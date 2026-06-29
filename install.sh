@@ -35,7 +35,9 @@ mkdir -p "$BIN"
 cat > "$BIN/lanex" <<EOF
 #!/usr/bin/env sh
 # Run the LanEx bundled cockpit. Current directory is mounted at /work.
-exec docker run --rm -it -p ${PORT}:8765 -v "\$PWD:/work" ${RUN_IMAGE} "\$@"
+# --dns pins reliable public resolvers so the sky130 PDK download works even when
+# the host (esp. WSL2) has a broken /etc/resolv.conf that Docker would otherwise copy in.
+exec docker run --rm -it --dns 8.8.8.8 --dns 1.1.1.1 -p ${PORT}:8765 -v "\$PWD:/work" ${RUN_IMAGE} "\$@"
 EOF
 chmod +x "$BIN/lanex"
 

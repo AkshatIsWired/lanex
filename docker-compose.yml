@@ -21,4 +21,12 @@ services:
       - "8765:8765"
     volumes:
       - ./work:/work
+    # Force reliable public DNS inside the container. On WSL2 the host's
+    # /etc/resolv.conf is frequently broken (UDP DNS bug), and Docker copies that
+    # broken resolver into the container at start — which makes the sky130 PDK
+    # download (`ciel fetch`) time out. Pinning DNS here fixes it permanently and
+    # survives WSL resets (unlike patching the host's resolv.conf, which gets wiped).
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     restart: unless-stopped

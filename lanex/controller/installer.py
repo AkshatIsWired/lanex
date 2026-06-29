@@ -933,9 +933,19 @@ def _install_gds3d() -> Dict[str, Any]:
     if not (shutil.which("g++") or shutil.which("clang++") or shutil.which("cc")):
         missing.append("a C++ compiler")
     if missing:
-        g = ("GDS3D builds from source and needs: " + ", ".join(missing) +
-             ". On Debian/Ubuntu: " + _GDS3D_APT_DEPS_CMD + ". "
-             "Then click Build again, or use the manual steps in Tools.")
+        # Only the apt path can auto-install the toolchain. Inside the bundled
+        # LibreLane image (Nix base, no apt) GDS3D simply can't be built, so don't
+        # show Debian instructions that will never apply — be honest about it.
+        if detect_environment().get("apt"):
+            g = ("GDS3D builds from source and needs: " + ", ".join(missing) +
+                 ". On Debian/Ubuntu: " + _GDS3D_APT_DEPS_CMD + ". "
+                 "Then click Build again, or use the manual steps in Tools.")
+        else:
+            g = ("GDS3D is a desktop OpenGL viewer and is not bundled in this image — "
+                 "it needs a build toolchain (git, make, a C++ compiler) plus an X11 "
+                 "display, which the headless container doesn't have. The web cockpit "
+                 "doesn't need it; run LanEx on a host with those tools to use GDS3D. "
+                 "Missing here: " + ", ".join(missing) + ".")
         _emit("installer_error", {"key": "gds3d", "message": g})
         return {"ok": False, "guidance": g, "reason": g}
 
