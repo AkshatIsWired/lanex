@@ -46,13 +46,28 @@ function paint() {
   }
 }
 
+let _userChose = false;
+
 export function setupRunMode() {
   try {
     const saved = localStorage.getItem(KEY);
-    if (saved === "local" || saved === "container") state.runMode = saved;
+    if (saved === "local" || saved === "container") {
+      state.runMode = saved;
+      _userChose = true;
+    }
   } catch (_e) {}
   document.querySelectorAll(".engine-btn").forEach((btn) => {
     btn.addEventListener("click", () => setRunMode(btn.dataset.runmode));
   });
+  paint();
+}
+
+// The server tells us which engine to start on (the bundled image runs every tool
+// natively, so it reports "local" to avoid the pointless "no container engine" banner).
+// Only adopt it when the user hasn't explicitly picked a mode this session.
+export function applyServerDefault(mode) {
+  if (_userChose) return;
+  const m = mode === "local" ? "local" : "container";
+  state.runMode = m;
   paint();
 }

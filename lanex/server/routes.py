@@ -147,7 +147,12 @@ def _path_within_roots(path: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def h_health(handler: Any) -> None:
-    _respond(handler, {"service": "lanex", "alive": True})
+    # default_run_mode lets a deployment pick the engine the UI starts on when the
+    # user has no saved preference. The bundled Docker image sets LANEX_RUN_MODE=local
+    # because every EDA tool is already native inside it (no nested container engine);
+    # a plain pip install leaves it unset → the UI keeps its "container" default.
+    default_mode = "local" if os.environ.get("LANEX_RUN_MODE") == "local" else "container"
+    _respond(handler, {"service": "lanex", "alive": True, "default_run_mode": default_mode})
 
 
 def h_steps(handler: Any) -> None:

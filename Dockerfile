@@ -29,15 +29,22 @@ LABEL org.opencontainers.image.description="Browser cockpit for the LibreLane RT
 LABEL org.opencontainers.image.source="https://github.com/AkshatIsWired/lanex"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
-# Extra tools LanEx drives, baked in so the image is self-contained:
-#   iverilog  — RTL simulation engine (RTL IDE)
-#   graphviz  — `dot`, renders Yosys netlist diagrams
-#   xfonts-base — legacy X11 "fixed" fonts (GDS3D NULL-derefs without them)
-#   + GDS3D build deps (git/g++/X11/OpenGL headers), then GDS3D itself from source.
-# Best-effort: the whole block is guarded so a non-apt base still produces a working
-# image (those tools just stay installable later via the in-app Tools tab). Desktop
-# GL viewers (GDS3D / KLayout / OpenROAD GUI) additionally need X11 forwarding at run
-# time (-e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix); web-served features need none.
+# Extra tools LanEx drives, baked in so the image is self-contained. The official
+# LibreLane base is NIX-built and already ships iverilog, klayout, magic, openroad,
+# yosys and netgen — the only web-flow tool missing is graphviz (`dot`, for Yosys
+# netlist diagrams), which we add through Nix (the base has no apt; the /nix store is
+# what the toolchain lives in). `--impure` is required because `nix profile` rewrites
+# root's existing user-environment, which pure evaluation refuses to read.
+#
+# Two paths so the Dockerfile also works on a hypothetical apt base:
+#   • apt base  → apt-get graphviz (+ legacy fonts, build deps) and build GDS3D.
+#   • nix base  → `nix profile install --impure nixpkgs#graphviz` (the real case).
+# Both guarded with `|| echo` so a tool that fails to install never breaks the build.
+#
+# GDS3D (a 3D GL desktop viewer) is intentionally NOT baked into the Nix image: it is
+# not in nixpkgs, building it pulls a ~1.5 GB X11/OpenGL toolchain for a viewer that
+# needs X11 forwarding to display anyway, and the web cockpit never uses it. It stays
+# an on-demand install via the Tools tab when someone forwards a display.
 USER root
 RUN set -e; \
     if command -v apt-get >/dev/null 2>&1; then \
@@ -51,8 +58,12 @@ RUN set -e; \
         for b in GDS3D gds3d; do [ -f "$b" ] && cp "$b" /usr/local/bin/gds3d && break; done ) && \
         chmod +x /usr/local/bin/gds3d || echo "skip: GDS3D build failed (install later via Tools tab)"; \
       rm -rf /var/lib/apt/lists/*; \
+    elif command -v nix >/dev/null 2>&1; then \
+      nix --extra-experimental-features 'nix-command flakes' \
+        profile install --impure nixpkgs#graphviz \
+        || echo "warn: nix graphviz install failed (netlist diagrams unavailable)"; \
     else \
-      echo "skip: non-apt base image; install iverilog/graphviz/gds3d via the Tools tab"; \
+      echo "skip: no apt or nix on base image; install graphviz via the Tools tab"; \
     fi
 
 # Put LanEx on the image WITHOUT pip. The official LibreLane image is Nix-built: there
@@ -65,6 +76,9 @@ WORKDIR /opt/lanex
 COPY pyproject.toml README.md LICENSE NOTICE ./
 COPY lanex ./lanex
 ENV PYTHONPATH=/opt/lanex
+# Every EDA tool is native inside this image, so start the UI on the "local" engine
+# (no nested container) — this is what stops the "no container engine found" banner.
+ENV LANEX_RUN_MODE=local
 
 # Designs live on a mounted volume so runs survive container restarts.
 VOLUME ["/work"]
