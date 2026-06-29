@@ -69,7 +69,7 @@ async function renderOutputs(tag) {
           "<div class='out-sub'>" + sub + " · " + fmtBytes(o.size) + "</div></div>" +
           "<div class='out-actions'>" +
           "<a class='btn btn-ghost' href='" + url + "' target='_blank' rel='noopener' download='" + fmt.escape(o.name) + "'>⬇ Download</a>" +
-          "<button class='btn btn-ghost out-reveal' data-path='" + fmt.escape(o.path) + "'>REVEAL_ICON Reveal</button>" +
+          "<button class='btn btn-ghost out-reveal' data-path='" + fmt.escape(o.path) + "'>" + icon('folderOpen',{size:13}) + " Reveal</button>" +
           "</div></div>"
         );
       }).join("") +
