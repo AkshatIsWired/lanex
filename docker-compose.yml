@@ -9,8 +9,12 @@ services:
     build:
       context: .
       args:
-        # Pin a LibreLane release here for reproducible tool versions, e.g. "3.0.4".
-        LIBRELANE_TAG: latest
+        # Pinned to the LibreLane release LanEx is tested against (matches pyproject's
+        # librelane==). Bump deliberately after re-testing.
+        LIBRELANE_TAG: "3.0.4"
+        # For full independence, build from YOUR OWN mirror instead of upstream — set
+        # this to the digest in base-image.lock (see scripts/mirror-base.sh):
+        # BASE_IMAGE: ghcr.io/akshatiswired/lanex-base@sha256:<digest>
     image: lanex:latest
     container_name: lanex
     ports:

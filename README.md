@@ -95,6 +95,23 @@ available it can also drive `librelane --dockerized`.
 **Requirements (Option B):** Python ≥ 3.10, an installed `librelane`, and either
 a local EDA toolchain or Docker/Podman for container runs.
 
+### Independence & self-hosting
+
+LanEx is built on LibreLane but is designed to keep working no matter what happens
+upstream. A built image is a frozen, self-contained snapshot — once published it
+needs none of LibreLane's servers to pull, run, or restore. Maintainers ship a
+release with one command:
+
+```sh
+docker login ghcr.io
+VERSION=0.1.0 ./scripts/release.sh        # mirror base → build → push → cold tarball
+```
+
+This (1) mirrors the LibreLane base into your own registry and pins its exact
+`@sha256:` digest in `base-image.lock`, (2) builds + pushes `ghcr.io/<you>/lanex`,
+and (3) writes a cold `docker save` tarball restorable with zero registry. Full
+runbook: [`docs/RELEASE.md`](docs/RELEASE.md).
+
 ---
 
 ## Run it

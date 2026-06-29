@@ -14,9 +14,12 @@
 # --build-arg LIBRELANE_TAG=<ver> (and bump pyproject's `librelane==` to match).
 #
 # BASE_IMAGE lets you build from YOUR OWN MIRROR of the LibreLane image instead of
-# upstream, so the bundle keeps building even if LibreLane deletes an old tag:
-#   scripts/mirror-base.sh           # copy upstream -> ghcr.io/<you>/lanex-base
-#   docker build --build-arg BASE_IMAGE=ghcr.io/akshatiswired/lanex-base:3.0.4 -t lanex .
+# upstream, so the bundle keeps building even if LibreLane deletes an old tag. For a
+# byte-reproducible build, pass the immutable @sha256: digest recorded in
+# `base-image.lock` (written by scripts/mirror-base.sh):
+#   scripts/mirror-base.sh           # copy upstream -> ghcr.io/<you>/lanex-base + lock the digest
+#   docker build --build-arg BASE_IMAGE="$(awk -F= '/^digest=/{print $2}' base-image.lock)" -t lanex .
+# Easiest of all: `VERSION=0.1.0 scripts/release.sh` does mirror+build+push+archive in one shot.
 ARG LIBRELANE_TAG=3.0.4
 ARG BASE_IMAGE=ghcr.io/librelane/librelane:${LIBRELANE_TAG}
 FROM ${BASE_IMAGE}

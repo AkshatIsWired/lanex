@@ -37,10 +37,17 @@ jobs:
             type=ref,event=tag
             type=raw,value=latest
 
+      # BASE_IMAGE: defaults to the upstream LibreLane tag, but if you set a repo
+      # variable `BASE_IMAGE` (Settings → Secrets and variables → Actions → Variables)
+      # to your own digest-pinned mirror (from base-image.lock), CI builds become fully
+      # independent + reproducible without ever editing this file. `LIBRELANE_TAG` (repo
+      # variable) overrides the default 3.0.4 fallback.
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          build-args: |
+            BASE_IMAGE=${{ vars.BASE_IMAGE || format('ghcr.io/librelane/librelane:{0}', vars.LIBRELANE_TAG || '3.0.4') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
