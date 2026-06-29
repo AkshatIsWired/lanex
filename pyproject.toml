@@ -30,7 +30,7 @@ classifiers = [
 # The GUI controller uses only the standard library plus what `librelane`
 # already pulls in. `librelane` itself is an *expected peer* (it is the host
 # package the GUI plugs into), declared here so a standalone install is usable.
-dependencies = ["librelane"]
+dependencies = ["librelane==3.0.4"]
 
 [project.scripts]
 lanex = "lanex.cli:main"

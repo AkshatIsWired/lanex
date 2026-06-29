@@ -9,14 +9,31 @@
 # Run:     docker run --rm -p 8765:8765 -v "$PWD/work:/work" lanex:latest
 # Then open http://localhost:8765
 #
-# Pin a specific LibreLane release by passing --build-arg LIBRELANE_TAG=<ver>.
-ARG LIBRELANE_TAG=latest
+# LibreLane is PINNED to the version LanEx is tested against (3.0.4) so upstream
+# releases can never silently break the bundle. Override deliberately with
+# --build-arg LIBRELANE_TAG=<ver> (and bump pyproject's `librelane==` to match).
+ARG LIBRELANE_TAG=3.0.4
 FROM ghcr.io/librelane/librelane:${LIBRELANE_TAG}
 
 LABEL org.opencontainers.image.title="LanEx"
 LABEL org.opencontainers.image.description="Browser cockpit for the LibreLane RTL-to-GDSII flow."
 LABEL org.opencontainers.image.source="https://github.com/AkshatIsWired/lanex"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+# Extra tools LanEx drives that the base image may not ship:
+#   iverilog  — RTL simulation engine (RTL IDE)
+#   graphviz  — `dot`, renders Yosys netlist diagrams
+#   xfonts-base — legacy X11 "fixed" fonts (GDS3D and other X tools NULL-deref without them)
+# Best-effort: skip silently on a non-apt base. Desktop GL viewers (GDS3D / KLayout
+# GUI / OpenROAD GUI) additionally need X11 forwarding into the container at run time
+# (-e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix); the web-served features need none of that.
+USER root
+RUN (command -v apt-get >/dev/null 2>&1 && \
+     apt-get update && \
+     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+       iverilog graphviz xfonts-base && \
+     rm -rf /var/lib/apt/lists/*) || \
+    echo "skip: non-apt base image; install iverilog/graphviz via the Tools tab"
 
 # Install LanEx on top of the LibreLane image.
 #   --no-deps: the base image already provides librelane (LanEx's only declared
