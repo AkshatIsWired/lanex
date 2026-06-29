@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LanEx — RTL → GDS in your browser</title>
+  <meta name="description" content="A browser cockpit for LibreLane." />
+  <link rel="stylesheet" href="/static/fonts.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/features.css" />
+  <link rel="stylesheet" href="/static/ide.css" />
+  <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
+</head>
+<body class="theme-dark">
+  <!-- Splash: covers the whole window until boot() finishes. -->
+  <div class="splash" id="splash">
+    <div class="splash-inner">
+      <img class="splash-logo" src="/static/vendor/lanex-logo.png" alt="LanEx" />
+      <div class="splash-spinner"></div>
+      <div class="splash-status" id="splash-status">booting…</div>
+    </div>
+  </div>
+
+  <div id="app" class="layout three-pane" style="display:none">
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-logo" src="/static/vendor/lanex-mark.png" alt="LanEx" />
+      <div class="brand-text">
+        <span class="brand-name">LanEx</span>
+        <span class="brand-sub">RTL → GDSII in your browser</span>
+      </div>
+    </div>
+    <div class="topbar-center">
+      <!-- Mode switch -->
+      <div class="mode-switch" role="group" aria-label="Run mode">
+        <button class="mode-btn mode-btn-active" data-mode="auto" title="Run every step end-to-end and produce a GDS.">
+          <span class="mode-ico">▶</span>
+          <span>Full Auto</span>
+        </button>
+        <button class="mode-btn" data-mode="semi" title="Pick the next step yourself; inspect each result before continuing.">
+          <span class="mode-ico">⌐</span>
+          <span>Step-by-step</span>
+        </button>
+      </div>
+      <!-- Run engine switch -->
+      <div class="mode-switch engine-switch" role="group" aria-label="Run engine">
+        <button class="engine-btn engine-btn-active" data-runmode="container" title="Recommended: run inside LibreLane's container image. Every EDA tool included — host only needs Docker or Podman.">
+          <span class="mode-ico">▣</span>
+          <span>Container</span>
+        </button>
+        <button class="engine-btn" data-runmode="local" title="Run against native EDA tools already installed on this machine.">
+          <span class="mode-ico">⛭</span>
+          <span>Local tools</span>
+        </button>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button id="btn-run-global" class="btn btn-cta topbar-run" disabled title="Start the flow, or stop a running one, from any tab">▶ Run</button>
+      <span id="design-pill" class="pill pill-warn" title="Click Load in the Setup tab">
+        <span class="d">●</span>
+        <span class="text">No design loaded</span>
+      </span>
+      <span id="pdk-pill" class="pill pill-warn" title="Setup tab → PDK picker">
+        <span class="d">●</span>
+        <span class="text">PDK: —</span>
+      </span>
+      <span class="tier-switch" role="group" aria-label="Complexity tier">
+        <button class="tier-btn" data-tier="simple" title="Simple: just Setup → Run → Results.">Simple</button>
+        <button class="tier-btn" data-tier="pro" title="Pro: every feature (DSE, verification drill-down, plugins).">Pro</button>
+      </span>
+      <button id="btn-new-project" class="iconbtn" title="New project from a template">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button id="btn-learn" class="iconbtn" title="Learn panel — explain steps, metrics, terms">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9.1 9a3 3 0 1 1 4 2.8c-.9.4-1.6 1-1.6 2.2M12 17h.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/></svg>
+      </button>
+      <button id="palette-btn" class="iconbtn iconbtn-cmdk" title="Command palette (Ctrl/⌘ K)">
+        <span class="cmdk-hintkey">⌘K</span>
+      </button>
+      <button id="theme-btn" class="iconbtn" title="Toggle dark / light theme (t)">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.39 5.39 0 0 1-4.4 2.26 5.4 5.4 0 0 1-5.4-5.4c0-1.81.89-3.41 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></svg>
+      </button>
+      <button id="density-btn" class="iconbtn" title="Toggle compact density (d)">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h18v2H3v-2z"/></svg>
+      </button>
+      <button id="tools-icon" class="iconbtn" title="Tools status (Tools tab)">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1 .1-1.4z"/></svg>
+        <span id="tools-count" class="badge">…</span>
+      </button>
+      <button id="help-icon" class="iconbtn" title="Show help (?)">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm-1-5h2v2h-2v-2zm1-9a3 3 0 0 1 3 3c0 1.4-1 2-1.6 2.5-.6.4-1.4.9-1.4 1.5h-2c0-1.7 1-2.5 1.7-3 .5-.3 1.3-.8 1.3-1.5a1 1 0 1 0-2 0H8a3 3 0 0 1 3-3z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Side tabs -->
+  <nav class="side-tabs" role="tablist">
+    <button class="side-tab side-tab-active" data-tab="setup" title="Pick your design, PDK, and configure the run.">
+      <span class="ico"></span><span class="label">Setup</span>
+    </button>
+    <button class="side-tab" data-tab="pipeline" title="The 80-step flow with live status.">
+      <span class="ico"></span><span class="label">Pipeline</span>
+    </button>
+    <button class="side-tab" data-tab="runs" title="History of past runs; pick one to inspect.">
+      <span class="ico"></span><span class="label">Runs</span>
+    </button>
+    <button class="side-tab" data-tab="preview" title="Rendered GDS / DEF preview.">
+      <span class="ico"></span><span class="label">Preview</span>
+    </button>
+    <button class="side-tab" data-tab="ide" title="RTL editor + Verilog/SV syntax highlighting, lint, simulation & waveforms.">
+      <span class="ico"></span><span class="label">RTL IDE</span>
+    </button>
+    <button class="side-tab" data-tab="tools" title="Check or install the EDA tools LibreLane needs.">
+      <span class="ico"></span><span class="label">Tools</span>
+    </button>
+    <button class="side-tab" data-tab="analytics" title="Every metric LibreLane recorded, organized by stage.">
+      <span class="ico"></span><span class="label">Analytics</span>
+    </button>
+    <button class="side-tab" data-tab="verify" title="Tape-out readiness: lint, equivalence, timing, DRC/LVS/antenna.">
+      <span class="ico"></span><span class="label">Verify</span>
+    </button>
+    <button class="side-tab" data-tab="dse" title="Design-space exploration: sweep configs and compare.">
+      <span class="ico"></span><span class="label">DSE</span>
+    </button>
+    <button class="side-tab" data-tab="layout" title="Interactive 2D + 3D layout viewers.">
+      <span class="ico"></span><span class="label">Layout</span>
+    </button>
+    <button class="side-tab" data-tab="cells" title="Insert custom cells &amp; macros, and browse the PDK standard-cell library.">
+      <span class="ico"></span><span class="label">Cells &amp; Macros</span>
+    </button>
+    <button class="side-tab" data-tab="manual" title="Advanced: run LibreLane/EDA commands yourself; copy the exact CLI.">
+      <span class="ico"></span><span class="label">Manual</span>
+    </button>
+  </nav>
+
+  <!-- Main work area -->
+  <main class="work">
+    <!-- SETUP -->
+    <section class="section section-active" id="sec-setup">
+      <!-- Welcome / Quickstart hero -->
+      <div class="hero" id="hero">
+        <div class="hero-inner">
+          <div class="hero-head">
+            <div class="hero-copy">
+              <p class="section-eyebrow">open-silicon flow · sky130 · gf180mcu</p>
+              <h1>Take Verilog <span class="hl">all the way to silicon.</span></h1>
+              <p class="hero-sub">
+                LibreLane is the open-source implementation flow used to harden projects on
+                <strong>Skywater 130&nbsp;nm</strong>, <strong>GF 180&nbsp;nm MCU</strong>, and other
+                open processes. This cockpit gives you a step-by-step runbook —
+                no terminal needed.
+              </p>
+            </div>
+            <!-- Signature: the chip's process-layer stack, built bottom-up like the flow. -->
+            <aside class="layer-stack" aria-hidden="true">
+              <div class="ls-layer" style="--lc:var(--met5);--lsw:90%" title="metal5 — top metal & power routing"><span class="ls-bar"></span><span class="ls-tag">met5</span></div>
+              <div class="ls-layer" style="--lc:var(--met4);--lsw:82%" title="metal4 — routing"><span class="ls-bar"></span><span class="ls-tag">met4</span></div>
+              <div class="ls-layer" style="--lc:var(--met3);--lsw:74%" title="metal3 — routing"><span class="ls-bar"></span><span class="ls-tag">met3</span></div>
+              <div class="ls-layer" style="--lc:var(--met2);--lsw:66%" title="metal2 — routing"><span class="ls-bar"></span><span class="ls-tag">met2</span></div>
+              <div class="ls-layer" style="--lc:var(--met1);--lsw:58%" title="metal1 — interconnect"><span class="ls-bar"></span><span class="ls-tag">met1</span></div>
+              <div class="ls-layer" style="--lc:var(--li);--lsw:46%" title="local interconnect — placement"><span class="ls-bar"></span><span class="ls-tag">li1</span></div>
+              <div class="ls-layer" style="--lc:var(--poly);--lsw:36%" title="poly — standard cells & synthesis"><span class="ls-bar"></span><span class="ls-tag">poly</span></div>
+              <div class="ls-sub">substrate · 130&nbsp;nm</div>
+            </aside>
+          </div>
+          <ol class="steps-3">
+            <li><strong>1. Pick your HDL folder.</strong> A folder with your <code>.v</code> (and ideally <code>.sdc</code>) files.</li>
+            <li><strong>2. Confirm the PDK is installed.</strong> If not, the Tools tab installs it for you.</li>
+            <li><strong>3. Press Run.</strong> Watch each stage light up green. The GDS lands in <code>runs/<date>/final/gds</code>.</li>
+          </ol>
+
+          <!-- Design picker -->
+          <div class="picker">
+            <h2>Your design folder</h2>
+            <p class="hint">Pick the directory that contains your Verilog sources. Click <strong>Browse…</strong> to navigate without copy-pasting the path. LibreLane will scan for <code>.v</code>, <code>.sv</code>, <code>.vh</code>, <code>.mem</code>, <code>.sdc</code> and a <code>config.yaml</code> (if you have one).</p>
+            <div class="picker-row">
+              <input type="text" id="design-dir-input" placeholder="e.g. /home/<you>/projects/my-chip" autocomplete="off"/>
+              <button class="btn btn-ghost" id="btn-browse-folder"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Browse…</button>
+              <button class="btn btn-primary" id="btn-set-design">Load design</button>
+            </div>
+            <div class="picker-actions">
+              <button class="btn btn-ghost" id="btn-load-spm">Use the SPM example</button>
+              <button class="btn btn-ghost" id="btn-quickstart">Show me the controls</button>
+            </div>
+            <div id="recent-designs" class="recent-designs"></div>
+            <div id="design-summary" class="design-summary"></div>
+            <div id="autoconfig-banner" class="autoconfig-banner" hidden></div>
+          </div>
+
+          <!-- File selector card -->
+          <div class="card" id="filesel-card" hidden>
+            <div class="card-body">
+              <div style="display:flex;gap:var(--s-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--s-3);">
+                <h3 style="margin:0;flex:1">Verilog sources & memory files</h3>
+                <span class="muted" id="filesel-count">0 files</span>
+                <button class="btn btn-ghost" id="btn-filesel-all">Select all</button>
+                <button class="btn btn-ghost" id="btn-filesel-none">Clear</button>
+                <button class="btn btn-ghost" id="btn-filesel-refresh">↻ Rescan</button>
+              </div>
+              <div id="filesel-list" class="filesel-list"></div>
+              <input type="text" id="filesel-extras" placeholder="Extra files (pin_order.cfg, readme.txt…); separate paths with commas" style="margin-top:var(--s-3)"/>
+              <p class="hint" style="margin-top:var(--s-2)">All detected source files are checked by default. Deselect ones you want LibreLane to ignore. Memory files (<code>.mem / .hex / .bin</code>) are listed separately.</p>
+            </div>
+          </div>
+
+          <!-- PDK picker -->
+          <div class="picker">
+            <h2>Process + standard-cell library</h2>
+            <p class="hint">Pick the silicon recipe your design will be hardened against. Most beginners use <strong>sky130A</strong> with <code>sky130_fd_sc_hd</code>.</p>
+            <div class="picker-row">
+              <select id="pdk-select"></select>
+              <select id="scl-select"></select>
+              <span id="pdk-readiness" class="pill pill-pending">checking…</span>
+            </div>
+          </div>
+
+          <!-- Preflight readiness checklist -->
+          <div class="picker">
+            <h2>Ready to run? <button class="btn btn-ghost" id="btn-preflight" style="font-size:var(--t-sm)">↻ Check my setup</button></h2>
+            <p class="hint">A quick check that everything a run needs is in place — design, config, PDK and the EDA tools — so you don't hit a surprise half-way through.</p>
+            <div id="preflight" class="preflight"></div>
+          </div>
+
+          <!-- Mode + Run -->
+          <div class="run-name-row">
+            <label for="run-name-input">Run name <span class="hint">optional — labels this run's folder under <code>runs/</code></span></label>
+            <input type="text" id="run-name-input" placeholder="e.g. spm-area-sweep-1" autocomplete="off"/>
+          </div>
+          <div class="cta">
+            <button class="btn btn-cta" id="btn-run">
+              <span class="big">▶ Run flow</span>
+              <span class="hint">Compiles your HDL → GDSII. Takes 5–60 minutes.</span>
+            </button>
+            <button class="btn btn-warn" id="btn-cancel" disabled>■ Stop</button>
+            <button class="btn btn-ghost" id="btn-resume" hidden title="In Step-by-step mode the flow pauses after each step.">▶ Resume / Next step</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Config / Constraints -->
+      <details class="card" id="cfg-card">
+        <summary>
+          <strong>Constraints & configuration</strong>
+          <span class="hint">Optional: tune clocks, utilisation, antenna strategy. Defaults are sane.</span>
+        </summary>
+        <div class="card-body">
+          <!-- Quick reports/diagram toggles (the most-asked-for knobs, surfaced). -->
+          <div class="reports-row">
+            <strong>Reports &amp; diagrams</strong>
+            <label class="report-toggle" title="Yosys emits design-hierarchy + gate-level .dot schematics — they render on the Preview tab.">
+              <input type="checkbox" id="cfg-synth-show"/> Generate Yosys synthesis diagrams (<code>SYNTH_SHOW</code>)
+            </label>
+          </div>
+          <!-- Sticky nav for jumping between config sections without scrolling. -->
+          <nav class="config-nav" id="config-nav"></nav>
+          <div class="preset-row">
+            <span class="lbl">Preset:</span>
+            <button class="chip chip-clickable" data-preset="default">Default</button>
+            <button class="chip chip-clickable" data-preset="lowpower">Low Power</button>
+            <button class="chip chip-clickable" data-preset="perfpush">Performance</button>
+            <button class="chip chip-clickable" data-preset="antenna">Antenna-hardened</button>
+            <button class="chip chip-clickable" data-preset="minimalarea">Minimum area</button>
+            <span id="config-user-presets" class="preset-user"></span>
+            <button class="btn btn-ghost" id="config-save-preset" title="Save the current overrides as a reusable preset">＋ Save preset</button>
+            <input type="search" id="var-search" placeholder="filter variables…" class="grow"/>
+          </div>
+          <!-- What will actually be sent: a preset is a STARTING POINT; any field
+               you then edit is layered on top. This shows the exact merged set
+               (preset values + your edits, blanks excluded). -->
+          <div id="config-overrides-summary" class="overrides-summary"></div>
+          <div id="vars-form" class="vars-form"></div>
+        </div>
+      </details>
+
+      <details class="card">
+        <summary><strong>Quick help</strong><span class="hint">What is RTL? GDSII? PDK?</span></summary>
+        <div class="card-body help-prose">
+          <p><strong>RTL</strong> — your design in Verilog. The behavioral description of what the chip should compute.</p>
+          <p><strong>GDSII</strong> — the layout of physical shapes on silicon. What the fab actually reads.</p>
+          <p><strong>PDK</strong> — Process Design Kit: the foundry's rules for routing, layers, cell library.</p>
+          <p><strong>SCL</strong> — Standard Cell Library: pre-built AND/OR/FF cells the synthesiser picks from.</p>
+          <p><strong>The flow</strong>: RTL → <em>synthesis</em> → netlist → <em>place</em> → DEF → <em>route</em> → DEF → <em>DRC/LVS</em> → GDSII.</p>
+          <p class="muted">Press <kbd>?</kbd> at any time for the shortcut list.</p>
+        </div>
+      </details>
+    </section>
+
+    <!-- PIPELINE -->
+    <section class="section" id="sec-pipeline">
+      <div class="bar">
+        <input type="text" id="run-tag-input" placeholder="run tag (optional)"/>
+        <label>From <input type="text" id="run-from" placeholder="step id (optional)"/></label>
+        <label>To <input type="text" id="run-to" placeholder="step id (optional)"/></label>
+        <label>Skip <input type="text" id="run-skip" placeholder="step ids, comma separated"/></label>
+        <button id="btn-cancel-2" class="btn btn-warn" disabled>■ Stop</button>
+        <button id="btn-resume-2" class="btn btn-ghost" hidden>▶ Resume</button>
+      </div>
+      <!-- Live RTL→GDS run timeline: which tool, which step, since when.
+           Click a step row to load its log/reports in the console below. -->
+      <div id="run-timeline" class="run-timeline"></div>
+
+      <!-- Lower console: live tool logs + per-step output (click a step above). -->
+      <div class="pipe-console" id="pipe-console">
+        <nav class="side-pane-tabs" role="tablist">
+          <button class="side-pane-tab side-pane-tab-active" data-itab="logs">Live Logs</button>
+          <button class="side-pane-tab" data-itab="stepout">Step Output</button>
+        </nav>
+        <section class="side-pane-section side-pane-section-active" id="spane-logs">
+          <div class="log-toolbar">
+            <input type="search" id="log-search" class="log-search" placeholder="filter logs…" autocomplete="off"/>
+            <select id="log-level" class="log-level" title="Minimum level">
+              <option value="all">All</option>
+              <option value="warn">Warnings+</option>
+              <option value="error">Errors</option>
+            </select>
+            <label class="log-auto" title="Stick to newest line"><input type="checkbox" id="log-autoscroll" checked/> auto</label>
+            <button id="log-copy" class="btn btn-ghost log-btn">copy</button>
+            <button id="log-clear" class="btn btn-ghost log-btn">clear</button>
+            <button class="btn btn-ghost log-btn panel-fs-btn" data-fs-target="pipe-console" title="Fullscreen console">⛶</button>
+            <span class="muted log-count" id="log-count"></span>
+          </div>
+          <div id="logs" class="logs" role="log" aria-live="polite" aria-label="Live logs"></div>
+        </section>
+        <section class="side-pane-section" id="spane-stepout">
+          <div id="step-output" class="step-output">
+            <div class="empty"><span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5"/></svg></span><h3>Step output</h3>
+              <p>Click any node in the flow graph above to load that step's log and reports here.</p></div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <!-- RUNS -->
+    <section class="section" id="sec-runs">
+      <div class="bar">
+        <span class="muted">Show runs from:</span>
+        <button class="btn btn-ghost runs-scope runs-scope-active" data-scope="design">This design</button>
+        <button class="btn btn-ghost runs-scope" data-scope="all" title="Merge runs across every design you've opened recently">All history</button>
+      </div>
+      <div class="bar">
+        <input type="search" id="runs-filter" class="runs-filter" placeholder="Filter runs by tag / PDK…" aria-label="Filter runs"/>
+        <select id="runs-status-filter" aria-label="Filter by status">
+          <option value="">All</option>
+          <option value="pass">Passed</option>
+          <option value="fail">Failed</option>
+        </select>
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" id="runs-batch-delete" hidden><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6"/></svg> Delete selected (0)</button>
+      </div>
+      <ul id="runs-list" class="runs-list"></ul>
+    </section>
+
+    <!-- PREVIEW -->
+    <section class="section" id="sec-preview">
+      <div class="bar">
+        <select id="view-tag"></select>
+        <select id="view-format"></select>
+        <button id="view-render" class="btn btn-primary">Show layout</button>
+        <a id="view-download" class="btn btn-ghost" download hidden>⬇ Download</a>
+      </div>
+      <nav class="section-jump" id="preview-jump" aria-label="Jump to section">
+        <button class="chip chip-clickable" data-jump="view-render-area">Layout</button>
+        <button class="chip chip-clickable" data-jump="view-text">Raw text</button>
+        <button class="chip chip-clickable" data-jump="view-diagrams">Diagrams</button>
+        <button class="chip chip-clickable" data-jump="view-outputs">Output files</button>
+      </nav>
+      <div id="view-render-area"></div>
+      <div id="view-text" class="code"></div>
+      <h2 style="margin-top:var(--s-5)">Synthesis diagrams</h2>
+      <p class="hint">Yosys block-hierarchy and gate-level schematics. Generated only when <code>SYNTH_SHOW</code> is enabled in Config — rendered here from the <code>.dot</code> files via graphviz.</p>
+      <div id="view-diagrams"></div>
+      <h2 style="margin-top:var(--s-5)">Output files</h2>
+      <p class="hint">Every deliverable LibreLane wrote to <code>runs/&lt;tag&gt;/final/</code>. Download any file, or reveal it in your file manager (works when the GUI runs on your own machine). Intermediate per-step files live in the <strong>Files</strong> button on the Runs tab.</p>
+      <div id="view-outputs"></div>
+    </section>
+
+    <!-- RTL IDE (embedded) -->
+    <section class="section" id="sec-ide">
+      <div class="ide-embed">
+        <div class="ide-topbar">
+          <strong>RTL IDE</strong>
+          <span class="muted" id="ide-design">…</span>
+          <span class="ide-spacer"></span>
+          <button class="btn btn-ghost" id="ide-popout" title="Open the IDE in its own window">⧉ Pop out</button>
+          <span class="ide-note" id="ide-note"></span>
+        </div>
+        <div class="ide-grid">
+          <aside class="ide-side">
+            <h3>Files</h3>
+            <div id="ide-tree" class="ide-tree"></div>
+            <div class="ide-uploads">
+              <button class="btn btn-ghost" id="ide-upload-src" title="Upload Verilog source files into src/">⬆ Sources</button>
+              <button class="btn btn-ghost" id="ide-upload-tb" title="Upload testbench files into verify/">⬆ Testbench</button>
+            </div>
+          </aside>
+          <main class="ide-main">
+            <div class="ide-toolbar">
+              <span id="ide-open" class="muted">(no file open)</span>
+              <span id="ide-cursor" class="muted" style="font-family:var(--mono);font-size:var(--t-xs)">Ln 1, Col 1</span>
+              <span class="ide-spacer"></span>
+              <button class="btn" id="ide-find" title="Find &amp; replace (Ctrl/⌘ F)">Find</button>
+              <button class="btn" id="ide-save">Save</button>
+              <button class="btn" id="ide-lint" title="Syntax-check with Verilator; errors highlight inline">Syntax check</button>
+              <label class="ide-autolint" title="Save + re-lint automatically a moment after you stop typing"><input type="checkbox" id="ide-autolint"/> Auto-lint</label>
+            </div>
+            <div id="ide-editor" class="ide-editor"></div>
+            <div class="ide-problems" id="ide-problems">
+              <div class="ide-problems-head">
+                <span>Problems</span>
+                <span class="pcount" id="ide-problems-count">no lint run yet</span>
+                <span class="ide-spacer"></span>
+                <button class="btn btn-ghost panel-fs-btn" data-fs-target="ide-problems" title="Fullscreen">⛶</button>
+              </div>
+              <div id="ide-diags" class="ide-diags"><p class='muted'>Run “Syntax check” to list errors and warnings here, with file:line.</p></div>
+            </div>
+          </main>
+          <section class="ide-sim">
+            <h3>Simulate</h3>
+            <label class="ide-field">Testbench<select id="ide-tb"></select></label>
+            <label class="ide-field">TB top module<input id="ide-top" class="inp" type="text" placeholder="counter_tb" /></label>
+            <label class="ide-field">Engine<select id="ide-sim-engine">
+              <option value="auto">Auto — Icarus if installed, else Verilator</option>
+              <option value="iverilog">Icarus Verilog (best for classic testbenches)</option>
+              <option value="verilator">Verilator (in the container image)</option>
+            </select></label>
+            <div class="ide-sim-actions">
+              <button class="btn btn-primary" id="ide-sim">Build &amp; run</button>
+              <button class="btn btn-ghost" id="ide-sim-stop" hidden title="Stop the running simulation">■ Stop</button>
+            </div>
+            <h3>Console
+              <button class="btn btn-ghost panel-fs-btn" data-fs-target="ide-log" title="Fullscreen console">⛶</button>
+            </h3>
+            <pre id="ide-log" class="ide-log"></pre>
+            <h3>Waveform
+              <button class="btn btn-ghost panel-fs-btn" data-fs-target="ide-wave-host" title="Fullscreen waveform">⛶</button>
+              <span class="wave-radixes">
+                <button class="btn btn-ghost" id="ide-wave-zoomout" title="Zoom out">−</button>
+                <button class="btn btn-ghost" id="ide-wave-zoomin" title="Zoom in">+</button>
+                <button class="btn btn-ghost" id="ide-wave-fit" title="Fit to window">fit</button>
+                <button class="btn btn-ghost wave-radix" data-radix="hex">hex</button>
+                <button class="btn btn-ghost wave-radix" data-radix="dec">dec</button>
+                <button class="btn btn-ghost wave-radix" data-radix="bin">bin</button>
+                <button class="btn btn-ghost wave-radix" data-radix="signed">signed</button>
+                <button class="btn btn-ghost" id="ide-wave-png" title="Export the waveform as a PNG image">⬇ PNG</button>
+                <button class="btn btn-ghost" id="ide-wave-csv" title="Export the waveform as CSV">⬇ CSV</button>
+              </span>
+            </h3>
+            <div class="ide-wave-host" id="ide-wave-host"><canvas id="ide-wave"></canvas></div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <!-- TOOLS -->
+    <section class="section" id="sec-tools">
+      <h2>Container runtime <span class="hint">recommended</span></h2>
+      <p class="hint">The simplest way to get every EDA tool: LibreLane ships a version-matched container image. With Docker or Podman installed, <code>Container</code> run mode needs no native tool installs at all.</p>
+      <div id="runtime-card"></div>
+
+      <details class="card" id="local-tools-card" style="margin-top:var(--s-4)">
+        <summary><strong>Advanced: local toolchain</strong><span class="hint">Only needed for <em>Local tools</em> run mode (Nix / conda / system installs).</span></summary>
+        <div class="card-body">
+          <p class="hint">These are the tools LibreLane shells out to when running with native tools. Green means ready. <strong>librelane</strong> and <strong>ciel</strong> are pip-installable in place; <strong>OpenROAD/Magic/Netgen</strong> have no universal package — install them via Nix, conda (litex-hub), or just use Container mode above.</p>
+          <p class="hint"><strong>Version mismatch?</strong> If a native tool is too old/new for your LibreLane (e.g. a system Yosys that rejects pyosys options), the fix is Container mode — the image pins every tool to the exact versions your LibreLane was built against. Native pinning is via the Nix flake or conda litex-hub.</p>
+          <div id="tools-grid"></div>
+        </div>
+      </details>
+
+      <h2>PDK Settings</h2>
+      <div class="card" style="margin-bottom: var(--s-4);">
+        <div class="card-body">
+          <label class="lbl">PDK Installation Directory (PDK_ROOT)</label>
+          <div style="display:flex; gap:var(--s-2); margin-top:var(--s-1);">
+            <input type="text" id="pdk-root-input" class="grow" placeholder="e.g. /home/user/.ciel" />
+            <button id="btn-save-pdk-root" class="btn btn-primary">Save</button>
+          </div>
+          <p class="hint">Changing this will point the GUI and tools to a new directory. Useful if you have a secondary drive with more space.</p>
+        </div>
+      </div>
+      <h2>PDK store</h2>
+      <div id="pdk-store-row"></div>
+
+      <h2>Desktop layout viewers</h2>
+      <p class="hint">Interactive layout/3D viewing uses your own desktop tools (the GUI launches them on a run's GDS from the Layout tab). KLayout &amp; Magic ship in the LibreLane container image; <strong>GDS3D</strong> is a small open-source OpenGL viewer you build once.</p>
+      <div id="desktop-viewers"></div>
+
+      <h2>Add-ons &amp; plugins</h2>
+      <p class="hint">Curated, checksum-verified plugins only. Front-end plugins load through a constrained SDK surface.</p>
+      <div id="plugins-body"></div>
+      <div id="plugin-tab-host"></div>
+
+      <details class="card">
+        <summary><strong>Install logs</strong></summary>
+        <pre id="installer-log" class="code"></pre>
+      </details>
+    </section>
+
+    <!-- ANALYTICS -->
+    <section class="section" id="sec-analytics">
+      <nav class="section-jump" id="analytics-jump" aria-label="Jump to section">
+        <span class="muted">Jump to:</span>
+        <button class="chip chip-clickable" data-jump="analytics-summary">Summary</button>
+        <button class="chip chip-clickable" data-jump="analytics-cells">Cell usage</button>
+        <button class="chip chip-clickable" data-jump="analytics-sections">All metrics</button>
+        <button class="chip chip-clickable" data-jump="analytics-trends">Trends</button>
+        <button class="chip chip-clickable" data-jump="analytics-compare">Compare runs</button>
+        <button class="chip chip-clickable" data-jump="analytics-glossary">Metric reference</button>
+      </nav>
+      <h2>Full metrics from the latest run</h2>
+      <p class="hint">Every value LibreLane persisted in <code>runs/<tag>/metrics.json</code>, grouped by stage. Click a metric for the full path. The advisor below describes what each group means and why a non-passing value matters.</p>
+      <div class="bar">
+        <select id="analytics-run-select"></select>
+        <button class="btn btn-ghost" id="btn-refresh-analytics">↻ Refresh</button>
+        <button class="btn btn-ghost" id="btn-analytics-csv" title="Download this run's metrics as CSV">⬇ CSV</button>
+        <input type="search" id="analytics-search" class="grow" placeholder="Filter metrics (e.g. timing, area, lvs)…" autocomplete="off" />
+        <span class="muted" id="analytics-count"></span>
+      </div>
+      <div id="analytics-summary"></div>
+      <details class="card" id="analytics-cells" open style="margin-top:var(--s-6)">
+        <summary><strong>Cell usage</strong><span class="hint">Which standard cells this run placed, and how many of each — read from the run's "Cells by Master" report.</span></summary>
+        <div class="card-body">
+          <div id="cells-usage-body"></div>
+        </div>
+      </details>
+      <div id="analytics-sections"></div>
+      <details class="card" id="analytics-trends" open style="margin-top:var(--s-6)">
+        <summary><strong>Trends</strong><span class="hint">How key metrics moved across this design's runs over time — spot a regression at a glance.</span></summary>
+        <div class="card-body">
+          <div class="row" style="gap:var(--s-2);align-items:center;flex-wrap:wrap">
+            <label class="muted" for="trend-metric">Metric:</label>
+            <select id="trend-metric"></select>
+          </div>
+          <div id="trends-chart" style="height:260px;margin-top:var(--s-3)"></div>
+        </div>
+      </details>
+      <details class="card" id="analytics-compare" style="margin-top:var(--s-6)">
+        <summary><strong>Compare runs</strong><span class="hint">Config differences, a colored metric-delta table, and comparison charts across runs.</span></summary>
+        <div class="card-body">
+          <div id="compare-body"></div>
+        </div>
+      </details>
+
+      <h2 style="margin-top:var(--s-6)">Metric reference</h2>
+      <p class="hint">Every metric LibreLane defines, grouped by category, with its pass/fail direction. Sourced live from LibreLane's metric registry — not a hand-written list.</p>
+      <div id="analytics-glossary"></div>
+    </section>
+
+    <!-- VERIFY -->
+    <section class="section" id="sec-verify">
+      <h2>Verification Center</h2>
+      <p class="hint">The Classic flow runs the full signoff suite on every run. This is the tape-out verdict, organized by stage — no re-run needed.</p>
+      <div class="verify-disclaimer">
+        <strong>⚠ Not a sign-off verdict.</strong> LanEx reports the numbers your EDA tools
+        (OpenROAD, Yosys, Magic, KLayout, Netgen) produced — it performs no silicon analysis of
+        its own. Before committing to fabrication, always confirm results against your foundry's
+        official sign-off decks and your shuttle program's checks. Provided <em>AS&nbsp;IS</em>,
+        without warranty (Apache-2.0).
+      </div>
+      <div id="verify-body"></div>
+
+      <details class="card" id="timing-paths-card" open style="margin-top:var(--s-5)">
+        <summary><strong>Timing paths</strong><span class="hint">Worst paths and slack distribution from the run's STA report (no re-run).</span></summary>
+        <div class="card-body">
+          <div class="row" id="timing-controls" style="gap:var(--s-2);align-items:center;flex-wrap:wrap">
+            <div class="seg" role="group" aria-label="Timing analysis type">
+              <button class="seg-btn is-active" data-timing-kind="setup">Setup (max)</button>
+              <button class="seg-btn" data-timing-kind="hold">Hold (min)</button>
+            </div>
+            <span class="muted" id="timing-source"></span>
+          </div>
+          <div id="timing-summary" class="tp-summary"></div>
+          <div id="timing-hist" class="tp-hist" style="height:200px"></div>
+          <div id="timing-table"></div>
+        </div>
+      </details>
+
+      <details class="card" id="verify-advisor" open style="margin-top:var(--s-5)">
+        <summary><strong>Advisor &amp; reports</strong><span class="hint">Timing guidance, failure explanations, and DRC/LVS report parsing.</span></summary>
+        <div class="card-body">
+          <h3>Timing closure</h3>
+          <div id="timing-advisor"></div>
+          <h3 style="margin-top:var(--s-4)">Failure advisor</h3>
+          <div id="advisor-list" class="advisor-list"></div>
+          <h3 style="margin-top:var(--s-4)">DRC / LVS report parser</h3>
+          <div class="row">
+            <input type="text" id="violations-input" placeholder="path to a DRC/LVS report (optional)"/>
+            <button id="btn-load-violations" class="btn btn-ghost">Parse</button>
+          </div>
+          <div id="violations-list"></div>
+        </div>
+      </details>
+    </section>
+
+    <!-- DSE -->
+    <section class="section" id="sec-dse">
+      <h2>Design-space exploration</h2>
+      <p class="hint">Sweep configuration variables; each combination runs once and the results are compared on a Pareto plot.</p>
+      <div id="dse-body"></div>
+    </section>
+
+    <!-- LAYOUT viewers -->
+    <section class="section" id="sec-layout">
+      <h2>Layout viewers</h2>
+      <div class="bar">
+        <label>Run <select id="layout-run"></select></label>
+        <button class="btn" id="btn-view2d">2D view</button>
+        <button class="btn" id="btn-view3d">3D (desktop viewer)</button>
+        <label title="On: open with the PDK's layer colours (.lyp / magicrc). Off: the tool's default view (e.g. KLayout's plain palette).">
+          <input type="checkbox" id="layout-pdk-colors" checked/> PDK layer colours
+        </label>
+      </div>
+      <!-- Desktop layout tools (KLayout / Magic / GDS3D) at the top level so they're
+           always reachable — not buried inside the 3D sub-view. -->
+      <div id="layout-tools" class="layout-tools"></div>
+      <div id="viewer2d-body"></div>
+      <div id="viewer3d-body"></div>
+    </section>
+
+    <!-- CELLS & MACROS -->
+    <section class="section" id="sec-cells">
+      <nav class="section-jump" id="cells-jump" aria-label="Jump to section">
+        <span class="muted">Quick explore:</span>
+        <button class="chip chip-clickable" data-jump="custom-macros-panel">Custom macros</button>
+        <button class="chip chip-clickable" data-jump="custom-cells-panel">Custom cells</button>
+        <button class="chip chip-clickable" data-jump="cells-library">Standard cells</button>
+      </nav>
+
+      <div class="cc-panel" id="custom-macros-panel">
+        <div class="cc-head">
+          <h2>Custom macros <span class="cc-badge">advanced</span></h2>
+          <button class="btn btn-ghost" id="btn-custom-macro-help" title="How custom macro insertion works">? Help</button>
+        </div>
+        <p class="hint">Drop a pre-hardened block — an SRAM, a PLL, an analog IP, or a separately hardened sub-design —
+          into this run as a fixed macro. Its views (GDS/LEF and optionally LIB/netlist/SPEF/SPICE) and per-instance
+          placement are wired in through LibreLane's <code>MACROS</code> variable via a GUI overlay config — your
+          <code>config.json</code> is left untouched.</p>
+        <div id="custom-macros-body"></div>
+      </div>
+
+      <div class="cc-panel" id="custom-cells-panel">
+        <div class="cc-head">
+          <h2>Custom cells <span class="cc-badge">advanced</span></h2>
+          <button class="btn btn-ghost" id="btn-custom-cell-help" title="How custom cell swapping works">? Help</button>
+        </div>
+        <p class="hint">Bring your own standard cell (a hand-drawn gate, a tuned drive-strength) and have
+          this run use it <strong>in exchange for</strong> one or more library cells. The cell's views are added via
+          <code>EXTRA_LEFS/LIBS/GDS/SPICE_MODELS/VERILOG_MODELS</code> and the cells you name are removed via
+          <code>EXTRA_EXCLUDED_CELLS</code>. Applies to runs you start from the GUI — your <code>config.json</code> is left untouched.</p>
+        <div id="custom-cells-body"></div>
+      </div>
+
+      <h2 id="cells-library">Standard-cell library</h2>
+      <p class="hint">Every cell in the selected PDK's standard-cell library, by kind. Pick the PDK/SCL in Setup.</p>
+      <div id="cells-body"></div>
+    </section>
+
+    <!-- MANUAL / ADVANCED -->
+    <section class="section" id="sec-manual">
+      <h2>Manual control <span class="cc-badge">advanced</span></h2>
+      <p class="hint">Drive LibreLane and the EDA tools yourself while the cockpit keeps watching
+        <code>runs/</code>. Copy the exact command to run in your own terminal, or run an
+        allow-listed command right here.</p>
+
+      <div class="card manual-card">
+        <div class="card-body">
+          <h3>Equivalent CLI for your current Setup</h3>
+          <p class="hint">Whatever you picked in Setup (PDK, SCL, flow, run name, From/To) as a command line.
+            Run it in your terminal — the GUI will pick up the new run automatically.</p>
+          <button class="btn btn-ghost" id="btn-cli-reveal">Show the command</button>
+          <div id="cli-reveal" class="cli-reveal"></div>
+        </div>
+      </div>
+
+      <div class="card manual-card">
+        <div class="card-body">
+          <h3>Run a command here</h3>
+          <p class="hint">Allowed: <code>librelane</code>, <code>openroad</code>, <code>yosys</code>,
+            <code>magic</code>, <code>klayout</code>, <code>netgen</code>, <code>iverilog</code>,
+            <code>verilator</code>, <code>ciel</code>, <code>docker</code>/<code>podman</code>.
+            Pipes, redirects and <code>sudo</code> are blocked — use your own terminal for those.</p>
+          <div class="manual-input-row">
+            <input type="text" id="manual-cmd" placeholder="e.g. librelane --dockerized config.json -T floorplan" autocomplete="off" spellcheck="false"/>
+            <button class="btn btn-primary" id="btn-manual-run">Run</button>
+            <button class="btn btn-ghost" id="btn-manual-cancel" disabled>Stop</button>
+          </div>
+          <pre id="manual-output" class="manual-output" aria-live="polite"></pre>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Bottom status -->
+  <footer class="status">
+    <span class="pill pill-pending" id="run-pill">idle</span>
+    <span class="status-progress" id="overall-progress"></span>
+    <span class="status-disclaimer" title="LanEx displays output from third-party EDA tools and performs no silicon analysis of its own. It is NOT a sign-off tool — always verify against your foundry's official sign-off decks before fabrication. Provided AS IS, without warranty (Apache-2.0).">⚠ not sign-off — verify with foundry decks</span>
+    <span class="status-help">
+      <kbd>⌘K</kbd> commands · <kbd>?</kbd> shortcuts · <a href="https://librelane.org/" target="_blank" rel="noopener">docs</a>
+    </span>
+  </footer>
+
+  <!-- Onboarding overlay -->
+  <div class="onboard" id="onboard" hidden>
+    <div class="onboard-card">
+      <button class="onboard-close" id="onboard-close">×</button>
+      <h2>Welcome to LanEx</h2>
+      <p>This is a five-step tour. You can skip any step.</p>
+      <ol id="onboard-steps">
+        <li>Open the <strong>Setup</strong> tab and pick your HDL folder (or click “Use the SPM example”).</li>
+        <li>Open <strong>Tools</strong> to verify everything is installed. Click <em>Install</em> if anything is red.</li>
+        <li>Confirm the <strong>PDK</strong> + SCL match your chip target.</li>
+        <li>Switch between <strong>Full Auto</strong> and <strong>Step-by-step</strong> in the top bar.</li>
+        <li>Press <strong>Run</strong>. Watch the pipeline light up. The GDS lands on the <strong>Preview</strong> tab.</li>
+      </ol>
+      <button class="btn btn-primary" id="onboard-done">Got it</button>
+    </div>
+  </div>
+
+  <!-- Help dialog -->
+  <dialog id="help-dialog" class="help-dialog">
+    <h2>Shortcuts</h2>
+    <ul>
+      <li><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>K</kbd> — command palette (everything)</li>
+      <li><kbd>1</kbd>..<kbd>6</kbd> — Setup / Pipeline / Runs / Preview / Tools / Analytics</li>
+      <li><kbd>j</kbd>/<kbd>k</kbd> — next / previous step (in Pipeline)</li>
+      <li><kbd>r</kbd> — start a run · <kbd>s</kbd> — stop a run</li>
+      <li><kbd>/</kbd> — focus the log filter</li>
+      <li><kbd>t</kbd> — toggle theme · <kbd>d</kbd> — toggle compact density</li>
+      <li><kbd>?</kbd> — this help · <kbd>Esc</kbd> — close</li>
+    </ul>
+    <button class="btn btn-ghost" id="btn-close-help">Close</button>
+  </dialog>
+
+  <!-- Folder browser modal -->
+  <div class="onboard" id="fs-modal" hidden>
+    <div class="onboard-card" style="max-width:720px;height:70vh;display:flex;flex-direction:column;">
+      <button class="onboard-close" id="fs-close">×</button>
+      <h2>Browse for a design folder</h2>
+      <p class="hint">Click a folder to open it. Type a path to jump directly. Pick <em>Use this folder</em> when you're at the right place.</p>
+      <div class="picker-row" style="margin-bottom:var(--s-3);">
+        <input type="text" id="fs-path" placeholder="path…" autocomplete="off"/>
+        <button class="btn btn-ghost" id="fs-up">↑</button>
+        <button class="btn btn-primary" id="fs-use">Use this folder</button>
+      </div>
+      <div class="filesel-list" id="fs-roots" style="margin-bottom:var(--s-3);display:flex;gap:var(--s-2);flex-wrap:wrap;"></div>
+      <div id="fs-list" class="filesel-list" style="flex:1;overflow:auto;"></div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/echarts.min.js"></script>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

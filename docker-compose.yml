@@ -1,0 +1,20 @@
+# LanEx — one-command bundled cockpit.
+#
+#   docker compose up
+#
+# Then open http://localhost:8765
+# Put your HDL projects under ./work (mounted at /work inside the container).
+services:
+  lanex:
+    build:
+      context: .
+      args:
+        # Pin a LibreLane release here for reproducible tool versions, e.g. "3.0.4".
+        LIBRELANE_TAG: latest
+    image: lanex:latest
+    container_name: lanex
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./work:/work
+    restart: unless-stopped

@@ -1,0 +1,25 @@
+/* Bundled, offline web fonts for the Mask Room theme.
+ * Variable woff2 (latin subset) — one file per family covers the weight axis.
+ * Space Grotesk = display/instrument · Inter = body/UI · JetBrains Mono = data.
+ */
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url(/static/vendor/fonts/spacegrotesk.woff2) format("woff2");
+}
+@font-face {
+  font-family: "Inter var";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/static/vendor/fonts/inter.woff2) format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url(/static/vendor/fonts/jetbrainsmono.woff2) format("woff2");
+}

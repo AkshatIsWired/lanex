@@ -1,0 +1,10 @@
+{
+  "name": "multiplier",
+  "title": "Registered Multiplier",
+  "description": "An NxN registered multiplier. A small datapath design that stresses synthesis area/timing trade-offs — a good DSE target.",
+  "top": "mult",
+  "clock_port": "clk",
+  "clock_period": 15.0,
+  "sources": ["src/mult.v"],
+  "testbench": "verify/mult_tb.v"
+}

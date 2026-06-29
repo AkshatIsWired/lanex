@@ -1,0 +1,10 @@
+{
+  "name": "blinky",
+  "title": "Blinky (LED blinker)",
+  "description": "A free-running counter whose top bit drives an LED. The classic 'hello world' of digital design.",
+  "top": "blinky",
+  "clock_port": "clk",
+  "clock_period": 10.0,
+  "sources": ["src/blinky.v"],
+  "testbench": "verify/blinky_tb.v"
+}

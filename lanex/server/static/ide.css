@@ -1,0 +1,141 @@
+/* ide.css — the RTL IDE (/ide) layout. Token-only, reuses styles.css :root. */
+.ide-body { margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
+.ide-topbar { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-4); border-bottom: 1px solid var(--border); background: var(--surface); }
+.ide-spacer { flex: 1; }
+.ide-note { color: var(--text-muted); font-size: var(--t-sm); }
+.ide-note-bad { color: var(--fail); }
+
+/* Single row pinned to the container height (minmax(0,1fr)) so a long file
+   scrolls *inside* the editor instead of growing the row past .ide-embed
+   (which is overflow:hidden) and getting clipped — the "can't scroll down" bug. */
+.ide-grid { flex: 1; display: grid; grid-template-columns: 240px 1fr 360px;
+  grid-template-rows: minmax(0, 1fr); min-height: 0; }
+.ide-side { border-right: 1px solid var(--border); padding: var(--s-3); overflow: auto; min-height: 0; }
+.ide-tree { display: flex; flex-direction: column; gap: 2px; }
+.ide-file-row { display: flex; align-items: center; gap: 2px; }
+.ide-file { flex: 1; text-align: left; background: transparent; color: var(--text); border: 0; border-radius: var(--r-sm); padding: var(--s-1) var(--s-2); cursor: pointer; font-family: var(--mono); font-size: var(--t-xs); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ide-file:hover { background: var(--hover); }
+.ide-file-del { flex: 0 0 auto; background: transparent; color: var(--text-muted); border: 0; border-radius: var(--r-sm); padding: 0 var(--s-1); cursor: pointer; font-size: var(--t-xs); opacity: 0; }
+.ide-file-row:hover .ide-file-del { opacity: 1; }
+.ide-file-del:hover { color: var(--fail, #e5484d); background: var(--hover); }
+.ide-sim-actions { display: flex; gap: var(--s-2); align-items: center; }
+.ide-sim-actions .btn { flex: 1; }
+
+.ide-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--border); }
+.ide-toolbar { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--border); }
+.ide-editor { flex: 1; min-height: 0; display: flex; }
+
+/* Syntax-highlighting editor: transparent <textarea> over a colored <pre>. */
+.hl-editor { display: flex; flex-direction: column; width: 100%; min-height: 0;
+  font-family: var(--mono); font-size: 13px; line-height: 1.5; }
+.hl-wrap { position: relative; flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.ed-gutter { width: 48px; flex: 0 0 48px; overflow: hidden; text-align: right;
+  padding: var(--s-2) var(--s-1); color: var(--text-disabled); background: var(--surface-2);
+  user-select: none; white-space: pre; }
+.ed-ln { padding-right: var(--s-1); }
+.ed-ln-error { color: var(--fail); font-weight: 700; background: var(--fail-soft); }
+.ed-ln-warning { color: var(--warn); font-weight: 700; background: var(--warn-soft); }
+/* Active line: highlight the gutter number for the line the caret is on. */
+.ed-ln-active { color: var(--text-strong); background: var(--surface-3); font-weight: 700; }
+.hl-pre, .ed-area {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 48px; margin: 0;
+  padding: var(--s-2); font: inherit; white-space: pre; tab-size: 4;
+  border: 0; box-sizing: border-box;
+  /* The editing <textarea> and the highlighted <pre> must share EXACT glyph
+     metrics or the caret drifts off the visible text. The --mono stack
+     (JetBrains Mono / SFMono / Menlo) ships programming ligatures which the
+     <pre> renders but the <textarea> does not — disable them on BOTH so every
+     character advances identically. */
+  letter-spacing: 0;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+.hl-pre { overflow: hidden; pointer-events: none; color: var(--text); background: var(--bg); }
+/* The global `code {}` rule (grey pill background + 1px 5px padding + radius)
+   leaked onto the editor's <code>: the background drew a grey box behind the
+   text, and — because an inline element's left padding applies only at the
+   START of its box — the 5px left-pad shifted ONLY the first line's glyphs,
+   making the caret (driven by the textarea, which has no such pad) land a few
+   px before the text on line 1. Reset all of it so the highlighted layer lines
+   up exactly with the textarea. */
+.hl-pre code, .hl-code {
+  font: inherit; background: transparent; padding: 0;
+  border-radius: 0; color: inherit;
+}
+.ed-area { overflow: auto; resize: none; outline: none; background: transparent;
+  /* color:transparent alone isn't honored for <textarea> text on WebKit/Blink,
+     so the grey caret-layer text bled over the coloured <pre> ("grey tint").
+     -webkit-text-fill-color forces the typed text fully invisible; only the
+     caret (caret-color) and the <pre> underneath remain visible. */
+  color: transparent; -webkit-text-fill-color: transparent;
+  caret-color: var(--text-strong); }
+.ed-area::selection { background: var(--accent-glow); }
+.tk-kw  { color: var(--syntax-kw); }
+.tk-com { color: var(--syntax-com); font-style: italic; }
+.tk-str { color: var(--syntax-str); }
+.tk-num { color: var(--syntax-num); }
+.tk-pp  { color: var(--syntax-pp); }
+
+/* Find & replace bar */
+.ed-find { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border); background: var(--surface); }
+.ed-find[hidden] { display: none; }
+.ed-find input { background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 4px 8px; font-size: var(--t-sm); }
+.ed-find-count { font-size: var(--t-xs); }
+.ed-find-x { margin-left: auto; }
+
+.ide-uploads { display: flex; gap: var(--s-2); margin-top: var(--s-3); flex-wrap: wrap; }
+.ide-uploads .btn { flex: 1; }
+/* "Problems" panel: dedicated lint-output area with its own header + count, so
+   syntax-check diagnostics (file:line:col) have a clear home, not a thin strip. */
+.ide-problems { display: flex; flex-direction: column; border-top: 1px solid var(--border);
+  flex: 0 0 auto; max-height: 38%; min-height: 0; }
+.ide-problems-head { display: flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-1) var(--s-3); background: var(--surface-2); font-size: var(--t-xs);
+  font-family: var(--mono); color: var(--text-muted); }
+.ide-problems-head .pcount { color: var(--text); }
+.ide-problems-head .pcount-err { color: var(--fail); }
+.ide-problems-head .pcount-warn { color: var(--warn); }
+.ide-problems-head .ide-spacer { flex: 1; }
+.ide-diag { cursor: pointer; padding: 2px 4px; border-radius: var(--r-sm); }
+.ide-diag:hover { background: var(--hover); }
+.ide-diags { flex: 1; overflow: auto; padding: var(--s-2); font-family: var(--mono); font-size: var(--t-xs); }
+.ide-diag-error { color: var(--fail); }
+.ide-diag-warning { color: var(--warn); }
+
+/* Fullscreen toggle for any panel (console, waveform, problems). Promotes the
+   element to a fixed overlay covering the viewport; the ✕/Esc restores it. */
+.panel-fs-btn { margin-left: auto; }
+/* `inset:0` already pins the overlay to all four viewport edges at the correct
+   width. Do NOT also set width:100vw/height:100vh — 100vw includes the vertical
+   scrollbar, so the element overflows a few px to the right and the absolutely
+   positioned ✕ exit button gets pushed half off-screen. */
+.panel-fullscreen { position: fixed !important; inset: 0; z-index: 9000;
+  width: auto !important; height: auto !important; max-width: 100vw; max-height: 100vh !important;
+  margin: 0 !important; background: var(--bg); border: 0; border-radius: 0;
+  padding: var(--s-4); overflow: auto; box-shadow: none; }
+.panel-fs-host { display: flex; flex-direction: column; }
+.panel-fs-host > .panel-fs-bar { display: flex; align-items: center; gap: var(--s-2);
+  font-size: var(--t-xs); color: var(--text-muted); }
+
+.ide-sim { padding: var(--s-3); overflow: auto; min-height: 0; }
+.ide-sim h3 { margin: var(--s-3) 0 var(--s-2); font-size: var(--t-md); }
+.ide-field { display: flex; flex-direction: column; gap: var(--s-1); margin-bottom: var(--s-2); }
+.ide-field select, .ide-field input { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-2); }
+.ide-log { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-2); height: 160px; overflow: auto; font-family: var(--mono); font-size: var(--t-xs); white-space: pre-wrap; }
+.wave-radixes { font-size: var(--t-xs); }
+.ide-wave-host { border: 1px solid var(--border); border-radius: var(--r-sm); overflow: auto; background: var(--surface-2); }
+#ide-wave { display: block; }
+
+/* Embedded IDE (the "RTL IDE" tab inside the main cockpit). Fills the work
+   area; its own grid scrolls internally instead of growing the page. */
+.ide-embed { display: flex; flex-direction: column; height: calc(100vh - 96px);
+  border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
+.ide-embed .ide-topbar { border-bottom: 1px solid var(--border); }
+.ide-embed .ide-grid { flex: 1; min-height: 0; }
+body.density-compact .ide-embed { height: calc(100vh - 80px); }
+@media (max-width: 960px) {
+  .ide-embed .ide-grid { grid-template-columns: 180px 1fr; }
+  .ide-embed .ide-sim { display: none; }
+}

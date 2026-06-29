@@ -1,0 +1,64 @@
+# Minimal CI: prove the suite is green and every JS module parses, on the
+# Python versions the package supports. Zero third-party Actions beyond the
+# official setup-python/checkout/setup-node; no Docker needed (the tests that
+# require a container/toolchain are skipped/guarded).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up Node (for `node --check` JS syntax validation only)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install (pulls in librelane as the only dependency)
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install pytest
+
+      - name: Python tests
+        run: python -m pytest gui/tests -q
+
+      - name: JavaScript syntax check
+        run: |
+          for f in gui/server/static/app.js gui/server/static/modules/*.js gui/server/static/modules/ide/*.js; do
+            node --check "$f"
+          done
+
+      - name: Build the wheel and confirm bundled data is present
+        run: |
+          python -m pip install build
+          python -m build --wheel
+          python - <<'PY'
+          import zipfile, glob, sys
+          whl = sorted(glob.glob("dist/*.whl"))[-1]
+          names = zipfile.ZipFile(whl).namelist()
+          needed = [
+              "gui/server/static/index.html",
+              "gui/server/static/app.js",
+              "gui/controller/plugins_registry.json",
+          ]
+          missing = [n for n in needed if not any(x.endswith(n) for x in names)]
+          if missing:
+              print("MISSING from wheel:", missing); sys.exit(1)
+          print("wheel OK:", whl)
+          PY

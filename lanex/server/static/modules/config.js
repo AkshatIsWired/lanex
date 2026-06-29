@@ -1,0 +1,427 @@
+// config.js — Constraints form, grouped & comprehensive.
+// - Groups variables by stage
+// - Sticky nav to jump between groups
+// - Presets: Default / Low Power / Performance / Sky130 special / Min area
+// - Auto-applies "hide non-PDK variables" when a PDK is selected
+
+import { api, fmt } from "./api.js";
+import { state, safeStorage } from "./state.js";
+import { toast } from "./toast.js";
+
+const STAGE_GROUPS = [
+  {
+    id: "pdk",
+    name: "Tech / PDK",
+    description: "Process design kit version, standard cell library, IO pads.",
+    pdk_only: true,
+  },
+  {
+    id: "synth",
+    name: "Synthesis",
+    description: "Yosys: how aggressively to optimise for delay vs area vs power.",
+    keys: ["SYNTH_", "YOSYS_", "VERILOG_", "EXTRA_VERILOG_"],
+  },
+  {
+    id: "lint",
+    name: "Linting",
+    description: "Verilator static checks (latch inference, blocking in always_ff, widths).",
+    keys: ["LINT_"],
+  },
+  {
+    id: "floorplan",
+    name: "Floorplan",
+    description: "Die/core area, utilisation, aspect ratio, macro placement.",
+    keys: ["FP_"],
+  },
+  {
+    id: "pdn",
+    name: "Power Delivery",
+    description: "Strap widths / spacing on the VDD/VSS grid.",
+    keys: ["PDN_"],
+  },
+  {
+    id: "placement",
+    name: "Placement",
+    description: "Where standard cells go (global + detailed placement).",
+    keys: ["PL_", "GLOBAL_PLACEMENT", "PLACE_", "IO_"],
+  },
+  {
+    id: "cts",
+    name: "Clock Tree",
+    description: "Clock buffer insertion strategy, CTS branch allowance, target skew.",
+    keys: ["CTS_", "CLOCK_"],
+  },
+  {
+    id: "antenna",
+    name: "Antenna & Diodes",
+    description: "Charge-discharge protection on long routes.",
+    keys: ["DIODE_", "ANTENNA_"],
+  },
+  {
+    id: "routing",
+    name: "Routing",
+    description: "Global + detailed router settings; design-rule-aware.",
+    keys: ["RT_", "ROUTING_"],
+  },
+  {
+    id: "sta",
+    name: "Static Timing",
+    description: "STA corners, slack targets, clock periods, hold/setup expectations.",
+    keys: ["STA_", "TIMING_", "RCX_"],
+  },
+  {
+    id: "signoff",
+    name: "Signoff",
+    description: "DRC, LVS, XOR, IR drop, density — what gets reported at the end.",
+    keys: ["DRC_", "LVS_", "XOR_", "KI_", "MAGIC_"],
+  },
+  {
+    id: "lvs",
+    name: "LVS",
+    description: "Layout-vs-Schematic verification.",
+    keys: ["LVS_"],
+  },
+  {
+    id: "ir",
+    name: "IR Drop",
+    description: "Voltage drop on the power grid.",
+    keys: ["IR_"],
+  },
+  {
+    id: "clockgating",
+    name: "Clock gating / retention",
+    description: "Optional low-power cells (sky130 hs variants etc).",
+    keys: ["CLOCK_GATING", "RETENTION"],
+  },
+  {
+    id: "misc",
+    name: "Misc",
+    description: "Log thresholds, exporter options, and other rare knobs.",
+    keys: [],
+  },
+];
+
+// Presets only set REAL LibreLane variables (verified against the live
+// variable registry). PL_TARGET_DENSITY_PCT is a percentage (0–100), FP_CORE_UTIL
+// is a percentage, SYNTH_STRATEGY is the Literal 'AREA n' / 'DELAY n', and
+// DIODE_ON_PORTS is the Literal 'none|in|out|both'. "Default" clears overrides so
+// every field falls back to LibreLane's own defaults.
+const PRESETS = {
+  default: {
+    label: "Default",
+    reset: true,
+    values: {},
+  },
+  lowpower: {
+    label: "Low Power",
+    values: {
+      SYNTH_STRATEGY: "AREA 2",
+      FP_CORE_UTIL: 40,
+      PL_TARGET_DENSITY_PCT: 55,
+    },
+  },
+  perfpush: {
+    label: "Performance",
+    values: {
+      SYNTH_STRATEGY: "DELAY 3",
+      FP_CORE_UTIL: 60,
+      PL_TARGET_DENSITY_PCT: 60,
+    },
+  },
+  minimalarea: {
+    label: "Min area",
+    values: {
+      SYNTH_STRATEGY: "AREA 3",
+      FP_CORE_UTIL: 70,
+      PL_TARGET_DENSITY_PCT: 78,
+    },
+  },
+  antenna: {
+    label: "Antenna-hardened",
+    values: {
+      DIODE_ON_PORTS: "both",
+      GRT_ANTENNA_REPAIR_ITERS: 3,
+    },
+  },
+};
+
+function groupFor(name, v) {
+  if (v?.pdk && STAGE_GROUPS[0].pdk_only) return "pdk";
+  for (const g of STAGE_GROUPS) {
+    if (!g.keys || !g.keys.length) continue;
+    if (g.keys.some((k) => name.toUpperCase().includes(k.toUpperCase()))) return g.id;
+  }
+  return "misc";
+}
+
+let _searchTerm = "";
+
+export function renderConfig() {
+  const root = document.getElementById("vars-form");
+  if (!root) return;
+  const search = document.getElementById("var-search");
+  search?.addEventListener("input", () => {
+    _searchTerm = search.value.toUpperCase();
+    paint();
+  });
+  document.querySelectorAll(".chip-clickable").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".chip-clickable").forEach((b) => b.classList.remove("chip-active"));
+      btn.classList.add("chip-active");
+      const p = PRESETS[btn.dataset.preset];
+      if (!p) return;
+      if (p.reset) state.varsValues = {};
+      for (const [k, v] of Object.entries(p.values)) state.varsValues[k] = String(v);
+      syncReportToggles();
+      paint();
+      renderOverridesSummary();
+    });
+  });
+  // "Save preset": persist the current overrides as a named, reusable preset
+  // (localStorage, per-browser). Cheap QoL — a returning user re-applies their
+  // own recipe in one click instead of re-typing fields.
+  const saveBtn = document.getElementById("config-save-preset");
+  if (saveBtn && !saveBtn._wired) {
+    saveBtn._wired = true;
+    saveBtn.addEventListener("click", async () => {
+      const ov = activeOverrides();
+      if (!Object.keys(ov).length) { toast.show("Set at least one override first.", "warn"); return; }
+      const { promptDialog } = await import("./dialog.js");
+      const name = await promptDialog({ title: "Save preset", label: "Preset name", defaultValue: "" });
+      if (!name || !name.trim()) return;
+      const presets = userPresets();
+      presets[name.trim()] = { values: ov };
+      safeStorage.setJSON(USER_PRESETS_KEY, presets);
+      paintUserPresets();
+      toast.show("Saved preset '" + name.trim() + "'.", "success");
+    });
+  }
+  paintUserPresets();
+  // Quick SYNTH_SHOW toggle (surfaces the most-asked-for diagram knob without
+  // hunting the full variable list). Drives the same override the form would.
+  const ss = document.getElementById("cfg-synth-show");
+  if (ss && !ss._wired) {
+    ss._wired = true;
+    ss.addEventListener("change", () => {
+      state.varsValues.SYNTH_SHOW = ss.checked;
+      const formInput = document.getElementById("var-SYNTH_SHOW");
+      if (formInput) formInput.value = ss.checked ? "true" : "false";
+      renderOverridesSummary();
+    });
+  }
+  syncReportToggles();
+  paint();
+  renderOverridesSummary();
+}
+
+// ---- User-defined presets (localStorage, per-browser) ---------------------
+const USER_PRESETS_KEY = "ll.userPresets";
+function userPresets() {
+  const p = safeStorage.getJSON(USER_PRESETS_KEY, {});
+  return (p && typeof p === "object") ? p : {};
+}
+function applyOverrideSet(values, { reset = true } = {}) {
+  if (reset) state.varsValues = {};
+  for (const [k, v] of Object.entries(values || {})) state.varsValues[k] = (typeof v === "boolean") ? v : String(v);
+  syncReportToggles();
+  paint();
+  renderOverridesSummary();
+}
+function paintUserPresets() {
+  const host = document.getElementById("config-user-presets");
+  if (!host) return;
+  const presets = userPresets();
+  const names = Object.keys(presets).sort();
+  host.innerHTML = names.map((n) =>
+    "<span class='chip chip-clickable user-preset' data-uname='" + fmt.escape(n) + "'>" + fmt.escape(n) +
+    "<button class='user-preset-del' data-del='" + fmt.escape(n) + "' title='Delete preset' aria-label='Delete preset " + fmt.escape(n) + "'>✕</button></span>").join("");
+  host.querySelectorAll(".user-preset").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest(".user-preset-del")) return;
+      document.querySelectorAll(".chip-clickable").forEach((b) => b.classList.remove("chip-active"));
+      el.classList.add("chip-active");
+      const p = userPresets()[el.dataset.uname];
+      if (p) applyOverrideSet(p.values);
+    });
+  });
+  host.querySelectorAll(".user-preset-del").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const presets = userPresets();
+      delete presets[b.dataset.del];
+      safeStorage.setJSON(USER_PRESETS_KEY, presets);
+      paintUserPresets();
+    });
+  });
+}
+
+// What will actually be sent to the engine. A preset only seeds these values;
+// any field you then edit is layered on top — so the run uses the preset's
+// values PLUS your edits (blanks excluded → those fall back to the PDK/tool
+// default). Showing the merged set removes the "preset or my edits?" ambiguity
+// (issue #7). Fields you never touch are NOT here and use LibreLane's defaults.
+export function activeOverrides() {
+  const out = {};
+  for (const [k, v] of Object.entries(state.varsValues || {})) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === "string" && v.trim() === "") continue;
+    if (typeof v === "boolean") { out[k] = v; continue; }
+    out[k] = v;
+  }
+  return out;
+}
+
+export function renderOverridesSummary() {
+  const el = document.getElementById("config-overrides-summary");
+  if (!el) return;
+  const ov = activeOverrides();
+  const keys = Object.keys(ov).sort();
+  if (!keys.length) {
+    el.innerHTML =
+      "<span class='ov-none'>No overrides set — every variable uses LibreLane's default for this PDK. " +
+      "Pick a preset or edit a field to override.</span>";
+    return;
+  }
+  const chips = keys
+    .map((k) => "<span class='ov-chip'><code>" + fmt.escape(k) + "</code>=<b>" +
+      fmt.escape(String(ov[k])) + "</b></span>")
+    .join("");
+  el.innerHTML =
+    "<div class='ov-head'><strong>" + keys.length + " override" + (keys.length === 1 ? "" : "s") +
+    " will be sent</strong> <span class='muted'>(preset values + your edits; unset fields use defaults)</span></div>" +
+    "<div class='ov-chips'>" + chips + "</div>";
+}
+
+// Reflect the current SYNTH_SHOW override into the quick toggle (e.g. after a
+// preset reset cleared it).
+function syncReportToggles() {
+  const ss = document.getElementById("cfg-synth-show");
+  if (ss) ss.checked = state.varsValues.SYNTH_SHOW === true || state.varsValues.SYNTH_SHOW === "true";
+}
+
+function paint() {
+  const root = document.getElementById("vars-form");
+  if (!root) return;
+  const nav = document.getElementById("config-nav");
+  if (!nav) return;
+  nav.innerHTML = "";
+  root.innerHTML = "";
+
+  const selected = state.selectedPdk;
+  const buckets = new Map(STAGE_GROUPS.map((g) => [g.id, []]));
+  const sorted = [...state.variables].sort((a, b) => a.name.localeCompare(b.name));
+  for (const v of sorted) {
+    if (selected && v.pdk === false && false) {/* keep all visible */}
+    if (_searchTerm && !v.name.toUpperCase().includes(_searchTerm) && !(v.description || "").toUpperCase().includes(_searchTerm))
+      continue;
+    buckets.get(groupFor(v.name, v)).push(v);
+  }
+  for (const [stageId, vs] of buckets) {
+    if (!vs.length) continue;
+    const def = STAGE_GROUPS.find((g) => g.id === stageId);
+    const heading = document.createElement("h3");
+    heading.id = "cfg-section-" + stageId;
+    heading.className = "config-anchor";
+    heading.textContent = def.name + " · " + vs.length;
+    if (def.description) {
+      const sub = document.createElement("div");
+      sub.className = "hint";
+      sub.style.marginBottom = "var(--s-3)";
+      sub.textContent = def.description;
+      root.appendChild(heading);
+      root.appendChild(sub);
+    } else {
+      root.appendChild(heading);
+    }
+    const navChip = document.createElement("button");
+    navChip.className = "nav-chip";
+    navChip.type = "button";
+    navChip.textContent = def.name + " (" + vs.length + ")";
+    navChip.addEventListener("click", () => jumpToSection(stageId, navChip));
+    nav.appendChild(navChip);
+    const grid = document.createElement("div");
+    grid.className = "vars-form";
+    for (const v of vs) grid.appendChild(buildRow(v));
+    root.appendChild(grid);
+  }
+}
+
+function jumpToSection(id, navChip) {
+  const target = document.getElementById("cfg-section-" + id);
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.querySelectorAll(".config-nav .nav-chip").forEach((c) => c.classList.remove("nav-active"));
+  navChip.classList.add("nav-active");
+}
+
+function buildRow(v) {
+  const row = document.createElement("div");
+  row.className = "var-row";
+  const id = "var-" + v.name;
+  row.innerHTML =
+    "<div class='vname'>" +
+    "<span class='name'>" + fmt.escape(v.name) + "</span>" +
+    (v.type ? "<span class='type'>" + fmt.escape(v.type) + "</span>" : "") +
+    (v.pdk ? "<span class='flag'>PDK</span>" : "") +
+    (v.units ? "<span class='units'>" + fmt.escape(v.units) + "</span>" : "") +
+    "</div>" +
+    "<div class='vdesc'>" + fmt.escape(v.description || "") + "</div>" +
+    inputFor(v, id) +
+    "<button type='button' class='var-reset' title='Reset to LibreLane default' aria-label='Reset " +
+      fmt.escape(v.name) + " to default'>↺</button>";
+  const input = row.querySelector("#" + cssEscape(id));
+  const resetBtn = row.querySelector(".var-reset");
+  const syncReset = () => { if (resetBtn) resetBtn.hidden = state.varsValues[v.name] === undefined; };
+  if (input) {
+    input.addEventListener("input", (e) => {
+      const value = v.type === "bool" ? e.target.value === "true" : e.target.value;
+      state.varsValues[v.name] = value;
+      syncReset();
+      renderOverridesSummary();
+    });
+  }
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      // Drop the override so the field falls back to LibreLane's own default.
+      delete state.varsValues[v.name];
+      const def = v.default;
+      if (input) input.value = (def === undefined || def === null) ? "" : String(def);
+      syncReset();
+      renderOverridesSummary();
+    });
+  }
+  syncReset();
+  return row;
+}
+
+function inputFor(v, id) {
+  const cur = state.varsValues[v.name] !== undefined ? state.varsValues[v.name] : v.default;
+  const str = cur === null || cur === undefined ? "" : String(cur);
+  if (v.type === "bool" || v.type === "Boolean") {
+    return (
+      "<select id='" + id + "'>" +
+      "<option value='true'" + (str === "true" ? " selected" : "") + ">true</option>" +
+      "<option value='false'" + (str === "false" ? " selected" : "") + ">false</option>" +
+      "</select>"
+    );
+  }
+  // Literal / Enum variables expose their allowed values in `choices` (from the
+  // backend's typing introspection). Render a real dropdown so users can't enter
+  // an invalid value. An optional variable gets a blank "(default)" entry.
+  if (Array.isArray(v.choices) && v.choices.length) {
+    const blank = v.optional
+      ? "<option value=''" + (str === "" ? " selected" : "") + ">(default)</option>"
+      : "";
+    const opts = v.choices
+      .map((s) => "<option value='" + fmt.escape(s) + "'" + (str === String(s) ? " selected" : "") + ">" + fmt.escape(s) + "</option>")
+      .join("");
+    return "<select id='" + id + "'>" + blank + opts + "</select>";
+  }
+  return "<input type='text' id='" + id + "' value='" + fmt.escape(str) + "' />";
+}
+
+function cssEscape(s) {
+  const _ = typeof CSS !== "undefined" && CSS.escape;
+  if (_) return CSS.escape(s);
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => "\\" + c);
+}

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LanEx RTL IDE</title>
+  <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
+  <link rel="stylesheet" href="/static/fonts.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/ide.css" />
+</head>
+<body class="ide-body theme-dark">
+  <header class="ide-topbar">
+    <strong>RTL IDE</strong>
+    <span class="muted" id="ide-design">…</span>
+    <span class="ide-spacer"></span>
+    <span class="ide-note" id="ide-note"></span>
+  </header>
+
+  <div class="ide-grid">
+    <aside class="ide-side">
+      <h3>Files</h3>
+      <div id="ide-tree" class="ide-tree"></div>
+      <div class="ide-uploads">
+        <button class="btn btn-ghost" id="ide-upload-src" title="Upload Verilog source files into src/">⬆ Sources</button>
+        <button class="btn btn-ghost" id="ide-upload-tb" title="Upload testbench files into verify/">⬆ Testbench</button>
+      </div>
+    </aside>
+
+    <main class="ide-main">
+      <div class="ide-toolbar">
+        <span id="ide-open" class="muted">(no file open)</span>
+        <span id="ide-cursor" class="muted" style="font-family:var(--mono);font-size:var(--t-xs)">Ln 1, Col 1</span>
+        <span class="ide-spacer"></span>
+        <button class="btn" id="ide-find" title="Find &amp; replace (Ctrl/⌘ F)">Find</button>
+        <button class="btn" id="ide-save">Save</button>
+        <button class="btn" id="ide-lint" title="Syntax-check with Verilator; errors highlight inline">Syntax check</button>
+        <label class="ide-autolint" title="Save + re-lint automatically a moment after you stop typing"><input type="checkbox" id="ide-autolint"/> Auto-lint</label>
+      </div>
+      <div id="ide-editor" class="ide-editor"></div>
+      <div class="ide-problems" id="ide-problems">
+        <div class="ide-problems-head">
+          <span>Problems</span>
+          <span class="pcount" id="ide-problems-count">no lint run yet</span>
+          <span class="ide-spacer"></span>
+          <button class="btn btn-ghost panel-fs-btn" data-fs-target="ide-problems" title="Fullscreen">⛶</button>
+        </div>
+        <div id="ide-diags" class="ide-diags"><p class='muted'>Run “Syntax check” to list errors and warnings here, with file:line.</p></div>
+      </div>
+    </main>
+
+    <section class="ide-sim">
+      <h3>Simulate</h3>
+      <label class="ide-field">Testbench<select id="ide-tb"></select></label>
+      <label class="ide-field">TB top module<input id="ide-top" class="inp" type="text" placeholder="counter_tb" /></label>
+      <label class="ide-field">Engine<select id="ide-sim-engine">
+        <option value="auto">Auto — Icarus if installed, else Verilator</option>
+        <option value="iverilog">Icarus Verilog (best for classic testbenches)</option>
+        <option value="verilator">Verilator (in the container image)</option>
+      </select></label>
+      <div class="ide-sim-actions">
+        <button class="btn btn-primary" id="ide-sim">Build &amp; run</button>
+        <button class="btn btn-ghost" id="ide-sim-stop" hidden title="Stop the running simulation">■ Stop</button>
+      </div>
+      <h3>Console
+        <button class="btn btn-ghost panel-fs-btn" data-fs-target="ide-log" title="Fullscreen console">⛶</button>
+      </h3>
+      <pre id="ide-log" class="ide-log"></pre>
+      <h3>Waveform
+        <button class="btn btn-ghost panel-fs-btn" data-fs-target="ide-wave-host" title="Fullscreen waveform">⛶</button>
+        <span class="wave-radixes">
+          <button class="btn btn-ghost" id="ide-wave-zoomout" title="Zoom out">−</button>
+          <button class="btn btn-ghost" id="ide-wave-zoomin" title="Zoom in">+</button>
+          <button class="btn btn-ghost" id="ide-wave-fit" title="Fit to window">fit</button>
+          <button class="btn btn-ghost wave-radix" data-radix="hex">hex</button>
+          <button class="btn btn-ghost wave-radix" data-radix="dec">dec</button>
+          <button class="btn btn-ghost wave-radix" data-radix="bin">bin</button>
+          <button class="btn btn-ghost wave-radix" data-radix="signed">signed</button>
+          <button class="btn btn-ghost" id="ide-wave-png" title="Export the waveform as a PNG image">⬇ PNG</button>
+          <button class="btn btn-ghost" id="ide-wave-csv" title="Export the waveform as CSV">⬇ CSV</button>
+        </span>
+      </h3>
+      <div class="ide-wave-host" id="ide-wave-host"><canvas id="ide-wave"></canvas></div>
+    </section>
+  </div>
+
+  <script type="module" src="/static/modules/ide/main.js"></script>
+</body>
+</html>

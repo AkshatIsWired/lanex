@@ -1,0 +1,10 @@
+{
+  "name": "empty",
+  "title": "Empty (start from scratch)",
+  "description": "A minimal top module + config you fill in yourself. For users who already have a design in mind.",
+  "top": "top",
+  "clock_port": "clk",
+  "clock_period": 10.0,
+  "sources": ["src/top.v"],
+  "testbench": null
+}
