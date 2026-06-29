@@ -55,14 +55,16 @@ RUN set -e; \
       echo "skip: non-apt base image; install iverilog/graphviz/gds3d via the Tools tab"; \
     fi
 
-# Install LanEx on top of the LibreLane image.
-#   --no-deps: the base image already provides librelane (LanEx's only declared
-#   dependency); everything else LanEx needs is the Python standard library, so
-#   this neither re-resolves nor changes the in-image LibreLane version.
+# Put LanEx on the image WITHOUT pip. The official LibreLane image is Nix-built: there
+# is no `pip` on PATH and the /nix store is read-only, so `pip install` is impossible
+# (and pointless). LanEx needs no install anyway — its only runtime dependency is
+# librelane (already in the image) plus the Python standard library — so we run it
+# straight from source on PYTHONPATH. The in-image `python3` is the Nix env that already
+# imports librelane, so `python3 -m lanex` uses the correct interpreter + toolchain.
 WORKDIR /opt/lanex
 COPY pyproject.toml README.md LICENSE NOTICE ./
 COPY lanex ./lanex
-RUN pip install --no-cache-dir --no-deps .
+ENV PYTHONPATH=/opt/lanex
 
 # Designs live on a mounted volume so runs survive container restarts.
 VOLUME ["/work"]
@@ -73,4 +75,4 @@ EXPOSE 8765
 # Clear any inherited entrypoint and launch the cockpit bound to all interfaces
 # inside the container (the published port is what the host actually exposes).
 ENTRYPOINT []
-CMD ["lanex", "--host", "0.0.0.0", "--port", "8765", "--no-browser", "--allow-remote"]
+CMD ["python3", "-m", "lanex", "--host", "0.0.0.0", "--port", "8765", "--no-browser", "--allow-remote"]
