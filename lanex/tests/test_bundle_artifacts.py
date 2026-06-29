@@ -118,6 +118,7 @@ def test_diagrams_part(run_dir: Path):
     assert any(x.endswith("hierarchy.dot") for x in n), "the .dot source is always bundled"
     if shutil.which("dot"):
         assert any(x.endswith(".dot.svg") for x in n), "graphviz present → rendered svg too"
+        assert any(x.endswith(".dot.png") for x in n), "graphviz present → rendered png too"
 
 
 def test_images_excludes_rendered_diagram_svg(run_dir: Path):

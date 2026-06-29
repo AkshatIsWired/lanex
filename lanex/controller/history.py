@@ -793,6 +793,63 @@ def render_dot(run_dir: str | Path, rel_path: str, *, force: bool = False) -> Di
     return {"ok": True, "svg": str(svg_file.relative_to(run))}
 
 
+def render_dot_png(run_dir: str | Path, rel_path: str, *, force: bool = False) -> Dict[str, Any]:
+    """Render a run's ``.dot`` to a sibling PNG via graphviz, cached.
+
+    Same safety envelope as :func:`render_dot` (size caps, RAM/CPU rlimit,
+    timeout, ``usable_which`` to dodge a Windows ``dot.exe`` on WSL) but emits a
+    raster ``<name>.dot.png``. Used by the run bundle so a schematic ships as a
+    drop-in image, not just a ``.dot``/``.svg``. Returns ``{ok, png: <rel>}`` or
+    ``{ok: False, ...}``; the caller treats failure as "skip this PNG".
+    """
+    run = Path(run_dir)
+    dot_file = (run / rel_path).resolve()
+    if dot_file.suffix.lower() != ".dot" or not dot_file.is_file():
+        return {"ok": False, "error": "not a .dot file"}
+    png_file = dot_file.with_name(dot_file.name + ".png")
+    try:
+        if png_file.is_file() and png_file.stat().st_mtime >= dot_file.stat().st_mtime:
+            return {"ok": True, "png": str(png_file.relative_to(run))}
+    except Exception:
+        pass
+
+    try:
+        size = dot_file.stat().st_size
+    except OSError:
+        size = 0
+    if size > _DOT_HARD_MAX:
+        return {"ok": False, "too_large": True, "size": size,
+                "error": f"diagram source is {size // 1000} KB — too large to render."}
+    if size > _DOT_AUTO_RENDER_MAX and not force:
+        return {"ok": False, "too_large": True, "size": size,
+                "error": f"diagram source is {size // 1000} KB — too large to auto-render."}
+
+    from . import platform_env
+    dot_bin = platform_env.usable_which("dot")  # ignore a Windows dot.exe on WSL
+    if not dot_bin:
+        return {"ok": False, "need": "graphviz",
+                "error": "graphviz 'dot' is not installed on the machine running the GUI."}
+    try:
+        proc = subprocess.run(
+            [dot_bin, "-Tpng", "-Gnslimit=2", "-Gnslimit2=2", "-Gmclimit=2", str(dot_file)],
+            capture_output=True, timeout=60, preexec_fn=_dot_rlimit(),
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "graphviz timed out rendering this diagram."}
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+    if proc.returncode != 0:
+        msg = (proc.stderr.decode("utf-8", "replace").strip() or "dot failed")[:300]
+        return {"ok": False, "error": msg}
+    if not proc.stdout:
+        return {"ok": False, "error": "graphviz produced an empty PNG"}
+    try:
+        png_file.write_bytes(proc.stdout)
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+    return {"ok": True, "png": str(png_file.relative_to(run))}
+
+
 def get_step_output(run_dir: str | Path, step_id: str, *, tail_bytes: int = 60000) -> Dict[str, Any]:
     """Return one step's log + reports for the click-to-inspect panel.
 

@@ -1315,8 +1315,50 @@ def cancel_install(key: str) -> Dict[str, Any]:
     return {"ok": True, "status": "cancelled"}
 
 
+def _uninstall_gds3d() -> Dict[str, Any]:
+    """Remove the source-built GDS3D binary.
+
+    GDS3D has no package-manager release (``_install_gds3d`` builds it from
+    source), so removal = delete the binary from the two locations we install
+    it to: ``~/.local/bin/gds3d`` (user-writable, no privileges) and
+    ``/usr/local/bin/gds3d`` (needs root, via the same escalation installs use).
+    Idempotent: removing one that isn't there still succeeds if the other went.
+    """
+    removed: List[str] = []
+    failed: List[str] = []
+
+    user_bin = Path.home() / ".local" / "bin" / "gds3d"
+    if user_bin.exists():
+        try:
+            user_bin.unlink()
+            removed.append(str(user_bin))
+        except OSError as ex:
+            failed.append(f"{user_bin}: {ex}")
+
+    sys_bin = Path("/usr/local/bin/gds3d")
+    if sys_bin.exists():
+        res = _run_argv(["sudo", "rm", "-f", str(sys_bin)], label="rm gds3d", key="gds3d")
+        if not sys_bin.exists():
+            removed.append(str(sys_bin))
+        else:
+            failed.append(f"{sys_bin}: exit {res.get('rc', '?')}")
+
+    if removed and not failed:
+        return {"ok": True, "method": "rm", "key": "gds3d", "removed": removed}
+    if removed:
+        return {"ok": True, "method": "rm", "key": "gds3d", "removed": removed,
+                "warning": "some copies could not be removed: " + "; ".join(failed)}
+    if failed:
+        return {"ok": False, "tried": failed, "reason": "Could not remove the GDS3D binary"}
+    return {"ok": False, "tried": [],
+            "reason": "GDS3D binary not found in ~/.local/bin or /usr/local/bin (already removed?)"}
+
+
 def uninstall_tool(key: str) -> Dict[str, Any]:
     """Try to uninstall a tool via pip or system package manager."""
+    if key == "gds3d":
+        return _uninstall_gds3d()
+
     env = detect_environment()
     tried: List[str] = []
     cmds = []
@@ -1341,6 +1383,7 @@ def uninstall_tool(key: str) -> Dict[str, Any]:
             "magic": ["sudo", apt, "remove", "-y", "magic"],
             "netgen": ["sudo", apt, "remove", "-y", "netgen"],
             "verilator": ["sudo", apt, "remove", "-y", "verilator"],
+            "iverilog": ["sudo", apt, "remove", "-y", "iverilog"],
             "graphviz": ["sudo", apt, "remove", "-y", "graphviz"],
             # Let users remove an engine and switch (e.g. drop Docker for Podman).
             "docker": ["sudo", apt, "remove", "-y", "docker.io"],
@@ -1348,6 +1391,28 @@ def uninstall_tool(key: str) -> Dict[str, Any]:
         }
         if key in apt_map:
             cmds.append(("apt remove", apt_map[key]))
+
+    if env.get("brew"):
+        brew_map = {
+            "iverilog": ["brew", "uninstall", "icarus-verilog"],
+            "graphviz": ["brew", "uninstall", "graphviz"],
+            "yosys": ["brew", "uninstall", "yosys"],
+            "verilator": ["brew", "uninstall", "verilator"],
+            "magic": ["brew", "uninstall", "magic"],
+        }
+        if key in brew_map:
+            cmds.append(("brew uninstall", brew_map[key]))
+
+    if env.get("conda"):
+        conda = "mamba" if _check_cmd("mamba") else "conda"
+        conda_map = {
+            "iverilog": [conda, "remove", "-y", "iverilog"],
+            "graphviz": [conda, "remove", "-y", "graphviz"],
+            "yosys": [conda, "remove", "-y", "yosys"],
+            "verilator": [conda, "remove", "-y", "verilator"],
+        }
+        if key in conda_map:
+            cmds.append(("conda remove", conda_map[key]))
 
     for label, argv in cmds:
         result = _run_argv(argv, label=label, key=key)

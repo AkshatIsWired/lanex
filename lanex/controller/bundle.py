@@ -380,8 +380,10 @@ def _image_files(run_dir: Path) -> List["tuple[str, Path]"]:
 
 def _diagram_files(run_dir: Path) -> List["tuple[str, Path]"]:
     """Yosys synthesis schematics: every ``.dot`` source plus, best-effort, its
-    rendered ``.svg`` (graphviz via :func:`history.render_dot`; gracefully skips
-    when graphviz is absent or the diagram is too big to render safely)."""
+    rendered ``.svg`` AND ``.png`` (graphviz via :func:`history.render_dot` /
+    :func:`history.render_dot_png`; gracefully skips when graphviz is absent or
+    the diagram is too big to render safely). The PNG is the drop-in raster image
+    a user can open anywhere; the SVG stays for zoomable inspection."""
     try:
         from . import history
         rows = history.list_run_diagrams(run_dir)
@@ -401,6 +403,14 @@ def _diagram_files(run_dir: Path) -> List["tuple[str, Path]"]:
                 svg = run_dir / res["svg"]
                 if svg.is_file():
                     out.append((f"diagrams/{flat}.svg", svg))
+        except Exception:
+            pass
+        try:
+            res = history.render_dot_png(run_dir, rel)
+            if res.get("ok") and res.get("png"):
+                png = run_dir / res["png"]
+                if png.is_file():
+                    out.append((f"diagrams/{flat}.png", png))
         except Exception:
             pass
     return out

@@ -46,7 +46,8 @@ async function renderDesktopViewers() {
     "<div class='tool-row'><strong>GDS3D</strong> " + badge(gds3d) +
     " <span class='hint'>3D layer-stack viewer (OpenGL). Open-source, built from source.</span> " +
     (gds3d && gds3d.available
-      ? "<span class='hint'>Open a run's GDS from the <strong>Layout</strong> tab → “3D (desktop viewer)”.</span>"
+      ? "<span class='hint'>Open a run's GDS from the <strong>Layout</strong> tab → “3D (desktop viewer)”.</span>" +
+        " <button class='btn btn-ghost' id='btn-remove-gds3d' style='font-size:11px;padding:2px 8px'>Remove</button>"
       : "<button class='btn btn-primary' id='btn-install-gds3d'>Build &amp; install GDS3D</button>") +
     "</div>" +
     "<details class='card' style='margin-top:var(--s-2)'><summary><strong>GDS3D — manual build</strong>" +
@@ -72,6 +73,25 @@ async function renderDesktopViewers() {
       toast.show("Could not start GDS3D build: " + (ex.message || ex), "error");
     }
     btn.disabled = false; btn.textContent = "Build & install GDS3D";
+  });
+  document.getElementById("btn-remove-gds3d")?.addEventListener("click", async (e) => {
+    if (!(await confirmDialog({ title: "Remove GDS3D", danger: true, confirmText: "Remove",
+      body: "Remove the GDS3D binary? You can rebuild it any time from this tab." }))) return;
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = "Removing…";
+    try {
+      const r = await api.uninstallTool("gds3d");
+      if (r && r.ok) {
+        toast.show("GDS3D removed", "info");
+        renderLogs.append({ payload: { message: "✓ GDS3D removed (" + (r.removed || []).join(", ") + ")" } });
+      } else {
+        toast.show("GDS3D remove failed: " + ((r && r.reason) || "unknown"), "error");
+        renderLogs.append({ payload: { message: "✗ GDS3D remove failed: " + ((r && r.reason) || "unknown"), level: "ERROR" } });
+      }
+    } catch (ex) {
+      toast.show("GDS3D remove error: " + (ex.message || ex), "error");
+    }
+    renderDesktopViewers();
   });
 }
 

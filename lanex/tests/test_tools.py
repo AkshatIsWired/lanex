@@ -136,6 +136,34 @@ def test_install_accepts_present_binary_despite_nonzero_exit(monkeypatch):
     assert res["rc"] == 100  # surfaced honestly, but treated as installed
 
 
+def test_uninstall_gds3d_removes_user_binary(monkeypatch, tmp_path):
+    # GDS3D has no package manager; uninstall = delete the source-built binary.
+    # The user-local copy (~/.local/bin/gds3d) needs no privileges.
+    from lanex.controller import installer
+
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    binary = home / ".local" / "bin" / "gds3d"
+    binary.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(installer.Path, "home", classmethod(lambda cls: home))
+
+    res = installer.uninstall_tool("gds3d")
+    assert res["ok"] is True
+    assert not binary.exists()
+    assert str(binary) in res["removed"]
+
+
+def test_uninstall_gds3d_absent_is_honest(monkeypatch, tmp_path):
+    # Nothing to remove -> not a crash, an honest "not found".
+    from lanex.controller import installer
+
+    monkeypatch.setattr(installer.Path, "home", classmethod(lambda cls: tmp_path))
+    # Pretend no /usr/local/bin/gds3d either.
+    res = installer.uninstall_tool("gds3d")
+    if not res["ok"]:
+        assert "not found" in res["reason"]
+
+
 def test_pull_image_fails_fast_without_engine_or_daemon():
     # With no usable engine, pull must return actionable guidance immediately
     # rather than launching a doomed background pull that looks like a hang.
