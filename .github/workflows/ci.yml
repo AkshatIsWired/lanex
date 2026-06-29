@@ -36,11 +36,11 @@ jobs:
           pip install pytest
 
       - name: Python tests
-        run: python -m pytest gui/tests -q
+        run: python -m pytest lanex/tests -q
 
       - name: JavaScript syntax check
         run: |
-          for f in gui/server/static/app.js gui/server/static/modules/*.js gui/server/static/modules/ide/*.js; do
+          for f in lanex/server/static/app.js lanex/server/static/modules/*.js lanex/server/static/modules/ide/*.js; do
             node --check "$f"
           done
 
@@ -53,9 +53,9 @@ jobs:
           whl = sorted(glob.glob("dist/*.whl"))[-1]
           names = zipfile.ZipFile(whl).namelist()
           needed = [
-              "gui/server/static/index.html",
-              "gui/server/static/app.js",
-              "gui/controller/plugins_registry.json",
+              "lanex/server/static/index.html",
+              "lanex/server/static/app.js",
+              "lanex/controller/plugins_registry.json",
           ]
           missing = [n for n in needed if not any(x.endswith(n) for x in names)]
           if missing:

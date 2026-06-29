@@ -3,16 +3,16 @@
 #
 # Why vendored? The GUI MUST work in airgapped and bandwidth-restricted
 # environments. We commit the binaries directly into
-# ``gui/server/static/vendor/`` to make first-load reproducible.
+# ``lanex/server/static/vendor/`` to make first-load reproducible.
 #
-# Run this when bumping versions, then ``git add gui/server/static/vendor``.
+# Run this when bumping versions, then ``git add lanex/server/static/vendor``.
 set -euo pipefail
 
-VENDOR="$(cd "$(dirname "$0")/.." && pwd)/gui/server/static/vendor"
+VENDOR="$(cd "$(dirname "$0")/.." && pwd)/lanex/server/static/vendor"
 mkdir -p "$VENDOR"
 
 # Versions — bump deliberately. Keep in sync with the GUI's CSS/JS imports
-# in `gui/server/static/index.html` and `styles.css`.
+# in `lanex/server/static/index.html` and `styles.css`.
 ECHARTS_VERSION="5.5.1"
 
 echo "==> ECharts  ${ECHARTS_VERSION} -> $VENDOR/echarts.min.js"
