@@ -25,8 +25,9 @@ export async function renderTools() {
   }
 }
 
-// Desktop layout viewers (KLayout / Magic / GDS3D): detection + GDS3D guided
-// build. The Layout tab launches whichever are installed on the run's GDS.
+// Desktop layout viewers (KLayout / Magic): status only. Both ship in the
+// LibreLane container image; the Layout tab launches whichever are installed on
+// the run's GDS. The 3D viewer GDS3D lives in the Recommended extra tools group.
 async function renderDesktopViewers() {
   const root = document.getElementById("desktop-viewers");
   if (!root) return;
@@ -36,31 +37,92 @@ async function renderDesktopViewers() {
   const badge = (t) => t && t.available
     ? "<span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span>"
     : "<span class='pill pill-warn'><span class='d'></span><span class='text'>not found</span></span>";
-  const gds3d = byKey.gds3d;
   root.innerHTML =
     "<div class='card'><div class='card-body'>" +
     "<div class='tool-row'><strong>KLayout</strong> " + badge(byKey.klayout) +
     " <span class='hint'>2D layout — bundled in the container image; or install from klayout.de.</span></div>" +
     "<div class='tool-row'><strong>Magic</strong> " + badge(byKey.magic) +
-    " <span class='hint'>2D layout/DRC — bundled in the container image. The GUI now launches it with the PDK's <code>.magicrc</code> so layers render.</span></div>" +
-    "<div class='tool-row'><strong>GDS3D</strong> " + badge(gds3d) +
-    " <span class='hint'>3D layer-stack viewer (OpenGL). Open-source, built from source.</span> " +
+    " <span class='hint'>2D layout/DRC — bundled in the container image. The GUI launches it with the PDK's <code>.magicrc</code> so layers render.</span></div>" +
+    "</div></div>";
+}
+
+// Recommended extra tools: the three optional power-ups (iverilog, graphviz,
+// gds3d). Native installs use the shared escalating installer — if a system
+// package needs sudo, the user is prompted for a password in the launch
+// terminal (handled globally by app.js's installer_info banner).
+async function renderRecommendedTools(info) {
+  const root = document.getElementById("recommended-tools");
+  if (!root) return;
+  const byKey = Object.fromEntries((info.tools || []).map((t) => [t.key, t]));
+  let desktop = {};
+  try {
+    desktop = Object.fromEntries(((await api.desktopTools()).tools || []).map((t) => [t.key, t]));
+  } catch (_e) {}
+  const gds3d = desktop.gds3d;
+
+  const probeCard = (t) => {
+    if (!t) return "";
+    const action = t.installed
+      ? "<div style='display:flex;gap:var(--s-2);align-items:center'><span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span>" +
+        "<button class='rec-uninstall' data-key='" + t.key + "' style='font-size:10px;padding:2px 6px;background:transparent;border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text-muted);cursor:pointer'>Remove</button></div>"
+      : (Array.isArray(t.install_recipe) || t.install_recipe
+          ? "<button class='btn btn-primary rec-install' data-key='" + t.key + "'>Install</button>"
+          : "<span class='muted' style='font-size:var(--t-xs)'>" + fmt.escape(t.install_recipe || "manual install") + "</span>");
+    return (
+      "<div class='tool-card " + (t.installed ? "installed-installed" : "installed-missing") + "' style='flex:0 0 auto;width:320px'>" +
+      "<div class='row1'><span class='name'>" + fmt.escape(t.label) + "</span>" +
+      (t.installed ? "<span class='dot-installed' title='installed'></span>" : "<span class='dot-missing' title='missing'></span>") +
+      "</div>" +
+      "<div class='what'>" + fmt.escape(t.what || "") + "</div>" +
+      (t.installed && t.version
+        ? "<div class='meta muted' style='font-size:var(--t-xs)' title='reported by the tool'>" + fmt.escape(t.version) + "</div>"
+        : "") +
+      "<div class='meta' style='margin-top:var(--s-2)'>" + action + "</div>" +
+      "</div>"
+    );
+  };
+
+  const gds3dCard =
+    "<div class='tool-card " + (gds3d && gds3d.available ? "installed-installed" : "installed-missing") + "' style='flex:0 0 auto;width:320px'>" +
+    "<div class='row1'><span class='name'>GDS3D</span>" +
+    (gds3d && gds3d.available ? "<span class='dot-installed' title='installed'></span>" : "<span class='dot-missing' title='missing'></span>") +
+    "</div>" +
+    "<div class='what'>3D layer-stack viewer (OpenGL). Open-source, built from source once. Open a run's GDS from the <strong>Layout</strong> tab → “3D (desktop viewer)”.</div>" +
+    "<div class='meta' style='margin-top:var(--s-2)'>" +
     (gds3d && gds3d.available
-      ? "<span class='hint'>Open a run's GDS from the <strong>Layout</strong> tab → “3D (desktop viewer)”.</span>" +
-        " <button class='btn btn-ghost' id='btn-remove-gds3d' style='font-size:11px;padding:2px 8px'>Remove</button>"
+      ? "<div style='display:flex;gap:var(--s-2);align-items:center'><span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span>" +
+        "<button class='btn btn-ghost' id='btn-remove-gds3d' style='font-size:11px;padding:2px 8px'>Remove</button></div>"
       : "<button class='btn btn-primary' id='btn-install-gds3d'>Build &amp; install GDS3D</button>") +
     "</div>" +
-    "<details class='card' style='margin-top:var(--s-2)'><summary><strong>GDS3D — manual build</strong>" +
-    "<span class='hint'>if the one-click build can't run on your machine</span></summary>" +
-    "<div class='card-body'><p class='hint'>GDS3D has no package manager release; you build the small OpenGL binary once. It needs the X11 + OpenGL/GLUT dev headers (the build fails with <code>X11/keysym.h: No such file or directory</code> without them). On Debian/Ubuntu/WSL:</p>" +
+    "<details style='margin-top:var(--s-2);font-size:12px'><summary style='cursor:pointer;color:var(--text-muted)'>Manual build (if the one-click build can't run)</summary>" +
+    "<p class='hint'>GDS3D has no package release; you build the small OpenGL binary once. It needs the X11 + OpenGL/GLUT dev headers (the build fails with <code>X11/keysym.h: No such file or directory</code> without them). On Debian/Ubuntu/WSL:</p>" +
     "<pre class='code'>sudo apt-get install -y git build-essential libx11-dev libxmu-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev freeglut3-dev\n" +
     "git clone https://github.com/trilomix/GDS3D\n" +
     "cd GDS3D/linux &amp;&amp; make\n" +
     "sudo cp GDS3D /usr/local/bin/gds3d</pre>" +
-    "<p class='hint'>Fedora/RHEL: <code>sudo dnf install -y libX11-devel mesa-libGL-devel mesa-libGLU-devel freeglut-devel gcc-c++ make git</code>. Arch: <code>sudo pacman -S --needed libx11 mesa glu freeglut base-devel git</code>.</p>" +
-    "<p class='hint'>macOS: build via the <code>mac</code> dir (needs XQuartz/freeglut). Windows: download the prebuilt binary from the GDS3D site. Then reopen this tab — it'll show as installed.</p>" +
-    "</div></details>" +
-    "</div></div>";
+    "<p class='hint'>Fedora/RHEL: <code>sudo dnf install -y libX11-devel mesa-libGL-devel mesa-libGLU-devel freeglut-devel gcc-c++ make git</code>. Arch: <code>sudo pacman -S --needed libx11 mesa glu freeglut base-devel git</code>. macOS: build via the <code>mac</code> dir (XQuartz/freeglut). Windows: download the prebuilt binary from the GDS3D site, then reopen this tab.</p>" +
+    "</details></div>";
+
+  root.innerHTML =
+    "<div style='display:flex;flex-wrap:wrap;gap:var(--s-4)'>" +
+    probeCard(byKey.iverilog) +
+    probeCard(byKey.graphviz) +
+    gds3dCard +
+    "</div>";
+
+  root.querySelectorAll(".rec-install").forEach((b) =>
+    b.addEventListener("click", async () => { await installByKey(b.dataset.key); renderTools(); }));
+  root.querySelectorAll(".rec-uninstall").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const key = b.dataset.key;
+      if (!(await confirmDialog({ title: "Remove " + key, danger: true, confirmText: "Remove",
+        body: "Remove " + key + "?" }))) return;
+      try {
+        const r = await api.uninstallTool(key);
+        toast.show(r.ok ? key + " removed" : key + " remove failed", r.ok ? "info" : "error");
+      } catch (ex) { toast.show(key + " remove error: " + (ex.message || ex), "error"); }
+      renderTools();
+    }));
   document.getElementById("btn-install-gds3d")?.addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true; btn.textContent = "Building GDS3D… (see Install logs)";
@@ -74,11 +136,9 @@ async function renderDesktopViewers() {
     }
     btn.disabled = false; btn.textContent = "Build & install GDS3D";
   });
-  document.getElementById("btn-remove-gds3d")?.addEventListener("click", async (e) => {
+  document.getElementById("btn-remove-gds3d")?.addEventListener("click", async () => {
     if (!(await confirmDialog({ title: "Remove GDS3D", danger: true, confirmText: "Remove",
       body: "Remove the GDS3D binary? You can rebuild it any time from this tab." }))) return;
-    const btn = e.currentTarget;
-    btn.disabled = true; btn.textContent = "Removing…";
     try {
       const r = await api.uninstallTool("gds3d");
       if (r && r.ok) {
@@ -86,12 +146,11 @@ async function renderDesktopViewers() {
         renderLogs.append({ payload: { message: "✓ GDS3D removed (" + (r.removed || []).join(", ") + ")" } });
       } else {
         toast.show("GDS3D remove failed: " + ((r && r.reason) || "unknown"), "error");
-        renderLogs.append({ payload: { message: "✗ GDS3D remove failed: " + ((r && r.reason) || "unknown"), level: "ERROR" } });
       }
     } catch (ex) {
       toast.show("GDS3D remove error: " + (ex.message || ex), "error");
     }
-    renderDesktopViewers();
+    renderRecommendedTools(info);
   });
 }
 
@@ -364,7 +423,24 @@ async function installEngine(key) {
   } catch (ex) {
     toast.show(key + " install error: " + ex.message, "error");
   }
-  renderTools();   // re-probe → card reflects binary + daemon state
+  // "In one go": once the engine is usable, chain straight into the image pull so
+  // a single click sets up the whole toolchain. If the engine isn't reachable yet
+  // (e.g. Docker needs a group/login), the runtime card shows the next fix instead.
+  try {
+    const info = await api.tools();
+    state.tools = info;
+    paint(info);
+    const c = info.container || {};
+    if (c.ready && !c.image_present && !_pull.active) {
+      const res = await api.containerPull();
+      if (res.ok) {
+        startPullUI();
+        renderLogs.append({ payload: { message: "→ engine ready — pulling container image " + (res.image || "") } });
+      }
+    }
+  } catch (_e) {
+    renderTools();   // re-probe → card reflects binary + daemon state
+  }
 }
 
 async function removeEngine(key) {
@@ -386,11 +462,17 @@ async function removeEngine(key) {
   renderTools();
 }
 
+// Tools shown in the dedicated "Recommended extra tools" group, so we skip them
+// in the Advanced local-toolchain grid to avoid duplicate cards.
+const RECOMMENDED_KEYS = new Set(["iverilog", "graphviz"]);
+
 function paint(info) {
   paintRuntimeCard(info.container);
+  renderRecommendedTools(info);
   const root = document.getElementById("tools-grid");
   root.innerHTML = "";
   for (const t of info.tools) {
+    if (RECOMMENDED_KEYS.has(t.key)) continue;
     const card = document.createElement("div");
     card.className = "tool-card " + (t.installed ? "installed-installed" : "installed-missing");
     card.dataset.key = t.key;

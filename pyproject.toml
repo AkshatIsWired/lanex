@@ -30,7 +30,11 @@ classifiers = [
 # The GUI controller uses only the standard library plus what `librelane`
 # already pulls in. `librelane` itself is an *expected peer* (it is the host
 # package the GUI plugs into), declared here so a standalone install is usable.
-dependencies = ["librelane==3.0.4"]
+# A floor pin (>=3.0.4, the tested baseline) rather than an exact pin so LanEx
+# slots into an existing, possibly newer, librelane without forcing a downgrade.
+# The container image tag is derived from the *installed* version at run time
+# (see controller/container_run.image_ref), so the toolchain always matches.
+dependencies = ["librelane>=3.0.4"]
 
 [project.scripts]
 lanex = "lanex.cli:main"

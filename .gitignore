@@ -37,8 +37,3 @@ claude-*.txt
 
 # Docker bundle design volume (user projects, not source)
 work/
-
-# Release artifacts: cold-backup image tarballs (huge; live on GitHub Releases, not git)
-dist/
-*.tar.gz
-# NOTE: base-image.lock IS committed on purpose — it pins the exact base digest.

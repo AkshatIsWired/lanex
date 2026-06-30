@@ -54,6 +54,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--no-browser", action="store_true", help="don't open the default browser")
     parser.add_argument("--design-dir", default=None, help="initial design directory")
     parser.add_argument("--pdk-root", default=None, help="PDK_ROOT (override)")
+    parser.add_argument("--pull-image", action="store_true",
+                        help="pull the version-matched LibreLane container image and exit "
+                             "(headless toolchain setup for Container run mode); skips the GUI")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -61,6 +64,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.pdk_root:
         os.environ["PDK_ROOT"] = args.pdk_root
+
+    if args.pull_image:
+        return _pull_image_cli()
 
     # Defer imports: read controller and server only when launched.
     try:
@@ -105,6 +111,60 @@ def main(argv: Optional[List[str]] = None) -> int:
             pass
         return 0
     return 0
+
+
+def _pull_image_cli() -> int:
+    """Pull the version-matched LibreLane container image to completion, headless.
+
+    The same toolchain setup the Tools tab's recommended one-click does, but from
+    the command line — so ``pip install lanex && lanex --pull-image`` sets up the
+    whole Container engine in one shot. Streams the engine's output and returns 0
+    on success. The pulled image is auto-recognised by the GUI's Tools tab.
+    """
+    import subprocess
+
+    try:
+        from .controller import tools
+        from .controller.container_run import image_ref, pull_argv
+    except Exception as ex:  # pragma: no cover - import/env dependent
+        sys.stderr.write(f"cannot resolve container helpers: {ex}\n")
+        return 2
+
+    resolved = tools.resolve_engine()
+    if not resolved.get("ready"):
+        sys.stderr.write(
+            "No usable Docker or Podman engine found.\n"
+            "Install one first (Linux: `curl -fsSL https://get.docker.com | sudo sh`, "
+            "or `sudo apt install -y podman`; macOS: `brew install podman`; "
+            "Windows: Docker Desktop with the WSL2 backend), then re-run "
+            "`lanex --pull-image`. Or just run `lanex` and use the Tools tab — "
+            "it can install the engine for you.\n"
+        )
+        return 1
+
+    engine = resolved.get("engine") or "docker"
+    image = image_ref()
+    argv = pull_argv(engine)
+    if resolved.get("sg_wrap"):
+        argv = tools.sg_wrap_argv(pull_argv(engine))
+    sys.stdout.write(f"Pulling {image} with {engine} (this is a one-time ~3 GB download)…\n")
+    sys.stdout.flush()
+    try:
+        rc = subprocess.call(argv)
+    except KeyboardInterrupt:  # pragma: no cover
+        sys.stderr.write("\npull cancelled\n")
+        return 130
+    except Exception as ex:  # pragma: no cover - platform dependent
+        sys.stderr.write(f"pull failed: {ex}\n")
+        return 1
+    if rc == 0:
+        sys.stdout.write(
+            "\nImage pulled. Container run mode is ready — run `lanex` and keep the "
+            "Container engine selected.\n"
+        )
+    else:
+        sys.stderr.write(f"\n{engine} pull exited with code {rc}.\n")
+    return rc
 
 
 def _lazy_open(url: str, no_browser: bool) -> None:

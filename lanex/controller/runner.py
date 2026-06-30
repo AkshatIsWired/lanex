@@ -1133,16 +1133,40 @@ class FlowRunner:
     # ---- log bridge ----
 
     def _setup_log_bridge(self) -> None:
-        """Forward LibreLane's logs to the SSE stream as ``log`` events."""
-        try:
-            from librelane.logging import getLogger  # type: ignore
+        """Forward LibreLane's logs to the SSE stream as ``log`` events.
 
-            root = getLogger()
+        Two things matter here, and getting either wrong makes the in-image
+        (native-toolchain) run look far less detailed than a container run:
+
+        * **Bind to the right logger.** LibreLane logs to a named logger,
+          ``__librelane__`` (not the root logger). The old
+          ``from librelane.logging import getLogger`` import silently failed
+          (that name isn't exported) and we fell back to the root logger,
+          catching LibreLane's records only by propagation.
+        * **Accept the SUBPROCESS level.** LibreLane streams every EDA tool's
+          stdout through that logger at its custom ``SUBPROCESS`` level (=12,
+          *below* ``INFO``). Our handler sat at ``INFO`` (20) and so dropped
+          exactly that per-tool detail — the polygon dumps / per-cell / LVS
+          output a verbose container run shows live. Capturing SUBPROCESS makes
+          the local/in-image stream as detailed as container mode.
+        """
+        try:
+            from librelane.logging.logger import LogLevels  # type: ignore
+
+            sub_level = int(LogLevels.SUBPROCESS)
         except Exception:
-            root = logging.getLogger()
+            sub_level = 12  # SUBPROCESS — stable, documented CLI log-level value
+        root = logging.getLogger("__librelane__")
         handler = _SSEHandler(self)
-        handler.setLevel(logging.INFO)
+        handler.setLevel(sub_level)
         root.addHandler(handler)
+        # __librelane__ defaults to SUBPROCESS, but be explicit so a global/parent
+        # level set elsewhere can't filter the tool detail before we see it.
+        try:
+            if root.level == 0 or root.level > sub_level:
+                root.setLevel(sub_level)
+        except Exception:
+            pass
         self._log_handler = handler
         self._log_root = root
 

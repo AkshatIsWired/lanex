@@ -51,66 +51,69 @@ affiliated with or endorsed by the LibreLane project or its maintainers.
 
 ## Install
 
-There are two ways in. **Newcomers want Option A.**
+LanEx is a small Python GUI (the Python standard library + `librelane`). Install
+it once; from there it can **install LibreLane and every EDA tool for you**, or
+plug into a toolchain you already run. The recommended toolchain is LibreLane's
+official, version-matched **container image** — one click pulls it and you need no
+native EDA installs at all.
 
-### Option A — Docker bundle (everything included) · recommended
+**Prerequisite:** Python ≥ 3.10. Docker or Podman is recommended but **optional** —
+LanEx can install an engine for you (you confirm the password prompt in your
+terminal if the system package needs `sudo`).
 
-The bundled image is based on the official LibreLane image, so the entire EDA
-toolchain is already inside. You need **only Docker** — no Python, no LibreLane,
-no tool installs.
+### Get LanEx
 
 ```bash
 git clone https://github.com/AkshatIsWired/lanex.git
 cd lanex
-docker compose up          # builds the image, then serves the cockpit
+pip install .            # or, once published: pip install lanex
+lanex                    # opens the cockpit at http://localhost:8765
 ```
 
-Then open **http://localhost:8765**. Put your HDL projects under `./work`
-(mounted at `/work` in the container).
+Then open the **Tools** tab and follow the row that matches your situation.
 
-Or without compose:
+### 1 · You have nothing yet — no LibreLane, no tools
+
+Tools tab → **Install the toolchain (recommended)**. One click pulls the
+version-matched LibreLane container image; keep the **Container** engine selected
+and you're done — zero native tool installs.
+
+**No Docker or Podman?** The same card installs one for you first, then pulls the
+image — all in one go. (It runs the official installer, e.g.
+`curl -fsSL https://get.docker.com | sudo sh` on Linux, `brew install podman` on
+macOS, or Docker Desktop with the WSL2 backend on Windows; you confirm the
+password prompt in your terminal.)
+
+### 2 · One command — GUI **and** toolchain
 
 ```bash
-docker build -t lanex:latest .
-docker run --rm -p 8765:8765 -v "$PWD/work:/work" lanex:latest
+pip install . && lanex --pull-image && lanex
 ```
 
-> Pin a specific LibreLane release for reproducible tool versions:
-> `docker build --build-arg LIBRELANE_TAG=3.0.4 -t lanex:latest .`
+`--pull-image` pulls the LibreLane container headless and exits, then `lanex`
+launches the cockpit with the toolchain already in place. LanEx **recognises the
+pulled image as your container toolchain automatically** — the Tools tab shows
+*image pulled · Container ready*.
 
-### Option B — add-on to an existing LibreLane install
+### 3 · You already run LibreLane
 
-If you already run LibreLane in a Python environment, install LanEx into the
-same environment:
+Install LanEx into the **same** Python environment and run it:
 
 ```bash
-pip install lanex          # from PyPI (or: pip install . from a clone)
-lanex                      # opens the cockpit in your browser
+pip install .
+lanex
 ```
 
-LanEx declares `librelane` as its only dependency and otherwise uses the Python
-standard library. With a local toolchain it runs flows natively; with Docker
-available it can also drive `librelane --dockerized`.
+LanEx auto-detects your setup. Use the **Local tools** engine to run flows against
+your native toolchain, or **Container** to drive `librelane --dockerized`. Nothing
+extra to install — it works with what you already have.
 
-**Requirements (Option B):** Python ≥ 3.10, an installed `librelane`, and either
-a local EDA toolchain or Docker/Podman for container runs.
+### 4 · Recommended extras (optional)
 
-### Independence & self-hosting
-
-LanEx is built on LibreLane but is designed to keep working no matter what happens
-upstream. A built image is a frozen, self-contained snapshot — once published it
-needs none of LibreLane's servers to pull, run, or restore. Maintainers ship a
-release with one command:
-
-```sh
-docker login ghcr.io
-VERSION=0.1.0 ./scripts/release.sh        # mirror base → build → push → cold tarball
-```
-
-This (1) mirrors the LibreLane base into your own registry and pins its exact
-`@sha256:` digest in `base-image.lock`, (2) builds + pushes `ghcr.io/<you>/lanex`,
-and (3) writes a cold `docker save` tarball restorable with zero registry. Full
-runbook: [`docs/RELEASE.md`](docs/RELEASE.md).
+The Tools tab's **Recommended extra tools** group one-click-installs the niceties
+LanEx adds on top: **Icarus Verilog** (RTL simulation in the IDE), **Graphviz**
+(synthesis schematics), and **GDS3D** (3D layout viewer). System packages that
+need `sudo` prompt for your password in the launch terminal.
 
 ---
 

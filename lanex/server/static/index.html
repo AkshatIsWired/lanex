@@ -454,9 +454,13 @@
 
     <!-- TOOLS -->
     <section class="section" id="sec-tools">
-      <h2>Container runtime <span class="hint">recommended</span></h2>
-      <p class="hint">The simplest way to get every EDA tool: LibreLane ships a version-matched container image. With Docker or Podman installed, <code>Container</code> run mode needs no native tool installs at all.</p>
+      <h2>Install the toolchain <span class="hint">recommended — one click</span></h2>
+      <p class="hint">The simplest way to get every EDA tool (OpenROAD · Yosys · Magic · KLayout · Netgen · Verilator) is the version-matched LibreLane container image. With Docker or Podman present, one click pulls it and <code>Container</code> run mode needs <strong>no native tool installs at all</strong>. No engine yet? The card below installs Docker or Podman for you, then pulls the image — all in one go.</p>
       <div id="runtime-card"></div>
+
+      <h2>Recommended extra tools <span class="hint">optional power-ups</span></h2>
+      <p class="hint">Not part of the hardening flow, but LanEx uses these for the extras: <strong>Icarus Verilog</strong> drives RTL simulation in the IDE, <strong>Graphviz</strong> renders the synthesis schematics, and <strong>GDS3D</strong> is a 3D layer-stack viewer. One-click install — if a system package needs <code>sudo</code>, LanEx asks for your password in the terminal it was launched from.</p>
+      <div id="recommended-tools"></div>
 
       <details class="card" id="local-tools-card" style="margin-top:var(--s-4)">
         <summary><strong>Advanced: local toolchain</strong><span class="hint">Only needed for <em>Local tools</em> run mode (Nix / conda / system installs).</span></summary>
@@ -482,7 +486,7 @@
       <div id="pdk-store-row"></div>
 
       <h2>Desktop layout viewers</h2>
-      <p class="hint">Interactive layout/3D viewing uses your own desktop tools (the GUI launches them on a run's GDS from the Layout tab). KLayout &amp; Magic ship in the LibreLane container image; <strong>GDS3D</strong> is a small open-source OpenGL viewer you build once.</p>
+      <p class="hint">Interactive layout viewing uses your own desktop tools (the GUI launches them on a run's GDS from the Layout tab). KLayout &amp; Magic ship in the LibreLane container image. The 3D viewer <strong>GDS3D</strong> installs from the <em>Recommended extra tools</em> section above.</p>
       <div id="desktop-viewers"></div>
 
       <h2>Add-ons &amp; plugins</h2>

@@ -133,38 +133,31 @@ def test_runner_starts_with_mock_run():
         r._run = original  # type: ignore[assignment]
 
 
-def test_runner_init_logs_handler_attached(monkeypatch, tmp_path: Path):
-    """The runner wires up a logging.Handler when the worker runs."""
+def test_runner_init_logs_handler_attached(tmp_path: Path):
+    """The bridge binds a handler to LibreLane's ``__librelane__`` logger at the
+    SUBPROCESS level (so per-tool output reaches the live stream, matching a
+    container run) and removes it on teardown.
+
+    Regression guard for the bug where we bound to the wrong logger (root, via a
+    failing ``librelane.logging.getLogger`` import) and sat at INFO — which
+    silently dropped every SUBPROCESS-level (=12) tool line.
+    """
+    import logging
+
     from lanex.controller import runner as rmod
 
-    assertions = {"attached": False, "detached": False}
-
-    class _StubLog:
-        def __init__(self):
-            self.handlers = []
-
-        def addHandler(self, h):
-            self.handlers.append(h)
-            assertions["attached"] = True
-
-        def removeHandler(self, h):
-            if h in self.handlers:
-                self.handlers.remove(h)
-            assertions["detached"] = True
-
-    def _fake_getLogger():
-        return _StubLog()
-
-    # Map monkeypatched getLogger.
-    import sys
-    import types
-
-    fake = types.ModuleType("librelane.logging")
-    fake.getLogger = _fake_getLogger
-    monkeypatch.setitem(sys.modules, "librelane.logging", fake)
+    ll_logger = logging.getLogger("__librelane__")
+    baseline = list(ll_logger.handlers)
 
     r = rmod.FlowRunner()
     r._setup_log_bridge()
+    # bound to the right logger…
+    assert r._log_root is ll_logger
+    assert r._log_handler in ll_logger.handlers
+    # …and accepting SUBPROCESS (12) or lower, NOT INFO (20)
+    assert r._log_handler.level <= 12
+    assert ll_logger.level <= 12
+
     r._teardown_log_bridge()
-    assert assertions["attached"] is True
-    assert assertions["detached"] is True
+    assert r._log_handler not in ll_logger.handlers
+    assert list(ll_logger.handlers) == baseline

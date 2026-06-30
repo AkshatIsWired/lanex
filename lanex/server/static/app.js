@@ -8,7 +8,7 @@ import { setupTheme, toggleTheme } from "./modules/theme.js";
 import { setupHotkeys } from "./modules/hotkeys.js";
 import { setupDensity, toggleDensity } from "./modules/density.js";
 import { setupPalette, openPalette } from "./modules/palette.js";
-import { setupRunMode, applyServerDefault } from "./modules/runmode.js";
+import { setupRunMode } from "./modules/runmode.js";
 import { renderConfig } from "./modules/config.js";
 import { renderPipeline } from "./modules/pipeline.js";
 import { renderRuntimeline, noteStepEvent, resetTimeline, notePhase } from "./modules/runtimeline.js";
@@ -114,8 +114,7 @@ async function boot() {
     // detection). The old inline handler here double-bound it — removed.
 
     try {
-      const h = await api.health();
-      if (h && h.default_run_mode) applyServerDefault(h.default_run_mode);
+      await api.health();
     } catch (_) {}
 
     setStatus("loading flow metadata…");
