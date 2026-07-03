@@ -220,6 +220,8 @@ def _summarise(run_dir: Path) -> RunSummary:
         steps_failed=steps_failed,
         wall_time_s=wall_time,
         key_metrics=key,
+        imported=(run_dir / _IMPORT_MARKER).is_file(),
+        pinned=(run_dir / _PIN_MARKER).is_file(),
     )
 
 
@@ -1352,6 +1354,188 @@ def _export_html(run: Path, tag: str, rows: List[Dict[str, Any]], verdict: Dict[
 
 _NOTE_FILE = ".gui-note.txt"
 _NOTE_MAX = 4000
+
+# Marker dropped into a run dir that was pulled in from elsewhere (E1). Used by
+# _summarise() to badge the Runs row "imported".
+_IMPORT_MARKER = "gui-imported.json"
+
+# Empty marker file present iff the user pinned/starred the run (E4.5).
+_PIN_MARKER = ".gui-pin"
+
+
+# Per-design metric watch-list (E4.2): rules of the form "this metric must stay
+# <cmp> <threshold>". Stored beside the design; evaluated against a finished run.
+_WATCH_FILE = ".gui-watch.json"
+_WATCH_CMPS = {">", "<", ">=", "<=", "==", "!="}
+
+
+def read_watch(design_dir: str | Path) -> List[Dict[str, Any]]:
+    p = Path(design_dir) / _WATCH_FILE
+    if not p.is_file():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def write_watch(design_dir: str | Path, rules: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Persist the watch-list for a design. Rules are sanitised: each needs a
+    non-empty ``metric``, a known comparator, and a numeric ``threshold``; bad
+    rules are dropped rather than stored."""
+    clean: List[Dict[str, Any]] = []
+    for r in rules or []:
+        if not isinstance(r, dict):
+            continue
+        metric = str(r.get("metric", "")).strip()
+        cmp = str(r.get("cmp", "")).strip()
+        try:
+            threshold = float(r.get("threshold"))
+        except (TypeError, ValueError):
+            continue
+        if metric and cmp in _WATCH_CMPS:
+            clean.append({"metric": metric, "cmp": cmp, "threshold": threshold})
+    p = Path(design_dir) / _WATCH_FILE
+    try:
+        if clean:
+            p.write_text(json.dumps(clean, indent=2) + "\n", encoding="utf-8")
+        elif p.is_file():
+            p.unlink()
+        return {"ok": True, "rules": clean}
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+
+
+def _watch_satisfied(value: float, cmp: str, threshold: float) -> bool:
+    if cmp == ">":
+        return value > threshold
+    if cmp == "<":
+        return value < threshold
+    if cmp == ">=":
+        return value >= threshold
+    if cmp == "<=":
+        return value <= threshold
+    if cmp == "==":
+        return value == threshold
+    if cmp == "!=":
+        return value != threshold
+    return True
+
+
+def evaluate_watch(metrics: Dict[str, Any], rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return the rules a run VIOLATES. Only rules whose metric is actually
+    present and finite in the run are evaluated — a missing or non-finite metric
+    is never reported as a pass OR a fail (no invented verdicts). Each violation
+    carries the real observed value so the UI shows the truth, not a guess."""
+    from decimal import Decimal
+    violations: List[Dict[str, Any]] = []
+    metrics = metrics or {}
+    for r in rules or []:
+        metric = r.get("metric")
+        cmp = r.get("cmp")
+        threshold = r.get("threshold")
+        if metric not in metrics or cmp not in _WATCH_CMPS:
+            continue
+        v = metrics[metric]
+        if isinstance(v, bool) or not isinstance(v, (int, float, Decimal)):
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv != fv or fv in (float("inf"), float("-inf")):  # NaN / inf
+            continue
+        try:
+            tf = float(threshold)
+        except (TypeError, ValueError):
+            continue
+        if not _watch_satisfied(fv, cmp, tf):
+            violations.append({"metric": metric, "value": fv, "cmp": cmp, "threshold": tf})
+    return violations
+
+
+def set_pin(run_dir: str | Path, pinned: bool) -> Dict[str, Any]:
+    """Pin/unpin a run (E4.5) — drops or removes an empty ``.gui-pin`` marker.
+    Purely a user bookmark; never touches run data."""
+    rd = Path(run_dir)
+    if not rd.is_dir():
+        return {"ok": False, "error": "run not found"}
+    marker = rd / _PIN_MARKER
+    try:
+        if pinned:
+            marker.touch()
+        elif marker.is_file():
+            marker.unlink()
+        return {"ok": True, "pinned": bool(pinned)}
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+
+
+def _looks_like_run(d: Path) -> bool:
+    """A directory looks like a LibreLane run if it holds resolved config, a
+    ``final/`` dir, or at least one ``NN-StepName`` step dir."""
+    if (d / "resolved.json").is_file() or (d / "config.json").is_file():
+        return True
+    if (d / "final").is_dir():
+        return True
+    for entry in d.iterdir():
+        if entry.is_dir():
+            prefix, sep, _ = entry.name.partition("-")
+            if prefix.isdigit() and sep:
+                return True
+    return False
+
+
+def adopt_run(src_run_dir: str | Path, design_dir: str | Path) -> Dict[str, Any]:
+    """Copy an existing LibreLane run dir into ``<design>/runs/`` so LanEx can
+    view it (E1, mode 1). Copies (never symlinks) so the import survives deletion
+    of the source. Returns ``{"tag": <adopted tag>}``.
+
+    Raises FileNotFoundError if the source is missing and ValueError if it does
+    not look like a run or would escape the design's ``runs/`` dir.
+    """
+    src = Path(src_run_dir).expanduser().resolve()
+    if not src.is_dir():
+        raise FileNotFoundError(f"not a directory: {src}")
+    if not _looks_like_run(src):
+        raise ValueError(
+            "that folder is not a LibreLane run (no resolved.json / final/ / NN-Step dir)"
+        )
+    runs_root = (Path(design_dir).resolve() / "runs")
+    runs_root.mkdir(parents=True, exist_ok=True)
+    # Refuse to adopt a dir that already lives under this design's runs/.
+    try:
+        src.relative_to(runs_root)
+        raise ValueError("that run already lives under this design — it's in the list")
+    except ValueError as ex:
+        if "already lives under" in str(ex):
+            raise
+
+    base = src.name or "imported-run"
+    tag = f"{base}-imported"
+    dest = runs_root / tag
+    n = 2
+    while dest.exists():
+        tag = f"{base}-imported-{n}"
+        dest = runs_root / tag
+        n += 1
+    # Confinement: the resolved destination must stay directly under runs/.
+    if dest.resolve().parent != runs_root.resolve():
+        raise ValueError("refusing to write outside the design's runs/ directory")
+    shutil.copytree(src, dest)
+    try:
+        (dest / _IMPORT_MARKER).write_text(
+            json.dumps(
+                {"source": str(src), "imported_at": datetime.now().isoformat()},
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+    return {"tag": tag, "run_dir": str(dest)}
 
 
 def read_note(run_dir: str | Path) -> str:

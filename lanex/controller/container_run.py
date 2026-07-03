@@ -345,17 +345,23 @@ class ContainerLogParser:
     def finish(self, returncode: int) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         if returncode == 0:
-            # A clean exit means every step ran (or was intentionally skipped).
-            # Close out any seeded step we never saw a `Running '<id>'` for —
-            # otherwise the final step(s) linger as "running" and the progress
-            # bar sticks at 99%.
+            # The step that was actively running when the flow exited cleanly did
+            # run and succeeded — close it as done (also covers the no-graph case
+            # where step_ids is empty but a step was running).
+            if self.current_id and self.current_id not in self.done_ids:
+                self.done_ids.add(self.current_id)
+                out.append({"type": "step_done", "step_id": self.current_id})
+            # Any OTHER seeded step we never saw a `Running '<id>'` banner for has
+            # NO evidence it executed — it was either skipped by the flow or its
+            # banner was missed (e.g. a LibreLane log-format change). Report it as
+            # skipped, never as a green "done" we cannot substantiate: inventing a
+            # success is exactly the over-optimistic status class the round-27
+            # verdict fix killed in Verify (audit A4). The progress bar still
+            # reaches 100% because skipped steps count toward the done total.
             for sid in self.step_ids:
                 if sid not in self.done_ids:
                     self.done_ids.add(sid)
-                    out.append({"type": "step_done", "step_id": sid})
-            if not self.step_ids and self.current_id and self.current_id not in self.done_ids:
-                self.done_ids.add(self.current_id)
-                out.append({"type": "step_done", "step_id": self.current_id})
+                    out.append({"type": "step_skipped", "step_id": sid})
             total = self.total or len(self.done_ids)
             out.append(
                 {"type": "progress", "done": len(self.done_ids), "total": total, "current": ""}
@@ -375,6 +381,14 @@ class ContainerLogParser:
                         "message": msg,
                     }
                 )
+            # Non-zero exit: the flow is over, so no seeded step that never reached
+            # a terminal state should linger as "pending" in the timeline. Close
+            # the tail as skipped (reason implicit in the failed run) — mirrors the
+            # local-abort tail-closing in runner._mark_remaining_aborted (A5).
+            for sid in self.step_ids:
+                if sid not in self.done_ids and sid != self.current_id:
+                    self.done_ids.add(sid)
+                    out.append({"type": "step_skipped", "step_id": sid})
             err = "PDK download failed (offline?)" if self.pdk_download_issue else f"exit code {returncode}"
             out.append({"type": "flow_done", "error": err})
         return out

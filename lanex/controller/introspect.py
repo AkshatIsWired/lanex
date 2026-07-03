@@ -118,10 +118,10 @@ def _stringify_default(default: Any) -> Any:
     if isinstance(default, (bool, int, float, str)):
         return default
     if isinstance(default, Decimal):
-        try:
-            return float(default)
-        except Exception:
-            return str(default)
+        # Use LibreLane's own canonical decimal string, NOT float(): a binary
+        # float can shift what the user sees (e.g. 2.4 -> 2.3999999999999999 after
+        # JS formatting). Display-only; the field is a text input either way (A9).
+        return str(default)
     if isinstance(default, (list, tuple)):
         return [_stringify_default(x) for x in default]
     if isinstance(default, dict):

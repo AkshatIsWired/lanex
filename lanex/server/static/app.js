@@ -1,29 +1,27 @@
 // app.js — front-end entry. Bootstraps everything.
 
 import { api, sse, fmt } from "./modules/api.js";
-import { state } from "./modules/state.js";
+import { state, safeStorage } from "./modules/state.js";
 import { setupTabs, activate } from "./modules/tabs.js";
-import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkPill } from "./modules/setup.js";
+import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkPill, paintOnboardChecklist } from "./modules/setup.js";
 import { setupTheme, toggleTheme } from "./modules/theme.js";
 import { setupHotkeys } from "./modules/hotkeys.js";
 import { setupDensity, toggleDensity } from "./modules/density.js";
 import { setupPalette, openPalette } from "./modules/palette.js";
 import { setupRunMode } from "./modules/runmode.js";
 import { renderConfig } from "./modules/config.js";
-import { renderPipeline } from "./modules/pipeline.js";
 import { renderRuntimeline, noteStepEvent, resetTimeline, notePhase } from "./modules/runtimeline.js";
 import { renderRuns } from "./modules/runs.js";
 import { renderPreview } from "./modules/preview.js";
 import { renderTools, updatePullProgress, finishPull } from "./modules/tools.js";
 import { renderAdvisor } from "./modules/advisor.js";
 import { renderTimingAdvisor } from "./modules/timingAdvisor.js";
-import { renderAnalytics, renderAnalyticsFull } from "./modules/analytics.js";
+import { renderAnalyticsFull } from "./modules/analytics.js";
 import { renderLogs, setupLogs } from "./modules/logs.js";
 import { setupStepOutput } from "./modules/stepoutput.js";
 import { populateReportsList, setupViolations } from "./modules/violations.js";
 import { help } from "./modules/help.js";
 import { toast } from "./modules/toast.js";
-import { setupTier } from "./modules/tier.js";
 import { setupWizard } from "./modules/wizard.js";
 import { setupLearn } from "./modules/learn.js";
 import { loadEnabledPlugins } from "./modules/plugins.js";
@@ -33,8 +31,8 @@ import { setupFullscreen } from "./modules/fullscreen.js";
 // Map each side-nav tab to a line-style SVG icon (replaces per-OS emoji glyphs).
 const TAB_ICONS = {
   setup: "folder", pipeline: "flow", runs: "clock", preview: "image",
-  ide: "code", tools: "tools", analytics: "chart", verify: "check", compare: "diff",
-  dse: "beaker", layout: "grid", cells: "layers", plugins: "plug", manual: "command",
+  ide: "code", tools: "tools", analytics: "chart", verify: "check",
+  dse: "beaker", layout: "grid", cells: "layers", manual: "command",
 };
 function paintNavIcons() {
   document.querySelectorAll(".side-tab").forEach((tab) => {
@@ -78,6 +76,9 @@ async function boot() {
 
   try {
     setStatus("setup…");
+    // Hygiene: the Simple/Pro tier system was removed — drop its orphaned keys.
+    safeStorage.remove("ll.tier");
+    safeStorage.remove("ll.onboarded");
     setupTabs();
     setupTheme();
     setupDensity();
@@ -88,7 +89,6 @@ async function boot() {
     setupSetup();
     setupHotkeys();
     setupViolations();
-    setupTier();
     setupWizard();
     setupLearn();
     setupFullscreen();
@@ -114,7 +114,8 @@ async function boot() {
     // detection). The old inline handler here double-bound it — removed.
 
     try {
-      await api.health();
+      const health = await api.health();
+      maybeWarnCompat(health && health.compat);
     } catch (_) {}
 
     setStatus("loading flow metadata…");
@@ -136,9 +137,7 @@ async function boot() {
     await populatePdkPicker();
     setStatus("rendering panels…");
     renderConfig();
-    renderPipeline();
     renderRuntimeline();
-    renderAnalytics();
     renderTimingAdvisor();
 
     // Subscribe to the event stream. SSE is optional; don't block boot.
@@ -152,7 +151,6 @@ async function boot() {
 
     if (state.steps.length) {
       state.selectedStepId = state.steps[0].id;
-      renderPipeline();
     }
 
     // Adopt a design directory so the GUI opens ready to run AND the Runs tab
@@ -197,6 +195,8 @@ async function boot() {
       }
     } catch (_e) {}
 
+    paintOnboardChecklist();  // E5.1 — reflect the real design/PDK/run state now
+
     // Always open on Setup (the design/PDK/run entry point), regardless of which
     // tab was last visited — boot should land the user at the start of the flow.
     activate("setup");
@@ -214,8 +214,8 @@ async function boot() {
   }
 }
 
-// Isolate one view's render from another: a throw in renderPipeline must not
-// skip renderRuntimeline/renderRuns for the same event. (The SSE loop itself is
+// Isolate one view's render from another: a throw in renderRuntimeline must not
+// skip renderRuns for the same event. (The SSE loop itself is
 // already protected by api._broadcast's per-handler try/catch.)
 function R(label, fn) {
   try { fn(); } catch (e) { console.error("render:" + label, e); }
@@ -229,17 +229,16 @@ function handle(ev) {
       state.pipeline = ev.step_graph;
       state.status.running = true;
       // Reset per-step statuses to the fresh graph (all pending). Without this
-      // the timeline + pipeline kept the PREVIOUS run's statuses (all "done")
+      // the timeline kept the PREVIOUS run's statuses (all "done")
       // until each new step event arrived — so a fresh run (especially a DSE
       // config, which reuses the runner back-to-back) looked like it was showing
       // the previous run's progress. Seeding pending here fixes that immediately.
       state.stepStatuses = {};
       for (const s of ev.step_graph) state.stepStatuses[s.id] = s.status || "pending";
       resetTimeline();        // a fresh run is starting; clear old step timings
-      R("pipeline", renderPipeline);
       R("runtimeline", renderRuntimeline);
       R("runs", renderRuns);  // surface the just-created run dir immediately
-      // Land the user on the live Pipeline view (graph + timeline) and focus
+      // Land the user on the live Pipeline view (timeline) and focus
       // the log pane, so they immediately see steps light up + terminal output.
       document.querySelector('.side-tab[data-tab="pipeline"]')?.click();
       document.querySelector('.side-pane-tab[data-itab="logs"]')?.click();
@@ -260,7 +259,6 @@ function handle(ev) {
     state.status.running = true;
     resetTimeline();
     notePhase("DSE config " + (((ev.index || 0) + 1)) + "/" + (ev.total || "?") + " — preparing…");
-    renderPipeline();
     renderRuntimeline();
   } else if (ev.type === "manual_started" || ev.type === "manual_line" || ev.type === "manual_done") {
     import("./modules/manual.js").then((m) => m.onManualEvent(ev));
@@ -333,7 +331,6 @@ function handle(ev) {
       if (ev.type === "step_started") {
         renderLogs.markStep(id, ev.long_name || ev.label || ev.payload?.long_name);
       }
-      R("pipeline", renderPipeline);
       R("runtimeline", renderRuntimeline);
     }
     if (ev.type === "step_failed") {
@@ -378,9 +375,13 @@ function handle(ev) {
       }
       renderAdvisorAndRefreshMetrics();
       renderRuns();
-      renderPipeline();
       renderRuntimeline();
       renderPreview();
+      paintOnboardChecklist();
+      if (!ev.error && !ev.cancelled) {
+        maybeShowPostRunPanel();
+        import("./modules/watch.js").then((m) => m.checkAfterRun()).catch(() => {});
+      }
     } catch (e) {
       console.error("flow_done render", e);
     }
@@ -395,7 +396,6 @@ async function renderAdvisorAndRefreshMetrics() {
     const view = await api.run(target);
     state.metrics = view.metrics?.values || {};
     populateReportsList(state.designDir, target);
-    import("./modules/analytics.js").then((mod) => mod.renderAnalytics());
     renderTimingAdvisor();
   } catch (_e) {}
 }
@@ -519,6 +519,71 @@ function clearPasswordBanner() {
   if (el) el.hidden = true;
 }
 
+// E5.2 — after the FIRST successful run, a one-time card points the newcomer at
+// the three things to look at next (real tabs; no invented content). Shown once,
+// dismissible; never after a failed/cancelled run.
+function maybeShowPostRunPanel() {
+  if (safeStorage.get("ll.postRunSeen") === "1") return;
+  if (document.getElementById("postrun-card")) return;
+  safeStorage.set("ll.postRunSeen", "1");
+  const el = document.createElement("div");
+  el.id = "postrun-card";
+  el.className = "postrun-card";
+  el.setAttribute("role", "status");
+  el.innerHTML =
+    "<div class='postrun-head'><strong>Run complete — what now?</strong>" +
+    "<button class='postrun-close' aria-label='Dismiss'>✕</button></div>" +
+    "<span class='muted'>See the layout, check sign-off, or dig into the numbers.</span>" +
+    "<div class='postrun-actions'>" +
+      "<button class='btn btn-ghost' data-go='preview'>View GDS</button>" +
+      "<button class='btn btn-ghost' data-go='verify'>Check sign-off</button>" +
+      "<button class='btn btn-ghost' data-go='analytics'>See metrics</button>" +
+    "</div>";
+  el.addEventListener("click", (e) => {
+    const t = e.target;
+    const go = t.getAttribute && t.getAttribute("data-go");
+    if (go) { document.querySelector('.side-tab[data-tab="' + go + '"]')?.click(); el.remove(); }
+    if (t.classList && t.classList.contains("postrun-close")) el.remove();
+  });
+  document.body.appendChild(el);
+}
+
+// I2 — warn (never block) when running against an unvalidated librelane. LanEx
+// reaches past librelane's public CLI, so a version outside the known-good range
+// or a failed private-API probe can misbehave; make that visible instead of
+// letting it surface as a cryptic mid-run failure.
+function maybeWarnCompat(compat) {
+  if (!compat || (compat.ok && compat.known_good)) return;
+  let msg;
+  if (compat.issues && compat.issues.length) {
+    msg = "LanEx may not work with this librelane (" + (compat.version || "?") + "): " +
+      compat.issues.join("; ") + ". Known-good: " + (compat.range || "") + ".";
+  } else {
+    msg = "LanEx has not been validated against librelane " + (compat.version || "?") +
+      " (known-good " + (compat.range || "") + "). Things may misbehave; " +
+      "pin with `pip install 'librelane~=3.0'` for a tested version.";
+  }
+  let el = document.getElementById("compat-banner");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "compat-banner";
+    el.className = "pw-banner";
+    el.setAttribute("role", "alert");
+    document.body.appendChild(el);
+  }
+  el.innerHTML = "";
+  const span = document.createElement("span");
+  span.textContent = msg;
+  const close = document.createElement("button");
+  close.className = "pw-banner-close";
+  close.setAttribute("aria-label", "Dismiss");
+  close.textContent = "Dismiss";
+  close.addEventListener("click", () => { el.hidden = true; });
+  el.appendChild(span);
+  el.appendChild(close);
+  el.hidden = false;
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   // Boot is responsible for its own failure UI (writes into #splash).
   boot();
@@ -543,6 +608,7 @@ document.addEventListener("g:tab_activated", (e) => {
   if (e.detail?.tab === "analytics") {
     import("./modules/analytics.js").then((m) => m.renderAnalyticsFull());
     import("./modules/compare.js").then((m) => m.renderCompare());
+    import("./modules/watch.js").then((m) => m.renderWatch());
     // The "Advisor & reports" card (failure advisor + DRC/LVS report parser)
     // used to populate only on flow_done, so after a reload it sat empty. Refill
     // it for the currently-selected run whenever Analytics is opened.

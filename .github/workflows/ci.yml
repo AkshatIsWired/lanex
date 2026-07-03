@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +44,19 @@ jobs:
             node --check "$f"
           done
 
+      - name: Static hygiene (no emoji pictographs — round-26 rule, locks D10)
+        run: |
+          # Fail if any U+1F300–U+1FAFF pictograph creeps back into first-party
+          # static assets. Typographic glyphs (⚠ ⬇ ✕ ✓ ↻ ⛭) are intentional and
+          # out of this range. vendor/ (echarts etc.) is third-party, excluded.
+          hits=$(grep -rlP "[\x{1F300}-\x{1FAFF}]" lanex/server/static \
+                   --include='*.js' --include='*.html' --include='*.css' \
+                   | grep -v '/vendor/' || true)
+          if [ -n "$hits" ]; then
+            echo "Emoji pictographs found (use modules/icons.js instead):"; echo "$hits"; exit 1
+          fi
+          echo "no emoji pictographs — OK"
+
       - name: Build the wheel and confirm bundled data is present
         run: |
           python -m pip install build
@@ -52,13 +65,46 @@ jobs:
           import zipfile, glob, sys
           whl = sorted(glob.glob("dist/*.whl"))[-1]
           names = zipfile.ZipFile(whl).namelist()
+          # One sentinel per fragile asset class (the recursive package-data globs
+          # are exactly what historically dropped assets from the wheel). Plain
+          # strings are exact-file checks; a trailing "/" means "at least one
+          # member under this directory".
           needed = [
               "lanex/server/static/index.html",
               "lanex/server/static/app.js",
+              "lanex/server/static/styles.css",
+              "lanex/server/static/modules/api.js",     # modules/
+              "lanex/server/static/modules/ide/",       # nested modules
+              "lanex/server/static/vendor/",            # echarts + fonts + logos
               "lanex/controller/plugins_registry.json",
+              "lanex/controller/templates/",            # project templates w/ .v sources
           ]
-          missing = [n for n in needed if not any(x.endswith(n) for x in names)]
+          def present(n):
+              if n.endswith("/"):
+                  return any((("/" + n) in ("/" + x)) or x.startswith(n) for x in names)
+              return any(x.endswith(n) for x in names)
+          missing = [n for n in needed if not present(n)]
           if missing:
               print("MISSING from wheel:", missing); sys.exit(1)
           print("wheel OK:", whl)
           PY
+
+  # I2 — advance warning when librelane's pre-release/main breaks a private-API
+  # touchpoint LanEx depends on. Non-blocking (continue-on-error): it never fails
+  # a PR, it just surfaces the break early via the compat canary.
+  compat-canary:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install LanEx against pre-release librelane
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install --pre --upgrade librelane || echo "no pre-release available; using released"
+          pip install pytest
+      - name: Compat canary (probe + version-range shims)
+        run: python -m pytest lanex/tests/test_compat.py -q

@@ -162,3 +162,16 @@ def test_introspect_models_jsonable_depth_guarded_cycle():
     assert info is not None
     assert info["name"] == flows[0]["name"]
     assert isinstance(info["steps"], list)
+
+
+def test_stringify_default_keeps_decimal_canonical_string():
+    # A9: Decimal defaults must render as LibreLane's own canonical string, not
+    # via float() (which can surface e.g. 2.3999999999999999 after JS formatting).
+    from decimal import Decimal
+    from lanex.controller.introspect import _stringify_default
+
+    assert _stringify_default(Decimal("2.4")) == "2.4"
+    assert _stringify_default(Decimal("0.1")) == "0.1"
+    # Non-Decimal numerics untouched.
+    assert _stringify_default(50) == 50
+    assert _stringify_default(None) is None

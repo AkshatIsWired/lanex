@@ -74,6 +74,27 @@ def test_health_ok(server):
     assert body["data"]["service"] == "lanex"
 
 
+def test_vendor_assets_cacheable_first_party_no_store(server):
+    # C4: immutable vendored assets (echarts etc.) must be cacheable with an ETag
+    # so a WSL2/remote client stops re-downloading ~1 MB per page load; first-party
+    # app code must stay no-store so edits show up without a server restart.
+    v = urllib.request.urlopen(f"http://127.0.0.1:{server}/static/vendor/echarts.min.js")
+    cc = v.headers.get("Cache-Control", "")
+    etag = v.headers.get("ETag")
+    assert "max-age" in cc and "no-store" not in cc
+    assert etag
+    # Conditional re-request with the ETag returns 304 (no body re-download).
+    # urllib raises HTTPError for a 304 (it isn't a 2xx); the code is what matters.
+    req = urllib.request.Request(f"http://127.0.0.1:{server}/static/vendor/echarts.min.js",
+                                 headers={"If-None-Match": etag})
+    with pytest.raises(urllib.error.HTTPError) as ei:
+        urllib.request.urlopen(req)
+    assert ei.value.code == 304
+    # First-party JS keeps no-store.
+    a = urllib.request.urlopen(f"http://127.0.0.1:{server}/static/app.js")
+    assert a.headers.get("Cache-Control") == "no-store"
+
+
 def test_variables_endpoint_returns_list(server):
     resp = urllib.request.urlopen(f"http://127.0.0.1:{server}/api/variables")
     body = json.loads(resp.read())
@@ -297,6 +318,52 @@ def test_json_safe_makes_non_finite_strict_parseable():
     assert vals["design__instance__area"] == 8051.47
     assert vals["design__instance__count"] == 4096  # ints untouched
     assert vals["flag"] is True                      # bools untouched
+
+
+def test_sse_write_strips_non_finite_metrics():
+    # A1 regression: the SSE path (sse.py:_write) must apply the SAME non-finite
+    # guard as the REST path, or a flow_done carrying an ``inf`` metric emits bare
+    # Infinity, the browser's JSON.parse throws, and the completion event is
+    # silently dropped (run appears stuck "running" after a successful run).
+    import time
+    from decimal import Decimal
+    from lanex.controller import models
+    from lanex.server.jsonsafe import json_safe
+
+    ev = models.Event(
+        type=models.EventType.FLOW_DONE,
+        payload={"ok": True, "tag": "spm-1", "metrics": {
+            "timing__setup_r2r__ws": float("inf"),
+            "x__neg": float("-inf"),
+            "x__nan": float("nan"),
+            "d_nan": Decimal("NaN"),          # A10: Decimal NaN -> "NaN", not null
+            "design__instance__count": 4096,
+        }},
+        seq=1, ts=time.time(),
+    )
+    # Exactly what sse.ISSEHandler._write now serialises with:
+    body = json.dumps(json_safe(models.to_json(ev)), allow_nan=False)
+    reparsed = json.loads(body, parse_constant=_reject_constant)  # browser-strict
+    m = reparsed["payload"]["metrics"]
+    assert m["timing__setup_r2r__ws"] == "Infinity"
+    assert m["x__neg"] == "-Infinity"
+    assert m["x__nan"] == "NaN"
+    assert m["d_nan"] == "NaN"                # A10: not null
+    assert m["design__instance__count"] == 4096
+
+
+def test_wildcard_bind_requires_allow_remote():
+    # C1 regression: 0.0.0.0 (all-interfaces) is the most-exposing bind there is
+    # and must NOT be treated as loopback — it has to go through --allow-remote.
+    from lanex.server import app as appmod
+
+    assert "0.0.0.0" not in appmod._LOOPBACK_HOSTS
+    assert "::" not in appmod._LOOPBACK_HOSTS
+    with pytest.raises(RuntimeError):
+        appmod.make_server(host="0.0.0.0", port=0, allow_remote=False)
+    # With the explicit opt-in it binds (port 0 = OS-assigned, no conflict).
+    httpd, _ = appmod.make_server(host="0.0.0.0", port=0, allow_remote=True)
+    httpd.server_close()
 
 
 def _reject_constant(_c):

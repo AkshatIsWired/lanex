@@ -32,7 +32,8 @@ _MAX = 50
 
 
 def _home() -> Path:
-    return Path(os.environ.get("LIBRELANE_GUI_HOME", str(Path.home() / ".librelane-gui")))
+    from . import platform_env
+    return platform_env.home()
 
 
 def _store() -> Path:

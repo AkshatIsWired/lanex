@@ -133,6 +133,36 @@ def test_runner_starts_with_mock_run():
         r._run = original  # type: ignore[assignment]
 
 
+def test_mark_remaining_aborted_skips_pending_steps():
+    # A5: after an abort (cancel or mid-flow error) every step that never reached
+    # a terminal state must be closed as skipped(reason: flow aborted) instead of
+    # lingering PENDING forever — the timeline must not show grey rows that look
+    # like they might still run. The current (failed) step is left untouched.
+    from lanex.controller.runner import FlowRunner
+    from lanex.controller.models import StepStatus, EventType
+
+    r = FlowRunner()
+    r._step_statuses = {
+        "s1": StepStatus.DONE.value,
+        "s2": StepStatus.FAILED.value,   # the current step, already marked failed
+        "s3": StepStatus.PENDING.value,
+        "s4": StepStatus.RUNNING.value,
+    }
+    r._current_step_id = "s2"
+    r._mark_remaining_aborted()
+
+    assert r._step_statuses["s1"] == StepStatus.DONE.value      # untouched
+    assert r._step_statuses["s2"] == StepStatus.FAILED.value    # current untouched
+    assert r._step_statuses["s3"] == StepStatus.SKIPPED.value
+    assert r._step_statuses["s4"] == StepStatus.SKIPPED.value
+
+    evs = r.drain(block=False, timeout=0.05)
+    reasons = {e["step_id"]: e.get("reason")
+               for e in evs if e["type"] == EventType.STEP_SKIPPED.value}
+    assert reasons.get("s3") == "flow aborted"
+    assert reasons.get("s4") == "flow aborted"
+
+
 def test_runner_init_logs_handler_attached(tmp_path: Path):
     """The bridge binds a handler to LibreLane's ``__librelane__`` logger at the
     SUBPROCESS level (so per-tool output reaches the live stream, matching a

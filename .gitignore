@@ -31,6 +31,7 @@ spm_example/
 cladue-*.txt
 claude-*.txt
 *audit response.txt
+*audit*.txt
 .gui-macros.json
 .gui-custom-macros.json
 .gui-custom-cells.json

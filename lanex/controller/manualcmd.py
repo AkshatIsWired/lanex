@@ -249,20 +249,47 @@ def cli_command_for(
     to: Optional[str] = None,
     skip: Optional[Sequence[str]] = None,
     overrides: Optional[Dict[str, Any]] = None,
+    extra_sources: Optional[Sequence[str]] = None,
+    extra_extras: Optional[Sequence[str]] = None,
+    extra_config_files: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Return the copy-pasteable CLI for a run, for both engines.
 
     ``container`` mirrors :func:`container_run.build_dockerized_argv` exactly;
     ``local`` is the native ``librelane`` invocation. Returns
-    ``{container, local, recommended}`` as shell-quoted strings."""
+    ``{container, local, recommended}`` as shell-quoted strings.
+
+    A faithful reproduction MUST include everything the runner synthesises that
+    is NOT already in the config file (audit A3): the Setup file-picker sources
+    become a ``VERILOG_FILES=`` / ``EXTRA_FILES=`` override (LibreLane parses
+    list variables as whitespace-separated), and the Cells & Macros overlay
+    config rides along as an extra leading CONFIG_FILE positional (LibreLane's
+    CLI takes ``CONFIG_FILES`` as ``nargs=-1`` and ``Config.load`` merges them).
+    Omitting these produced a command that ran *different RTL* (or dropped
+    macros) for any design using the pickers — the exact reproduce-metadata bug."""
     cfg_rel = config_file
     try:
         cfg_rel = str(Path(config_file).resolve().relative_to(Path(design_dir).resolve()))
     except Exception:
         pass
 
-    def _inner(prefix: List[str], cfg: str) -> List[str]:
-        argv = list(prefix) + [cfg]
+    # Overlay configs ride as extra leading positionals. Container form is
+    # relativised to the design dir (the container cwd / mount) exactly like
+    # build_dockerized_argv; local form keeps the absolute path the runner uses.
+    container_extra_cfgs: List[str] = []
+    local_extra_cfgs: List[str] = []
+    for ecf in (extra_config_files or []):
+        if not ecf:
+            continue
+        local_extra_cfgs.append(str(ecf))
+        try:
+            container_extra_cfgs.append(
+                str(Path(ecf).resolve().relative_to(Path(design_dir).resolve())))
+        except Exception:
+            container_extra_cfgs.append(str(ecf))
+
+    def _inner(prefix: List[str], cfg: str, extra_cfgs: List[str]) -> List[str]:
+        argv = list(prefix) + [cfg] + list(extra_cfgs)
         if flow:
             argv += ["-f", flow]
         if pdk:
@@ -278,7 +305,14 @@ def cli_command_for(
         for s in (skip or []):
             if s:
                 argv += ["-S", str(s)]
-        for k, v in (overrides or {}).items():
+        # Overrides + the picker-synthesised list variables, exactly as the
+        # runner / build_dockerized_argv assemble them.
+        ov: Dict[str, Any] = dict(overrides or {})
+        if extra_sources:
+            ov["VERILOG_FILES"] = " ".join(str(s) for s in extra_sources)
+        if extra_extras:
+            ov["EXTRA_FILES"] = " ".join(str(s) for s in extra_extras)
+        for k, v in ov.items():
             argv += ["-c", f"{k}={v}"]
         return argv
 
@@ -290,12 +324,12 @@ def cli_command_for(
     if pdk_root:
         host += ["--pdk-root", pdk_root]
     host += ["--docker-no-tty", "--dockerized"]
-    container = _inner(host, cfg_rel)
+    container = _inner(host, cfg_rel, container_extra_cfgs)
 
     local_prefix: List[str] = ["librelane"]
     if pdk_root:
         local_prefix += ["--pdk-root", pdk_root]
-    local = _inner(local_prefix, config_file)
+    local = _inner(local_prefix, config_file, local_extra_cfgs)
 
     quote = (lambda a: " ".join(shlex.quote(x) for x in a))
     return {

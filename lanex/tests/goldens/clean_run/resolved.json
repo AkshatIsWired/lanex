@@ -1,0 +1,6 @@
+{
+  "PDK": "sky130A",
+  "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+  "DESIGN_NAME": "spm",
+  "meta": {"flow": "Classic", "version": 2}
+}

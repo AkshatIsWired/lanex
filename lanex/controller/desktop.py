@@ -72,9 +72,9 @@ def available_tools() -> List[Dict[str, Any]]:
 def _gds3d_techfile_dirs() -> List[Path]:
     """Directories that may hold GDS3D process/tech files (the ``-p`` argument)."""
     dirs: List[Path] = []
-    home = Path(os.environ.get("LIBRELANE_GUI_HOME", str(Path.home() / ".librelane-gui")))
-    dirs.append(home / "tools" / "GDS3D" / "techfiles")
     from . import platform_env
+    home = platform_env.home()
+    dirs.append(home / "tools" / "GDS3D" / "techfiles")
     found = platform_env.resolve_user_bin("gds3d", ["GDS3D"])
     if found:
         bp = Path(found).resolve().parent
@@ -227,7 +227,7 @@ def open_in_tool(tool: str, file_path: str | Path, *,
                              + (f" {pdk}" if pdk else "") + ", and none was found. GDS3D ships "
                              "example tech files in its techfiles/ folder — install GDS3D from "
                              "Tools (it builds those in), or drop a matching <pdk>.txt into "
-                             "~/.librelane-gui/tools/GDS3D/techfiles/, then retry."}
+                             "~/.lanex/tools/GDS3D/techfiles/, then retry."}
         tech["gds3d_process"] = proc
         # GDS3D segfaults the instant its window opens if the legacy X11
         # ``-misc-fixed-`` fonts are missing (it dereferences a NULL font). A

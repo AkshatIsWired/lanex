@@ -1,0 +1,10 @@
+{
+  "design__instance__area": 1234.56,
+  "design__instance__count": 789,
+  "timing__setup__ws": 0.4231,
+  "timing__setup__tns": 0.0,
+  "clock__skew__worst_setup": 0.0125,
+  "design__lvs_error__count": 0,
+  "antenna__violating__nets": 0,
+  "route__drc_errors": 0
+}

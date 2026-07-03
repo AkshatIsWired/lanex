@@ -34,40 +34,21 @@ from ..controller.runner import FlowRunner
 _log = logging.getLogger("librelane.lanex.server")
 
 # Hosts considered loopback-safe for the default no-auth localhost cockpit.
-_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+# NB: the all-interfaces wildcards ("0.0.0.0", "::") are deliberately NOT here —
+# they are the most-exposing bind there is and must go through the explicit
+# --allow-remote gate in make_server(), same as any other non-loopback host.
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 # Set True by make_server(allow_remote=True). When the server is bound to a
 # non-loopback address the operator has explicitly opted into LAN exposure;
 # we still keep the same-origin check below as defence-in-depth.
 _ALLOW_REMOTE = False
 
 
-def _json_safe(obj: Any) -> Any:
-    """Recursively replace non-finite floats with JSON-standard-safe tokens.
-
-    Python's ``json.dumps`` emits bare ``Infinity``/``-Infinity``/``NaN`` for
-    non-finite floats. Python's own ``json.loads`` tolerates them, but the
-    browser's ``JSON.parse`` (and any strict JSON parser) rejects them, which
-    silently breaks every endpoint that carries such a value (e.g. LibreLane
-    metrics like ``timing__setup_r2r__ws`` are ``inf`` when a design has no
-    register-to-register paths). We map them to readable strings so the payload
-    is valid JSON everywhere while staying human-meaningful. Handles numpy
-    floats too (all subclasses of ``numbers.Real``).
-    """
-    if isinstance(obj, dict):
-        return {k: _json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_json_safe(v) for v in obj]
-    # bool is an Integral subclass; ints/numpy ints are always finite — pass through.
-    if isinstance(obj, numbers.Integral) or isinstance(obj, bool):
-        return obj
-    if isinstance(obj, numbers.Real):
-        f = float(obj)
-        if math.isnan(f):
-            return "NaN"
-        if math.isinf(f):
-            return "Infinity" if f > 0 else "-Infinity"
-        return f
-    return obj
+# The non-finite-float sanitiser lives in a neutral module (jsonsafe.py) so both
+# the REST path here and the SSE path (sse.py) share ONE implementation without
+# the app⇄sse import cycle. Re-exported under the historical private name for
+# back-compat (tests and callers import ``lanex.server.app._json_safe``).
+from .jsonsafe import json_safe as _json_safe
 
 _RUNNER_LOCK = threading.Lock()
 _RUNNER: Optional[FlowRunner] = None
@@ -390,9 +371,34 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             ".woff2": "font/woff2",
         }.get(ext, "application/octet-stream")
         try:
+            st = target.stat()
             blob = target.read_bytes()
         except Exception:
             self._send_404()
+            return
+        # Vendored, version-bumped assets (echarts ~1 MB, three.js, fonts, logos)
+        # live under static/vendor/ and are immutable between releases. Serve them
+        # with a validating ETag + max-age instead of the blanket no-store, so a
+        # WSL2/remote client stops re-downloading a megabyte on every page load.
+        # First-party code (index.html, app.js, modules/*) stays no-store so edits
+        # show up without a server restart (C4).
+        rel_posix = target.relative_to(base).as_posix()
+        if rel_posix.startswith("vendor/"):
+            etag = '"%x-%x"' % (int(st.st_mtime), st.st_size)
+            if (self.headers.get("If-None-Match") or "") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(blob)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.send_header("ETag", etag)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(blob)
             return
         self._send_bytes(blob, 200, ctype)
 

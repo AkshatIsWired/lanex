@@ -34,9 +34,27 @@ export function setupFolderBrowser() {
   document.getElementById("filesel-extras")?.addEventListener("input", commitSelection);
 }
 
+// Esc-to-close + basic focus handling so the file browser matches the a11y of
+// the dialog.js modals (G2a). Kept lightweight: one keydown listener, removed on
+// close, plus a focus trap that wraps Tab within the modal.
+function _fsKeydown(e) {
+  const modal = document.getElementById("fs-modal");
+  if (!modal || modal.hidden) return;
+  if (e.key === "Escape") { e.preventDefault(); closeModal(); return; }
+  if (e.key !== "Tab") return;
+  const focusable = modal.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])');
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+
 async function openModal() {
   const modal = document.getElementById("fs-modal");
   modal.hidden = false;
+  document.addEventListener("keydown", _fsKeydown);
+  setTimeout(() => document.getElementById("fs-path")?.focus(), 0);
   await loadRoots();
   const seed = (document.getElementById("design-dir-input")?.value || "").trim();
   await fetchDir(seed || (await defaultSeed()) || ("/"));
@@ -45,6 +63,7 @@ async function openModal() {
 function closeModal() {
   const modal = document.getElementById("fs-modal");
   modal.hidden = true;
+  document.removeEventListener("keydown", _fsKeydown);
 }
 
 async function defaultSeed() {

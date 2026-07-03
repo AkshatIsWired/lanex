@@ -19,11 +19,40 @@ run, so importing this module is always safe on every platform.
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import shutil
 import socket
 import sys
+from pathlib import Path
 from typing import Dict, Optional
+
+_log = logging.getLogger("librelane.lanex.platform_env")
+
+
+def home() -> Path:
+    """The LanEx config/state home directory (F1).
+
+    Resolution order:
+      1. ``$LANEX_HOME`` if set.
+      2. ``$LIBRELANE_GUI_HOME`` if set — deprecated, honoured for one release
+         (warn-logged) so an existing install isn't stranded.
+      3. ``~/.lanex`` — the new default. If it doesn't exist yet but the old
+         ``~/.librelane-gui`` does, the old dir is used (keeps known-designs.json,
+         plugins, and the GDS3D tool tree working without a manual migration).
+    """
+    env_new = os.environ.get("LANEX_HOME")
+    if env_new:
+        return Path(env_new)
+    env_old = os.environ.get("LIBRELANE_GUI_HOME")
+    if env_old:
+        _log.warning("LIBRELANE_GUI_HOME is deprecated — set LANEX_HOME instead")
+        return Path(env_old)
+    new_default = Path.home() / ".lanex"
+    old_default = Path.home() / ".librelane-gui"
+    if not new_default.exists() and old_default.exists():
+        return old_default
+    return new_default
 
 # GitHub is what ciel/volare and the container registry resolve against, so it
 # is the right host to test reachability for the PDK/image download paths.
@@ -141,16 +170,16 @@ def user_bin_dirs() -> list:
     """Well-known install dirs the GUI drops tools into that may be off ``$PATH``.
 
     A one-click install (e.g. the GDS3D source build) writes to ``~/.local/bin``,
-    and the GDS3D build tree lives under ``$LIBRELANE_GUI_HOME/tools/GDS3D``. The
+    and the GDS3D build tree lives under ``$LANEX_HOME/tools/GDS3D``. The
     server's own ``$PATH`` often doesn't include ``~/.local/bin`` (it isn't on a
     fresh login shell's PATH until re-login), so a freshly installed tool would
     look "not installed". These dirs are searched as a fallback. POSIX-oriented
     (Linux/WSL/macOS — where these builds land); harmless elsewhere.
     """
-    home = os.path.expanduser("~")
-    gui_home = os.environ.get("LIBRELANE_GUI_HOME") or os.path.join(home, ".librelane-gui")
+    user = os.path.expanduser("~")
+    gui_home = str(home())
     return [
-        os.path.join(home, ".local", "bin"),
+        os.path.join(user, ".local", "bin"),
         os.path.join(gui_home, "tools", "GDS3D", "linux"),
         os.path.join(gui_home, "tools", "GDS3D", "mac"),
     ]

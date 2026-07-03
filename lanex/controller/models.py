@@ -128,6 +128,8 @@ class RunSummary:
     steps_failed: int
     wall_time_s: Optional[float]
     key_metrics: Dict[str, Any] = field(default_factory=dict)
+    imported: bool = False
+    pinned: bool = False
 
 
 @dataclass(frozen=True)
@@ -224,8 +226,13 @@ def _convert(v: Any, d: int, *, _seen: set, depth: int) -> Any:
     try:
         if isinstance(v, Decimal):
             try:
-                f = float(v)
-                return f if f == f else None
+                # Return the float unconditionally (incl. NaN/±inf). Both wire
+                # transports now run every payload through json_safe(), which
+                # renders non-finites as "NaN"/"Infinity" strings — the same
+                # presentation as a plain non-finite float. Previously a
+                # Decimal("NaN") became JSON null here, silently indistinguishable
+                # from an absent metric and inconsistent with the REST path.
+                return float(v)
             except Exception:
                 return str(v)
         try:

@@ -69,6 +69,47 @@ def test_dse_bool_formatting():
     assert combos == [{"RUN_LVS": "true"}, {"RUN_LVS": "false"}]
 
 
+def test_assemble_overrides_cleans_and_carries_context(tmp_path):
+    # A2: the shared assembler must clean blanks (keeping real 0/False), pull PDK/
+    # SCL out as kwargs, and carry the picker sources/extras through — for BOTH
+    # the Setup path and the DSE sweep path (they call the same helper).
+    from lanex.server import routes
+
+    body = {
+        "overrides": {"A": "1", "BLANK": "", "SPACE": "   ",
+                      "ZERO": 0, "FALSE": False, "PDK": "sky130A",
+                      "STD_CELL_LIBRARY": "sky130_fd_sc_hd"},
+        "sources": ["src/spm.v"],
+        "extras": [],
+    }
+    asm = routes._assemble_overrides(str(tmp_path), body)
+    assert asm["pdk"] == "sky130A"
+    assert asm["scl"] == "sky130_fd_sc_hd"
+    # blank/whitespace dropped; real falsy values preserved; PDK/SCL pulled out.
+    assert asm["overrides"] == {"A": "1", "ZERO": 0, "FALSE": False}
+    assert asm["extra_sources"] == ["src/spm.v"]
+    assert asm["extra_extras"] is None            # [] normalises to None
+    assert asm["extra_config_files"] is None      # no macro overlay in a bare dir
+
+
+def test_dse_and_setup_assemble_identically(tmp_path):
+    # A2 regression guard (the audit's "golden-equality between the two entry
+    # points"): given the same merged overrides + sources, a DSE sweep point and
+    # a Setup run must produce byte-identical assembled kwargs.
+    from lanex.server import routes
+
+    setup_body = {"overrides": {"FP_CORE_UTIL": "50", "PDK": "sky130A"},
+                  "sources": ["src/spm.v"], "extras": ["macro.v"]}
+    # DSE builds: synthetic["overrides"] = {**base_overrides, **swept_point}
+    base_overrides = {"PDK": "sky130A"}
+    swept_point = {"FP_CORE_UTIL": "50"}
+    dse_body = {"overrides": {**base_overrides, **swept_point},
+                "sources": ["src/spm.v"], "extras": ["macro.v"]}
+    a = routes._assemble_overrides(str(tmp_path), setup_body)
+    b = routes._assemble_overrides(str(tmp_path), dse_body)
+    assert a == b
+
+
 def test_reverify_validate_rejects_unknown_step():
     res = reverify.validate("Totally.Fake.Step", {})
     if reverify._known_step_ids():

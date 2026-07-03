@@ -147,7 +147,12 @@ def _path_within_roots(path: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def h_health(handler: Any) -> None:
-    _respond(handler, {"service": "lanex", "alive": True})
+    from ..controller import compat
+    try:
+        probe = compat.probe_compat()
+    except Exception:  # never let the probe break the health check
+        probe = {"ok": True, "issues": []}
+    _respond(handler, {"service": "lanex", "alive": True, "compat": probe})
 
 
 def h_steps(handler: Any) -> None:
@@ -436,6 +441,15 @@ def h_read_text(handler: Any) -> None:
 
 
 def h_design_summary(handler: Any) -> None:
+    # C5 — decision (kept intentionally unconfined): this endpoint reads an
+    # arbitrary directory the user is about to pick as their design. It is the
+    # SAME trust class as the folder-browser endpoints (fs-roots / fs-list) — the
+    # user must be able to inspect any directory before choosing it, so path
+    # confinement here would break the picker. The exposure is bounded to the
+    # local machine: after C1 the server binds loopback only unless the user
+    # explicitly passes --allow-remote. It only ever lists source-file names and
+    # config presence, never file contents. Do NOT "harden" this into a confined
+    # path — that regresses the folder browser.
     path = _query_param(handler.path, "path")
     if not path:
         _respond(handler, "missing path", 400)
@@ -446,7 +460,7 @@ def h_design_summary(handler: Any) -> None:
         return
     try:
         srcs = fsbrowser.walk_sources(str(p))
-        pills = [{"type": "info", "text": f"📁 {p.name}"}]
+        pills = [{"type": "info", "text": p.name}]
         cfg = next((f"config.{e}" for e in ("json", "yaml", "tcl") if (p / f"config.{e}").is_file()), None)
         if cfg:
             pills.append({"type": "pass", "text": f"{cfg} ✓"})
@@ -793,6 +807,75 @@ def _clean_overrides(overrides: Dict[str, Any]) -> Dict[str, Any]:
     return clean
 
 
+def _assemble_overrides(design_dir: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Single source of truth for the user-data payload of a run.
+
+    Turns a run-request body into the pieces that carry USER-SUPPLIED data into
+    LibreLane: cleaned overrides (with PDK/SCL pulled out as constructor
+    kwargs), the per-run custom-cell overrides (``EXTRA_LEFS``/``…`` +
+    ``EXTRA_EXCLUDED_CELLS``), and the hard-macro overlay config file. Used by
+    BOTH :func:`h_run_start` and every DSE sweep point so a swept run is
+    identical to the same run launched from Setup — DSE used to bypass override
+    cleaning, custom cells and macros, silently sweeping a *different* design
+    than the one shown in the UI (audit A2).
+
+    Returns ``{pdk, scl, overrides, extra_sources, extra_extras,
+    extra_config_files}``. Never mutates ``body``; never touches the user's
+    ``config.json`` (all of this is per-run only).
+    """
+    overrides = dict(body.get("overrides") or {})
+    pdk = overrides.pop("PDK", None) or body.get("pdk") or None
+    scl = overrides.pop("STD_CELL_LIBRARY", None) or body.get("scl") or None
+    # Strip blank/None overrides so a left-empty constraint field never becomes a
+    # bare ``KEY=`` the engine can't type-parse (issue #11); real 0/False kept.
+    overrides = _clean_overrides(overrides)
+    # Fold in any custom standard cells configured for this design. Per-run only.
+    try:
+        from ..controller import customcells
+        cc = customcells.build_overrides(design_dir)
+        if cc:
+            overrides = customcells.merge_into(overrides, cc)
+    except Exception:
+        _log.exception("custom-cell overrides failed (continuing without them)")
+    # Custom hard macros (the MACROS variable) can't ride a ``-c KEY=VALUE``
+    # override — a Dict would be misparsed as a flat Tcl list — so they go through
+    # a JSON overlay config file merged by Config.load. Per-run only.
+    extra_config_files: List[str] = []
+    try:
+        from ..controller import custommacros
+        overlay = custommacros.write_overlay(design_dir)
+        if overlay:
+            extra_config_files.append(overlay)
+    except Exception:
+        _log.exception("custom-macro overlay failed (continuing without it)")
+    return {
+        "pdk": pdk,
+        "scl": scl,
+        "overrides": overrides,
+        "extra_sources": body.get("sources") or None,
+        "extra_extras": body.get("extras") or None,
+        "extra_config_files": extra_config_files or None,
+    }
+
+
+def _hash_files(paths: Optional[List[str]]) -> Optional[str]:
+    """SHA-256 over the content of the given files, or ``None`` if there are
+    none. Used to snapshot the per-run macro overlay into ``gui-run.json`` so a
+    later reproduce can detect that the regenerated overlay has drifted (A3)."""
+    import hashlib
+    files = [p for p in (paths or []) if p]
+    if not files:
+        return None
+    h = hashlib.sha256()
+    for p in files:
+        try:
+            with open(p, "rb") as fh:
+                h.update(fh.read())
+        except Exception:
+            h.update(b"\0missing\0")
+    return h.hexdigest()
+
+
 def h_run_start(handler: Any) -> None:
     from ..server.app import get_runner
     body = getattr(handler, "_body", {})
@@ -829,37 +912,15 @@ def h_run_start(handler: Any) -> None:
         # PDK / SCL are construction-time options, not plain config variables.
         # The SPA folds the picker selection into ``overrides``; pull them back
         # out so they reach the Flow constructor as dedicated kwargs.
-        overrides = dict(body.get("overrides") or {})
-        pdk = overrides.pop("PDK", None) or body.get("pdk") or None
-        scl = overrides.pop("STD_CELL_LIBRARY", None) or body.get("scl") or None
         run_mode = "container" if body.get("run_mode") == "container" else "local"
-        # Strip blank/None overrides so a left-empty constraint field never becomes
-        # a bare `KEY=` the engine can't type-parse (issue #11).
-        overrides = _clean_overrides(overrides)
-
-        # Fold in any custom standard cells the user configured for this design
-        # (EXTRA_LEFS/LIBS/GDS/… + EXTRA_EXCLUDED_CELLS). Applied per-run only —
-        # never written into the user's config.json.
-        try:
-            from ..controller import customcells
-            cc = customcells.build_overrides(design_dir)
-            if cc:
-                overrides = customcells.merge_into(overrides, cc)
-        except Exception:
-            _log.exception("custom-cell overrides failed (continuing without them)")
-
-        # Custom hard macros (the MACROS variable) can't ride a -c KEY=VALUE
-        # override — a Dict variable would be misparsed as a flat Tcl list — so we
-        # write a JSON overlay config and pass it as an extra config file (both run
-        # modes; merged by Config.load). Per-run only; config.json is untouched.
-        extra_config_files: List[str] = []
-        try:
-            from ..controller import custommacros
-            overlay = custommacros.write_overlay(design_dir)
-            if overlay:
-                extra_config_files.append(overlay)
-        except Exception:
-            _log.exception("custom-macro overlay failed (continuing without it)")
+        # Assemble everything that carries USER DATA into LibreLane through the
+        # ONE shared helper (override cleaning that preserves 0/False, custom-cell
+        # overrides, the hard-macro overlay). The DSE sweep path calls the exact
+        # same helper, so a swept run can never silently differ from this one.
+        _asm = _assemble_overrides(design_dir, body)
+        pdk, scl = _asm["pdk"], _asm["scl"]
+        overrides = _asm["overrides"]
+        extra_config_files: List[str] = list(_asm["extra_config_files"] or [])
 
         # Resolve the pdk_root that actually holds the files this mode needs, and
         # refuse a run that we already know will fail (PDK genuinely absent and
@@ -896,6 +957,11 @@ def h_run_start(handler: Any) -> None:
             "skip": body.get("skip") or [],
             "sources": body.get("sources") or [],
             "extras": body.get("extras") or [],
+            # Persist the macro-overlay config path(s) so the run is fully
+            # reproducible — the overlay is regenerated per run, so also record a
+            # content hash to let a later reproduce detect that it drifted (A3).
+            "extra_config_files": list(extra_config_files or []),
+            "extra_config_hash": _hash_files(extra_config_files),
             "config_file": str(config_file),
         }
         try:
@@ -906,6 +972,9 @@ def h_run_start(handler: Any) -> None:
                 run_mode=run_mode, tag=body.get("tag") or None,
                 frm=body.get("frm") or None, to=body.get("to") or None,
                 skip=body.get("skip") or [], overrides=overrides,
+                extra_sources=body.get("sources") or None,
+                extra_extras=body.get("extras") or None,
+                extra_config_files=extra_config_files or None,
             )
         except Exception:
             _log.debug("cli_command_for failed for gui-run.json", exc_info=True)
@@ -956,11 +1025,11 @@ def h_cli_command(handler: Any) -> None:
     if config_file is None:
         _respond(handler, "no config.{json,yaml,tcl} in design directory", 400)
         return
-    overrides = dict(body.get("overrides") or {})
-    pdk = overrides.pop("PDK", None) or body.get("pdk") or None
-    scl = overrides.pop("STD_CELL_LIBRARY", None) or body.get("scl") or None
-    overrides = _clean_overrides(overrides)
     run_mode = "container" if body.get("run_mode") == "container" else "local"
+    # Assemble EXACTLY like a real run so the revealed command is faithful:
+    # cleaned overrides + custom cells + macro overlay + picker sources (A3).
+    asm = _assemble_overrides(design_dir, body)
+    pdk, scl = asm["pdk"], asm["scl"]
     pdk_root = os.environ.get("PDK_ROOT") or None
     try:
         if pdk:
@@ -973,7 +1042,9 @@ def h_cli_command(handler: Any) -> None:
         flow=body.get("flow") or "Classic", pdk=pdk, scl=scl, pdk_root=pdk_root,
         run_mode=run_mode, tag=body.get("tag") or None,
         frm=body.get("frm") or None, to=body.get("to") or None,
-        skip=body.get("skip") or [], overrides=overrides,
+        skip=body.get("skip") or [], overrides=asm["overrides"],
+        extra_sources=asm["extra_sources"], extra_extras=asm["extra_extras"],
+        extra_config_files=asm["extra_config_files"],
     )
     _respond(handler, cmd)
 
@@ -1008,12 +1079,6 @@ def h_run_cancel(handler: Any) -> None:
     from ..server.app import get_runner
     get_runner().cancel()
     _respond(handler, {"status": "cancelled"})
-
-
-def h_run_pause(handler: Any) -> None:
-    from ..server.app import get_runner
-    get_runner().pause()
-    _respond(handler, {"status": "paused"})
 
 
 def h_run_resume(handler: Any) -> None:
@@ -1352,11 +1417,7 @@ def h_render_dot(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     target = (run_dir / rel).resolve()
-    try:
-        inside = target.is_relative_to(run_dir)
-    except AttributeError:  # pragma: no cover - py<3.9
-        inside = str(target).startswith(str(run_dir))
-    if not inside:
+    if not target.is_relative_to(run_dir):
         _respond(handler, "invalid path", 400)
         return
     try:
@@ -1559,6 +1620,117 @@ def h_run_note(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     _respond(handler, {"tag": run_dir.name, "note": history.read_note(run_dir)})
+
+
+def h_watch(handler: Any) -> None:
+    """Get (GET ?design=) or set (POST {design, rules}) a design's metric
+    watch-list (E4.2). The design path is the active design's own dir."""
+    if getattr(handler, "command", "GET") == "POST":
+        body = getattr(handler, "_body", {})
+        design_dir = body.get("design") or _get_active_design_dir()
+        if not design_dir or not Path(design_dir).is_dir():
+            _respond(handler, "no such design", 404)
+            return
+        _respond(handler, history.write_watch(design_dir, body.get("rules") or []))
+        return
+    design_dir = _query_param(handler.path, "design") or _get_active_design_dir()
+    if not design_dir or not Path(design_dir).is_dir():
+        _respond(handler, {"rules": []})
+        return
+    _respond(handler, {"rules": history.read_watch(design_dir)})
+
+
+def h_run_pin(handler: Any) -> None:
+    """Pin/unpin a run (E4.5). POST {tag, pinned}."""
+    body = getattr(handler, "_body", {})
+    run_dir = _resolve_run_dir(body.get("tag"))
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    _respond(handler, history.set_pin(run_dir, bool(body.get("pinned"))))
+
+
+def h_run_gui_meta(handler: Any) -> None:
+    """Return the persisted ``gui-run.json`` for a run so Setup can reproduce it
+    (E2). 404 (with a clear message) for runs made before reproduce support or
+    outside the GUI — the caller degrades gracefully."""
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag)
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    meta_path = run_dir / "gui-run.json"
+    if not meta_path.is_file():
+        _respond(
+            handler,
+            "this run predates reproduce support or was made outside the GUI",
+            404,
+        )
+        return
+    try:
+        _respond(handler, json.loads(meta_path.read_text(encoding="utf-8")))
+    except Exception as ex:
+        _log.exception("reading gui-run.json failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_run_import_dir(handler: Any) -> None:
+    """Adopt an existing LibreLane run directory into the active design's history
+    (E1, mode 1). POST {path}. The path is intentionally external — same trust
+    class as the folder picker — but the copy target is confined to the design."""
+    body = getattr(handler, "_body", {})
+    src = (body.get("path") or "").strip()
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no active design — set a design directory first", 400)
+        return
+    if not src:
+        _respond(handler, "no run directory given", 400)
+        return
+    try:
+        res = history.adopt_run(src, design_dir)
+        _respond(handler, res)
+    except FileNotFoundError as ex:
+        _respond(handler, str(ex), 404)
+    except ValueError as ex:
+        _respond(handler, str(ex), 400)
+    except Exception as ex:
+        _log.exception("adopt_run failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_run_import_bundle(handler: Any) -> None:
+    """Import a LanEx export bundle (.zip) as a viewable partial run (E1, mode 2).
+    POST {path} (server-side zip path — heavy bundles exceed the upload cap) or
+    {data: <base64 zip>} for small bundles."""
+    import base64
+    import io
+
+    from ..controller import bundle
+    body = getattr(handler, "_body", {})
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        _respond(handler, "no active design — set a design directory first", 400)
+        return
+    src_path = (body.get("path") or "").strip()
+    data_b64 = body.get("data")
+    try:
+        if src_path:
+            res = bundle.import_bundle(src_path, design_dir)
+        elif data_b64:
+            raw = base64.b64decode(data_b64)
+            res = bundle.import_bundle(io.BytesIO(raw), design_dir)
+        else:
+            _respond(handler, "no bundle path or data given", 400)
+            return
+        _respond(handler, res)
+    except FileNotFoundError as ex:
+        _respond(handler, str(ex), 404)
+    except ValueError as ex:
+        _respond(handler, str(ex), 400)
+    except Exception as ex:
+        _log.exception("import_bundle failed")
+        _respond(handler, str(ex), 500)
 
 
 def h_run_bundle(handler: Any) -> None:
@@ -1998,9 +2170,15 @@ def h_verify_rerun(handler: Any) -> None:
 
 
 def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
-                          run_mode: str, base_overrides: Dict[str, Any]):
+                          run_mode: str, base_overrides: Dict[str, Any],
+                          dse_body: Optional[Dict[str, Any]] = None):
     """Return a ``start_one(tag, overrides)`` closure for the DSE queue that
-    starts a run through the shared runner and blocks until it finishes."""
+    starts a run through the shared runner and blocks until it finishes.
+
+    Each sweep point is assembled through the SAME ``_assemble_overrides`` helper
+    as a Setup run (override cleaning, custom cells, macro overlay, picker
+    sources/extras), so a swept run is identical to the same run launched from
+    Setup instead of silently dropping that context (audit A2)."""
     import time
     from ..server.app import get_runner
 
@@ -2011,9 +2189,13 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
             if not r.running:
                 break
             time.sleep(0.5)
-        merged = {**base_overrides, **overrides}
-        pdk = merged.pop("PDK", None)
-        scl = merged.pop("STD_CELL_LIBRARY", None)
+        # Fold the swept point onto the sweep's base overrides, THEN run it all
+        # through the shared assembler so cleaning + custom cells + macro overlay
+        # + picker sources apply exactly as they do for a Setup run.
+        synthetic = dict(dse_body or {})
+        synthetic["overrides"] = {**base_overrides, **overrides}
+        asm = _assemble_overrides(design_dir, synthetic)
+        pdk, scl = asm["pdk"], asm["scl"]
         # Resolve the pdk_root that actually holds this PDK for the run mode
         # (ciel homes, not just $PDK_ROOT) — otherwise a sky130 sweep on a box
         # whose $PDK_ROOT points elsewhere fails every config with "PDK not
@@ -2031,7 +2213,10 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
             design_dir=design_dir,
             pdk=pdk, scl=scl, pdk_root=pdk_root,
             tag=tag, overwrite=True,
-            config_overrides=merged,
+            config_overrides=asm["overrides"],
+            extra_sources=asm["extra_sources"],
+            extra_extras=asm["extra_extras"],
+            extra_config_files=asm["extra_config_files"],
             run_mode=run_mode, flow_name=flow_name,
         )
         if not res.get("ok"):
@@ -2077,7 +2262,7 @@ def h_dse_start(handler: Any) -> None:
     if not body.get("replace"):
         base_tag = dse.unique_base_tag(design_dir, base_tag, len(overrides_list))
     tags = dse.dse_run_tags(base_tag, len(overrides_list))
-    start_one = _dse_run_one_blocking(design_dir, config_file, flow_name, run_mode, base_overrides)
+    start_one = _dse_run_one_blocking(design_dir, config_file, flow_name, run_mode, base_overrides, body)
     result = dse.job.start(start_one=start_one, overrides_list=overrides_list, tags=tags)
     if not result.get("ok"):
         _respond(handler, result.get("error") or "could not start DSE", 400)
@@ -2383,11 +2568,7 @@ def h_waveform(handler: Any) -> None:
         return
     base = Path(design_dir).resolve()
     target = (base / rel).resolve()
-    try:
-        inside = target.is_relative_to(base)
-    except AttributeError:  # pragma: no cover - py<3.9
-        inside = str(target).startswith(str(base))
-    if not inside or not target.is_file():
+    if not target.is_relative_to(base) or not target.is_file():
         _respond(handler, "not found", 404)
         return
     try:
@@ -2656,6 +2837,11 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/run-diagrams", h_run_diagrams),
     ("/api/render-dot", h_render_dot),
     ("/api/run-note", h_run_note),
+    ("/api/watch", h_watch),
+    ("/api/run-pin", h_run_pin),
+    ("/api/run-gui-meta", h_run_gui_meta),
+    ("/api/run-import-dir", h_run_import_dir),
+    ("/api/run-import-bundle", h_run_import_bundle),
     ("/api/run-bundle", h_run_bundle),
     ("/api/trends", h_trends),
     ("/api/run-delete", h_run_delete),
@@ -2690,7 +2876,6 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/manual/result", h_manual_result),
     ("/api/run/start", h_run_start),
     ("/api/run/cancel", h_run_cancel),
-    ("/api/run/pause", h_run_pause),
     ("/api/run/resume", h_run_resume),
     ("/api/reproducible", h_reproducible),
     ("/api/tools/install-ciel", h_tools_install_ciel),

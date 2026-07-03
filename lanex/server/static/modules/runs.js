@@ -2,9 +2,10 @@
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
-import { confirmDialog, alertDialog, checklistDialog } from "./dialog.js";
+import { confirmDialog, alertDialog, checklistDialog, choiceDialog, promptDialog } from "./dialog.js";
 import { toast } from "./toast.js";
 import { gatherRunsScoped, normDir } from "./runscope.js";
+import { icon } from "./icons.js";
 
 // Lightweight "make this run's design active" — needed before any run-scoped
 // call (delete / files) since they resolve against the server's active design
@@ -33,6 +34,7 @@ function designLabel(dir) { return (dir || "").split(/[/\\]/).filter(Boolean).po
 let _scopeWired = false;
 let _filterText = "";
 let _filterStatus = "";
+let _filterPinned = false;
 // Runs ticked for batch delete, keyed "<designDir>\u0000<tag>" so the same tag
 // in two designs can't collide in the "All history" scope.
 const _picked = new Set();
@@ -50,8 +52,17 @@ function wireScope() {
   if (fi) fi.addEventListener("input", () => { _filterText = fi.value.toLowerCase(); renderRuns(); });
   const sf = document.getElementById("runs-status-filter");
   if (sf) sf.addEventListener("change", () => { _filterStatus = sf.value; renderRuns(); });
+  const pf = document.getElementById("runs-pin-filter");
+  if (pf) pf.addEventListener("click", () => {
+    _filterPinned = !_filterPinned;
+    pf.classList.toggle("runs-scope-active", _filterPinned);
+    pf.setAttribute("aria-pressed", _filterPinned ? "true" : "false");
+    renderRuns();
+  });
   const bd = document.getElementById("runs-batch-delete");
   if (bd) bd.addEventListener("click", () => batchDelete());
+  const im = document.getElementById("runs-import");
+  if (im) im.addEventListener("click", () => importRunFlow());
 }
 
 function syncBatchButton() {
@@ -59,10 +70,11 @@ function syncBatchButton() {
   if (!bd) return;
   const n = _picked.size;
   bd.hidden = n === 0;
-  bd.textContent = "🗑 Delete selected (" + n + ")";
+  bd.innerHTML = icon("trash", { size: 13 }) + " Delete selected (" + n + ")";
 }
 
 function matchesFilter(run) {
+  if (_filterPinned && !run.pinned) return false;
   if (_filterStatus === "pass" && !run.success) return false;
   if (_filterStatus === "fail" && run.success) return false;
   if (!_filterText) return true;
@@ -100,7 +112,7 @@ export async function renderRuns() {
   if (!shown.length) {
     const li = document.createElement("li");
     li.className = "empty";
-    li.innerHTML = "<span class='ico'>🔍</span><h3>No runs match</h3><p>Clear the filter to see all " + runs.length + " runs.</p>";
+    li.innerHTML = "<span class='ico'>" + icon("search") + "</span><h3>No runs match</h3><p>Clear the filter to see all " + runs.length + " runs.</p>";
     root.appendChild(li);
     return;
   }
@@ -110,16 +122,20 @@ export async function renderRuns() {
     // give a colour-blind-safe redundant cue).
     li.className = run.success ? "run-pass" : "run-fail";
     const designRow = scope === "all"
-      ? "<div class='row2 muted'>📁 " + fmt.escape(designLabel(run._design)) + "</div>"
+      ? "<div class='row2 muted'>" + icon("folder", { size: 13 }) + " " + fmt.escape(designLabel(run._design)) + "</div>"
       : "";
     const pkey = pickKey(run._design, run.tag);
     li.innerHTML =
       "<div class='row1'>" +
       "<input type='checkbox' class='run-pick' title='Select for batch delete'" + (_picked.has(pkey) ? " checked" : "") + "/>" +
+      "<button class='run-pin" + (run.pinned ? " pinned" : "") + "' data-act='pin' aria-pressed='" +
+        (run.pinned ? "true" : "false") + "' title='" + (run.pinned ? "Unpin" : "Pin") +
+        " this run' aria-label='Pin run'>" + (run.pinned ? "★" : "☆") + "</button>" +
       "<span class='tag'>" + fmt.escape(run.tag) + "</span>" +
       (run.success
         ? "<span class='pill pill-pass'><span class='d'></span><span class='text'>✓ passed</span></span>"
         : "<span class='pill pill-fail'><span class='d'></span><span class='text'>✗ failed</span></span>") +
+      (run.imported ? "<span class='pill pill-pending' title='Imported from elsewhere — a partial run'>imported</span>" : "") +
       "</div>" +
       designRow +
       "<div class='row2'>" +
@@ -130,17 +146,22 @@ export async function renderRuns() {
       "<div class='run-note-row' data-note-row hidden></div>" +
       "<div class='row3 run-actions'>" +
       "<button class='btn btn-ghost run-act' data-act='open'>Open</button>" +
-      "<button class='btn btn-ghost run-act' data-act='files'>📁 Files</button>" +
-      "<button class='btn btn-ghost run-act' data-act='note'>📝 Note</button>" +
+      "<button class='btn btn-ghost run-act' data-act='reproduce' title='Load this run's settings into Setup'>↻ Reproduce</button>" +
+      "<button class='btn btn-ghost run-act' data-act='files'>" + icon("folder", { size: 13 }) + " Files</button>" +
+      "<button class='btn btn-ghost run-act' data-act='note'>" + icon("file", { size: 13 }) + " Note</button>" +
       "<button class='btn btn-ghost run-act' data-act='bundle' title='Download a .zip — pick what to include'>⬇ Bundle</button>" +
-      "<button class='btn btn-ghost run-act run-del' data-act='delete'>🗑 Delete</button>" +
+      "<button class='btn btn-ghost run-act' data-act='export' title='Download a run report (CSV / Markdown / HTML)'>⬇ Export</button>" +
+      "<button class='btn btn-ghost run-act run-del' data-act='delete'>" + icon("trash", { size: 13 }) + " Delete</button>" +
       "</div>";
     const designDir = run._design;
     li.querySelector('[data-act="open"]').addEventListener("click", (e) => { e.stopPropagation(); openRun(run.tag, designDir); });
+    li.querySelector('[data-act="reproduce"]').addEventListener("click", (e) => { e.stopPropagation(); focusDesign(designDir).then(() => reproduceRun(run.tag)); });
     li.querySelector('[data-act="files"]').addEventListener("click", (e) => { e.stopPropagation(); focusDesign(designDir).then(() => showFilesModal(run.tag)); });
     li.querySelector('[data-act="note"]').addEventListener("click", (e) => { e.stopPropagation(); toggleNote(li, run.tag, designDir); });
     li.querySelector('[data-act="delete"]').addEventListener("click", (e) => { e.stopPropagation(); focusDesign(designDir).then(() => deleteRunFlow(run.tag)); });
     li.querySelector('[data-act="bundle"]').addEventListener("click", (e) => { e.stopPropagation(); focusDesign(designDir).then(() => bundleDownloadFlow(run.tag)); });
+    li.querySelector('[data-act="export"]').addEventListener("click", (e) => { e.stopPropagation(); focusDesign(designDir).then(() => exportRunFlow(run.tag)); });
+    li.querySelector('[data-act="pin"]').addEventListener("click", (e) => { e.stopPropagation(); togglePin(run.tag, designDir, !run.pinned); });
     const pick = li.querySelector(".run-pick");
     pick.addEventListener("click", (e) => e.stopPropagation());
     pick.addEventListener("change", () => {
@@ -258,6 +279,143 @@ async function bundleDownloadFlow(tag) {
   toast.show("Preparing bundle…", "info");
 }
 
+// E3 — download a formatted run report (CSV / Markdown / HTML). The backend
+// (history.export_run + /api/run-export) already exists; this is the UI for it.
+async function exportRunFlow(tag) {
+  const fmt = await choiceDialog({
+    title: "Export run report — “" + tag + "”",
+    body: "Download a formatted report of this run. (For the raw metrics table use Analytics → Metrics CSV.)",
+    choices: [
+      { label: "CSV", value: "csv" },
+      { label: "Markdown", value: "md" },
+      { label: "HTML", value: "html" },
+    ],
+  });
+  if (!fmt) return;
+  const a = document.createElement("a");
+  a.href = api.runExportUrl(tag, fmt);
+  a.download = tag + "-report." + fmt;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+// E2 — load a run's saved settings back into Setup so it can be re-run. Reads
+// gui-run.json (persisted per run); never auto-starts the run.
+async function reproduceRun(tag) {
+  let meta;
+  try {
+    meta = await api.runGuiMeta(tag);
+  } catch (ex) {
+    await alertDialog({
+      title: "Can't reproduce this run",
+      body: (ex && ex.message) ||
+        "This run has no saved settings — it predates reproduce support or was made outside the GUI.",
+    });
+    return;
+  }
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ""; };
+  // PDK / SCL — set state + the pickers; refresh the SCL list off the PDK.
+  if (meta.pdk) {
+    state.selectedPdk = meta.pdk;
+    const ps = document.getElementById("pdk-select");
+    if (ps) { ps.value = meta.pdk; ps.dispatchEvent(new Event("change")); }
+  }
+  if (meta.scl) {
+    state.selectedScl = meta.scl;
+    // The PDK change above repopulates SCLs asynchronously; set after a tick.
+    setTimeout(() => { const sc = document.getElementById("scl-select"); if (sc) sc.value = meta.scl; }, 0);
+  }
+  if (meta.run_mode) state.runMode = meta.run_mode;
+  // Config overrides.
+  state.varsValues = {};
+  for (const [k, v] of Object.entries(meta.overrides || {})) {
+    state.varsValues[k] = (typeof v === "boolean") ? v : String(v);
+  }
+  // From / To / Skip.
+  setVal("run-from", meta.frm);
+  setVal("run-to", meta.to);
+  setVal("run-skip", (meta.skip || []).join(", "));
+  // Full-auto vs step-by-step.
+  const modeVal = meta.mode === "semi" ? "semi" : "auto";
+  document.querySelectorAll(".mode-btn").forEach((b) =>
+    b.classList.toggle("mode-btn-active", b.dataset.mode === modeVal));
+  // Run name.
+  const rn = (meta.tag || tag) + "-repro";
+  setVal("run-name-input", rn); setVal("run-tag-input", rn);
+  // Sources (best-effort — files may have moved/been deleted since the run).
+  if (Array.isArray(meta.sources) && meta.sources.length) state.selectedFiles = meta.sources.slice();
+  // Repaint the config panel + jump to Setup.
+  try { const cfg = await import("./config.js"); cfg.renderConfig(); } catch (_e) { /* ignore */ }
+  document.querySelector('.side-tab[data-tab="setup"]')?.click();
+  const summary = "Loaded " + Object.keys(meta.overrides || {}).length + " override(s), " +
+    (meta.sources || []).length + " source(s), " + (meta.run_mode || "container") +
+    " mode, flow " + (meta.flow || "Classic") + ". Review the Setup tab, then press Run — " +
+    "nothing was started automatically.";
+  // E4.4 — offer the EXACT CLI command this run was launched with (persisted in
+  // gui-run.json, not rebuilt), so a terminal user can reproduce it verbatim.
+  const cli = (meta.cli_command || "").trim();
+  const choices = cli ? [{ label: "Copy the run's CLI command", value: "copy" }] : [];
+  const pick = await choiceDialog({
+    title: "Loaded “" + tag + "” into Setup",
+    body: summary + (cli ? "\n\nThat run's exact command:\n" + cli : ""),
+    choices,
+  });
+  if (pick === "copy" && cli) {
+    try { await navigator.clipboard.writeText(cli); toast.show("CLI command copied.", "success"); }
+    catch (_e) { toast.show("Copy failed — select the text in the Manual tab instead.", "warn"); }
+  }
+}
+
+// E4.5 — pin/star a run so it's easy to find in a long history. Just a bookmark
+// marker; never touches run data.
+async function togglePin(tag, designDir, pinned) {
+  try {
+    await focusDesign(designDir);
+    await api.setRunPin(tag, pinned);
+    await renderRuns();
+  } catch (ex) {
+    toast.show("Could not " + (pinned ? "pin" : "unpin") + ": " + (ex.message || ex), "error");
+  }
+}
+
+// E1 — import a run from elsewhere: adopt a run directory, or restore a LanEx
+// export bundle (.zip). Both land under the active design's runs/.
+async function importRunFlow() {
+  if (!state.designDir) {
+    await alertDialog({
+      title: "No active design",
+      body: "Set a design directory first — imported runs land in its runs/ folder.",
+    });
+    return;
+  }
+  const kind = await choiceDialog({
+    title: "Import a run",
+    body: "Adopt an existing LibreLane run directory, or restore a LanEx export bundle (.zip). It is copied into this design's runs/ so it survives deletion of the source.",
+    choices: [
+      { label: "Run folder", value: "dir" },
+      { label: "LanEx bundle (.zip)", value: "bundle" },
+    ],
+  });
+  if (!kind) return;
+  const path = await promptDialog({
+    title: kind === "dir" ? "Adopt a run directory" : "Import a bundle (.zip)",
+    label: kind === "dir"
+      ? "Absolute path to the run directory (a runs/<tag> folder):"
+      : "Absolute path to the LanEx bundle (.zip):",
+  });
+  if (!path || !path.trim()) return;
+  try {
+    const res = kind === "dir"
+      ? await api.importRunDir(path.trim())
+      : await api.importRunBundle({ path: path.trim() });
+    await renderRuns();
+    let msg = "Imported as '" + res.tag + "'.";
+    if (res.warnings && res.warnings.length) msg += " " + res.warnings.join(" ");
+    toast.show(msg, "success");
+  } catch (ex) {
+    await alertDialog({ title: "Import failed", body: (ex && ex.message) || String(ex) });
+  }
+}
+
 async function deleteRunFlow(tag) {
   const ok = await confirmDialog({
     title: "Delete run “" + tag + "”?", danger: true, confirmText: "Delete run",
@@ -348,12 +506,8 @@ async function openRun(tag, designDir) {
       const id = line.split(":")[0] || "";
       return { id, status: line.includes("ok") ? "done" : "failed" };
     });
-    const mod = await import("./pipeline.js");
-    mod.renderPipeline();
-    // Pull metrics for analytics tab.
+    // Pull metrics for analytics tab (rendered on tab activation).
     state.metrics = view.metrics?.values || {};
-    const modM = await import("./analytics.js");
-    modM.renderAnalytics();
     const modA = await import("./timingAdvisor.js");
     modA.renderTimingAdvisor();
     document.querySelector(".side-tab[data-tab='preview']")?.click();

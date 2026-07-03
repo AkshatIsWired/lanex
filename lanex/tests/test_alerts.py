@@ -54,3 +54,24 @@ def test_explain_checker_failure_classifies_main_categories():
         # Either title is the canonical key, or a generic fallback. Always a card.
         assert card is not None
         assert card["title"]
+
+
+def test_env_failure_advice_matches_precisely():
+    # E5.3 — precise environment-failure phrases yield the right advice, and only
+    # for genuine matches (never a false positive on unrelated errors).
+    from lanex.controller import alerts
+
+    docker = alerts.explain_alert(
+        "[ERROR] Cannot connect to the Docker daemon at unix:///var/run/docker.sock")
+    assert "container engine" in docker["what"].lower()
+
+    tool = alerts.explain_alert("bash: yosys: command not found")
+    assert "eda tool" in tool["what"].lower()
+
+    win = alerts.explain_alert("[ERROR] --dockerized is not supported on Windows")
+    assert "windows" in win["what"].lower()
+
+    # An unrelated tool DRC error must NOT be mislabelled as an environment gap.
+    drc = alerts.explain_alert("[ERROR DRC-0001] routing spacing violation on met3")
+    assert "container engine" not in drc["what"].lower()
+    assert "eda tool" not in drc["what"].lower()

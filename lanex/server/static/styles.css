@@ -69,7 +69,10 @@
   /* Phase 5 semantic tokens (no widget hardcodes literals). */
   --on-accent: #ffffff;       /* text/icon on an accent fill; also white diagram backdrop */
   --on-status: #ffffff;       /* text/icon on a status fill */
+  --on-warn: #000;            /* text/icon on an amber/warn fill (white fails contrast) */
+  --on-pass: #000;            /* text/icon on a green/pass fill (black is the AA choice) */
   --canvas: #ffffff;          /* layout/diagram image backdrop (GDS renders assume white) */
+  --canvas-dark: #000;        /* deliberately dark backdrop for light-on-dark GDS thumbnails */
   --focus: var(--met1);
   --accent-cyan: #38d6c8;     /* secondary chart hue only */
 
@@ -319,9 +322,9 @@ code {
   grid-area: topbar;
   display: grid;
   /* Side columns size to their content (the right one holds a variable number of
-     controls — Run/Stop, pills, tier switch, icon buttons); the center status
+     controls — Run/Stop, pills, icon buttons); the center status
      flexes. A fixed-width right column squeezed those items below their text
-     width, clipping "Run"/"Simple"/the design + PDK pills. */
+     width, clipping "Run"/the design + PDK pills. */
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: var(--s-3);
@@ -458,8 +461,8 @@ body.theme-light .splash-logo {
 
 .topbar-right { display: flex; gap: var(--s-2); justify-content: flex-end; align-items: center; flex-wrap: nowrap; }
 /* Don't let the topbar controls shrink below their content — that's what was
-   clipping the Run button, the "Simple"/"Pro" tier buttons, and the design/PDK
-   pills. The pills keep their own max-width + ellipsis for very long paths. */
+   clipping the Run button and the design/PDK pills. The pills keep their own
+   max-width + ellipsis for very long paths. */
 .topbar-right > * { flex: 0 0 auto; }
 
 /* ---------- pills ---------- */
@@ -517,7 +520,7 @@ body.theme-light .splash-logo {
   padding: 0 4px;
   border-radius: 9px;
   background: var(--warn);
-  color: #000;
+  color: var(--on-warn);
   font-size: 10px;
   font-weight: 700;
   display: inline-flex;
@@ -941,7 +944,7 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .btn-warn { background: var(--fail); border-color: var(--fail); color: var(--on-accent); }
 .btn-warn:hover { filter: brightness(1.05); }
 .btn-ghost { background: transparent; border-color: var(--border); }
-.btn-success { background: var(--pass); border-color: var(--pass); color: #000; }
+.btn-success { background: var(--pass); border-color: var(--pass); color: var(--on-pass); }
 .btn-success:hover { filter: brightness(1.05); }
 
 /* ---------- card ---------- */
@@ -1073,6 +1076,16 @@ input:focus, select:focus, textarea:focus {
   font-size: 10px;
   font-weight: 400;
 }
+.var-row .vname .vdefault {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+.var-row .vname .vdefault-none { font-style: italic; opacity: .8; }
+/* B4: an override that differs from the LibreLane default gets an accent edge so
+   the form scannably shows what you are changing. */
+.var-row.modified { border-left: 2px solid var(--accent); }
 .var-row .vdesc { font-size: var(--t-sm); color: var(--text-muted); margin-bottom: var(--s-2); }
 .var-row select, .var-row input[type="text"] { font-family: var(--mono); }
 
@@ -1114,7 +1127,7 @@ input:focus, select:focus, textarea:focus {
   max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  background: white;
+  background: var(--canvas);
   box-shadow: var(--sh-2);
 }
 .code {
@@ -1772,7 +1785,7 @@ body.density-compact .steps-3 { margin-bottom: var(--s-4); }
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
 }
 .view-thumb { margin: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
-.view-thumb img { display: block; width: 100%; height: auto; background: #000; }
+.view-thumb img { display: block; width: 100%; height: auto; background: var(--canvas-dark); }
 .view-thumb figcaption { padding: var(--s-2); font-size: var(--t-xs); color: var(--text-muted); font-family: var(--mono); word-break: break-word; }
 
 /* Runs list: per-run action buttons + files modal rows. */

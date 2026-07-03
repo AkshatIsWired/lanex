@@ -1,6 +1,41 @@
 /* features.css — styles for the Phase 0–4 additions (verification, compare, DSE,
-   cells, plugins, viewers, wizard, learn, tiers). Token-only: every color,
+   cells, plugins, viewers, wizard, learn). Token-only: every color,
    space, radius, and shadow comes from styles.css :root. No hardcoded hex. */
+
+/* ---- E4.3 timing compare Δ ------------------------------------------------ */
+.tp-pos { color: var(--pass); }
+.tp-neg { color: var(--fail); }
+
+/* ---- E4.2 metric watch ---------------------------------------------------- */
+.watch-row { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; }
+.watch-row code { color: var(--text); }
+.watch-del { margin-left: auto; }
+
+/* ---- E4.5 run pin/star ---------------------------------------------------- */
+.run-pin {
+  background: none; border: 0; cursor: pointer; padding: 0 var(--s-1);
+  color: var(--text-disabled); font-size: var(--t-md); line-height: 1;
+}
+.run-pin:hover { color: var(--text-muted); }
+.run-pin.pinned { color: var(--warn); }
+
+/* ---- E5.1 first-run checklist (live ✓/○ on the hero steps) ---------------- */
+#onboard-checklist .ck-mark {
+  display: inline-block; width: 1.2em; font-weight: 700; color: var(--text-muted);
+}
+#onboard-checklist li.ck-done .ck-mark { color: var(--pass); }
+#onboard-checklist li.ck-done { color: var(--text-muted); }
+
+/* ---- E5.2 one-time post-run "what now?" card ------------------------------ */
+.postrun-card {
+  position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: 900;
+  max-width: 320px; display: flex; flex-direction: column; gap: var(--s-2);
+  padding: var(--s-4); background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: var(--r-lg); box-shadow: var(--sh-2);
+}
+.postrun-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
+.postrun-close { background: none; border: 0; color: var(--text-muted); cursor: pointer; font-size: var(--t-md); }
+.postrun-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
 
 /* ---- shared bits ---------------------------------------------------------- */
 .inp {
@@ -20,12 +55,6 @@
 .chip-pass { background: var(--pass-soft); color: var(--pass); }
 .chip-fail { background: var(--fail-soft); color: var(--fail); }
 .chip-warn { background: var(--warn-soft); color: var(--warn); }
-
-/* Tier control + visibility */
-.tier-switch { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-pill); overflow: hidden; }
-.tier-btn { background: transparent; color: var(--text-muted); border: 0; padding: var(--s-1) var(--s-3); cursor: pointer; font-size: var(--t-xs); }
-.tier-btn-active { background: var(--accent); color: var(--on-accent, #fff); }
-body[data-tier="simple"] [data-tier-min="pro"] { display: none !important; }
 
 /* ---- Verification Center -------------------------------------------------- */
 .verify-bar { display: flex; gap: var(--s-4); align-items: center; flex-wrap: wrap; margin-bottom: var(--s-3); }
@@ -102,11 +131,13 @@ body[data-tier="simple"] [data-tier-min="pro"] { display: none !important; }
   position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
   display: flex; align-items: center; justify-content: center; gap: var(--s-4);
   padding: var(--s-3) var(--s-4);
-  background: var(--warn, #b8860b); color: #fff;
+  background: var(--warn, #b8860b); color: var(--on-status);
   font-size: var(--t-sm); box-shadow: var(--sh-2);
 }
 .pw-banner[hidden] { display: none; }
 .pw-banner-close {
+  /* Deliberate literal whites: this close button sits on the warn banner fill,
+     not a themed surface, so it stays white in both themes (G1). */
   background: rgba(255, 255, 255, .18); color: #fff;
   border: 1px solid rgba(255, 255, 255, .5); border-radius: var(--r-sm, 3px);
   padding: 2px var(--s-2); cursor: pointer; font-size: var(--t-xs); white-space: nowrap;

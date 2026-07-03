@@ -15,6 +15,8 @@ let _wired = false;
 let _sortKey = "slack";
 let _sortAsc = true;
 let _rows = [];
+let _compareTag = "";   // E4.3 — the run being compared against (or "")
+let _baseTag = null;    // the run currently shown
 
 function slackPill(slack, met) {
   const cls = met === false ? "pill-fail" : (slack < 0 ? "pill-warn" : "pill-pass");
@@ -33,6 +35,8 @@ function drawHist(hist) {
     return;
   }
   if (!chart) { el.innerHTML = ""; chart = window.echarts.init(el); }
+  el.setAttribute("role", "img");
+  el.setAttribute("aria-label", "Timing slack histogram — the worst endpoints are listed in the table below.");
   const theme = chartTheme();
   const pal = chartPalette();
   chart.setOption({
@@ -130,9 +134,70 @@ export async function renderTimingPaths(tag) {
     (data.corners && data.corners.length ?
       "<span class='muted' style='margin-left:var(--s-2)'>corner: " + fmt.escape(data.corners.join(", ")) + "</span>" : "");
   _rows = data.paths || [];
+  _baseTag = tag;
   _sortKey = "slack"; _sortAsc = true;
   drawHist(data.histogram);
   renderTable();
+  populateCompareSelect(tag);
+  renderTimingCompare();
+}
+
+// E4.3 — populate the "compare against" picker from this design's other runs.
+function populateCompareSelect(currentTag) {
+  const sel = document.getElementById("timing-compare");
+  if (!sel) return;
+  const runs = (state.runs || []).filter((r) => r.tag !== currentTag);
+  if (_compareTag && !runs.some((r) => r.tag === _compareTag)) _compareTag = "";
+  sel.innerHTML = "<option value=''>— none —</option>" +
+    runs.map((r) => "<option value='" + fmt.escape(r.tag) + "'" +
+      (r.tag === _compareTag ? " selected" : "") + ">" + fmt.escape(r.tag) + "</option>").join("");
+}
+
+// E4.3 — join the two runs' paths by endpoint and show the endpoints whose slack
+// changed most. Only endpoints present (with a real slack) in BOTH runs are shown;
+// nothing is inferred for endpoints that don't match, so the delta is always real.
+async function renderTimingCompare() {
+  const out = document.getElementById("timing-compare-out");
+  if (!out) return;
+  if (!_compareTag || !_baseTag) { out.innerHTML = ""; return; }
+  out.innerHTML = "<p class='muted'>Loading comparison…</p>";
+  let other;
+  try {
+    other = await api.timingPaths(_compareTag, _kind, 200);
+  } catch (e) {
+    out.innerHTML = "<div class='cmp-error'>Compare failed: " + fmt.escape(e.message || e) + "</div>";
+    return;
+  }
+  if (!other || !other.ok) {
+    out.innerHTML = "<p class='muted'>No " + _kind + " timing report for “" + fmt.escape(_compareTag) + "”.</p>";
+    return;
+  }
+  const otherByEp = {};
+  for (const p of (other.paths || [])) if (p.endpoint && p.slack != null) otherByEp[p.endpoint] = p.slack;
+  const joined = [];
+  for (const p of _rows) {
+    if (!p.endpoint || p.slack == null) continue;
+    if (!(p.endpoint in otherByEp)) continue;
+    const b = otherByEp[p.endpoint];
+    joined.push({ endpoint: p.endpoint, a: p.slack, b, d: p.slack - b });
+  }
+  joined.sort((x, y) => Math.abs(y.d) - Math.abs(x.d));
+  const head = "<h4 style='margin:var(--s-4) 0 var(--s-2)'>Δ vs “" + fmt.escape(_compareTag) + "” (" + fmt.escape(_kind) + ")</h4>";
+  if (!joined.length) {
+    out.innerHTML = head + "<p class='muted'>No endpoints in common between these two runs for this analysis.</p>";
+    return;
+  }
+  const top = joined.slice(0, 50);
+  const rows = top.map((j) =>
+    "<tr><td><code>" + fmt.escape(j.endpoint) + "</code></td>" +
+    "<td>" + fmt.metric(j.a) + "</td><td>" + fmt.metric(j.b) + "</td>" +
+    "<td class='" + (j.d < 0 ? "tp-neg" : "tp-pos") + "'>" + (j.d >= 0 ? "+" : "") + fmt.metric(j.d) + "</td></tr>").join("");
+  out.innerHTML = head +
+    "<p class='muted'>" + joined.length + " endpoint(s) in common, sorted by |Δ slack|" +
+    (top.length < joined.length ? " (top " + top.length + " shown)" : "") +
+    ". Positive Δ = this run has more slack than “" + fmt.escape(_compareTag) + "”.</p>" +
+    "<table class='cmp-table'><thead><tr><th>Endpoint</th><th>this</th><th>“" +
+    fmt.escape(_compareTag) + "”</th><th>Δ slack (ns)</th></tr></thead><tbody>" + rows + "</tbody></table>";
 }
 
 function wireOnce() {
@@ -143,7 +208,9 @@ function wireOnce() {
       _kind = btn.dataset.timingKind;
       document.querySelectorAll("#timing-controls [data-timing-kind]").forEach((b) =>
         b.classList.toggle("is-active", b === btn));
-      renderTimingPaths(state.selectedRunTag);
+      renderTimingPaths(_baseTag || state.selectedRunTag);
     });
   });
+  const cmp = document.getElementById("timing-compare");
+  if (cmp) cmp.addEventListener("change", () => { _compareTag = cmp.value || ""; renderTimingCompare(); });
 }

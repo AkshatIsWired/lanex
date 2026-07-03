@@ -33,10 +33,13 @@ for guess in ("librelane", "../librelane", "/tmp/librelane"):
 sys.path[:0] = [str(p) for p in _candidates if str(p) not in sys.path]
 
 
-# Isolate the GUI home for the WHOLE test session so nothing writes into the real
-# ``~/.librelane-gui``. Set at import time (before any fixture — incl. module-scoped
+# Isolate the LanEx home for the WHOLE test session so nothing writes into the real
+# ``~/.lanex``. Set at import time (before any fixture — incl. module-scoped
 # server fixtures — runs) so e.g. set-design-dir's known-designs recording can't
 # leak test paths into the user's cross-design picker. conftest is only imported
-# under pytest, so this never affects a real run.
+# under pytest, so this never affects a real run. Both the new (LANEX_HOME) and the
+# deprecated (LIBRELANE_GUI_HOME) env are set during the transition.
 import tempfile  # noqa: E402
-os.environ["LIBRELANE_GUI_HOME"] = tempfile.mkdtemp(prefix="ll-gui-test-home-")
+_test_home = tempfile.mkdtemp(prefix="lanex-test-home-")
+os.environ["LANEX_HOME"] = _test_home
+os.environ["LIBRELANE_GUI_HOME"] = _test_home

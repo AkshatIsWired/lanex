@@ -1,12 +1,13 @@
 // dse.js — Design-Space Exploration (Phase 2.B). Build a sweep over config
 // variables, launch N sequential runs, watch queue progress, then compare +
-// Pareto on completion. Pro-tier feature.
+// Pareto on completion.
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { paretoOption } from "./charts.js";
 import { gatherRunsScoped, getRunScope, designLabel, scopeToggleHtml, wireScopeToggle } from "./runscope.js";
 import { jumpBarHtml, wireJump } from "./jumpnav.js";
+import { collectRunPayload } from "./setup.js";
 
 const COMMON_VARS = ["FP_CORE_UTIL", "PL_TARGET_DENSITY_PCT", "SYNTH_STRATEGY",
                      "CLOCK_PERIOD", "GRT_ANTENNA_REPAIR_ITERS"];
@@ -265,8 +266,14 @@ async function startSweep(root) {
     return;
   }
   try {
+    // Carry the SAME Setup context into every sweep point (base overrides, the
+    // picked PDK/SCL, custom-cell / macro selections via the backend, and the
+    // file-picker sources) so a swept run matches a Setup run — only the swept
+    // axes differ. Without this a sweep silently ran a different design (A2).
+    const base = collectRunPayload();
     const res = await api.dseStart({
       axes: _axes, mode, run_mode: state.runMode, flow_name: "Classic",
+      base_overrides: base.overrides, sources: base.sources, extras: base.extras,
     });
     if (!res.ok) { toast.show("DSE refused: " + (res.error || "unknown"), "error"); return; }
     toast.show("Started " + res.count + " runs.", "success");
@@ -459,6 +466,8 @@ function drawChart(root, sel, opt, emptyMsg) {
   }
   chart.setOption(opt, true);      // notMerge: replace series on metric change
   chart.resize();
+  el.setAttribute("role", "img");
+  el.setAttribute("aria-label", "Design-space exploration scatter — the same points are in the results table below.");
 }
 
 function fmtVal(v) {

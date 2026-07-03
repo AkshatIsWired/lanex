@@ -87,7 +87,7 @@ def test_gds3d_process_file_maps_pdk(tmp_path, monkeypatch):
     tf.mkdir(parents=True)
     for name in ("sky130.txt", "sky130_s10.txt", "sg13g2.txt"):
         (tf / name).write_text("# techfile\n", encoding="utf-8")
-    monkeypatch.setenv("LIBRELANE_GUI_HOME", str(tmp_path))
+    monkeypatch.setenv("LANEX_HOME", str(tmp_path))
 
     # sky130A -> sky130.txt (shortest stem wins over sky130_s10.txt).
     assert Path(desktop.gds3d_process_file("sky130A")).name == "sky130.txt"

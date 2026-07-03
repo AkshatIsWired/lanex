@@ -73,7 +73,10 @@ const STAGE_GROUPS = [
     id: "signoff",
     name: "Signoff",
     description: "DRC, LVS, XOR, IR drop, density — what gets reported at the end.",
-    keys: ["DRC_", "LVS_", "XOR_", "KI_", "MAGIC_"],
+    // NB: no "LVS_" here — LVS_* vars belong to the dedicated "lvs" group below.
+    // Listing it in both made the first-match win send every LVS_* to Signoff and
+    // left the LVS group empty (B5).
+    keys: ["DRC_", "XOR_", "KI_", "MAGIC_"],
   },
   {
     id: "lvs",
@@ -113,7 +116,10 @@ const PRESETS = {
     values: {},
   },
   lowpower: {
-    label: "Low Power",
+    // Honest label: these are AREA-optimising knobs. Smaller area tends to lower
+    // dynamic power (shorter wires), but LibreLane 3.0.4 has no direct
+    // power-driven synthesis strategy — calling it "Low Power" overstated it (B2).
+    label: "Area-lean (lower power)",
     values: {
       SYNTH_STRATEGY: "AREA 2",
       FP_CORE_UTIL: 40,
@@ -140,18 +146,31 @@ const PRESETS = {
     label: "Antenna-hardened",
     values: {
       DIODE_ON_PORTS: "both",
-      GRT_ANTENNA_REPAIR_ITERS: 3,
+      // 5 > the LibreLane default of 3 — a genuinely stronger antenna-repair
+      // pass. (At the default value this preset member was a no-op, B1.)
+      GRT_ANTENNA_REPAIR_ITERS: 5,
     },
   },
 };
 
 function groupFor(name, v) {
   if (v?.pdk && STAGE_GROUPS[0].pdk_only) return "pdk";
+  // Longest-matching-key wins, NOT first-match. First-match sent e.g.
+  // CLOCK_GATING_* to "Clock Tree" (it matched the shorter "CLOCK_") instead of
+  // "Clock gating" (B5). The LVS/Signoff duplicate is fixed at the data level
+  // above (only the lvs group carries "LVS_").
+  const upper = name.toUpperCase();
+  let best = null, bestLen = 0;
   for (const g of STAGE_GROUPS) {
-    if (!g.keys || !g.keys.length) continue;
-    if (g.keys.some((k) => name.toUpperCase().includes(k.toUpperCase()))) return g.id;
+    for (const k of (g.keys || [])) {
+      const ku = k.toUpperCase();
+      if (upper.includes(ku) && ku.length > bestLen) {
+        best = g.id;
+        bestLen = ku.length;
+      }
+    }
   }
-  return "misc";
+  return best || "misc";
 }
 
 let _searchTerm = "";
@@ -165,11 +184,32 @@ export function renderConfig() {
     paint();
   });
   document.querySelectorAll(".chip-clickable").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
+      const p = PRESETS[btn.dataset.preset];
+      if (!p) return;  // user-defined chips are handled by paintUserPresets()
+      const { confirmDialog } = await import("./dialog.js");
+      // B3 — preview exactly what the preset changes BEFORE applying it, so a
+      // preset can never silently overwrite a field the user tuned by hand.
+      const changes = [];
+      if (p.reset) {
+        const nOv = Object.keys(state.varsValues || {}).length;
+        changes.push(nOv ? ("clear " + nOv + " current override(s) → LibreLane defaults")
+                         : "nothing to clear — no overrides set");
+      }
+      for (const [k, v] of Object.entries(p.values)) {
+        const cur = state.varsValues[k];
+        const from = (cur === undefined || cur === "") ? "default" : String(cur);
+        changes.push(k + ": " + from + " → " + String(v));
+      }
+      const ok = await confirmDialog({
+        title: "Apply preset “" + (p.label || btn.dataset.preset) + "”?",
+        body: "This preset will " + changes.join("; ") + "." +
+          (p.reset ? "" : " Overrides not listed here are kept."),
+        confirmText: "Apply preset",
+      });
+      if (!ok) return;
       document.querySelectorAll(".chip-clickable").forEach((b) => b.classList.remove("chip-active"));
       btn.classList.add("chip-active");
-      const p = PRESETS[btn.dataset.preset];
-      if (!p) return;
       if (p.reset) state.varsValues = {};
       for (const [k, v] of Object.entries(p.values)) state.varsValues[k] = String(v);
       syncReportToggles();
@@ -307,11 +347,9 @@ function paint() {
   nav.innerHTML = "";
   root.innerHTML = "";
 
-  const selected = state.selectedPdk;
   const buckets = new Map(STAGE_GROUPS.map((g) => [g.id, []]));
   const sorted = [...state.variables].sort((a, b) => a.name.localeCompare(b.name));
   for (const v of sorted) {
-    if (selected && v.pdk === false && false) {/* keep all visible */}
     if (_searchTerm && !v.name.toUpperCase().includes(_searchTerm) && !(v.description || "").toUpperCase().includes(_searchTerm))
       continue;
     buckets.get(groupFor(v.name, v)).push(v);
@@ -358,12 +396,20 @@ function buildRow(v) {
   const row = document.createElement("div");
   row.className = "var-row";
   const id = "var-" + v.name;
+  // B4: show LibreLane's own default for every field so a pre-filled value is
+  // never mistaken for something the user typed. Empty default => explicit
+  // "no default" (required / PDK-derived), which is itself information.
+  const defStr = (v.default === undefined || v.default === null) ? "" : String(v.default);
+  const defaultChip = defStr !== ""
+    ? "<span class='vdefault' title='LibreLane default'>default: " + fmt.escape(defStr) + "</span>"
+    : "<span class='vdefault vdefault-none' title='No LibreLane default (required, or derived from the PDK/flow)'>no default</span>";
   row.innerHTML =
     "<div class='vname'>" +
     "<span class='name'>" + fmt.escape(v.name) + "</span>" +
     (v.type ? "<span class='type'>" + fmt.escape(v.type) + "</span>" : "") +
     (v.pdk ? "<span class='flag'>PDK</span>" : "") +
     (v.units ? "<span class='units'>" + fmt.escape(v.units) + "</span>" : "") +
+    defaultChip +
     "</div>" +
     "<div class='vdesc'>" + fmt.escape(v.description || "") + "</div>" +
     inputFor(v, id) +
@@ -372,11 +418,19 @@ function buildRow(v) {
   const input = row.querySelector("#" + cssEscape(id));
   const resetBtn = row.querySelector(".var-reset");
   const syncReset = () => { if (resetBtn) resetBtn.hidden = state.varsValues[v.name] === undefined; };
+  // "modified" = the current value is an explicit override that differs from the
+  // default; the CSS gives it an accent left-border so the form scannably shows
+  // exactly what you are overriding.
+  const syncModified = () => {
+    const cur = state.varsValues[v.name];
+    row.classList.toggle("modified", cur !== undefined && String(cur) !== defStr);
+  };
   if (input) {
     input.addEventListener("input", (e) => {
       const value = v.type === "bool" ? e.target.value === "true" : e.target.value;
       state.varsValues[v.name] = value;
       syncReset();
+      syncModified();
       renderOverridesSummary();
     });
   }
@@ -387,10 +441,12 @@ function buildRow(v) {
       const def = v.default;
       if (input) input.value = (def === undefined || def === null) ? "" : String(def);
       syncReset();
+      syncModified();
       renderOverridesSummary();
     });
   }
   syncReset();
+  syncModified();
   return row;
 }
 

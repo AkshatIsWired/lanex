@@ -90,6 +90,15 @@ export function setupSetup() {
   document.getElementById("btn-resume-2")?.addEventListener("click", () => api.resumeRun().catch(() => {}));
   document.getElementById("btn-preflight")?.addEventListener("click", () => renderPreflight());
 
+  // D11: the Setup "Run name" and the Pipeline-bar "run tag" are two inputs for
+  // the same value — mirror each into the other so they can never silently disagree.
+  const nameA = document.getElementById("run-name-input");
+  const nameB = document.getElementById("run-tag-input");
+  if (nameA && nameB) {
+    nameA.addEventListener("input", () => { nameB.value = nameA.value; });
+    nameB.addEventListener("input", () => { nameA.value = nameB.value; });
+  }
+
   document.querySelectorAll(".mode-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".mode-btn").forEach((b) =>
@@ -126,6 +135,7 @@ export async function adoptDesignDir(designDir, opts = {}) {
   state.designDir = designDir;
   state.designExplicit = explicit;
   rememberDesign(designDir);
+  paintOnboardChecklist();  // E5.1 — step 1 (design chosen) is now satisfied
   // Keep the SERVER's active design dir in lock-step with the frontend's. Every
   // run-scoped endpoint (/api/runs, /api/runs/<tag>, cell-usage, run-images,
   // verify, …) resolves against the server's active dir. If it ever drifts from
@@ -205,6 +215,37 @@ export function paintPdkPill(text, kind) {
   pill.classList.remove("pill-warn", "pill-pass", "pill-fail");
   if (kind) pill.classList.add(kind);
   document.querySelector("#pdk-pill .text").textContent = text;
+  // Mirror onto the inline readiness pill beside the PDK selects (D5): it used to
+  // sit frozen at "checking…" because nothing ever repainted it.
+  const inline = document.getElementById("pdk-readiness");
+  if (inline) {
+    inline.classList.remove("pill-pending", "pill-warn", "pill-pass", "pill-fail");
+    if (kind) inline.classList.add(kind);
+    inline.textContent = text.replace(/^PDK:\s*/, "");
+  }
+  paintOnboardChecklist();
+}
+
+// E5.1 — the hero's 3-step guide reflects REAL state, not static prose. Each step
+// is only ticked when its condition is genuinely true (design chosen / PDK ready /
+// a successful run exists), so it never claims progress the user hasn't made.
+export function paintOnboardChecklist() {
+  const list = document.getElementById("onboard-checklist");
+  if (!list) return;
+  const pill = document.getElementById("pdk-pill");
+  const status = {
+    design: !!state.designDir,
+    // The PDK pill is painted green only by the honest readiness probe.
+    pdk: !!(pill && pill.classList.contains("pill-pass")),
+    // A genuinely completed run for this design — not merely "Run was pressed".
+    run: (state.runs || []).some((r) => r && r.success),
+  };
+  list.querySelectorAll("li[data-ck]").forEach((li) => {
+    const done = !!status[li.dataset.ck];
+    li.classList.toggle("ck-done", done);
+    const mark = li.querySelector(".ck-mark");
+    if (mark) mark.textContent = done ? "✓" : "○";
+  });
 }
 
 async function onPdkSelected() {

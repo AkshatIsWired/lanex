@@ -25,11 +25,11 @@ const CATALOG = {
   },
   pipeline: {
     title: "Pipeline tab",
-    goal: "Visualise the 80-step Classic flow and run a sub-section of it.",
+    goal: "Watch the Classic flow run step-by-step, and run a sub-section of it.",
     how: [
-      "Each node = one Step (Yosys.Synthesis, OpenROAD.Placement, etc.). Hover for syntax; click to copy the step id.",
-      "Right-click a node for actions: Run from here, Run to here, Skip, Reproducible, Help \u2014 all wired into flow.start(frm=, to=, skip=).",
-      "The From / To / Skip fields at the top take the same step ids. Range-select \u21d2 partial flow.",
+      "The timeline lists every Step (Yosys.Synthesis, OpenROAD.Placement, \u2026) and lights each one up as the run reaches it. Click a step row to load that step's log + output into the Step Output panel below.",
+      "The From / To / Skip fields at the top take step ids. Range-select \u21d2 partial flow (wired into flow.start(frm=, to=, skip=)).",
+      "Step-by-step mode holds after each step so you can inspect before continuing.",
     ],
     samples: [
       { key: "From", sample: "Yosys.JsonHeader" },
@@ -37,7 +37,6 @@ const CATALOG = {
     ],
     pitfalls: [
       "Skipping a step depends on what earlier steps produced. LibreLane won't refabricate inputs.",
-      "Right-click on a Node only works once the pipeline graph has loaded.",
     ],
   },
   runs: {
@@ -45,8 +44,9 @@ const CATALOG = {
     goal: "Every past invocation of the flow; pick one to inspect deeply.",
     how: [
       "Each row tells you PDK, SCL, total steps, passed/failed, and wall-clock time.",
-      "Click a row to load its metrics into the Analytics tab and its final views into the Preview tab.",
-      "Diff rows from the right-pane Advisor to see what changed between two runs.",
+      "Click Open to load its metrics into the Analytics tab and its final views into the Preview tab.",
+      "Pick two or more runs in the Analytics tab's Compare card to see what changed between them.",
+      "Import… adopts a run directory or a LanEx bundle from elsewhere; each row also has Files, Note, Bundle, Reproduce and Export actions.",
     ],
     samples: [
       { key: "Tag format", sample: "RUN\\_2025-01-19\\_14-30-00" },
@@ -98,7 +98,7 @@ const CATALOG = {
     ],
   },
   files: {
-    title: "Files (after you click \ud83d\udcc1 Browse\u2026)",
+    title: "Design files",
     goal: "Confirm every source/memory file LibreLane will read.",
     how: [
       "Files are deduped and grouped: Sources (.v/.sv/.vh) and Memory files (.mem/.hex/.bin).",
@@ -108,45 +108,6 @@ const CATALOG = {
     ],
     pitfalls: [
       "Memory files misclicked as unchecked will silently leave initial regs at X.",
-    ],
-  },
-  metrics: {
-    title: "Metrics (Live, side pane)",
-    goal: "Latest run only as a hero strip.",
-    how: [
-      "Same heuristic painting rules as Analytics; this view always reflects state.metrics, which is updated when flow_dones.",
-      "Click the Metrics heading to expand the Analytics tab for the full breakdown.",
-    ],
-  },
-  advisor: {
-    title: "Advisor (right pane)",
-    goal: "Plain-English explanations for failed steps + one-click fixes.",
-    how: [
-      "Cards auto-populate when a step fails or an OpenROADAlert is emitted \u2014 the matcher is in gui.controller.alerts.",
-      "Card fields: What happened, Why it matters, ranked Try\u2026 list, and Apply buttons that overlay config fixes on the form.",
-      "Timing closure mini-card at the top reads current WNS/TNS and suggests which variable to tune next.",
-      "Below: per-run DRC/LVS report picker (auto-detected from runs/<tag>/<step>/).",
-    ],
-    pitfalls: [
-      "Clicking 'Apply' writes to state.varsValues \u2014 to actually send, hit Run again.",
-    ],
-  },
-  topbar: {
-    title: "Top bar",
-    goal: "Project status at a glance + global controls.",
-    how: [
-      "Design / PDK pills turn green when set.",
-      "Mode switch: Full Auto for end-to-end runs; Step-by-step reserves the next step for manual inspection.",
-      "Tools \u2699 badge warns about any missing EDA binary.",
-      "Help icon opens the keyboard-shortcut dialog.",
-    ],
-  },
-  wizard: {
-    title: "First-run wizard",
-    goal: "A ten-minute guided trip from RTL to GDS using the SPM example.",
-    how: [
-      "Follow the five prompts in order. Each ties to a specific tab.",
-      "Skip with the X. The wizard only reappears if you clear site storage.",
     ],
   },
   ide: {

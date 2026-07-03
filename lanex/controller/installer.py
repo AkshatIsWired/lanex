@@ -979,7 +979,8 @@ def _install_gds3d() -> Dict[str, Any]:
             _emit("installer_error", {"key": "gds3d", "message": g})
             return {"ok": False, "guidance": g, "reason": g}
 
-    home = Path(os.environ.get("LIBRELANE_GUI_HOME", str(Path.home() / ".librelane-gui")))
+    from . import platform_env
+    home = platform_env.home()
     src = home / "tools" / "GDS3D"
     bindir = Path.home() / ".local" / "bin"
     subdir = "mac" if sys.platform == "darwin" else "linux"

@@ -130,15 +130,7 @@ function formatValue(v) {
   return fmt.metric(v);
 }
 
-// ---------- (A) Side-pane mini view -------------------------------------------
-
-// Legacy no-op: the old side-pane mini-metrics view (#metrics-grid / #metrics-trend)
-// was removed from the DOM in the cockpit overhaul. The full Analytics tab
-// (renderAnalyticsFull) is the single metrics surface now. Kept as an exported
-// stub because several callers (boot, flow_done, openRun) still invoke it.
-export function renderAnalytics() { /* superseded by renderAnalyticsFull */ }
-
-// ---------- (B) Full-screen Analytics tab ------------------------------------
+// ---------- Full-screen Analytics tab ------------------------------------
 
 // tag -> run row (carries _design) for the current picker, so a cross-design
 // selection can switch the active design before fetching that run's metrics.
@@ -399,7 +391,28 @@ function drawTrend(metric) {
       }],
     }, true);
     chart.resize();
+    // G2b — screen readers get nothing from a <canvas>; give a summary label and
+    // a plain data table so the trend is reachable without sight.
+    el.setAttribute("role", "img");
+    el.setAttribute("aria-label", "Line chart: " + metric + " across " + xs.length + " runs.");
+    renderTrendTable(el, metric, xs, ys);
   });
+}
+
+function renderTrendTable(chartEl, metric, xs, ys) {
+  let box = document.getElementById("trends-table");
+  if (!box) {
+    box = document.createElement("details");
+    box.id = "trends-table";
+    box.className = "card";
+    box.style.marginTop = "var(--s-3)";
+    chartEl.parentElement && chartEl.parentElement.insertBefore(box, chartEl.nextSibling);
+  }
+  const rows = xs.map((t, i) => "<tr><td>" + fmt.escape(t) + "</td><td>" +
+    (ys[i] === null || ys[i] === undefined ? "—" : fmt.escape(String(ys[i]))) + "</td></tr>").join("");
+  box.innerHTML = "<summary>Data table</summary><div class='card-body'>" +
+    "<table class='cmp-table'><thead><tr><th>Run</th><th>" + fmt.escape(metric) +
+    "</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
 }
 
 // Cell-usage breakdown: which standard cells the run placed + how many of each.
@@ -448,6 +461,8 @@ async function renderCellUsage(tag) {
       if (opt && el) {
         const chart = window.echarts.init(el, chartTheme(), { renderer: "canvas" });
         chart.setOption(Object.assign({ backgroundColor: "transparent" }, opt));
+        el.setAttribute("role", "img");
+        el.setAttribute("aria-label", "Standard-cell usage breakdown — the same counts are in the table below.");
       }
     }
   } catch (_e) { /* chart is a nicety; the table already shows everything */ }

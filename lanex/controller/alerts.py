@@ -247,7 +247,73 @@ KB: List[Dict[str, Any]] = [
         ],
         "fix": [],
     },
+    # --- Environment / setup failures (E5.3). Matched by PRECISE log phrases in
+    #     _LOG_PHRASES below so advice never fires on the wrong error. ---
+    {
+        "key": "env.docker_down",
+        "match_kind": "log",
+        "what": "The container engine (Docker/Podman) isn't running, so the containerised flow can't start.",
+        "why": "Container mode shells out to `librelane --dockerized`, which needs a running Docker/Podman daemon.",
+        "remediations": [
+            "Start Docker Desktop (macOS/Windows) or `sudo systemctl start docker` (Linux), then retry.",
+            "Or switch the engine to Local tools on Setup if you have the EDA toolchain installed natively.",
+        ],
+        "fix": [],
+    },
+    {
+        "key": "env.tool_missing",
+        "match_kind": "log",
+        "what": "A required EDA tool (yosys / openroad / magic / klayout / netgen) isn't on PATH in Local mode.",
+        "why": "Local mode runs the native toolchain; one of the binaries the flow needs isn't installed or isn't on PATH.",
+        "remediations": [
+            "Switch the engine to Container — the LibreLane image bundles every tool at the matched version.",
+            "Or install the missing tool from the Tools tab (or your package manager) and re-run.",
+        ],
+        "fix": [],
+    },
+    {
+        "key": "env.dockerized_windows",
+        "match_kind": "log",
+        "what": "`--dockerized` was used on native Windows, which has no direct container runtime.",
+        "why": "LibreLane's containerised path needs a Linux container engine; native Windows Python can't provide one.",
+        "remediations": [
+            "Run LanEx inside WSL2 with Docker Desktop's WSL integration enabled.",
+            "Or use Local tools mode inside a WSL2 distro that has the toolchain installed.",
+        ],
+        "fix": [],
+    },
 ]
+
+# Precise, low-false-positive log phrases → KB key (E5.3). Each phrase is
+# distinctive enough that a match is unambiguous; we never guess from generic
+# fragments like "not found" alone.
+_LOG_PHRASES: List[tuple] = [
+    ("cannot connect to the docker daemon", "env.docker_down"),
+    ("is the docker daemon running", "env.docker_down"),
+    ("error during connect", "env.docker_down"),
+    ("cannot connect to podman", "env.docker_down"),
+    ("--dockerized is not supported on windows", "env.dockerized_windows"),
+]
+
+# EDA tools whose "<tool>: ... not found" / "no such file" strongly implies the
+# local toolchain is incomplete.
+_LOCAL_TOOLS = ("yosys", "openroad", "magic", "klayout", "netgen")
+
+
+def _match_log_phrase(text: str) -> Optional[Dict[str, Any]]:
+    """Return a KB entry when *text* contains a precise, unambiguous failure
+    phrase — else None (so the caller keeps its generic fallback)."""
+    for phrase, key in _LOG_PHRASES:
+        if phrase in text:
+            return _find_by_key(key)
+    # A named EDA tool reported missing → local toolchain gap. Require BOTH a
+    # tool name AND an explicit "not found"/"command not found" so a mention of
+    # the tool in ordinary output can't trip it.
+    if ("command not found" in text or "not found" in text or "no such file" in text):
+        for tool in _LOCAL_TOOLS:
+            if f"{tool}: " in text or f"{tool} not found" in text or f"'{tool}'" in text:
+                return _find_by_key("env.tool_missing")
+    return None
 
 
 def _find_by_key(key: str) -> Optional[Dict[str, Any]]:
@@ -302,6 +368,10 @@ def explain_alert(message: str) -> Dict[str, Any]:
     if m:
         code = m.group(2)
     entry = _find_by_key(code) if code else None
+    if entry is None:
+        text = message.lower()
+        # Precise environment-failure phrases first (E5.3) — high confidence.
+        entry = _match_log_phrase(text)
     if entry is None:
         # Best-effort fingerprint from message text.
         text = message.lower()

@@ -40,8 +40,8 @@ DEFAULT_REGISTRY_URL = os.environ.get(
 
 
 def plugins_home() -> Path:
-    base = Path(os.environ.get("LIBRELANE_GUI_HOME", str(Path.home() / ".librelane-gui")))
-    return base / "plugins"
+    from . import platform_env
+    return platform_env.home() / "plugins"
 
 
 def _state_file() -> Path:

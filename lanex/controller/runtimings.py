@@ -34,8 +34,8 @@ _ALPHA = 0.4  # EWMA weight on the newest observation
 
 
 def _home() -> Path:
-    base = os.environ.get("LIBRELANE_GUI_HOME")
-    return Path(base) if base else (Path.home() / ".librelane-gui")
+    from . import platform_env
+    return platform_env.home()
 
 
 def _store_path() -> Path:

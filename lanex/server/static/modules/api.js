@@ -102,6 +102,12 @@ export const api = {
   deleteRun: (tag) => _fetch("/api/run-delete", { method: "POST", body: JSON.stringify({ tag }) }),
   runNote: (tag) => _fetch("/api/run-note?tag=" + encodeURIComponent(tag)),
   setRunNote: (tag, note) => _fetch("/api/run-note", { method: "POST", body: JSON.stringify({ tag, note }) }),
+  setRunPin: (tag, pinned) => _fetch("/api/run-pin", { method: "POST", body: JSON.stringify({ tag, pinned }) }),
+  getWatch: (design) => _fetch("/api/watch" + (design ? "?design=" + encodeURIComponent(design) : "")),
+  setWatch: (design, rules) => _fetch("/api/watch", { method: "POST", body: JSON.stringify({ design, rules }) }),
+  runGuiMeta: (tag) => _fetch("/api/run-gui-meta?tag=" + encodeURIComponent(tag)),
+  importRunDir: (path) => _fetch("/api/run-import-dir", { method: "POST", body: JSON.stringify({ path }) }),
+  importRunBundle: (payload) => _fetch("/api/run-import-bundle", { method: "POST", body: JSON.stringify(payload) }),
   runBundleUrl: (tag, include) =>
     "/api/run-bundle?tag=" + encodeURIComponent(tag) +
     (Array.isArray(include) && include.length ? "&include=" + encodeURIComponent(include.join(",")) : ""),
@@ -116,9 +122,7 @@ export const api = {
     _fetch("/api/explain-checker", { method: "POST", body: JSON.stringify({ checker, metric }) }),
   startRun: (payload) => _fetch("/api/run/start", { method: "POST", body: JSON.stringify(payload) }),
   cancelRun: () => _fetch("/api/run/cancel", { method: "POST", body: "{}" }),
-  pauseRun:  () => _fetch("/api/run/pause",  { method: "POST", body: "{}" }),
   resumeRun: () => _fetch("/api/run/resume", { method: "POST", body: "{}" }),
-  runStatus: () => _fetch("/api/run/status"),
   reportsDrc: (path) => _fetch("/api/reports/drc?path=" + encodeURIComponent(path)),
   reportsLvs: (path) => _fetch("/api/reports/lvs?path=" + encodeURIComponent(path)),
   getPdkRoot: () => _fetch("/api/settings/pdk-root"),
@@ -129,7 +133,6 @@ export const api = {
   cliCommand: (payload) => _fetch("/api/cli-command", { method: "POST", body: JSON.stringify(payload || {}) }),
   manualRun: (command) => _fetch("/api/manual/run", { method: "POST", body: JSON.stringify({ command }) }),
   manualCancel: () => _fetch("/api/manual/cancel", { method: "POST", body: "{}" }),
-  manualResult: () => _fetch("/api/manual/result"),
 
   tools: () => _fetch("/api/tools"),
   installTool: (key) =>

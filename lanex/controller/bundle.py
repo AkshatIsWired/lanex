@@ -55,9 +55,12 @@ individually via the per-run Files browser.
 from __future__ import annotations
 
 import csv
+import datetime
+import hashlib
 import io
 import json
 import platform
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -502,6 +505,11 @@ def write_bundle(dest: BinaryIO, run_dir: str | Path, *,
                 f = run_dir / name
                 if f.is_file():
                     add_file(f"config/{name}", f)
+            # The canonical metrics file, byte-for-byte (NOT the derived CSV) so
+            # an imported bundle reproduces the EXACT same metric values (E1).
+            mj = final / "metrics.json"
+            if mj.is_file():
+                add_file("final/metrics.json", mj)
 
         if "metrics_csv" in parts and metrics:
             add_text("metrics.csv", _metrics_csv(metrics))
@@ -574,3 +582,101 @@ def build_bundle(run_dir: str | Path, *, include: Optional[Iterable[str]] = None
     buf = io.BytesIO()
     write_bundle(buf, run_dir, include=include, mode=mode)
     return buf.getvalue()
+
+
+def import_bundle(src: "str | Path | BinaryIO", design_dir: str | Path) -> Dict[str, Any]:
+    """Import a LanEx export bundle (.zip) as a *viewable partial run* under
+    ``<design>/runs/`` (E1, mode 2). *src* is a filesystem path or a binary file
+    object. Returns ``{"tag", "warnings"}``.
+
+    An imported bundle only contains what was packed; every consumer already
+    degrades gracefully on absent files, and ``warnings`` names what is missing.
+    Zip-slip safe (any member whose path escapes the run dir is dropped) and the
+    real ``final/metrics.json`` (packed byte-for-byte by :func:`write_bundle`) is
+    restored verbatim, so the imported run reports the exact same metric values.
+    """
+    if isinstance(src, (str, Path)):
+        src_path = Path(src).expanduser()
+        if not src_path.is_file():
+            raise FileNotFoundError(f"no such bundle: {src_path}")
+        zf_src: Any = str(src_path)
+    else:
+        zf_src = src
+
+    runs_root = Path(design_dir).resolve() / "runs"
+    runs_root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        zf_ctx = zipfile.ZipFile(zf_src)
+    except zipfile.BadZipFile as ex:
+        raise ValueError(f"not a valid .zip bundle: {ex}") from ex
+
+    with zf_ctx as zf:
+        names = zf.namelist()
+        if not names:
+            raise ValueError("empty or invalid bundle")
+        base = "bundle"
+        try:
+            mani = json.loads(zf.read("MANIFEST.json"))
+            if isinstance(mani, dict) and mani.get("run_tag"):
+                base = str(mani["run_tag"])
+        except (KeyError, ValueError):
+            pass
+        tag = f"{base}-imported"
+        dest = runs_root / tag
+        n = 2
+        while dest.exists():
+            tag = f"{base}-imported-{n}"
+            dest = runs_root / tag
+            n += 1
+        dest_res = dest.resolve()
+
+        def _target(arc: str) -> Optional[Path]:
+            # ``config/<name>`` lands at the run root (where history reads the
+            # config + metrics); every other member keeps its relative path.
+            rel = arc[len("config/"):] if arc.startswith("config/") else arc
+            if not rel or rel.endswith("/"):
+                return None
+            t = (dest / rel).resolve()
+            try:
+                t.relative_to(dest_res)  # zip-slip guard
+            except ValueError:
+                return None
+            return t
+
+        wrote_any = False
+        for arc in names:
+            t = _target(arc)
+            if t is None:
+                continue
+            t.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(arc) as fsrc, open(t, "wb") as fdst:
+                shutil.copyfileobj(fsrc, fdst)
+            wrote_any = True
+
+    if not wrote_any:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise ValueError("bundle had no usable members (all paths were unsafe)")
+
+    manifest_hash = hashlib.sha256("\n".join(sorted(names)).encode()).hexdigest()[:16]
+    try:
+        (dest / "gui-imported.json").write_text(
+            json.dumps(
+                {"source": "bundle", "manifest": manifest_hash,
+                 "imported_at": datetime.datetime.now().isoformat()},
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    warnings: List[str] = []
+    if not (dest / "final" / "metrics.json").is_file():
+        warnings.append("no metrics.json in this bundle — Analytics will be empty.")
+    if not any(dest.glob("gds/*")) and not any((dest / "final").glob("**/*.gds*")):
+        warnings.append("no GDS in this bundle — the Preview layout will be empty.")
+    if (dest / "SKIPPED.json").is_file():
+        warnings.append("the source bundle omitted some large files (see SKIPPED.json).")
+    return {"tag": tag, "warnings": warnings}

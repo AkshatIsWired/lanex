@@ -1,0 +1,8 @@
+{
+  "design__instance__area": 1000.0,
+  "design__instance__count": 512,
+  "timing__setup_r2r__ws": Infinity,
+  "timing__hold_r2r__ws": -Infinity,
+  "clock__skew__worst_hold": NaN,
+  "design__lvs_error__count": 0
+}

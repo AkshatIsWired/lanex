@@ -1,0 +1,4 @@
+[INFO] Executing Yosys.Synthesis
+Number of cells: 789
+Chip area for module '\spm': 1234.560000
+[SUCCESS] Yosys.Synthesis completed

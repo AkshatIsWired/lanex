@@ -236,3 +236,39 @@ def test_cli_command_container_ordering():
     assert "config.json" in c and "-T floorplan" in c
     assert "-c FP_CORE_UTIL=45" in c
     assert r["recommended"] == "container"
+
+
+def test_cli_command_mirrors_dockerized_argv_with_sources_and_overlay():
+    # A3: cli_command_for must faithfully reproduce build_dockerized_argv — the
+    # Setup picker sources become VERILOG_FILES/EXTRA_FILES overrides and the
+    # macro overlay rides as an extra CONFIG_FILE positional. Omitting them made
+    # the revealed / persisted command run different RTL (or drop macros).
+    import shlex
+    from lanex.controller import manualcmd, container_run
+
+    kw = dict(
+        design_dir="/d/proj", config_file="/d/proj/config.json", flow="Classic",
+        pdk="sky130A", scl="sky130_fd_sc_hd", pdk_root="/pdks", run_mode="container",
+        tag="spm-1", overrides={"FP_CORE_UTIL": 45},
+        extra_sources=["src/spm.v", "verify/tb.v"], extra_extras=["ip/mem.v"],
+        extra_config_files=["/d/proj/.gui-macros.json"],
+    )
+    revealed = shlex.split(manualcmd.cli_command_for(**kw)["container"])
+    # The real argv the container path would execute for the same inputs:
+    argv = container_run.build_dockerized_argv(
+        config_file="/d/proj/config.json", design_dir=Path("/d/proj"),
+        flow="Classic", pdk="sky130A", scl="sky130_fd_sc_hd", pdk_root="/pdks",
+        tag="spm-1", overrides={"FP_CORE_UTIL": 45},
+        extra_sources=["src/spm.v", "verify/tb.v"], extra_extras=["ip/mem.v"],
+        extra_config_files=["/d/proj/.gui-macros.json"],
+    )
+    # Overlay positional present, sources folded into list overrides.
+    assert ".gui-macros.json" in revealed
+    joined = " ".join(revealed)
+    assert "VERILOG_FILES=src/spm.v verify/tb.v" in joined
+    assert "EXTRA_FILES=ip/mem.v" in joined
+    # Everything from --dockerized onward (the inner librelane invocation) must be
+    # identical. The two differ only in the host launcher prefix — cli_command_for
+    # shows `librelane`, build_dockerized_argv uses `python3 -m librelane` — which
+    # the audit test plan explicitly allows.
+    assert revealed[revealed.index("--dockerized"):] == argv[argv.index("--dockerized"):]

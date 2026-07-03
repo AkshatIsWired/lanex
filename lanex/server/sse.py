@@ -19,6 +19,7 @@ import time
 from typing import Any, Iterable, List, Optional, Set
 
 from ..controller.runner import FlowRunner
+from .jsonsafe import json_safe
 
 _log = logging.getLogger("librelane.gui.sse")
 
@@ -65,7 +66,12 @@ class ISSEHandler:
         if self._closed:
             return
         try:
-            body = json.dumps(payload, default=_json_default)
+            # json_safe() strips bare Infinity/NaN (the REST path already does
+            # this via app._json_safe); allow_nan=False then guarantees the wire
+            # is strict JSON the browser's JSON.parse accepts, so a live metric
+            # of `inf` (normal for a design with no reg-to-reg paths) can no
+            # longer silently kill the flow_done event client-side.
+            body = json.dumps(json_safe(payload), default=_json_default, allow_nan=False)
         except Exception:
             body = json.dumps({"type": ev_type, "error": "unserialisable payload"})
         headers = []

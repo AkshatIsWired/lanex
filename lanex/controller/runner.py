@@ -279,12 +279,6 @@ class FlowRunner:
         except Exception as ex:  # pragma: no cover - platform dependent
             self._emit(EventType.INFO, {"message": f"could not terminate subprocesses: {ex}"})
 
-    def pause(self) -> None:
-        if not self._running:
-            return
-        self._resume.clear()
-        self._emit(EventType.INFO, {"message": "pause requested — will hold at the next step"})
-
     def resume(self) -> None:
         # Container step-by-step: "Resume"/"Next" launches the next single-step
         # container invocation rather than releasing an in-process Event (there
@@ -694,6 +688,7 @@ class FlowRunner:
         except _Cancelled:
             self._run_dir = getattr(self._flow, "run_dir", None) or self._run_dir
             self._mark_current_failed("cancelled")
+            self._mark_remaining_aborted()
             self._emit(EventType.INFO, {"message": "flow cancelled by user"})
             self._emit(EventType.FLOW_DONE, {"tag": self._run_dir or "", "cancelled": True})
         except Exception as ex:
@@ -710,6 +705,7 @@ class FlowRunner:
                     "cancelled": self._cancel.is_set(),
                 },
             )
+            self._mark_remaining_aborted()
             self._emit(EventType.FLOW_DONE, {"tag": self._run_dir or "", "error": self._error})
         finally:
             self._running = False
@@ -1117,6 +1113,21 @@ class FlowRunner:
         sid = self._current_step_id
         if sid:
             self._step_statuses[sid] = StepStatus.FAILED.value
+
+    def _mark_remaining_aborted(self) -> None:
+        """After a flow aborts (cancel or mid-flow error), every step that never
+        reached a terminal state stays PENDING/RUNNING forever — the timeline
+        then shows a tail of grey "pending" rows that look like they might still
+        run, even though the run is over (audit A5). Emit ``step_skipped``
+        (reason: flow aborted) for each so the timeline is honest. The current
+        step is already marked FAILED by :meth:`_mark_current_failed` and is left
+        untouched here."""
+        for sid, st in list(self._step_statuses.items()):
+            if sid == self._current_step_id:
+                continue
+            if st in (StepStatus.PENDING.value, StepStatus.RUNNING.value):
+                self._step_statuses[sid] = StepStatus.SKIPPED.value
+                self._emit(EventType.STEP_SKIPPED, {"step_id": sid, "reason": "flow aborted"})
 
     def _seed_step_graph(self, flow: Any) -> None:
         """Tell the SPA which steps exist before any run begins."""

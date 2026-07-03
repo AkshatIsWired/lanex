@@ -21,7 +21,7 @@
     </div>
   </div>
 
-  <div id="app" class="layout three-pane" style="display:none">
+  <div id="app" class="layout" style="display:none">
     <!-- Top bar -->
     <header class="topbar">
       <div class="brand">
@@ -64,10 +64,6 @@
       <span id="pdk-pill" class="pill pill-warn" title="Setup tab → PDK picker">
         <span class="d">●</span>
         <span class="text">PDK: —</span>
-      </span>
-      <span class="tier-switch" role="group" aria-label="Complexity tier">
-        <button class="tier-btn" data-tier="simple" title="Simple: just Setup → Run → Results.">Simple</button>
-        <button class="tier-btn" data-tier="pro" title="Pro: every feature (DSE, verification drill-down, plugins).">Pro</button>
       </span>
       <button id="btn-new-project" class="iconbtn" title="New project from a template">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 5v14M5 12h14"/></svg>
@@ -164,10 +160,10 @@
               <div class="ls-sub">substrate · 130&nbsp;nm</div>
             </aside>
           </div>
-          <ol class="steps-3">
-            <li><strong>1. Pick your HDL folder.</strong> A folder with your <code>.v</code> (and ideally <code>.sdc</code>) files.</li>
-            <li><strong>2. Confirm the PDK is installed.</strong> If not, the Tools tab installs it for you.</li>
-            <li><strong>3. Press Run.</strong> Watch each stage light up green. The GDS lands in <code>runs/<date>/final/gds</code>.</li>
+          <ol class="steps-3" id="onboard-checklist">
+            <li data-ck="design"><span class="ck-mark" aria-hidden="true">○</span><strong>1. Pick your HDL folder.</strong> A folder with your <code>.v</code> (and ideally <code>.sdc</code>) files.</li>
+            <li data-ck="pdk"><span class="ck-mark" aria-hidden="true">○</span><strong>2. Confirm the PDK is installed.</strong> If not, the Tools tab installs it for you.</li>
+            <li data-ck="run"><span class="ck-mark" aria-hidden="true">○</span><strong>3. Press Run.</strong> Watch each stage light up green. The GDS lands in <code>runs/<tag>/final/gds</code>.</li>
           </ol>
 
           <!-- Design picker -->
@@ -192,7 +188,7 @@
           <div class="card" id="filesel-card" hidden>
             <div class="card-body">
               <div style="display:flex;gap:var(--s-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--s-3);">
-                <h3 style="margin:0;flex:1">Verilog sources & memory files</h3>
+                <h3 style="margin:0;flex:1">Verilog sources & memory files <span class="help-pill" data-help="files" title="What is this?" role="button" tabindex="0">?</span></h3>
                 <span class="muted" id="filesel-count">0 files</span>
                 <button class="btn btn-ghost" id="btn-filesel-all">Select all</button>
                 <button class="btn btn-ghost" id="btn-filesel-none">Clear</button>
@@ -257,7 +253,7 @@
           <div class="preset-row">
             <span class="lbl">Preset:</span>
             <button class="chip chip-clickable" data-preset="default">Default</button>
-            <button class="chip chip-clickable" data-preset="lowpower">Low Power</button>
+            <button class="chip chip-clickable" data-preset="lowpower" title="Optimises area (SYNTH_STRATEGY AREA 2, denser floorplan). Smaller area tends to lower dynamic power via shorter wires — LibreLane has no direct power-driven synthesis strategy.">Area-lean</button>
             <button class="chip chip-clickable" data-preset="perfpush">Performance</button>
             <button class="chip chip-clickable" data-preset="antenna">Antenna-hardened</button>
             <button class="chip chip-clickable" data-preset="minimalarea">Minimum area</button>
@@ -325,7 +321,7 @@
         <section class="side-pane-section" id="spane-stepout">
           <div id="step-output" class="step-output">
             <div class="empty"><span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5"/></svg></span><h3>Step output</h3>
-              <p>Click any node in the flow graph above to load that step's log and reports here.</p></div>
+              <p>Click any step row in the timeline above to load that step's log and reports here.</p></div>
           </div>
         </section>
       </div>
@@ -345,7 +341,9 @@
           <option value="pass">Passed</option>
           <option value="fail">Failed</option>
         </select>
+        <button class="btn btn-ghost runs-scope" id="runs-pin-filter" aria-pressed="false" title="Show only pinned runs">★ Pinned</button>
         <span style="flex:1"></span>
+        <button class="btn btn-ghost" id="runs-import" title="Adopt a run directory or a LanEx bundle (.zip) from elsewhere">⬆ Import…</button>
         <button class="btn btn-ghost" id="runs-batch-delete" hidden><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6"/></svg> Delete selected (0)</button>
       </div>
       <ul id="runs-list" class="runs-list"></ul>
@@ -493,11 +491,6 @@
       <p class="hint">Curated, checksum-verified plugins only. Front-end plugins load through a constrained SDK surface.</p>
       <div id="plugins-body"></div>
       <div id="plugin-tab-host"></div>
-
-      <details class="card">
-        <summary><strong>Install logs</strong></summary>
-        <pre id="installer-log" class="code"></pre>
-      </details>
     </section>
 
     <!-- ANALYTICS -->
@@ -536,6 +529,10 @@
             <select id="trend-metric"></select>
           </div>
           <div id="trends-chart" style="height:260px;margin-top:var(--s-3)"></div>
+          <details class="card" id="watch-card" style="margin-top:var(--s-4)">
+            <summary><strong>Metric watch</strong><span class="hint">Get warned when a finished run breaks a bound you set (e.g. worst-slack must stay ≥ 0). Evaluated only against metrics the run actually produced.</span></summary>
+            <div class="card-body" id="watch-body"></div>
+          </details>
         </div>
       </details>
       <details class="card" id="analytics-compare" style="margin-top:var(--s-6)">
@@ -572,9 +569,12 @@
               <button class="seg-btn" data-timing-kind="hold">Hold (min)</button>
             </div>
             <span class="muted" id="timing-source"></span>
+            <label class="muted" style="margin-left:auto" for="timing-compare">Compare against:</label>
+            <select id="timing-compare" class="inp" aria-label="Compare timing against another run"><option value="">— none —</option></select>
           </div>
           <div id="timing-summary" class="tp-summary"></div>
           <div id="timing-hist" class="tp-hist" style="height:200px"></div>
+          <div id="timing-compare-out"></div>
           <div id="timing-table"></div>
         </div>
       </details>
@@ -681,7 +681,8 @@
           <h3>Run a command here</h3>
           <p class="hint">Allowed: <code>librelane</code>, <code>openroad</code>, <code>yosys</code>,
             <code>magic</code>, <code>klayout</code>, <code>netgen</code>, <code>iverilog</code>,
-            <code>verilator</code>, <code>ciel</code>, <code>docker</code>/<code>podman</code>.
+            <code>vvp</code>, <code>verilator</code>, <code>dot</code>, <code>ciel</code>,
+            <code>docker</code>/<code>podman</code>.
             Pipes, redirects and <code>sudo</code> are blocked — use your own terminal for those.</p>
           <div class="manual-input-row">
             <input type="text" id="manual-cmd" placeholder="e.g. librelane --dockerized config.json -T floorplan" autocomplete="off" spellcheck="false"/>
@@ -725,23 +726,15 @@
   <!-- Help dialog -->
   <dialog id="help-dialog" class="help-dialog">
     <h2>Shortcuts</h2>
-    <ul>
-      <li><kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>K</kbd> — command palette (everything)</li>
-      <li><kbd>1</kbd>..<kbd>6</kbd> — Setup / Pipeline / Runs / Preview / Tools / Analytics</li>
-      <li><kbd>j</kbd>/<kbd>k</kbd> — next / previous step (in Pipeline)</li>
-      <li><kbd>r</kbd> — start a run · <kbd>s</kbd> — stop a run</li>
-      <li><kbd>/</kbd> — focus the log filter</li>
-      <li><kbd>t</kbd> — toggle theme · <kbd>d</kbd> — toggle compact density</li>
-      <li><kbd>?</kbd> — this help · <kbd>Esc</kbd> — close</li>
-    </ul>
+    <ul id="help-shortcut-list"><!-- populated by hotkeys.js SHORTCUTS (single source of truth) --></ul>
     <button class="btn btn-ghost" id="btn-close-help">Close</button>
   </dialog>
 
   <!-- Folder browser modal -->
-  <div class="onboard" id="fs-modal" hidden>
+  <div class="onboard" id="fs-modal" hidden role="dialog" aria-modal="true" aria-labelledby="fs-modal-title">
     <div class="onboard-card" style="max-width:720px;height:70vh;display:flex;flex-direction:column;">
-      <button class="onboard-close" id="fs-close">×</button>
-      <h2>Browse for a design folder</h2>
+      <button class="onboard-close" id="fs-close" aria-label="Close">×</button>
+      <h2 id="fs-modal-title">Browse for a design folder</h2>
       <p class="hint">Click a folder to open it. Type a path to jump directly. Pick <em>Use this folder</em> when you're at the right place.</p>
       <div class="picker-row" style="margin-bottom:var(--s-3);">
         <input type="text" id="fs-path" placeholder="path…" autocomplete="off"/>

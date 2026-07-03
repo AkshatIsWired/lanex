@@ -105,14 +105,14 @@ export async function renderVerify(tag) {
   const cards = Object.entries(rep.stages || {}).map(([id, stage]) => {
     const rows = (stage.checks || []).map((c) => {
       const val = Object.values(c.values || {})[0];
-      return "<div class='vcheck' data-tier-min='pro'>" +
+      return "<div class='vcheck'>" +
         "<span class='pf " + (DOT[c.status] || "pf-absent") + "'></span>" +
         "<span class='vcheck-name'>" + fmt.escape(c.name) + "</span>" +
         (val !== undefined ? "<span class='vcheck-val'>" + fmt.escape(String(val)) + "</span>" : "") +
         (c.step_id ? "<button class='btn btn-ghost vcheck-log' data-step='" + fmt.escape(c.step_id) +
           "'>log</button>" : "") +
         (c.step_id ? "<button class='btn btn-ghost vcheck-rerun' data-step='" + fmt.escape(c.step_id) +
-          "' data-tier-min='pro'>re-run</button>" : "") +
+          "'>re-run</button>" : "") +
         "</div>";
     }).join("");
     return "<div class='vstage card'>" +

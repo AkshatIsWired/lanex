@@ -107,6 +107,45 @@ def test_parser_failure_path():
     assert fd and "error" in fd[-1]
 
 
+def test_finish_clean_marks_unseen_trailing_step_skipped_not_done():
+    # A4: on a clean (rc==0) exit only the step that was actually RUNNING is
+    # closed as done. A seeded step we never saw a `Running` banner for has no
+    # evidence it ran and must be reported *skipped*, never a green "done" we
+    # can't substantiate (a missed banner / LibreLane log-format change must not
+    # silently read as success).
+    from lanex.controller.container_run import ContainerLogParser
+
+    p = ContainerLogParser(["A", "B", "C"])
+    events = []
+    events += p.feed("[INFO] Running 'A' at 'runs/r/01-a'…")
+    events += p.feed("[INFO] Running 'B' at 'runs/r/02-b'…")
+    # C never emits a banner but the flow exits clean.
+    events += p.finish(0)
+    done = [e["step_id"] for e in events if e["type"] == "step_done"]
+    skipped = [e["step_id"] for e in events if e["type"] == "step_skipped"]
+    assert "A" in done and "B" in done          # A closed on B's start; B was running
+    assert "C" in skipped and "C" not in done   # never seen -> skipped, NOT done
+    assert [e for e in events if e["type"] == "flow_done"][-1].get("ok") is True
+
+
+def test_finish_failure_closes_pending_tail_as_skipped():
+    # A5 (container): a non-zero exit ends the flow, so no seeded step should
+    # linger "pending" in the timeline — the tail after the failed step is closed
+    # as skipped, mirroring runner._mark_remaining_aborted for local mode.
+    from lanex.controller.container_run import ContainerLogParser
+
+    p = ContainerLogParser(["A", "B", "C"])
+    events = []
+    events += p.feed("[INFO] Running 'A' at 'runs/r/01-a'…")
+    events += p.feed("FlowException: boom")
+    events += p.finish(1)
+    failed = [e for e in events if e["type"] == "step_failed"]
+    skipped = [e["step_id"] for e in events if e["type"] == "step_skipped"]
+    assert failed and failed[0]["step_id"] == "A"
+    assert "B" in skipped and "C" in skipped
+    assert [e for e in events if e["type"] == "flow_done"][-1].get("error")
+
+
 def test_pull_argv():
     from lanex.controller.container_run import pull_argv, image_ref
 

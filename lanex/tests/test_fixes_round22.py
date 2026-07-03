@@ -36,7 +36,7 @@ from lanex.server.app import LibreLaneGUIRequestHandler as H
 def test_designs_remember_and_list(tmp_path, monkeypatch):
     from lanex.controller import designs
     home = tmp_path / "home"
-    monkeypatch.setenv("LIBRELANE_GUI_HOME", str(home))
+    monkeypatch.setenv("LANEX_HOME", str(home))
     a = tmp_path / "A"; a.mkdir()
     b = tmp_path / "B"; b.mkdir()
     designs.remember(str(a))
@@ -66,7 +66,7 @@ def test_conn_error_classifier():
 
 @pytest.fixture()
 def _server(tmp_path, monkeypatch):
-    monkeypatch.setenv("LIBRELANE_GUI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("LANEX_HOME", str(tmp_path / "home"))
     from lanex.server.app import make_server
     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
         s.bind(("127.0.0.1", 0))
