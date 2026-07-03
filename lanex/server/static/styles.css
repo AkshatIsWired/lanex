@@ -87,6 +87,7 @@
   --r-sm: 2px;
   --r-md: 4px;
   --r-lg: 6px;
+  --r-xl: 10px;               /* landing cards + large modals only */
   --r-pill: 999px;
   /* compat alias: a few rules reference --radius; keep them on the scale */
   --radius: var(--r-md);
@@ -101,14 +102,14 @@
   --s-7: 48px;
   --s-8: 64px;
 
-  /* type scale */
+  /* type scale — fluid: steady at laptop widths, breathes on large monitors */
   --t-xs: 11px;
-  --t-sm: 12px;
+  --t-sm: 12.5px;
   --t-md: 14px;
   --t-lg: 16px;
-  --t-xl: 20px;
-  --t-2xl: 28px;
-  --t-3xl: 38px;
+  --t-xl: clamp(18px, 1.1vw + 12px, 21px);
+  --t-2xl: clamp(24px, 1.8vw + 14px, 30px);
+  --t-3xl: clamp(34px, 2.6vw + 20px, 46px);
 
   /* fonts — display = instrument labeling, body = dense UI, mono = chip data */
   --display: "Space Grotesk", "Inter var", system-ui, sans-serif;
@@ -119,6 +120,32 @@
   --sh-1: 0 1px 2px rgba(0, 0, 0, 0.5);
   --sh-2: 0 8px 24px rgba(0, 0, 0, 0.55);
   --sh-3: 0 20px 60px rgba(0, 0, 0, 0.66);
+
+  /* First Light additions ------------------------------------------------ */
+  /* Wafer iridescence — reserved EXCLUSIVELY for the landing hero + splash
+     wordmark glow. Never used on in-app chrome. */
+  --irid-1: #4da3ff;   /* met1 blue     */
+  --irid-2: #e879c9;   /* met2 magenta  */
+  --irid-3: #36d399;   /* met3 green    */
+  --iridescence: linear-gradient(115deg, var(--irid-1) 0%, var(--irid-2) 45%, var(--irid-3) 90%);
+
+  /* Elevation / overlay scale (single source of truth — B10) */
+  --z-sticky: 10;      /* in-page sticky bars (config-nav, section-jump)      */
+  --z-chrome: 100;     /* topbar / rail                                       */
+  --z-drawer: 500;     /* learn panel, log drawer                             */
+  --z-modal: 600;      /* dlg, smodal, fs-modal, help, fullscreen panels      */
+  --z-banner: 700;     /* pw-banner, compat banner (must beat modals)         */
+  --z-palette: 800;    /* command palette                                     */
+  --z-toast: 900;
+  --z-splash: 1000;    /* landing / splash                                    */
+
+  /* Motion scale */
+  --dur-1: 80ms;   /* press feedback          */
+  --dur-2: 160ms;  /* hover, toast, dropdown  */
+  --dur-3: 240ms;  /* overlay enter/exit      */
+  --dur-4: 600ms;  /* landing die assembly    */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.25, 1);
 
   color-scheme: dark;
 }
@@ -216,6 +243,8 @@ h1, h2, h3, .brand-name, .hero h1, .section-eyebrow {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+/* Firefox — thin, token-colored scrollbars (webkit props are ignored there) */
+html { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
 kbd {
   display: inline-block;
@@ -237,7 +266,7 @@ kbd {
   background:
     radial-gradient(circle at 50% 30%, var(--accent-soft) 0%, transparent 60%),
     var(--bg);
-  z-index: 200;
+  z-index: var(--z-splash);
   transition: opacity 0.3s ease;
 }
 .splash.hide { opacity: 0; pointer-events: none; }
@@ -247,15 +276,6 @@ kbd {
   height: 56px;
   width: auto;
   filter: drop-shadow(0 0 18px var(--accent-glow));
-}
-.splash-title {
-  font-family: var(--display);
-  font-size: var(--t-lg);
-  font-weight: 700;
-  color: var(--text-strong);
-  margin: var(--s-3) 0 var(--s-2);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 .splash-spinner {
   margin: var(--s-2) auto;
@@ -306,7 +326,7 @@ code {
 /* ---------- layout shells ---------- */
 #app {
   display: grid;
-  grid-template-columns: 96px 1fr;
+  grid-template-columns: 104px 1fr;
   grid-template-rows: 56px 1fr 32px;
   grid-template-areas:
     "topbar    topbar"
@@ -336,7 +356,7 @@ code {
   backdrop-filter: blur(14px) saturate(1.1);
   -webkit-backdrop-filter: blur(14px) saturate(1.1);
   border-bottom: 1px solid var(--border);
-  z-index: 20;
+  z-index: var(--z-chrome);
   position: relative;
 }
 /* Underline reads as the process-layer stack: poly → met1..met5, hairline. */
@@ -368,12 +388,7 @@ body.theme-light .splash-logo {
   filter: invert(1) brightness(0.45) contrast(1.5);
 }
 body.theme-light .splash-logo {
-  filter: invert(1) brightness(0.5) contrast(1.5) drop-shadow(0 0 14px rgba(109,40,217,0.15));
-}
-.brand-mark {
-  font-size: 26px;
-  color: var(--accent);
-  text-shadow: 0 0 16px var(--accent-glow);
+  filter: invert(1) brightness(0.5) contrast(1.5) drop-shadow(0 0 14px color-mix(in srgb, var(--accent) 15%, transparent));
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.05; }
 .brand-name {
@@ -387,77 +402,36 @@ body.theme-light .splash-logo {
 .brand-sub {
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.14em;
+  font-size: var(--t-xs);       /* 11px floor — 10px was below AA comfort */
+  font-weight: 500;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-.topbar-center { display: flex; justify-content: center; min-width: 0; overflow: hidden; }
-.mode-switch {
-  display: inline-flex;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  padding: 3px;
-  gap: 2px;
-  position: relative;
-}
-.mode-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  padding: 7px 14px;
-  border-radius: var(--r-pill);
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: var(--t-sm);
+/* Instrument-panel micro label — the single microcaps recipe (§3.2). */
+.inst-label {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
   font-weight: 500;
-  white-space: nowrap;
-  flex: 0 0 auto;
-  position: relative;
-  transition: color 0.15s ease, transform 0.12s ease;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
-.mode-btn:hover { color: var(--text); }
-.mode-btn:active { transform: scale(0.97); }
-.mode-btn.mode-btn-active {
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  color: var(--on-accent);
-  box-shadow: 0 0 0 1px var(--accent-glow), 0 8px 24px var(--accent-soft);
-}
-.mode-btn.mode-btn-active:hover {
-  background: linear-gradient(135deg, var(--accent-2), var(--accent-3));
-}
-.mode-btn .mode-ico { font-size: 14px; }
-.mode-btn.mode-btn-disabled,
-.mode-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* Run-engine switch — same chassis as the auto/semi mode switch. */
-.engine-switch { margin-left: var(--s-2); }
-.engine-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
-  padding: 7px 14px;
-  border-radius: var(--r-pill);
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: var(--t-sm);
-  font-weight: 500;
-  white-space: nowrap;
-  flex: 0 0 auto;
-  position: relative;
-  transition: color 0.15s ease, transform 0.12s ease;
-}
-.engine-btn:hover { color: var(--text); }
-.engine-btn:active { transform: scale(0.97); }
-.engine-btn.engine-btn-active {
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  color: var(--on-accent);
-  box-shadow: 0 0 0 1px var(--accent-glow), 0 8px 24px var(--accent-soft);
-}
-.engine-btn .mode-ico { font-size: 14px; }
+/* Topbar center — the two segmented switches. flex-wrap so a narrow window
+   never CLIPS the engine switch (B17); overflow is no longer hidden. */
+.topbar-center { display: flex; justify-content: center; align-items: center;
+  gap: var(--s-2); min-width: 0; flex-wrap: wrap; }
+.switch-label { align-self: center; }
+.engine-seg { margin-left: var(--s-1); }
+
+/* Mode / engine switches use the shared .seg component (B16). The active +
+   disabled markers keep the class names runmode.js/setup.js already toggle. */
+.mode-seg .seg-btn, .engine-seg .seg-btn { display: inline-flex; align-items: center; gap: var(--s-2); white-space: nowrap; }
+.mode-seg .seg-btn:hover, .engine-seg .seg-btn:hover { color: var(--text); }
+.seg-btn.mode-btn-active, .seg-btn.engine-btn-active { background: var(--accent-soft); color: var(--accent); }
+.seg-btn.mode-btn-disabled, .seg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.mode-ico { display: inline-flex; align-items: center; }
 
 .topbar-right { display: flex; gap: var(--s-2); justify-content: flex-end; align-items: center; flex-wrap: nowrap; }
 /* Don't let the topbar controls shrink below their content — that's what was
@@ -494,7 +468,8 @@ body.theme-light .splash-logo {
 .pill-fail  { background: var(--fail-soft);  border-color: var(--fail);  }
 .pill-fail  .d { background: var(--fail); }
 .pill-info  { background: var(--accent-soft); border-color: var(--accent); }
-.pill-info  .d { background: var(--accent); }.pill-pending { color: var(--text-muted); }
+.pill-info  .d { background: var(--accent); }
+.pill-pending { color: var(--text-muted); }
 .pill-running { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); animation: pulse 1.5s ease-in-out infinite; }
 .pill-running .d { background: var(--accent); }
 @keyframes pulse { 50% { opacity: 0.55; } }
@@ -540,12 +515,21 @@ body.theme-light .splash-logo {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--s-3);           /* space BETWEEN groups */
   padding: var(--s-3);
   /* On short viewports the lower tabs (DSE/Layout/Cells/Manual) fell below the
      fold with no way to reach them — scroll instead. */
   overflow-y: auto;
   min-height: 0;
+}
+/* Activity groups (U1) — markup-only wrappers; tabs.js/hotkeys unaffected. */
+.rail-group { display: flex; flex-direction: column; gap: 6px; }
+.rail-label {
+  font-size: 10px;
+  color: var(--text-disabled);
+  letter-spacing: 0.12em;
+  padding-left: 6px;
+  margin-bottom: 2px;
 }
 .side-tab .label {
   max-width: 100%;
@@ -571,7 +555,6 @@ body.theme-light .splash-logo {
 .side-tab:hover {
   background: var(--surface);
   color: var(--text);
-  transform: translateX(2px);
 }
 .side-tab.side-tab-active {
   background:
@@ -649,9 +632,12 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
   overflow: hidden;
   box-shadow: var(--sh-2);
 }
-/* corner crop marks — like a mask reticle frame */
-.hero::before,
-.hero::after {
+/* corner crop marks — like a mask reticle frame. Promoted to a .reticle utility
+   (§3.3): applied to the landing hero, the verify verdict, and the run-timeline
+   hero. Nowhere else (restraint). */
+.reticle { position: relative; }
+.hero::before, .hero::after,
+.reticle::before, .reticle::after {
   content: "";
   position: absolute;
   width: 18px; height: 18px;
@@ -659,16 +645,16 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
   pointer-events: none;
   opacity: 0.7;
 }
-.hero::before { top: 12px; left: 12px; border-right: 0; border-bottom: 0; }
-.hero::after  { bottom: 12px; right: 12px; border-left: 0; border-top: 0; }
+.hero::before, .reticle::before { top: 12px; left: 12px; border-right: 0; border-bottom: 0; }
+.hero::after,  .reticle::after  { bottom: 12px; right: 12px; border-left: 0; border-top: 0; }
 
 .section-eyebrow {
   font-family: var(--mono);
   font-size: var(--t-xs);
   font-weight: 500;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--met1);
+  color: var(--met1);        /* eyebrow is the one sanctioned met1 accent (§3.1) */
   margin: 0 0 var(--s-3);
 }
 .hero h1 {
@@ -698,7 +684,7 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
   display: flex;
   flex-direction: column;
   gap: 2px;
-  width: 280px;
+  width: 220px;              /* motif echo of the landing die; the landing carries the marketing */
   padding: var(--s-3);
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -787,23 +773,36 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 }
 .steps-3 li:hover {
   border-color: var(--accent);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(139,92,246,0.10);
+  box-shadow: 0 6px 18px var(--accent-soft);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .steps-3 strong { color: var(--text-strong); }
+/* Step number = a Manhattan square via, layer-accent colored (not a floating
+   gradient circle). The live ✓/○ state lives in .ck-mark (E5.1). */
 .steps-3 li::before {
   content: counter(step);
   position: absolute;
-  top: -10px; left: -10px;
-  width: 24px; height: 24px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  color: var(--on-accent);
-  border-radius: 50%;
+  top: -9px; left: -9px;
+  width: 18px; height: 18px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: var(--r-sm);
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 700;
-  box-shadow: var(--sh-2);
+  font-family: var(--mono);
+  font-size: 11px; font-weight: 700;
 }
+/* Setup picker h2 leading icons (§6.1) — decorative, inline flow preserved. */
+.h2ico { vertical-align: -3px; margin-right: 6px; color: var(--text-muted); }
+/* filesel-card (was inline styles, B13) */
+.filesel-head { display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; margin-bottom: var(--s-3); }
+.filesel-h3 { margin: 0; flex: 1; }
+#filesel-extras { margin-top: var(--s-3); }
+.filesel-note { margin-top: var(--s-2); }
+/* standard rhythm for in-section subheadings (was inline margin-top, B13) */
+.section-h2 { margin-top: var(--s-5); }
 
+.picker.picker-ready { border-left: 3px solid var(--pass); }
 .picker {
   background:
     linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
@@ -894,12 +893,6 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
   position: relative;
   overflow: hidden;
 }
-.btn-cta::before {
-  content: "";
-  position: absolute; inset: 0;
-  background: radial-gradient(circle at 30% 0%, rgba(255,255,255,0.18) 0%, transparent 50%);
-  pointer-events: none;
-}
 .btn-cta:hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 14px 38px var(--accent-glow); }
 .btn-cta:active { transform: translateY(0); }
 .btn-cta:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -924,8 +917,7 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .btn:hover {
   border-color: var(--accent);
   color: var(--text-strong);
-  box-shadow: 0 0 0 1px var(--accent-soft), 0 6px 18px rgba(139,92,246,0.10);
-  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px var(--accent-soft);
 }
 .btn:active { transform: translateY(0); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
@@ -946,6 +938,7 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .btn-ghost { background: transparent; border-color: var(--border); }
 .btn-success { background: var(--pass); border-color: var(--pass); color: var(--on-pass); }
 .btn-success:hover { filter: brightness(1.05); }
+.btn-sm { padding: 2px 8px; font-size: var(--t-xs); gap: 4px; }
 
 /* ---------- card ---------- */
 .card {
@@ -959,14 +952,14 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
   overflow: hidden;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
-.card:hover {
+/* Plain cards do NOT react to hover — in grids (metric cards, report rows) a
+   hover shadow/lift shifts neighbours and makes dense engineering UI feel
+   unstable. Only cards that are themselves an action respond. */
+.card.card-clickable:hover {
   border-color: var(--border-strong);
   box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-  /* No translateY lift on plain cards: in grids (metric cards, report rows) it
-     shifts neighbours and makes dense engineering UI feel unstable. Only cards
-     that are themselves an action lift. */
+  transform: translateY(-2px);
 }
-.card.card-clickable:hover { transform: translateY(-2px); }
 .card[open] { box-shadow: 0 8px 24px rgba(0,0,0,0.22); }
 .card summary {
   cursor: pointer;
@@ -1003,6 +996,15 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+/* Native selects are the last unthemed control — draw our own chevron. */
+select {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238595a9' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 13px;
+}
 .grow { flex: 1; min-width: 200px; }
 
 /* ---------- preset chips ---------- */
@@ -1020,7 +1022,7 @@ input:focus, select:focus, textarea:focus {
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);          /* Manhattan: controls are rectilinear (B16) */
   background: var(--surface-2);
   border: 1px solid var(--border);
   font-size: var(--t-xs);
@@ -1029,7 +1031,7 @@ input:focus, select:focus, textarea:focus {
 }
 .chip-clickable { cursor: pointer; }
 .chip-clickable:hover { border-color: var(--accent); }
-.chip-active { background: var(--accent-2); color: var(--on-accent); border-color: var(--accent); }
+.chip-active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 
 /* ---------- active-overrides summary (what will be sent) ---------- */
 .overrides-summary { margin-bottom: var(--s-3); }
@@ -1090,12 +1092,6 @@ input:focus, select:focus, textarea:focus {
 .var-row select, .var-row input[type="text"] { font-family: var(--mono); }
 
 /* ---------- pipeline ---------- */
-.pipeline {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  height: calc(100vh - 220px);
-}
 .bar {
   display: flex; gap: var(--s-2); align-items: center;
   background: var(--surface);
@@ -1107,6 +1103,7 @@ input:focus, select:focus, textarea:focus {
 }
 .bar label { color: var(--text-muted); font-size: var(--t-sm); display: inline-flex; align-items: center; gap: 6px; }
 .bar input[type="text"] { width: 200px; }
+.bar-spacer { flex: 1; }
 
 /* ---------- runs ---------- */
 .runs-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s-3); }
@@ -1168,8 +1165,18 @@ input:focus, select:focus, textarea:focus {
   cursor: pointer;
 }
 .tool-card .install-btn:hover { border-color: var(--accent); color: var(--accent); }
-.tool-card.installed-installed { border-color: var(--pass); }
-.tool-card.installed-missing  { border-color: var(--fail); }
+/* Status as a 3px left edge (the app-wide convention), not a full perimeter. */
+.tool-card.installed-installed { border-left: 3px solid var(--pass); }
+.tool-card.installed-missing  { border-left: 3px solid var(--fail); }
+/* Tools tab: inline-style → class conversions (B13) + uninstall control. */
+.tools-pdk-card { margin-bottom: var(--s-4); }
+.tools-local-card { margin-top: var(--s-4); }
+.pdk-root-row { display: flex; gap: var(--s-2); margin-top: var(--s-1); }
+.tool-installed-row { display: flex; gap: var(--s-2); align-items: center; }
+.uninstall-btn { display: inline-flex; align-items: center; padding: 2px 6px;
+  background: transparent; border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text-muted); cursor: pointer; }
+.uninstall-btn:hover { border-color: var(--fail); color: var(--fail); }
 
 .dot-installed {
   display: inline-block;
@@ -1309,13 +1316,6 @@ input:focus, select:focus, textarea:focus {
 .metric-card .val.fail { color: var(--fail); }
 .metric-card .val.warn { color: var(--warn); }
 .metric-card .val .unit { font-size: var(--t-xs); color: var(--text-muted); font-weight: 400; }
-.metrics-trend {
-  height: 220px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-}
-
 .advisor-list { display: grid; gap: var(--s-3); margin-top: var(--s-3); }
 .adv-card {
   background: var(--surface);
@@ -1324,7 +1324,8 @@ input:focus, select:focus, textarea:focus {
   padding: var(--s-3) var(--s-4);
 }
 .adv-card.fail { border-left: 4px solid var(--fail); }
-.adv-card.warn { border-left: 4px solid var(--warn); }.adv-card .title { color: var(--text-strong); font-weight: 600; margin-bottom: var(--s-1); }
+.adv-card.warn { border-left: 4px solid var(--warn); }
+.adv-card .title { color: var(--text-strong); font-weight: 600; margin-bottom: var(--s-1); }
 .adv-card .what { color: var(--text); margin-bottom: var(--s-1); }
 .adv-card .why { color: var(--text-muted); font-size: var(--t-sm); margin-bottom: var(--s-2); }
 .adv-card .try { font-family: var(--mono); font-size: var(--t-sm); padding-left: var(--s-4); }
@@ -1355,68 +1356,50 @@ input:focus, select:focus, textarea:focus {
 .status-progress { flex: 1; margin: 0 var(--s-4); }
 .status-help .pill { padding: 3px 8px; }
 
-/* ---------- onboarding ---------- */
-.onboard {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.55);
-  display: grid;
-  place-items: center;
-  z-index: 80;
-  backdrop-filter: blur(6px);
-  animation: fadeIn 0.18s ease;
-}
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-.onboard[hidden] { display: none; }
-.onboard-card {
-  background:
-    linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
-  border: 1px solid var(--accent);
-  border-radius: var(--r-lg);
-  padding: var(--s-5);
-  max-width: 540px;
-  box-shadow: var(--sh-3), 0 0 0 1px var(--accent-soft);
-  position: relative;
-  animation: rise 0.2s ease;
-}
+/* keyframe kept for .splash-inner (styles.css:274); the onboard tour that also
+   used it was removed in round 39 — the landing screen (§5) replaces it. */
 @keyframes rise { from { transform: translateY(8px); opacity: 0.6; } to { transform: translateY(0); opacity: 1; } }
-.onboard-card h2 { color: var(--text-strong); margin: 0 0 var(--s-2); font-size: var(--t-xl); }
-.onboard-card ol { padding-left: var(--s-4); line-height: 1.7; color: var(--text); }
-.onboard-close {
-  position: absolute; top: 12px; right: 12px;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 26px; width: 32px; height: 32px;
-  border-radius: var(--r-sm);
-}
-.onboard-close:hover { background: var(--surface-2); color: var(--text); }
 
-/* ---------- help dialog ---------- */
+/* ---------- help dialog (rebuilt on the .dlg look, two columns) ---------- */
 .help-dialog {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
-  border-radius: var(--r-md);
-  padding: var(--s-5);
-  max-width: 360px;
+  border-radius: var(--r-lg);
+  padding: 0;
+  width: min(560px, 92vw);
   box-shadow: var(--sh-3);
 }
 .help-dialog::backdrop { background: rgba(0,0,0,0.5); }
-.help-dialog ul { padding-left: 0; list-style: none; }
-.help-dialog li { padding: 6px 0; border-bottom: 1px dashed var(--border); font-size: var(--t-sm); }
+.help-head { display: flex; align-items: center; justify-content: space-between;
+  padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--border); }
+.help-head .help-x { margin: -4px -6px; }
+.help-cols { display: grid; grid-template-columns: 1.3fr 1fr; gap: var(--s-4);
+  padding: var(--s-4); }
+.help-col-h { margin: 0 0 var(--s-2); }
+.help-dialog ul { padding-left: 0; list-style: none; margin: 0; }
+.help-dialog #help-shortcut-list li { padding: 6px 0; border-bottom: 1px dashed var(--border); font-size: var(--t-sm); }
+.help-links li { padding: 4px 0; font-size: var(--t-sm); }
+.help-links a, .linklike {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--text-muted); font-size: var(--t-sm); font-family: inherit; text-decoration: none;
+}
+.help-links a:hover, .linklike:hover { color: var(--accent); text-decoration: underline; }
+@media (max-width: 560px) { .help-cols { grid-template-columns: 1fr; } }
 
 /* ---------- responsive ---------- */
 /* Responsive: the layout grid lives on #app, so the breakpoints must target it
    (they previously targeted <body>, which has no grid -> never collapsed). */
 @media (max-width: 1240px) {
-  #app { grid-template-columns: 80px 1fr; }
+  #app { grid-template-columns: 88px 1fr; }
 }
 @media (max-width: 960px) {
-  #app { grid-template-columns: 70px 1fr; }
+  #app { grid-template-columns: 72px 1fr; }
 }
 @media (max-width: 720px) {
   #app { grid-template-rows: 56px 1fr 32px; grid-template-columns: 64px 1fr; grid-template-areas: "topbar topbar" "side work" "status status"; }
+  /* Rail too narrow for group labels here — the gap still separates the groups. */
+  .rail-label { display: none; }
   /* Don't hide the right-side controls (theme / palette / help / tools) — they
      become inaccessible. Let them scroll horizontally instead. */
   .topbar-right { display: flex; overflow-x: auto; min-width: 0; -webkit-overflow-scrolling: touch; }
@@ -1448,14 +1431,14 @@ input:focus, select:focus, textarea:focus {
 .filesel-row .ext { font-size: 10px; padding: 1px 6px; border-radius: var(--r-pill); background: var(--surface-3); color: var(--text); margin-left: var(--s-2); }
 .filesel-row.dir { background: var(--surface-3); }
 .filesel-row.dir .name { color: var(--accent); }
-.fs-roots-pill { background: var(--surface-3); border: 1px solid var(--border); padding: 6px 12px; border-radius: var(--r-pill); cursor: pointer; font-family: var(--mono); font-size: var(--t-xs); color: var(--text); }
+.fs-roots-pill { background: var(--surface-3); border: 1px solid var(--border); padding: 6px 12px; border-radius: var(--r-sm); cursor: pointer; font-family: var(--mono); font-size: var(--t-xs); color: var(--text); }
 .fs-roots-pill:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ---------- config nav ---------- */
 .config-nav {
   position: sticky;
   top: 0;
-  z-index: 4;
+  z-index: var(--z-sticky);
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -1470,14 +1453,14 @@ input:focus, select:focus, textarea:focus {
   background: var(--surface-2);
   border: 1px solid var(--border);
   padding: 5px 12px;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);          /* Manhattan control (B16) */
   font-size: var(--t-xs);
   font-family: var(--mono);
   color: var(--text-muted);
   cursor: pointer;
 }
 .config-nav .nav-chip:hover { border-color: var(--accent); color: var(--text); }
-.config-nav .nav-chip.nav-active { background: var(--accent-2); color: var(--on-accent); border-color: var(--accent); }
+.config-nav .nav-chip.nav-active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .config-anchor { scroll-margin-top: 70px; }
 
 /* ---------- empty state messages ---------- */
@@ -1505,7 +1488,7 @@ h3 { font-size: var(--t-md); font-weight: 600; color: var(--text-strong); margin
 #analytics-sections > .card { margin-bottom: 0; }
 #analytics-sections > .card summary { background: var(--surface-2); }
 #analytics-sections > .card summary strong { font-size: var(--t-lg); }
-.metric-group-header { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; padding: var(--s-2) 0; margin: var(--s-2) 0 0; }
+.metric-group-header { font-family: var(--mono); font-size: var(--t-xs); font-weight: 500; color: var(--text-muted); letter-spacing: 0.14em; text-transform: uppercase; padding: var(--s-2) 0; margin: var(--s-2) 0 0; }
 
 /* ---- Preflight "Ready to run?" checklist ---------------------------------- */
 .preflight { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-2); }
@@ -1567,16 +1550,36 @@ h3 { font-size: var(--t-md); font-weight: 600; color: var(--text-strong); margin
 }
 
 /* ---- topbar ⌘K button -------------------------------------------------- */
-.iconbtn-cmdk { width: auto; padding: 0 10px; gap: 4px; }
+/* Vertical hairline separating topbar-right groups. */
+.topbar-divider { width: 1px; align-self: stretch; margin: 8px 2px;
+  background: var(--border); flex: 0 0 auto; }
+
+/* Command launcher — a mini search field (discoverability fix), id palette-btn. */
+.cmdk-launcher {
+  display: flex; align-items: center; gap: var(--s-2);
+  width: 160px; height: 34px; padding: 0 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-md); color: var(--text-muted); cursor: pointer;
+  transition: border-color var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out);
+}
+.cmdk-launcher:hover { border-color: var(--accent); color: var(--text); }
+.cmdk-launcher .cmdk-search { flex: 0 0 auto; opacity: 0.8; }
+.cmdk-launcher .cmdk-lbl { flex: 1; text-align: left; font-size: var(--t-sm); }
 .cmdk-hintkey {
   font-family: var(--mono);
   font-size: var(--t-xs);
   font-weight: 600;
   letter-spacing: 0.02em;
+  color: var(--text-disabled);
+}
+@media (max-width: 1240px) {
+  /* Reclaim width: collapse the launcher to an icon square (still opens palette). */
+  .cmdk-launcher { width: 34px; padding: 0; justify-content: center; }
+  .cmdk-launcher .cmdk-lbl, .cmdk-launcher .cmdk-hintkey { display: none; }
 }
 
 /* ---- command palette --------------------------------------------------- */
-.cmdk { position: fixed; inset: 0; z-index: 300; }
+.cmdk { position: fixed; inset: 0; z-index: var(--z-palette); }
 .cmdk[hidden] { display: none; }
 .cmdk-backdrop {
   position: absolute; inset: 0;
@@ -1679,7 +1682,7 @@ body.density-compact .metric-card { padding: var(--s-2); }
 body.density-compact .pf-row { padding: 4px var(--s-3); }
 body.density-compact .side-tab { padding: 8px 6px; }
 body.density-compact .side-tab .ico { font-size: 18px; }
-body.density-compact .tool-card { padding: var(--s-3) !important; }
+body.density-compact .tool-card { padding: var(--s-3); }
 body.density-compact .steps-3 { margin-bottom: var(--s-4); }
 
 /* ---- Live RTL→GDS run timeline ------------------------------------------- */
@@ -1743,7 +1746,7 @@ body.density-compact .steps-3 { margin-bottom: var(--s-4); }
 
 /* Step-output inspector modal (click a node on the flow graph). */
 .smodal-backdrop {
-  position: fixed; inset: 0; z-index: 1000;
+  position: fixed; inset: 0; z-index: var(--z-modal);
   background: rgba(0, 0, 0, 0.55);
   display: flex; align-items: center; justify-content: center;
   padding: var(--s-4);
@@ -1824,7 +1827,7 @@ body.density-compact .steps-3 { margin-bottom: var(--s-4); }
 .summary-card.pass .summary-val { color: var(--pass); }
 .summary-card.fail .summary-val { color: var(--fail); }
 .summary-val .unit { font-size: var(--t-xs); color: var(--text-muted); font-weight: 400; margin-left: 2px; }
-.summary-label { font-size: var(--t-xs); color: var(--text-muted); margin-top: var(--s-1); text-transform: uppercase; letter-spacing: 0.04em; }
+.summary-label { font-family: var(--mono); font-weight: 500; font-size: var(--t-xs); color: var(--text-muted); margin-top: var(--s-1); text-transform: uppercase; letter-spacing: 0.14em; }
 
 /* ---- Preview: output-file browser ---- */
 .out-cat { margin-bottom: var(--s-3); }

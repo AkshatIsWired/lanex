@@ -7,6 +7,7 @@ import { renderConfig } from "./config.js";
 import { setupFolderBrowser, loadFilesFor } from "./fs.js";
 import { toast } from "./toast.js";
 import { renderPreflight } from "./preflight.js";
+import { icon } from "./icons.js";
 
 const RECENT_KEY = "ll.recentDesigns";
 
@@ -244,7 +245,7 @@ export function paintOnboardChecklist() {
     const done = !!status[li.dataset.ck];
     li.classList.toggle("ck-done", done);
     const mark = li.querySelector(".ck-mark");
-    if (mark) mark.textContent = done ? "✓" : "○";
+    if (mark) mark.innerHTML = done ? icon("check", { size: 14 }) : icon("dot", { size: 14 });
   });
 }
 
@@ -435,7 +436,7 @@ export function paintRunning(running) {
     if (b) b.disabled = true;
     if (c) c.disabled = false;
     if (c2) c2.disabled = false;
-    if (g) { g.disabled = false; g.textContent = "■ Stop"; g.classList.add("is-stop"); }
+    if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); }
     pill?.classList.remove("pill-pending");
     pill?.classList.add("pill-running");
     if (pill) pill.textContent = "running";
@@ -443,7 +444,7 @@ export function paintRunning(running) {
     if (b) b.disabled = !state.designDir;
     if (c) c.disabled = true;
     if (c2) c2.disabled = true;
-    if (g) { g.disabled = !state.designDir; g.textContent = "▶ Run"; g.classList.remove("is-stop"); }
+    if (g) { g.disabled = !state.designDir; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); }
     pill?.classList.add("pill-pending");
     pill?.classList.remove("pill-running");
     if (pill) pill.textContent = "idle";

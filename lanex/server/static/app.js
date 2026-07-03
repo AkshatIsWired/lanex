@@ -27,6 +27,8 @@ import { setupLearn } from "./modules/learn.js";
 import { loadEnabledPlugins } from "./modules/plugins.js";
 import { icon } from "./modules/icons.js";
 import { setupFullscreen } from "./modules/fullscreen.js";
+import { showAbout } from "./modules/about.js";
+import { setupTooltips } from "./modules/tooltip.js";
 
 // Map each side-nav tab to a line-style SVG icon (replaces per-OS emoji glyphs).
 const TAB_ICONS = {
@@ -92,6 +94,7 @@ async function boot() {
     setupWizard();
     setupLearn();
     setupFullscreen();
+    setupTooltips();
     paintNavIcons();
     help.bind();
     document.getElementById("ide-popout")?.addEventListener("click", () => {
@@ -110,6 +113,8 @@ async function boot() {
     document.getElementById("palette-btn")?.addEventListener("click", openPalette);
     document.getElementById("theme-btn")?.addEventListener("click", toggleTheme);
     document.getElementById("density-btn")?.addEventListener("click", toggleDensity);
+    // Help-dialog quick links (static markup; wired once).
+    document.getElementById("help-license")?.addEventListener("click", showAbout);
     // The "Parse" button is wired once by setupViolations() (smart kind
     // detection). The old inline handler here double-bound it — removed.
 
@@ -206,7 +211,6 @@ async function boot() {
     if (splash) splash.classList.add("hide");
     document.getElementById("app").style.display = "";
 
-    setTimeout(showOnboardingOnce, 600);
     // Load any enabled front-end plugins through the SDK surface (best-effort).
     loadEnabledPlugins();
   } catch (err) {
@@ -468,23 +472,6 @@ function setRunProgress(done, total, current) {
   bar.textContent = "step " + done + "/" + total + ":" + (current ? " " + current : "") + " (" + pct + "%)";
 }
 
-function showOnboardingOnce() {
-  try {
-    if (sessionStorage.getItem("ll.onboarded") === "1") return;
-  } catch (_) {}
-  const o = document.getElementById("onboard");
-  if (!o) return;
-  o.hidden = false;
-  document.getElementById("onboard-close")?.addEventListener("click", dismiss);
-  document.getElementById("onboard-done")?.addEventListener("click", dismiss);
-}
-
-function dismiss() {
-  const o = document.getElementById("onboard");
-  if (o) o.hidden = true;
-  try { sessionStorage.setItem("ll.onboarded", "1"); } catch (_) {}
-}
-
 function logInstallerLine(line) {
   renderLogs.append({ type: "installer_line", payload: { message: line } });
 }
@@ -502,6 +489,9 @@ function showPasswordBanner(message) {
     document.body.appendChild(el);
   }
   el.innerHTML = "";
+  const ico = document.createElement("span");
+  ico.className = "pw-banner-ico";
+  ico.innerHTML = icon("alert", { size: 16 });
   const msg = document.createElement("span");
   msg.textContent = message;
   const close = document.createElement("button");
@@ -509,6 +499,7 @@ function showPasswordBanner(message) {
   close.setAttribute("aria-label", "Dismiss");
   close.textContent = "Dismiss";
   close.addEventListener("click", clearPasswordBanner);
+  el.appendChild(ico);
   el.appendChild(msg);
   el.appendChild(close);
   el.hidden = false;
@@ -532,7 +523,7 @@ function maybeShowPostRunPanel() {
   el.setAttribute("role", "status");
   el.innerHTML =
     "<div class='postrun-head'><strong>Run complete — what now?</strong>" +
-    "<button class='postrun-close' aria-label='Dismiss'>✕</button></div>" +
+    "<button class='postrun-close' aria-label='Dismiss'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "<span class='muted'>See the layout, check sign-off, or dig into the numbers.</span>" +
     "<div class='postrun-actions'>" +
       "<button class='btn btn-ghost' data-go='preview'>View GDS</button>" +
@@ -572,6 +563,9 @@ function maybeWarnCompat(compat) {
     document.body.appendChild(el);
   }
   el.innerHTML = "";
+  const ico = document.createElement("span");
+  ico.className = "pw-banner-ico";
+  ico.innerHTML = icon("alert", { size: 16 });
   const span = document.createElement("span");
   span.textContent = msg;
   const close = document.createElement("button");
@@ -579,6 +573,7 @@ function maybeWarnCompat(compat) {
   close.setAttribute("aria-label", "Dismiss");
   close.textContent = "Dismiss";
   close.addEventListener("click", () => { el.hidden = true; });
+  el.appendChild(ico);
   el.appendChild(span);
   el.appendChild(close);
   el.hidden = false;

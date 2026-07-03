@@ -2,6 +2,38 @@
    cells, plugins, viewers, wizard, learn). Token-only: every color,
    space, radius, and shadow comes from styles.css :root. No hardcoded hex. */
 
+/* ---- Toasts (bottom-right; class-styled, dismissable) --------------------- */
+.toast-host {
+  position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: var(--z-toast);
+  display: flex; flex-direction: column; gap: var(--s-2);
+  max-width: min(380px, 92vw);
+}
+.toast {
+  display: flex; align-items: flex-start; gap: var(--s-2);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md); box-shadow: var(--sh-2);
+  padding: var(--s-3) var(--s-3); color: var(--text);
+  font-size: var(--t-sm); line-height: 1.4;
+  opacity: 0; transform: translateY(8px);
+  transition: opacity var(--dur-2, 160ms) var(--ease-out, ease-out),
+              transform var(--dur-2, 160ms) var(--ease-out, ease-out);
+}
+.toast.is-in { opacity: 1; transform: none; }
+.toast-success { border-left-color: var(--pass); }
+.toast-warn    { border-left-color: var(--warn); }
+.toast-error   { border-left-color: var(--fail); }
+.toast-info    { border-left-color: var(--accent); }
+.toast-ico { flex: none; display: inline-flex; margin-top: 1px; }
+.toast-success .toast-ico { color: var(--pass); }
+.toast-warn .toast-ico    { color: var(--warn); }
+.toast-error .toast-ico   { color: var(--fail); }
+.toast-info .toast-ico    { color: var(--accent); }
+.toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast-close { flex: none; background: none; border: 0; cursor: pointer;
+  color: var(--text-muted); padding: 0; display: inline-flex; line-height: 1; }
+.toast-close:hover { color: var(--text-strong); }
+
 /* ---- E4.3 timing compare Δ ------------------------------------------------ */
 .tp-pos { color: var(--pass); }
 .tp-neg { color: var(--fail); }
@@ -28,9 +60,9 @@
 
 /* ---- E5.2 one-time post-run "what now?" card ------------------------------ */
 .postrun-card {
-  position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: 900;
+  position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: var(--z-toast);
   max-width: 320px; display: flex; flex-direction: column; gap: var(--s-2);
-  padding: var(--s-4); background: var(--surface-1); border: 1px solid var(--border);
+  padding: var(--s-4); background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--r-lg); box-shadow: var(--sh-2);
 }
 .postrun-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
@@ -46,11 +78,13 @@
 .inp:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .chart-box { width: 100%; }
 
-.pf { width: 9px; height: 9px; border-radius: var(--r-pill); display: inline-block; flex: 0 0 auto; }
-.pf-pass { background: var(--pass); }
-.pf-fail { background: var(--fail); }
-.pf-warn { background: var(--warn); }
-.pf-absent { background: var(--text-disabled); }
+/* Verify/DSE status DOTS (renamed from .pf* to end the collision with
+   preflight.js's .pf-ok/.pf-warn/.pf-bad glyph TEXT colors in styles.css — B7). */
+.vdot { width: 9px; height: 9px; border-radius: var(--r-pill); display: inline-block; flex: 0 0 auto; }
+.vdot-pass { background: var(--pass); }
+.vdot-fail { background: var(--fail); }
+.vdot-warn { background: var(--warn); }
+.vdot-absent { background: var(--text-disabled); }
 
 .chip-pass { background: var(--pass-soft); color: var(--pass); }
 .chip-fail { background: var(--fail-soft); color: var(--fail); }
@@ -69,7 +103,9 @@
 .verdict-pass { border-color: var(--pass); background: var(--pass-soft); }
 .verdict-fail { border-color: var(--fail); background: var(--fail-soft); }
 .verdict-incomplete { border-color: var(--warn); background: var(--warn-soft); }
-.verdict-title { font-size: var(--t-lg); font-weight: 600; color: var(--text-strong); }
+.verdict-title { font-family: var(--display); font-size: var(--t-xl); font-weight: 700; letter-spacing: -0.01em; color: var(--text-strong); }
+/* the verdict banner is the Verify tab's hero — give the reticle room to breathe */
+.verdict.reticle { padding: var(--s-5) var(--s-4); }
 .verdict-chips { display: flex; gap: var(--s-2); flex-wrap: wrap; width: 100%; }
 .vstages { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 .vstage-head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); }
@@ -94,13 +130,14 @@
 .report-row .rname { font-family: var(--mono); font-size: var(--t-xs); flex: 1; word-break: break-all; }
 
 /* ---- Right-side log drawer (out-of-pipeline streamed logs) ---------------- */
-.log-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 90vw);
-  z-index: 8500; display: flex; flex-direction: column; background: var(--surface);
+.log-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw);
+  z-index: var(--z-drawer); display: flex; flex-direction: column; background: var(--surface);
   border-left: 1px solid var(--border); box-shadow: -8px 0 24px rgba(0,0,0,0.35); }
 .log-drawer[hidden] { display: none; }
+.log-drawer:not([hidden]) { animation: drawer-in var(--dur-3) var(--ease-out); }
 .log-drawer-head { display: flex; align-items: center; gap: var(--s-2);
   padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--border); background: var(--surface-2); }
-.log-drawer-title { font-weight: 600; font-size: var(--t-sm); }
+.log-drawer-title { font-family: var(--mono); font-size: var(--t-xs); font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
 .log-drawer-spacer { flex: 1; }
 .log-drawer-btn { font-size: var(--t-xs); padding: 2px 8px; }
 .log-drawer-body { flex: 1; overflow: auto; margin: 0; padding: var(--s-3);
@@ -128,13 +165,22 @@
 
 /* ---- Privileged-install password banner ----------------------------------- */
 .pw-banner {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+  position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-banner);
   display: flex; align-items: center; justify-content: center; gap: var(--s-4);
   padding: var(--s-3) var(--s-4);
   background: var(--warn, #b8860b); color: var(--on-status);
   font-size: var(--t-sm); box-shadow: var(--sh-2);
 }
 .pw-banner[hidden] { display: none; }
+.pw-banner-ico { display: inline-flex; align-items: center; flex: none; margin-right: calc(-1 * var(--s-3)); }
+
+/* ---- Tooltip (one reusable bubble for [data-tip], tooltip.js) ------------- */
+.tip { position: fixed; z-index: var(--z-toast); pointer-events: none;
+  max-width: 240px; padding: 5px var(--s-2);
+  background: var(--surface-3); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--sh-2);
+  font-family: var(--mono); font-size: var(--t-xs); line-height: 1.35; white-space: normal; }
+.tip[hidden] { display: none; }
 .pw-banner-close {
   /* Deliberate literal whites: this close button sits on the warn banner fill,
      not a themed surface, so it stays white in both themes (G1). */
@@ -145,7 +191,7 @@
 .pw-banner-close:hover { background: rgba(255, 255, 255, .3); }
 
 /* ---- In-page jump nav (long tabs) ----------------------------------------- */
-.section-jump { position: sticky; top: 0; z-index: 5; display: flex; align-items: center;
+.section-jump { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center;
   flex-wrap: wrap; gap: var(--s-2); padding: var(--s-2) 0; margin-bottom: var(--s-2);
   background: var(--bg); border-bottom: 1px solid var(--border); }
 
@@ -176,9 +222,9 @@
 .dse-runs { display: grid; gap: var(--s-1); grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); max-height: 240px; overflow: auto; }
 .dse-run-row { display: flex; align-items: center; gap: var(--s-2); padding: 2px 0; cursor: pointer; }
 .dse-run-row code { overflow-wrap: anywhere; }
-.dse-runs .pf { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.dse-runs .pf-pass { background: var(--pass); }
-.dse-runs .pf-fail { background: var(--fail); }
+.dse-runs .vdot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dse-runs .vdot-pass { background: var(--pass); }
+.dse-runs .vdot-fail { background: var(--fail); }
 .dse-sweep-lbl { font-size: var(--t-sm); color: var(--text-muted); display: inline-flex; align-items: center; gap: var(--s-1); }
 /* DSE results: comparison table + side-by-side charts */
 .dse-results { padding: var(--s-4); margin-top: var(--s-3); }
@@ -243,11 +289,16 @@
 .wiz-actions { display: flex; justify-content: space-between; margin-top: var(--s-3); }
 
 /* ---- Learn panel ---------------------------------------------------------- */
-.learn-panel { position: fixed; top: 0; right: 0; width: min(420px, 90vw); height: 100vh; background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--sh-3); z-index: 60; display: flex; flex-direction: column; }
+.learn-panel { position: fixed; top: 0; right: 0; width: min(440px, 92vw); height: 100vh; background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--sh-3); z-index: var(--z-drawer); display: flex; flex-direction: column; }
 /* display:flex overrides the hidden attribute → restore hide-on-hidden so the ✕ closes it. */
 .learn-panel[hidden] { display: none; }
+.learn-panel:not([hidden]) { animation: drawer-in var(--dur-3) var(--ease-out); }
 .learn-head { display: flex; align-items: center; justify-content: space-between; padding: var(--s-3); border-bottom: 1px solid var(--border); }
-.learn-title { font-weight: 600; color: var(--text-strong); }
+.learn-title { font-family: var(--mono); font-size: var(--t-xs); font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+
+/* Shared drawer slide-in (learn panel + log drawer); covered by the global
+   prefers-reduced-motion kill-switch. */
+@keyframes drawer-in { from { transform: translateX(24px); opacity: 0.4; } to { transform: translateX(0); opacity: 1; } }
 .learn-body { padding: var(--s-4); overflow: auto; }
 .learn-md code { font-family: var(--mono); }
 [data-explain] { cursor: help; }
@@ -313,7 +364,7 @@
 .cc-panel { margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--border); }
 .cc-head { display: flex; align-items: center; gap: var(--s-3); }
 .cc-head h2 { margin: 0; flex: 1; }
-.cc-badge { font-size: var(--t-xs); padding: 1px 8px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); vertical-align: middle; }
+.cc-badge { font-size: var(--t-xs); padding: 1px 8px; border-radius: var(--r-sm); border: 1px solid var(--accent); color: var(--accent); vertical-align: middle; font-family: var(--mono); }
 .cc-table { width: 100%; border-collapse: collapse; margin: var(--s-3) 0; font-size: var(--t-sm); }
 .cc-table th, .cc-table td { text-align: left; padding: var(--s-2); border-bottom: 1px solid var(--border); }
 .cc-table .mono, .mono { font-family: var(--mono); }
@@ -392,11 +443,11 @@
   white-space: pre; max-height: 360px; color: var(--text); }
 
 /* ---- In-app dialogs (dialog.js) --------------------------------------- */
-.dlg-backdrop { position: fixed; inset: 0; z-index: 9500; display: flex;
+.dlg-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: flex;
   align-items: center; justify-content: center; background: rgba(0,0,0,0.5);
   backdrop-filter: blur(2px); padding: var(--s-4); }
 .dlg { background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r-lg); box-shadow: var(--sh-lg, 0 16px 48px rgba(0,0,0,0.4));
+  border-radius: var(--r-lg); box-shadow: var(--sh-3);
   width: min(480px, 96vw); max-height: 90vh; overflow: auto; }
 .dlg-head { padding: var(--s-3) var(--s-4); font-weight: 600; font-size: var(--t-md, 15px);
   border-bottom: 1px solid var(--border); }
@@ -408,6 +459,21 @@
   font-family: var(--mono); font-size: var(--t-sm); box-sizing: border-box; }
 .dlg-actions { display: flex; gap: var(--s-2); justify-content: flex-end;
   padding: var(--s-3) var(--s-4); border-top: 1px solid var(--border); }
+
+/* Wide dialog variant — the folder browser (fs-modal) keeps `hidden` toggling
+   (fs.js), so it lives as a persistent element, not a dialog.js instance. */
+.dlg-backdrop[hidden] { display: none; }
+.dlg-wide { width: min(720px, 94vw); height: 70vh; display: flex; flex-direction: column; }
+.dlg-wide .dlg-body { flex: 1; min-height: 0; display: flex; flex-direction: column;
+  gap: var(--s-3); overflow: hidden; }
+.fs-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
+.fs-head #fs-modal-title { font-weight: 600; }
+.fs-head .fs-x { flex: none; margin: -4px -6px -4px 0; }
+.fs-body .hint { margin: 0; }
+.fs-pathrow { margin: 0; }
+.fs-up { flex: none; }
+.fs-roots { flex: none; display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.fs-filelist { flex: 1; min-height: 0; overflow: auto; }
 
 /* ---- Runs list: status border, filter, inline note -------------------- */
 .runs-filter { flex: 1; min-width: 0; padding: 5px var(--s-2); background: var(--surface-2);
@@ -478,7 +544,7 @@
 .layout-tools { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin: var(--s-2) 0 var(--s-3); }
 .layout-tools:empty { display: none; }
 .layout-tool { display: inline-flex; align-items: center; gap: var(--s-2); }
-.layout-tool-badge { font-size: var(--t-xs); padding: 1px 6px; border-radius: var(--r-pill, 999px); border: 1px solid var(--border); color: var(--text-muted); }
+.layout-tool-badge { font-size: var(--t-xs); padding: 1px 6px; border-radius: var(--r-sm); border: 1px solid var(--border); color: var(--text-muted); }
 .layout-tool-badge.lt-container { color: var(--on-accent, #fff); background: var(--accent); border-color: var(--accent); }
 .layout-tool-badge.lt-host { color: var(--text); }
 .layout-tool-badge.lt-install, .layout-tool-badge.lt-nodisplay { color: var(--text-muted); opacity: .8; }
@@ -522,4 +588,13 @@
   cursor: help;
   white-space: nowrap;
 }
-@media (max-width: 900px) { .status-disclaimer { display: none; } }
+.status-disclaimer .sd-short { display: none; }
+/* B20 — between ~900-1100px the full sentence crowds the shortcut hints; show
+   the short form (the full text stays in the title attribute). */
+@media (max-width: 1100px) {
+  .status-disclaimer .sd-full { display: none; }
+  .status-disclaimer .sd-short { display: inline; }
+}
+/* Below 900px the status bar is too tight even for the short form — hide it
+   there (scoped to the status bar; the landing footer keeps its disclaimer). */
+@media (max-width: 900px) { footer.status .status-disclaimer { display: none; } }

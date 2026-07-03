@@ -1,59 +1,63 @@
-// toast.js — Simple toast notifications
+// toast.js — bottom-right notifications. Class-styled (no inline cssText),
+// icon per type, dismissable, error toasts are sticky + assertive.
+
+import { icon } from "./icons.js";
+
+const ICON = { success: "check", warn: "alert", error: "x", info: "dot" };
+const MAX = 4;
 
 export const toast = {
   container: null,
+
   init() {
-    this.container = document.createElement("div");
-    // Announce toasts to assistive tech (errors are assertive, the rest polite).
-    this.container.setAttribute("role", "status");
-    this.container.setAttribute("aria-live", "polite");
-    this.container.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      z-index: 9999;
-    `;
-    document.body.appendChild(this.container);
+    const c = document.createElement("div");
+    c.className = "toast-host";
+    c.setAttribute("role", "status");
+    c.setAttribute("aria-live", "polite");
+    document.body.appendChild(c);
+    this.container = c;
   },
-  show(message, type = "info", duration = 3000) {
+
+  show(message, type = "info", duration) {
     if (!this.container) this.init();
-    
+    // Cap the stack — drop the oldest so a burst can't wallpaper the screen.
+    while (this.container.children.length >= MAX) {
+      this.container.firstElementChild?.remove();
+    }
+    const t = type in ICON ? type : "info";
     const el = document.createElement("div");
-    el.className = `toast toast-${type}`;
-    el.textContent = message;
-    
-    // Inline styles for glassmorphism
-    el.style.cssText = `
-      background: var(--surface-2);
-      border: 1px solid var(--border);
-      border-left: 4px solid var(--${type === 'error' ? 'fail' : type === 'success' ? 'pass' : 'accent'});
-      color: var(--text-strong);
-      padding: 12px 20px;
-      border-radius: var(--r-md);
-      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      font-size: var(--t-sm);
-      transform: translateX(120%);
-      opacity: 0;
-      transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    `;
-    
+    el.className = "toast toast-" + t;
+    // The element itself carries role=alert for errors — that is what actually
+    // makes a screen reader interrupt (the container's aria-live is polite).
+    if (t === "error") el.setAttribute("role", "alert");
+
+    const ic = document.createElement("span");
+    ic.className = "toast-ico";
+    ic.innerHTML = icon(ICON[t], { size: 15 });
+    const msg = document.createElement("span");
+    msg.className = "toast-msg";
+    msg.textContent = message;
+    const close = document.createElement("button");
+    close.className = "toast-close";
+    close.setAttribute("aria-label", "Dismiss");
+    close.innerHTML = icon("x", { size: 13 });
+    el.append(ic, msg, close);
     this.container.appendChild(el);
-    
-    // Trigger animation
-    requestAnimationFrame(() => {
-      el.style.transform = "translateX(0)";
-      el.style.opacity = "1";
-    });
-    
-    setTimeout(() => {
-      el.style.transform = "translateX(120%)";
-      el.style.opacity = "0";
-      setTimeout(() => el.remove(), 300);
-    }, duration);
-  }
+    requestAnimationFrame(() => el.classList.add("is-in"));
+
+    // Errors stick until dismissed; everything else auto-dismisses. Hover pauses.
+    const ttl = duration != null ? duration : (t === "error" ? 0 : 4000);
+    let timer = null;
+    const dismiss = () => {
+      if (timer) clearTimeout(timer);
+      el.classList.remove("is-in");
+      setTimeout(() => el.remove(), 200);
+    };
+    const arm = () => { if (ttl > 0) timer = setTimeout(dismiss, ttl); };
+    close.addEventListener("click", dismiss);
+    el.addEventListener("mouseenter", () => { if (timer) clearTimeout(timer); });
+    el.addEventListener("mouseleave", arm);
+    arm();
+    return dismiss;
+  },
 };

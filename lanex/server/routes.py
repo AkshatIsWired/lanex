@@ -155,6 +155,44 @@ def h_health(handler: Any) -> None:
     _respond(handler, {"service": "lanex", "alive": True, "compat": probe})
 
 
+def h_about(handler: Any) -> None:
+    """Read-only product identity for the landing footer + License modal.
+
+    Truth-in-UI: ``version``/``librelane`` come from installed package metadata
+    (``None`` when unknown), and ``notice`` is the repo NOTICE file verbatim
+    (``None`` when absent) — never a hardcoded copy that could drift. Sent as a
+    plain object (not the ``{ok,data}`` envelope) so the frontend reads the
+    fields at the top level.
+    """
+    import importlib.metadata as _md
+
+    def _ver(pkg: str) -> Any:
+        try:
+            return _md.version(pkg)
+        except Exception:
+            return None
+
+    notice = None
+    try:
+        for cand in (
+            Path(__file__).resolve().parents[2] / "NOTICE",
+            Path(__file__).resolve().parents[1] / "NOTICE",
+        ):
+            if cand.is_file():
+                notice = cand.read_text(encoding="utf-8", errors="replace")
+                break
+    except Exception:
+        notice = None
+
+    handler._send_json({
+        "name": "LanEx",
+        "version": _ver("lanex"),
+        "librelane": _ver("librelane"),
+        "license": "Apache-2.0",
+        "notice": notice,
+    }, 200)
+
+
 def h_steps(handler: Any) -> None:
     try:
         _respond(handler, introspect.list_steps())
@@ -2821,6 +2859,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/plugins/remove", h_plugins_remove),
     ("/api/plugins/enable", h_plugins_enable),
     ("/api/health", h_health),
+    ("/api/about", h_about),
     ("/api/steps", h_steps),
     ("/api/variables", h_variables),
     ("/api/design-formats", h_design_formats),

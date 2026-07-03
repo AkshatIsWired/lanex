@@ -13,20 +13,20 @@ function cssVar(name, fallback) {
 
 export function chartPalette() {
   return [
-    cssVar("--accent", "#8b5cf6"),
-    cssVar("--accent-cyan", "#39c5cf"),
-    cssVar("--pass", "#3fb950"),
-    cssVar("--warn", "#d29922"),
-    cssVar("--fail", "#f85149"),
-    cssVar("--info", "#58a6ff"),
+    cssVar("--accent", "#2f6fe0"),
+    cssVar("--accent-cyan", "#38d6c8"),
+    cssVar("--pass", "#2faa6a"),
+    cssVar("--warn", "#c98a14"),
+    cssVar("--fail", "#e5484d"),
+    cssVar("--info", "#2f6fe0"),
   ];
 }
 
 export function chartTheme() {
-  const text = cssVar("--text-muted", "#8b949e");
-  const border = cssVar("--border", "#30363d");
-  const surface = cssVar("--surface", "#161b22");
-  const strong = cssVar("--text-strong", "#e6edf3");
+  const text = cssVar("--text-muted", "#7e8ea7");
+  const border = cssVar("--border", "#1f2a3b");
+  const surface = cssVar("--surface", "#0e131c");
+  const strong = cssVar("--text-strong", "#f2f7ff");
   return {
     color: chartPalette(),
     backgroundColor: "transparent",

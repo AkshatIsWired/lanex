@@ -77,7 +77,7 @@ export async function openAutoConfigModal(designDir) {
     "<div class='smodal-head'>" +
     "<span class='smodal-title'>Auto-generate config</span>" +
     "<span class='smodal-spacer'></span>" +
-    "<button class='btn btn-ghost' id='ac-close'>✕</button>" +
+    "<button class='btn btn-ghost' id='ac-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button>" +
     "</div>" +
     "<div class='ac-body'>" +
     "<p class='hint'>Detected from your RTL. Edit the JSON below if anything is wrong, then write it.</p>" +

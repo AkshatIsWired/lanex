@@ -68,7 +68,7 @@ async function renderOutputs(tag) {
           "<div class='out-meta'><div class='out-label'>" + fmt.escape(o.label) + "</div>" +
           "<div class='out-sub'>" + sub + " · " + fmtBytes(o.size) + "</div></div>" +
           "<div class='out-actions'>" +
-          "<a class='btn btn-ghost' href='" + url + "' target='_blank' rel='noopener' download='" + fmt.escape(o.name) + "'>⬇ Download</a>" +
+          "<a class='btn btn-ghost' href='" + url + "' target='_blank' rel='noopener' download='" + fmt.escape(o.name) + "'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Download</a>" +
           "<button class='btn btn-ghost out-reveal' data-path='" + fmt.escape(o.path) + "'>" + icon('folderOpen',{size:13}) + " Reveal</button>" +
           "</div></div>"
         );
@@ -251,7 +251,7 @@ async function renderDiagrams(tag, ep) {
       "<span class='muted'>" + fmt.escape(d.step) + " · " + fmt.escape(d.name) + sizeKb + "</span></figcaption>" +
       "<div class='diagram-body muted'></div>" +
       "<div class='diagram-actions'>" +
-      "<a class='btn btn-ghost' href='" + dotUrl + "' target='_blank' rel='noopener' download='" + fmt.escape(d.name) + "'>⬇ .dot</a>" +
+      "<a class='btn btn-ghost' href='" + dotUrl + "' target='_blank' rel='noopener' download='" + fmt.escape(d.name) + "'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> .dot</a>" +
       "</div>";
     root.appendChild(card);
     const body = card.querySelector(".diagram-body");
@@ -295,7 +295,7 @@ async function doRenderDot(tag, d, body, actions, force) {
       a.className = "btn btn-ghost svg-dl";
       a.href = svgUrl; a.target = "_blank"; a.rel = "noopener";
       a.setAttribute("download", d.name.replace(/\.dot$/, "") + ".svg");
-      a.textContent = "⬇ .svg";
+      a.innerHTML = "<svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> .svg";
       actions.appendChild(a);
     }
     return;

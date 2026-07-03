@@ -274,7 +274,7 @@ function paintUserPresets() {
   const names = Object.keys(presets).sort();
   host.innerHTML = names.map((n) =>
     "<span class='chip chip-clickable user-preset' data-uname='" + fmt.escape(n) + "'>" + fmt.escape(n) +
-    "<button class='user-preset-del' data-del='" + fmt.escape(n) + "' title='Delete preset' aria-label='Delete preset " + fmt.escape(n) + "'>✕</button></span>").join("");
+    "<button class='user-preset-del' data-del='" + fmt.escape(n) + "' title='Delete preset' aria-label='Delete preset " + fmt.escape(n) + "'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></span>").join("");
   host.querySelectorAll(".user-preset").forEach((el) => {
     el.addEventListener("click", (e) => {
       if (e.target.closest(".user-preset-del")) return;

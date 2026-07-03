@@ -55,7 +55,7 @@ export async function renderPlugins() {
   };
 
   const disclaimer =
-    "<div class='plugin-disclaimer'>⚠ <strong>External downloads:</strong> entries marked " +
+    "<div class='plugin-disclaimer'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l10 18H2zM12 10v5M12 18h.01'/></svg> <strong>External downloads:</strong> entries marked " +
     "<em>external download</em> are third-party tools/plugins, not part of LibreLane. " +
     "<strong>LibreLane (and this GUI) is not responsible for software you download or run " +
     "from external sources</strong> — you install and use them at your own risk. Only this " +

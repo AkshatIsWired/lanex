@@ -17,7 +17,7 @@ function enter(target) {
   if (!target.querySelector(":scope > .panel-fs-exit")) {
     const x = document.createElement("button");
     x.className = "btn btn-ghost panel-fs-exit";
-    x.textContent = "✕ Exit fullscreen (Esc)";
+    x.innerHTML = "<svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg> Exit fullscreen (Esc)";
     // position:fixed pins it to the viewport's top-right, so it can never be
     // pushed off-screen by the panel's padding/scroll (the old absolute+right:8px
     // hung half off the right edge). z-index above the overlay (9000).

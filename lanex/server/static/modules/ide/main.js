@@ -113,7 +113,7 @@ async function loadTree() {
     "<button class='ide-file' data-abs='" + fmt.escape(f.abspath) + "' data-rel='" +
     fmt.escape(f.relpath) + "'>" + fmt.escape(f.relpath) + "</button>" +
     "<button class='ide-file-del' title='Delete this file' data-rel='" +
-    fmt.escape(f.relpath) + "'>✕</button></div>").join("") ||
+    fmt.escape(f.relpath) + "'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>").join("") ||
     "<p class='muted'>No source files found. Upload some below.</p>";
   tree.querySelectorAll(".ide-file").forEach((b) =>
     b.addEventListener("click", () => openFile(b.dataset.abs, b.dataset.rel)));

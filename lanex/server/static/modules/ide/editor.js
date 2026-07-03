@@ -77,7 +77,7 @@ export class Editor {
       "  <button class='btn btn-ghost ed-find-rep'>Replace</button>" +
       "  <button class='btn btn-ghost ed-find-all'>All</button>" +
       "  <span class='ed-find-count muted'></span>" +
-      "  <button class='btn btn-ghost ed-find-x' title='Close (Esc)'>✕</button>" +
+      "  <button class='btn btn-ghost ed-find-x' title='Close (Esc)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button>" +
       "</div>" +
       "<div class='hl-wrap'>" +
       "  <div class='ed-gutter' aria-hidden='true'></div>" +

@@ -6,10 +6,12 @@ import { renderLogs } from "./logs.js";
 import { toast } from "./toast.js";
 import { confirmDialog } from "./dialog.js";
 import { icon } from "./icons.js";
+import { wireJump } from "./jumpnav.js";
 
 export async function renderTools() {
   const root = document.getElementById("tools-grid");
   if (!root) return;
+  wireJump(document.getElementById("sec-tools"));   // static section-jump nav (§6.6)
   renderDesktopViewers();
   try {
     const info = await api.tools();
@@ -318,7 +320,7 @@ function paintRuntimeCard(container) {
       "<span class='dot-installed' title='ready'></span></div>" +
       "<div class='what'>All EDA tools are available via the LibreLane image (version-matched). No native tool installs needed — just keep the <strong>Container</strong> run engine selected.</div>" +
       (verBad
-        ? "<div class='hint' style='color:var(--warn)'>⚠ " + fmt.escape(c.engine) + " " + fmt.escape(c.version) +
+        ? "<div class='hint' style='color:var(--warn)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l10 18H2zM12 10v5M12 18h.01'/></svg> " + fmt.escape(c.engine) + " " + fmt.escape(c.version) +
           " is older than LibreLane's recommended " + fmt.escape(c.min_version) + " — consider upgrading.</div>"
         : (c.version ? "<div class='hint'>" + fmt.escape(c.version) + "</div>" : "")) +
       "<div class='meta' style='display:flex;align-items:center;gap:var(--s-2);flex-wrap:wrap'>" +
@@ -488,7 +490,7 @@ function paint(info) {
       "</div>" +
       "<div class='what'>" + fmt.escape(t.what || "") + "</div>" +
       (t.windows_only
-        ? "<div class='hint' style='color:var(--warn,#d29922)'>⚠ A Windows build was found on the WSL PATH but can't be used by the Linux flow. Install the Linux build inside WSL (button below) or use the container image.</div>"
+        ? "<div class='hint' style='color:var(--warn,#d29922)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l10 18H2zM12 10v5M12 18h.01'/></svg> A Windows build was found on the WSL PATH but can't be used by the Linux flow. Install the Linux build inside WSL (button below) or use the container image.</div>"
         : "") +
       "<div class='meta'>" +
       (t.installed
@@ -540,10 +542,10 @@ function paint(info) {
              }).join("");
              libsHtml = `<details style="margin-bottom:var(--s-2);font-size:12px"><summary style="cursor:pointer;color:var(--text-muted);margin-bottom:4px;user-select:none">Libraries (${allLibs.length})</summary>
                <div style="display:flex;gap:8px;margin-bottom:4px">
-                 <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}').forEach(cb => cb.checked = cb.defaultChecked)" style="font-size:10px;padding:2px 4px">Default set</button>
-                 <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}').forEach(cb => cb.checked = true)" style="font-size:10px;padding:2px 4px">All</button>
+                 <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}').forEach(cb => cb.checked = cb.defaultChecked)">Default set</button>
+                 <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}').forEach(cb => cb.checked = true)">All</button>
                </div>
-               <div style="display:flex;flex-direction:column;gap:2px;max-height:150px;overflow-y:auto;background:var(--bg-inset);padding:4px;border-radius:4px">${cbHtml}</div></details>`;
+               <div style="display:flex;flex-direction:column;gap:2px;max-height:150px;overflow-y:auto;background:var(--bg-2);padding:4px;border-radius:4px">${cbHtml}</div></details>`;
           }
         }
 
@@ -667,7 +669,7 @@ function paint(info) {
 }
 
 function buttonUninstallHtml(t) {
-  return "<div style='display:flex;gap:var(--s-2);align-items:center'><span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span><button class='uninstall-btn' data-key='" + t.key + "' title='Uninstall " + t.key + "' style='font-size:10px;padding:2px 6px;background:transparent;border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text-muted);cursor:pointer'>✕</button></div>";
+  return "<div class='tool-installed-row'><span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span><button class='uninstall-btn' data-key='" + t.key + "' title='Uninstall " + t.key + "' aria-label='Uninstall " + t.key + "'>" + icon("x", { size: 11 }) + "</button></div>";
 }
 
 function paintToolBar(info) {

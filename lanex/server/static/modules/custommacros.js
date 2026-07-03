@@ -118,7 +118,7 @@ function addInstanceRow(values) {
     "<select class='mc-inst-orient'>" +
     _orientations.map((o) => "<option" + (o === (v.orientation || "N") ? " selected" : "") + ">" + o + "</option>").join("") +
     "</select>" +
-    "<button class='btn btn-ghost mc-inst-del' type='button' title='Remove this instance'>✕</button>";
+    "<button class='btn btn-ghost mc-inst-del' type='button' title='Remove this instance'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button>";
   row.querySelector(".mc-inst-del").addEventListener("click", () => row.remove());
   rows.appendChild(row);
 }
@@ -176,7 +176,7 @@ function showMacroHelp() {
   backdrop.innerHTML =
     "<div class='smodal cc-help-modal'>" +
     "<div class='smodal-head'><span class='smodal-title'>Custom macros — how it works</span>" +
-    "<span class='smodal-spacer'></span><button class='btn btn-ghost' id='mc-help-close'>✕</button></div>" +
+    "<span class='smodal-spacer'></span><button class='btn btn-ghost' id='mc-help-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "<div class='smodal-log cc-help'>" + HELP_HTML + "</div></div>";
   document.body.appendChild(backdrop);
   const close = () => backdrop.remove();

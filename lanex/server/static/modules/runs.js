@@ -130,7 +130,7 @@ export async function renderRuns() {
       "<input type='checkbox' class='run-pick' title='Select for batch delete'" + (_picked.has(pkey) ? " checked" : "") + "/>" +
       "<button class='run-pin" + (run.pinned ? " pinned" : "") + "' data-act='pin' aria-pressed='" +
         (run.pinned ? "true" : "false") + "' title='" + (run.pinned ? "Unpin" : "Pin") +
-        " this run' aria-label='Pin run'>" + (run.pinned ? "★" : "☆") + "</button>" +
+        " this run' aria-label='Pin run'>" + (run.pinned ? "<svg viewBox='0 0 24 24' width='14' height='14' fill='currentColor' stroke='currentColor' stroke-width='1' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z'/></svg>" : "<svg viewBox='0 0 24 24' width='14' height='14' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z'/></svg>") + "</button>" +
       "<span class='tag'>" + fmt.escape(run.tag) + "</span>" +
       (run.success
         ? "<span class='pill pill-pass'><span class='d'></span><span class='text'>✓ passed</span></span>"
@@ -146,11 +146,11 @@ export async function renderRuns() {
       "<div class='run-note-row' data-note-row hidden></div>" +
       "<div class='row3 run-actions'>" +
       "<button class='btn btn-ghost run-act' data-act='open'>Open</button>" +
-      "<button class='btn btn-ghost run-act' data-act='reproduce' title='Load this run's settings into Setup'>↻ Reproduce</button>" +
+      "<button class='btn btn-ghost run-act' data-act='reproduce' title='Load this run's settings into Setup'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M21 12a9 9 0 1 1-3-6.7M21 4v4h-4'/></svg> Reproduce</button>" +
       "<button class='btn btn-ghost run-act' data-act='files'>" + icon("folder", { size: 13 }) + " Files</button>" +
       "<button class='btn btn-ghost run-act' data-act='note'>" + icon("file", { size: 13 }) + " Note</button>" +
-      "<button class='btn btn-ghost run-act' data-act='bundle' title='Download a .zip — pick what to include'>⬇ Bundle</button>" +
-      "<button class='btn btn-ghost run-act' data-act='export' title='Download a run report (CSV / Markdown / HTML)'>⬇ Export</button>" +
+      "<button class='btn btn-ghost run-act' data-act='bundle' title='Download a .zip — pick what to include'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Bundle</button>" +
+      "<button class='btn btn-ghost run-act' data-act='export' title='Download a run report (CSV / Markdown / HTML)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Export</button>" +
       "<button class='btn btn-ghost run-act run-del' data-act='delete'>" + icon("trash", { size: 13 }) + " Delete</button>" +
       "</div>";
     const designDir = run._design;
@@ -441,7 +441,7 @@ function filesOverlay() {
   ov.innerHTML =
     "<div class='smodal'>" +
     "  <div class='smodal-head'><span class='smodal-title' id='files-title'>Files</span>" +
-    "  <span class='smodal-spacer'></span><button class='btn btn-ghost' id='files-close'>✕</button></div>" +
+    "  <span class='smodal-spacer'></span><button class='btn btn-ghost' id='files-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "  <div class='smodal-log' id='files-body' style='white-space:normal'></div>" +
     "</div>";
   document.body.appendChild(ov);

@@ -34,7 +34,7 @@ function panel() {
   p.hidden = true;
   p.innerHTML =
     "<div class='learn-head'><span class='learn-title'>Learn</span>" +
-    "<button class='btn btn-ghost' id='learn-close'>✕</button></div>" +
+    "<button class='btn btn-ghost' id='learn-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "<div class='learn-body' id='learn-body'></div>";
   document.body.appendChild(p);
   p.querySelector("#learn-close").addEventListener("click", () => { p.hidden = true; });

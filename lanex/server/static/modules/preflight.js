@@ -15,9 +15,9 @@ export function lastPreflight() {
 // that will download itself on the first run) — distinct from a hard ✗.
 function row(state, label, detail, actionHtml) {
   const icon =
-    state === "ok" ? "<span class='pf-ok'>✓</span>"
-    : state === "warn" ? "<span class='pf-warn'>⚠</span>"
-    : "<span class='pf-bad'>✗</span>";
+    state === "ok" ? "<span class='pf-ok'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M5 13l4 4L19 7'/></svg></span>"
+    : state === "warn" ? "<span class='pf-warn'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l10 18H2zM12 10v5M12 18h.01'/></svg></span>"
+    : "<span class='pf-bad'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></span>";
   const cls = state === "ok" ? "pf-row-ok" : state === "warn" ? "pf-row-warn" : "pf-row-bad";
   return (
     "<div class='pf-row " + cls + "'>" +
@@ -38,7 +38,7 @@ export async function renderPreflight() {
   try {
     pf = await api.preflight(state.selectedPdk, state.selectedScl, state.runMode);
   } catch (ex) {
-    root.innerHTML = "<div class='pf-row pf-row-bad'><span class='pf-bad'>✗</span><span class='pf-label'>Check failed</span><span class='pf-detail'>" + fmt.escape(ex.message) + "</span></div>";
+    root.innerHTML = "<div class='pf-row pf-row-bad'><span class='pf-bad'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></span><span class='pf-label'>Check failed</span><span class='pf-detail'>" + fmt.escape(ex.message) + "</span></div>";
     return null;
   }
   _last = pf;
@@ -103,6 +103,10 @@ export async function renderPreflight() {
     : "<div class='pf-banner pf-banner-bad'>" + pf.blockers.length + " thing(s) to fix before a run will finish.</div>";
 
   root.innerHTML = banner + html;
+
+  // §6.1 — the "Ready to run?" picker reads as visually terminal (a --pass
+  // left edge) once preflight passes. Presentation only; no new logic.
+  root.closest(".picker")?.classList.toggle("picker-ready", !!pf.ready);
 
   // Wire the fix buttons to jump to the right place.
   root.querySelectorAll(".pf-act").forEach((b) => {

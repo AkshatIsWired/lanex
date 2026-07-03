@@ -17,7 +17,7 @@ export function fileActionsHtml(tag, relPath) {
   const dl = api.runFileUrl(tag, relPath);
   return (
     "<span class='file-actions'>" +
-    "<a class='btn btn-ghost file-act' href='" + dl + "' download target='_blank' rel='noopener' title='Download'>⬇ Download</a>" +
+    "<a class='btn btn-ghost file-act' href='" + dl + "' download target='_blank' rel='noopener' title='Download'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Download</a>" +
     "<button class='btn btn-ghost file-act' data-reveal data-tag='" + fmt.escape(tag) +
     "' data-path='" + fmt.escape(relPath) + "' title='Show in your file manager (when the GUI runs on your machine)'>" + icon('folderOpen',{size:13}) + " Locate</button>" +
     "</span>"
@@ -54,7 +54,7 @@ export function renderFileText(container, text, opts = {}) {
     "<input type='search' class='inp fv-find' placeholder='find in text…'/>" +
     "<span class='muted fv-count'></span>" +
     "<button class='btn btn-ghost fv-prev' title='Previous match'>◀</button>" +
-    "<button class='btn btn-ghost fv-next' title='Next match'>▶</button>" +
+    "<button class='btn btn-ghost fv-next' title='Next match'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M7 4l13 8-13 8z'/></svg></button>" +
     "<span class='fv-spacer'></span>" +
     fileActionsHtml(opts.tag, opts.path) +
     "</div>" +

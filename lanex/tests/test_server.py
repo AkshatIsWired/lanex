@@ -74,6 +74,23 @@ def test_health_ok(server):
     assert body["data"]["service"] == "lanex"
 
 
+def test_about_endpoint(server):
+    # /api/about backs the landing footer + License modal. It is a plain object
+    # (not the {ok,data} envelope) and every field is real: version/librelane
+    # from package metadata (str or null), and notice = the repo NOTICE verbatim
+    # (never a hardcoded copy).
+    resp = urllib.request.urlopen(f"http://127.0.0.1:{server}/api/about")
+    body = json.loads(resp.read())
+    assert body["name"] == "LanEx"
+    assert body["license"] == "Apache-2.0"
+    for key in ("version", "librelane", "notice"):
+        assert key in body
+    # When the repo NOTICE file exists, the endpoint must return it byte-for-byte.
+    notice_file = Path(__file__).resolve().parents[2] / "NOTICE"
+    if notice_file.is_file():
+        assert body["notice"] == notice_file.read_text(encoding="utf-8", errors="replace")
+
+
 def test_vendor_assets_cacheable_first_party_no_store(server):
     # C4: immutable vendored assets (echarts etc.) must be cacheable with an ETag
     # so a WSL2/remote client stops re-downloading ~1 MB per page load; first-party

@@ -39,7 +39,7 @@ export async function renderCompare() {
       "<label class='cmp-check'><input type='checkbox' value='" + fmt.escape(r.tag) +
       "' data-rundir='" + fmt.escape(r.run_dir || "") + "'/> " +
       (multi ? "<span class='muted'>" + fmt.escape(designLabel(r._design)) + " · </span>" : "") +
-      fmt.escape(r.tag) + (r.success ? " ✓" : " ✗") + "</label>").join("") +
+      fmt.escape(r.tag) + (r.success ? " <svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M5 13l4 4L19 7'/></svg>" : " <svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg>") + "</label>").join("") +
     "</div><button class='btn btn-primary' id='cmp-go'>Compare</button>" +
     "<input id='cmp-search' class='inp' type='search' placeholder='filter metrics…' hidden /></div>" +
     "<div id='cmp-out'></div>";
@@ -113,7 +113,7 @@ async function doCompare(root) {
   };
 
   out.innerHTML =
-    "<div class='cmp-toolbar'><button class='btn btn-ghost' id='cmp-export-csv'>⬇ Export comparison CSV</button></div>" +
+    "<div class='cmp-toolbar'><button class='btn btn-ghost' id='cmp-export-csv'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Export comparison CSV</button></div>" +
     summaryHtml + kcHtml + cfgHtml +
     "<h3>Comparison charts</h3><div id='cmp-charts' class='cmp-charts'></div>" +
     "<h3>Metrics <span class='muted'>(best highlighted)</span></h3>" +

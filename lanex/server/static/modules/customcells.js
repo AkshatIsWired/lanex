@@ -122,7 +122,7 @@ function showCustomCellHelp() {
   backdrop.innerHTML =
     "<div class='smodal cc-help-modal'>" +
     "<div class='smodal-head'><span class='smodal-title'>Custom cells — how it works</span>" +
-    "<span class='smodal-spacer'></span><button class='btn btn-ghost' id='cc-help-close'>✕</button></div>" +
+    "<span class='smodal-spacer'></span><button class='btn btn-ghost' id='cc-help-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "<div class='smodal-log cc-help'>" + HELP_HTML + "</div></div>";
   document.body.appendChild(backdrop);
   const close = () => backdrop.remove();

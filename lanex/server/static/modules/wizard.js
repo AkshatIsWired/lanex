@@ -15,7 +15,7 @@ function overlay() {
   ov.innerHTML =
     "<div class='smodal wizard'>" +
     "  <div class='smodal-head'><span class='smodal-title'>New project</span>" +
-    "  <span class='smodal-spacer'></span><button class='btn btn-ghost' id='wiz-close'>✕</button></div>" +
+    "  <span class='smodal-spacer'></span><button class='btn btn-ghost' id='wiz-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "  <div class='wizard-body' id='wiz-body'></div>" +
     "</div>";
   document.body.appendChild(ov);

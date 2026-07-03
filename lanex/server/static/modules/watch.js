@@ -94,7 +94,7 @@ export async function renderWatch() {
     ? rules.map((r, i) =>
         "<div class='watch-row'><code>" + fmt.escape(r.metric) + "</code> " +
         "<span class='muted'>" + fmt.escape(r.cmp) + " " + fmt.escape(String(r.threshold)) + "</span>" +
-        "<button class='btn btn-ghost watch-del' data-i='" + i + "' aria-label='Remove rule'>✕</button></div>").join("")
+        "<button class='btn btn-ghost watch-del' data-i='" + i + "' aria-label='Remove rule'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>").join("")
     : "<p class='muted'>No watch rules yet. Add one below — you'll be warned after a run breaks it.</p>";
 
   body.innerHTML =

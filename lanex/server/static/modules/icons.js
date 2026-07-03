@@ -48,6 +48,11 @@ const P = {
   database: "M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3",
   folderOpen: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2H3zM3 9h18l-2.2 9H5z",
   trash: "M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6",
+  expand: "M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5",     // fullscreen
+  popout: "M14 5h5v5M19 5l-8 8M10 5H5v14h14v-5",         // open in new panel
+  upload: "M12 15V4M7 8l5-5 5 5M5 20h14",                // upload / import a file
+  importIn: "M12 4v11M7 11l5 5 5-5M5 20h14",             // import a run into the app
+  minus: "M5 12h14",                                      // zoom-out / collapse
 };
 
 export function icon(name, { size = 18, stroke = 1.5 } = {}) {

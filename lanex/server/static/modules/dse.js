@@ -53,7 +53,7 @@ export function renderDse() {
     "    <span class='dse-spacer'></span>" +
     "    <label class='dse-sweep-lbl'>Previous sweep " +
     "      <select id='dse-sweep-pick'><option value=''>—</option></select></label>" +
-    "    <button class='btn btn-ghost' id='dse-runs-refresh'>↻ Refresh</button>" +
+    "    <button class='btn btn-ghost' id='dse-runs-refresh'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M21 12a9 9 0 1 1-3-6.7M21 4v4h-4'/></svg> Refresh</button>" +
     "    <button class='btn btn-ghost' id='dse-runs-all'>All</button>" +
     "    <button class='btn btn-ghost' id='dse-runs-none'>None</button>" +
     "    <button class='btn btn-primary' id='dse-plot'>View metrics &amp; plots</button>" +
@@ -66,7 +66,7 @@ export function renderDse() {
     "  <div class='dse-results-head'><h3>Sweep results</h3>" +
     "    <span class='muted' id='dse-results-sub'></span>" +
     "    <span style='flex:1'></span>" +
-    "    <button class='btn btn-ghost' id='dse-export-csv'>⬇ Export CSV</button></div>" +
+    "    <button class='btn btn-ghost' id='dse-export-csv'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Export CSV</button></div>" +
     "  <div id='dse-results-table' class='dse-results-table'></div>" +
     "  <div class='dse-charts'>" +
     "    <div class='dse-chart-col'><div class='dse-chart-title'>Pareto — cell area vs setup slack</div>" +
@@ -177,10 +177,10 @@ async function renderRunPicker(root) {
   const allScope = getRunScope() === "all";
   host.innerHTML = runs.map((r) => {
     const checked = _pickedTags.has(r.tag) ? " checked" : "";
-    const ok = r.success ? "pf-pass" : "pf-fail";
+    const ok = r.success ? "vdot-pass" : "vdot-fail";
     const prefix = allScope ? "<span class='muted'>" + fmt.escape(designLabel(r._design)) + " · </span>" : "";
     return "<label class='dse-run-row'><input type='checkbox' value='" + fmt.escape(r.tag) + "'" + checked + "/>" +
-      "<span class='pf " + ok + "'></span>" + prefix + "<code>" + fmt.escape(r.tag) + "</code></label>";
+      "<span class='vdot " + ok + "'></span>" + prefix + "<code>" + fmt.escape(r.tag) + "</code></label>";
   }).join("");
   host.querySelectorAll("input[type=checkbox]").forEach((c) => {
     c.addEventListener("change", () => {
@@ -205,7 +205,7 @@ function paintAxes(root) {
   host.innerHTML = _axes.map((a, i) =>
     "<div class='dse-axis'><code>" + fmt.escape(a.var) + "</code> = [" +
     a.values.map(fmt.escape).join(", ") + "] " +
-    "<button class='btn btn-ghost dse-del' data-i='" + i + "'>✕</button></div>").join("");
+    "<button class='btn btn-ghost dse-del' data-i='" + i + "'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>").join("");
   host.querySelectorAll(".dse-del").forEach((b) =>
     b.addEventListener("click", () => { _axes.splice(+b.dataset.i, 1); paintAxes(root); }));
   updateCount(root);
@@ -291,13 +291,13 @@ async function pollStatus(root) {
   try { st = await api.dseStatus(); } catch (_e) { return; }
   const host = root.querySelector("#dse-queue");
   const row = (tag, cls, label) =>
-    "<div class='dse-qrow'><span class='pf " + cls + "'></span><code>" + fmt.escape(tag) +
+    "<div class='dse-qrow'><span class='vdot " + cls + "'></span><code>" + fmt.escape(tag) +
     "</code> <span class='muted'>" + label + "</span></div>";
   host.innerHTML = "<h3>Queue</h3>" +
-    (st.running ? row(st.running, "pf-warn", "running") : "") +
-    (st.done || []).map((t) => row(t, "pf-pass", "done")).join("") +
-    (st.failed || []).map((t) => row(t, "pf-fail", "failed")).join("") +
-    (st.queued || []).map((t) => row(t, "pf-absent", "queued")).join("");
+    (st.running ? row(st.running, "vdot-warn", "running") : "") +
+    (st.done || []).map((t) => row(t, "vdot-pass", "done")).join("") +
+    (st.failed || []).map((t) => row(t, "vdot-fail", "failed")).join("") +
+    (st.queued || []).map((t) => row(t, "vdot-absent", "queued")).join("");
   if (st.active) {
     _pollTimer = setTimeout(() => pollStatus(root), 3000);
   } else {

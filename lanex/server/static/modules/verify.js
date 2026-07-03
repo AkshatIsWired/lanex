@@ -32,7 +32,7 @@ const STAGE_LABELS = {
   manufacturability: "Manufacturability",
 };
 
-const DOT = { pass: "pf-pass", fail: "pf-fail", warn: "pf-warn", absent: "pf-absent" };
+const DOT = { pass: "vdot-pass", fail: "vdot-fail", warn: "vdot-warn", absent: "vdot-absent" };
 
 export async function renderVerify(tag) {
   const root = document.getElementById("verify-body");
@@ -86,7 +86,7 @@ export async function renderVerify(tag) {
   else { vClass = "verdict-fail"; vTitle = "Not tape-out ready"; }
   const missing = (v.missing_stages || []).map((s) => STAGE_LABELS[s] || s);
   const banner =
-    "<div class='verdict " + vClass + "'>" +
+    "<div class='verdict reticle " + vClass + "'>" +
     "<span class='verdict-title'>" + vTitle + "</span>" +
     "<span class='muted'>run " + fmt.escape(rep.tag || "") + "</span>" +
     (v.incomplete && missing.length
@@ -106,7 +106,7 @@ export async function renderVerify(tag) {
     const rows = (stage.checks || []).map((c) => {
       const val = Object.values(c.values || {})[0];
       return "<div class='vcheck'>" +
-        "<span class='pf " + (DOT[c.status] || "pf-absent") + "'></span>" +
+        "<span class='vdot " + (DOT[c.status] || "vdot-absent") + "'></span>" +
         "<span class='vcheck-name'>" + fmt.escape(c.name) + "</span>" +
         (val !== undefined ? "<span class='vcheck-val'>" + fmt.escape(String(val)) + "</span>" : "") +
         (c.step_id ? "<button class='btn btn-ghost vcheck-log' data-step='" + fmt.escape(c.step_id) +
@@ -116,7 +116,7 @@ export async function renderVerify(tag) {
         "</div>";
     }).join("");
     return "<div class='vstage card'>" +
-      "<div class='vstage-head'><span class='pf " + (DOT[stage.status] || "pf-absent") + "'></span>" +
+      "<div class='vstage-head'><span class='vdot " + (DOT[stage.status] || "vdot-absent") + "'></span>" +
       "<h3>" + fmt.escape(STAGE_LABELS[id] || id) + "</h3></div>" +
       (rows || "<p class='muted'>No data for this stage — this run didn't produce these metrics.</p>") + "</div>";
   }).join("");
