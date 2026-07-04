@@ -82,6 +82,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     url = f"http://{args.host}:{port}/"
+    # The browser opens on the landing home screen; the printed URL stays the
+    # cockpit root. The landing page honours the user's "skip this screen"
+    # choice client-side and forwards to "/" instantly when set.
+    home_url = url + "landing"
     _print_url(url)
     if args.design_dir:
         # Register the initial design directory directly with the server so the
@@ -100,7 +104,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception as ex:  # pragma: no cover - defensive
             sys.stderr.write(f"could not set --design-dir: {ex}\n")
 
-    threading.Timer(0.5, _lazy_open, args=(url, args.no_browser)).start()
+    threading.Timer(0.5, _lazy_open, args=(home_url, args.no_browser)).start()
     try:
         serve_forever(httpd, open_after=False)
     except KeyboardInterrupt:

@@ -215,6 +215,9 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         if path == "/ide" or path == "/ide.html":
             self._serve_static("ide.html")
             return
+        if path == "/landing" or path == "/landing.html":
+            self._serve_static("landing.html")
+            return
         if path.startswith("/static/"):
             rel = path[len("/static/"):]
             self._serve_static(rel)

@@ -112,6 +112,27 @@ def test_vendor_assets_cacheable_first_party_no_store(server):
     assert a.headers.get("Cache-Control") == "no-store"
 
 
+def test_landing_page(server):
+    # /landing serves the self-playing home screen. It is separate from the
+    # cockpit boot flow ("/" still serves index.html directly) and must work
+    # with the same static assets (fonts, favicon) the app already ships.
+    resp = urllib.request.urlopen(f"http://127.0.0.1:{server}/landing")
+    assert resp.status == 200
+    assert "text/html" in resp.headers.get("Content-Type", "")
+    body = resp.read().decode("utf-8")
+    assert "LanEx" in body
+    # The CTA hands off to the cockpit root (Setup tab is the default).
+    assert 'data-launch' in body and 'href="/"' in body
+    # The pipeline tracker mirrors the looping build animation, and the
+    # "skip this screen" opt-out is honoured before first paint.
+    assert 'id="tracker"' in body
+    assert 'll.landing' in body
+    # The cockpit root must be untouched by the landing addition.
+    root = urllib.request.urlopen(f"http://127.0.0.1:{server}/")
+    assert root.status == 200
+    assert "cockpit" in root.read().decode("utf-8", errors="replace").lower()
+
+
 def test_variables_endpoint_returns_list(server):
     resp = urllib.request.urlopen(f"http://127.0.0.1:{server}/api/variables")
     body = json.loads(resp.read())

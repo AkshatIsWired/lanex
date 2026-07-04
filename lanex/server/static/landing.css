@@ -1,0 +1,852 @@
+/* landing.css — LanEx home screen ("The Build", v2).
+ * ------------------------------------------------------------------
+ * A self-playing CSS-3D scene loops through the full chip journey —
+ * synthesis → floorplan → placement (green rats-nest) → CTS → routing
+ * → tape-out (purple) → lithography (UV sweep) → wafer dicing (laser
+ * scribe, 4×4 grid) → packaging. landing.js drives every act on a
+ * time (not scroll) timeline; a bottom glass tracker mirrors progress.
+ * Zero dependencies, offline-safe, both themes, reduced-motion = a
+ * static finished chip. The cockpit itself never loads this file.
+ *
+ * Palette: deep-blue/cyan bias (electric-cyan accents), rats-nest
+ * green, KLayout-style purple for the tape-out act. Hues are stack
+ * ROLES, not PDK layers.
+ */
+
+:root {
+  --bg: #05070d;
+  --bg-2: #03050a;
+  --surface: #0c1320;
+  --border: #1b2940;
+  --border-strong: #2e4467;
+
+  --text: #bfcfe4;
+  --text-muted: #7f93b0;
+  --text-strong: #eef6ff;
+
+  --accent: #16a8cf;
+  --accent-2: #0f83aa;
+  --accent-soft: rgba(34, 211, 238, 0.13);
+  --accent-glow: rgba(34, 211, 238, 0.45);
+
+  /* stack-role hues */
+  --c-poly: #38bdf8;    /* device / cell rows */
+  --c-li:   #7e9cc3;    /* I/O ring */
+  --c-m1:   #22d3ee;    /* metal 1 — electric cyan */
+  --c-m2:   #60a5fa;    /* metal 2 — blue */
+  --c-m3:   #2dd4bf;    /* metal 3 — teal */
+  --c-mt:   #f2c14e;    /* top metal — power straps */
+  --c-pass: #2faa6a;    /* verdict green (features grid) */
+  --c-clk:  #7dd3fc;    /* clock tree — ice blue */
+  --nest:   #4ade80;    /* rats-nest netlist — green */
+  --gds:    #8b5cf6;    /* tape-out — KLayout purple (that act ONLY) */
+  --uv:     #bfeaff;    /* lithography beam */
+  --gold:   #d9a441;    /* package pins */
+
+  /* display gradient: single cyan family — no blue→purple fades */
+  --irid: linear-gradient(120deg, #8ff1ff 0%, #22d3ee 48%, #0e9cbe 100%);
+
+  /* glass */
+  --glass-bg: rgba(11, 18, 30, 0.62);
+  --glass-brd: rgba(140, 180, 230, 0.14);
+  --glass-hi: rgba(255, 255, 255, 0.06);
+
+  /* stage */
+  --stage-vignette: rgba(2, 4, 9, 0.55);
+  --grid-line: rgba(34, 211, 238, 0.05);
+  --plate-glow: 0.8;          /* glow multiplier, dimmed in light theme */
+  --sub-face: #0a1322;
+  --sub-edge: #1a2a46;
+
+  --display: "Space Grotesk", "Inter var", system-ui, sans-serif;
+  --sans: "Inter var", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --die-scale: 1;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  color-scheme: dark;
+}
+
+body.theme-light {
+  --bg: #edf2f9;
+  --bg-2: #e2eaf4;
+  --surface: #ffffff;
+  --border: #d0dbe9;
+  --border-strong: #a9bad2;
+
+  --text: #33415a;
+  --text-muted: #5d6e88;
+  --text-strong: #0f1a2e;
+
+  --accent: #0e7da3;
+  --accent-2: #0a6484;
+  --accent-soft: rgba(14, 125, 163, 0.10);
+  --accent-glow: rgba(14, 125, 163, 0.26);
+
+  --c-poly: #0d84c4;
+  --c-li:   #5d7495;
+  --c-m1:   #0899b8;
+  --c-m2:   #2563eb;
+  --c-m3:   #0d9488;
+  --c-mt:   #b8860b;
+  --c-pass: #178552;
+  --c-clk:  #0369a1;
+  --nest:   #16a34a;
+  --gds:    #7c3aed;
+  --uv:     #2b7fb0;
+  --gold:   #a97b1e;
+
+  --irid: linear-gradient(120deg, #0aa6c9 0%, #0879a0 55%, #065e80 100%);
+
+  --glass-bg: rgba(255, 255, 255, 0.66);
+  --glass-brd: rgba(30, 55, 100, 0.14);
+  --glass-hi: rgba(255, 255, 255, 0.85);
+
+  --stage-vignette: rgba(226, 234, 246, 0.55);
+  --grid-line: rgba(8, 153, 184, 0.06);
+  --plate-glow: 0.3;
+  --sub-face: #dbe4f0;
+  --sub-edge: #b9c8dd;
+
+  color-scheme: light;
+}
+
+/* ==================== base ==================== */
+
+* { box-sizing: border-box; }
+/* NB: no CSS scroll-behavior:smooth — it animates even initial #anchor
+   navigation (deep links should land instantly); JS smooth-scrolls clicks. */
+html, body { margin: 0; padding: 0; }
+.sec[id], footer[id] { scroll-margin-top: 64px; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+h1, h2, h3 { font-family: var(--display); color: var(--text-strong); margin: 0; }
+p { margin: 0; }
+a { color: var(--accent); text-decoration: none; }
+code { font-family: var(--mono); font-size: 0.86em; }
+button { font-family: inherit; }
+
+::selection { background: var(--accent-soft); color: var(--text-strong); }
+
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 200;
+  padding: 10px 16px; background: var(--surface); color: var(--text-strong);
+  border: 1px solid var(--border-strong); border-radius: 4px;
+}
+.skip-link:focus { left: 12px; top: 12px; }
+
+:focus-visible { outline: 2px solid var(--c-m1); outline-offset: 2px; }
+
+/* ==================== buttons ==================== */
+
+.btn {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 9px 18px; border-radius: 6px; border: 1px solid transparent;
+  font-family: var(--display); font-weight: 600; font-size: 14px;
+  letter-spacing: 0.01em; cursor: pointer;
+  transition: transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out),
+              background 160ms, border-color 160ms;
+}
+.btn-primary {
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  color: #fff; border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 18px var(--accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 30px var(--accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.btn-primary:active { transform: translateY(0); }
+.btn-ghost {
+  color: var(--text); border-color: var(--border-strong);
+  background: transparent;
+}
+.btn-ghost:hover { border-color: var(--accent); color: var(--text-strong); background: var(--accent-soft); }
+.btn-lg { padding: 12px 24px; font-size: 15px; }
+.btn-xl { padding: 15px 34px; font-size: 17px; border-radius: 8px; }
+
+/* ==================== glass panels ==================== */
+
+.glass {
+  position: relative;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-brd);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35), inset 0 1px 0 var(--glass-hi);
+}
+@supports (backdrop-filter: blur(4px)) or (-webkit-backdrop-filter: blur(4px)) {
+  .glass { -webkit-backdrop-filter: blur(16px) saturate(1.25); backdrop-filter: blur(16px) saturate(1.25); }
+}
+body.theme-light .glass { box-shadow: 0 14px 40px rgba(30, 55, 100, 0.12), inset 0 1px 0 var(--glass-hi); }
+
+/* ==================== fixed 3D stage ==================== */
+
+.stage {
+  position: fixed; inset: 0; z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 90% at 50% 0%, transparent 40%, var(--stage-vignette) 100%),
+    var(--bg);
+  perspective: 1150px;
+  perspective-origin: 50% 42%;
+}
+.stage-grid {
+  position: absolute; inset: -2%;
+  background:
+    repeating-linear-gradient(0deg,   var(--grid-line) 0 1px, transparent 1px 64px),
+    repeating-linear-gradient(90deg,  var(--grid-line) 0 1px, transparent 1px 64px);
+  -webkit-mask-image: radial-gradient(80% 70% at 50% 45%, #000 20%, transparent 80%);
+  mask-image: radial-gradient(80% 70% at 50% 45%, #000 20%, transparent 80%);
+}
+.stage-glow {
+  position: absolute; width: 46vw; height: 46vw; border-radius: 50%;
+  filter: blur(90px); opacity: calc(0.14 * var(--plate-glow) / 0.55);
+}
+.stage-glow-a { left: -12vw; top: -14vh; background: var(--c-m1); }
+.stage-glow-b { right: -14vw; bottom: -18vh; background: var(--c-m2); }
+
+/* loop-reset dim + act flashes. These sit ABOVE the scene inside the stage:
+   opacity on the preserve-3d scene itself would flatten the 3D tree. */
+.dip {
+  position: absolute; inset: 0; background: var(--bg);
+  opacity: 0; will-change: opacity;
+}
+.flash {
+  position: absolute; inset: 0; opacity: 0; will-change: opacity;
+  mix-blend-mode: screen;
+}
+.flash-uv  { background: radial-gradient(60% 52% at 50% 44%, #eaffff 0%, rgba(234, 255, 255, 0) 72%); }
+.flash-gds { background: radial-gradient(60% 52% at 50% 44%, var(--gds) 0%, transparent 72%); }
+body.theme-light .flash { mix-blend-mode: normal; }
+
+.scene {
+  position: absolute; left: 63%; top: 45%;
+  width: 0; height: 0;
+  transform: scale(var(--die-scale));
+  transform-style: preserve-3d;
+}
+.die-float { transform-style: preserve-3d; animation: die-bob 7s ease-in-out infinite; }
+@keyframes die-bob {
+  0%, 100% { transform: translate3d(0, -4px, 0); }
+  50%      { transform: translate3d(0,  6px, 0); }
+}
+.rig { transform-style: preserve-3d; will-change: transform; }  /* JS: camera */
+.die {
+  position: absolute; left: -170px; top: -170px;
+  width: 340px; height: 340px;
+  transform-style: preserve-3d;
+}
+
+/* ---- plates (each lies flat in die space; JS sets translateZ) ---- */
+.plate {
+  position: absolute; inset: 0;
+  border-radius: 3px;
+  opacity: 0;
+  will-change: transform, opacity;
+  backface-visibility: visible;
+}
+
+/* substrate: bulk + I/O ring (--io) + core outline (--core), JS-driven */
+.p-sub {
+  background:
+    repeating-linear-gradient(0deg,  rgba(126, 156, 195, 0.05) 0 1px, transparent 1px 22px),
+    repeating-linear-gradient(90deg, rgba(126, 156, 195, 0.05) 0 1px, transparent 1px 22px),
+    linear-gradient(160deg, var(--sub-face), var(--bg-2));
+  border: 1px solid var(--sub-edge);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4),
+    0 0 calc(46px * var(--plate-glow)) rgba(34, 211, 238, calc(0.13 * var(--plate-glow)));
+}
+.p-sub::before {           /* I/O pad ring */
+  content: ""; position: absolute; inset: 7px; border-radius: 2px;
+  background:
+    repeating-linear-gradient(90deg, var(--c-li) 0 7px, transparent 7px 16px) top    / 100% 4px no-repeat,
+    repeating-linear-gradient(90deg, var(--c-li) 0 7px, transparent 7px 16px) bottom / 100% 4px no-repeat,
+    repeating-linear-gradient(0deg,  var(--c-li) 0 7px, transparent 7px 16px) left   / 4px 100% no-repeat,
+    repeating-linear-gradient(0deg,  var(--c-li) 0 7px, transparent 7px 16px) right  / 4px 100% no-repeat;
+  opacity: calc(0.6 * var(--io, 0));
+}
+.fp-core {                 /* core-area outline + corner keepout marks */
+  position: absolute; inset: 26px; border: 1px dashed var(--border-strong);
+  border-radius: 2px; opacity: var(--core, 0);
+}
+.fp-core::before, .fp-core::after {
+  content: ""; position: absolute; width: 14px; height: 14px;
+  border: 1.5px solid var(--c-m1); opacity: 0.8;
+}
+.fp-core::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; }
+.fp-core::after  { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+
+/* device / standard-cell plate: dense placement rows (fill = legalization) */
+.p-dev {
+  background: linear-gradient(160deg, rgba(56, 189, 248, 0.10), rgba(56, 189, 248, 0.03));
+  border: 1px solid color-mix(in srgb, var(--c-poly) 45%, transparent);
+  box-shadow: 0 0 calc(34px * var(--plate-glow)) color-mix(in srgb, var(--c-poly) 26%, transparent);
+}
+.dev-rows {
+  position: absolute; inset: 26px; opacity: var(--fill, 0);
+  background:
+    repeating-linear-gradient(0deg, color-mix(in srgb, var(--c-poly) 55%, transparent) 0 3px, transparent 3px 11px),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.10) 0 1px, transparent 1px 7px);
+}
+
+/* rats-nest netlist: green flightlines, drawn in by JS during synthesis,
+   descending + fading during placement as the rows legalize */
+.p-nest { color: var(--nest); filter: drop-shadow(0 0 calc(8px * var(--plate-glow)) currentColor); }
+.p-nest svg { position: absolute; inset: 20px; width: calc(100% - 40px); height: calc(100% - 40px); overflow: visible; }
+.p-nest line   { stroke: currentColor; stroke-width: 0.55; stroke-linecap: round; }
+.p-nest circle { fill: currentColor; }
+
+/* clock H-tree */
+.p-htree { color: var(--c-clk); filter: drop-shadow(0 0 calc(7px * var(--plate-glow)) currentColor); }
+.p-htree svg { position: absolute; inset: 22px; width: calc(100% - 44px); height: calc(100% - 44px); overflow: visible; }
+
+/* metal plates: Manhattan line fields, alternating direction */
+.p-m1, .p-m2, .p-m3, .p-mt { border: 1px solid transparent; }
+.p-m1 {
+  background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--c-m1) 70%, transparent) 0 2px, transparent 2px 11px);
+  border-color: color-mix(in srgb, var(--c-m1) 40%, transparent);
+  box-shadow: 0 0 calc(30px * var(--plate-glow)) color-mix(in srgb, var(--c-m1) 30%, transparent);
+}
+.p-m2 {
+  background: repeating-linear-gradient(0deg, color-mix(in srgb, var(--c-m2) 62%, transparent) 0 2px, transparent 2px 14px);
+  border-color: color-mix(in srgb, var(--c-m2) 36%, transparent);
+  box-shadow: 0 0 calc(30px * var(--plate-glow)) color-mix(in srgb, var(--c-m2) 26%, transparent);
+}
+.p-m3 {
+  background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--c-m3) 58%, transparent) 0 3px, transparent 3px 19px);
+  border-color: color-mix(in srgb, var(--c-m3) 34%, transparent);
+  box-shadow: 0 0 calc(30px * var(--plate-glow)) color-mix(in srgb, var(--c-m3) 24%, transparent);
+}
+.p-mt {                     /* thick top metal — power straps */
+  background:
+    repeating-linear-gradient(0deg,  color-mix(in srgb, var(--c-mt) 55%, transparent) 0 6px, transparent 6px 46px),
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--c-mt) 55%, transparent) 0 6px, transparent 6px 46px);
+  border-color: color-mix(in srgb, var(--c-mt) 36%, transparent);
+  box-shadow: 0 0 calc(32px * var(--plate-glow)) color-mix(in srgb, var(--c-mt) 26%, transparent);
+}
+
+/* passivation: glass lid with an etched mark */
+.p-pass {
+  background: linear-gradient(135deg, rgba(210, 230, 255, 0.10), rgba(210, 230, 255, 0.02) 55%, rgba(210, 230, 255, 0.08));
+  border: 1px solid rgba(210, 230, 255, 0.22);
+}
+body.theme-light .p-pass {
+  background: linear-gradient(135deg, rgba(30, 60, 110, 0.10), rgba(30, 60, 110, 0.02) 55%, rgba(30, 60, 110, 0.07));
+  border-color: rgba(30, 60, 110, 0.20);
+}
+.pass-mark {
+  position: absolute; right: 22px; bottom: 22px; width: 34px; height: 34px;
+  border: 1.5px solid var(--c-m1); border-radius: 2px; opacity: 0.9;
+}
+.pass-mark::before {
+  content: ""; position: absolute; inset: 7px;
+  background: var(--irid); border-radius: 1px; opacity: 0.85;
+}
+
+/* tape-out: KLayout-style purple wash + 45° hatch over the finished stack */
+.p-gds {
+  background:
+    repeating-linear-gradient(45deg, color-mix(in srgb, var(--gds) 45%, transparent) 0 2px, transparent 2px 12px),
+    linear-gradient(135deg, color-mix(in srgb, var(--gds) 34%, transparent), color-mix(in srgb, var(--gds) 10%, transparent));
+  border: 1px solid color-mix(in srgb, var(--gds) 60%, transparent);
+  box-shadow: 0 0 calc(48px * var(--plate-glow)) color-mix(in srgb, var(--gds) 45%, transparent);
+}
+
+.sheen {
+  position: absolute; inset: 0; border-radius: 3px; overflow: hidden;
+  background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, 0.35) 50%, transparent 70%);
+  background-size: 260% 100%;
+  opacity: 0; will-change: opacity;
+  animation: sheen-sweep 3.2s ease-in-out infinite;
+  mix-blend-mode: screen;
+}
+@keyframes sheen-sweep {
+  0%   { background-position: 130% 0; }
+  60%, 100% { background-position: -130% 0; }
+}
+.die-shadow {
+  position: absolute; left: 8%; top: 8%; width: 84%; height: 84%;
+  border-radius: 50%;
+  background: radial-gradient(50% 50% at 50% 50%, rgba(0, 0, 0, 0.55), transparent 70%);
+  will-change: transform, opacity; opacity: 0;
+}
+body.theme-light .die-shadow { background: radial-gradient(50% 50% at 50% 50%, rgba(40, 60, 95, 0.30), transparent 70%); }
+
+/* ---- lithography: mask reticle + UV beam + printed stripe ---- */
+.mask-plane {
+  position: absolute; left: -170px; top: -170px; width: 340px; height: 340px;
+  border-radius: 3px;
+  background:
+    repeating-linear-gradient(0deg,  color-mix(in srgb, var(--uv) 22%, transparent) 0 2px, transparent 2px 17px),
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--uv) 22%, transparent) 0 2px, transparent 2px 17px),
+    color-mix(in srgb, var(--uv) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--uv) 45%, transparent);
+  box-shadow: 0 0 calc(30px * var(--plate-glow)) color-mix(in srgb, var(--uv) 25%, transparent);
+  opacity: 0; will-change: transform, opacity;
+}
+.uv-beam {
+  position: absolute; left: -11px; top: -170px; width: 22px; height: 340px;
+  background: linear-gradient(90deg, transparent, #e8fbff 50%, transparent);
+  box-shadow: 0 0 34px var(--uv), 0 0 90px color-mix(in srgb, var(--uv) 60%, transparent);
+  opacity: 0; will-change: transform, opacity;
+}
+.uv-print {                 /* the beam's footprint projected onto the die */
+  position: absolute; left: -13px; top: -170px; width: 26px; height: 340px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--uv) 75%, transparent) 50%, transparent);
+  opacity: 0; will-change: transform, opacity;
+}
+body.theme-light .uv-beam { background: linear-gradient(90deg, transparent, #6db6dd 50%, transparent); }
+
+/* ---- dicing: wafer disc + 4×4 die grid + laser + scribes (JS-built tiles) ---- */
+.wafer {
+  position: absolute; left: -215px; top: -215px; width: 430px; height: 430px;
+  transform-style: preserve-3d;
+  opacity: 0; will-change: transform, opacity;
+}
+.wafer-disc {
+  position: absolute; inset: 0; border-radius: 50%;
+  background:
+    radial-gradient(60% 60% at 38% 34%, rgba(255, 255, 255, 0.07), transparent 60%),
+    conic-gradient(from 210deg, #101b2e, #0a1220 30%, #16233a 52%, #0a1220 74%, #101b2e);
+  border: 1px solid var(--sub-edge);
+  box-shadow: 0 0 calc(60px * var(--plate-glow)) rgba(34, 211, 238, calc(0.15 * var(--plate-glow)));
+}
+body.theme-light .wafer-disc {
+  background:
+    radial-gradient(60% 60% at 38% 34%, rgba(255, 255, 255, 0.55), transparent 60%),
+    conic-gradient(from 210deg, #c9d6e8, #b6c6dc 30%, #dbe6f2 52%, #b6c6dc 74%, #c9d6e8);
+}
+.wafer-disc::before {       /* faint process rings */
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: repeating-radial-gradient(circle at 50% 50%, transparent 0 26px, rgba(140, 190, 240, 0.05) 26px 27px);
+}
+.wafer-disc::after {        /* wafer flat/notch */
+  content: ""; position: absolute; left: 50%; bottom: 3px; width: 42px; height: 5px;
+  margin-left: -21px; border-radius: 3px; background: var(--sub-edge);
+}
+.wafer-grid {
+  position: absolute; left: 50%; top: 50%; width: 300px; height: 300px;
+  margin: -150px 0 0 -150px;
+  will-change: transform;
+}
+.wtile {
+  position: absolute; width: 75px; height: 75px;
+  will-change: transform, opacity;
+}
+.wtile::before {            /* mini die inside the reticle field */
+  content: ""; position: absolute; inset: 5px; border-radius: 1px;
+  background:
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--c-m1) 40%, transparent) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(0deg,  color-mix(in srgb, var(--c-m2) 30%, transparent) 0 1px, transparent 1px 8px),
+    linear-gradient(160deg, var(--sub-face), var(--bg-2));
+  border: 1px solid color-mix(in srgb, var(--c-m1) 30%, var(--sub-edge));
+}
+.wtile.hero-tile::before {
+  border-color: var(--c-m1);
+  box-shadow: 0 0 calc(22px * var(--hero-glow, 0)) var(--accent-glow);
+}
+.scribe {
+  position: absolute; opacity: 0.95;
+  background: linear-gradient(90deg, transparent, #dff6ff, transparent);
+  box-shadow: 0 0 9px var(--uv);
+  will-change: transform;
+}
+.scribe.v { width: 3px; height: 300px; top: 0; margin-left: -1.5px; transform: scaleY(var(--cut, 0)); transform-origin: top center; }
+.scribe.h { height: 3px; width: 300px; left: 0; margin-top: -1.5px; transform: scaleX(var(--cut, 0)); transform-origin: left center;
+            background: linear-gradient(0deg, transparent, #dff6ff, transparent); }
+.laser {
+  position: absolute; left: 0; top: 0; width: 14px; height: 14px;
+  margin: -7px 0 0 -7px; border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 0%, var(--uv) 45%, transparent 70%);
+  box-shadow: 0 0 18px #ffffff, 0 0 44px var(--uv);
+  opacity: 0; will-change: transform, opacity;
+}
+
+/* ---- packaging: substrate with gold pins + lid ---- */
+.pkg-sub {
+  position: absolute; left: -210px; top: -210px; width: 420px; height: 420px;
+  border-radius: 6px;
+  background:
+    repeating-linear-gradient(90deg, rgba(126, 156, 195, 0.05) 0 1px, transparent 1px 26px),
+    linear-gradient(160deg, #0b1526, #060b16);
+  border: 1px solid var(--sub-edge);
+  box-shadow: 0 0 calc(40px * var(--plate-glow)) rgba(34, 211, 238, calc(0.10 * var(--plate-glow)));
+  opacity: 0; will-change: transform, opacity;
+}
+body.theme-light .pkg-sub { background: linear-gradient(160deg, #cdd9e9, #b7c7dc); }
+.pkg-sub::before {          /* gold pin field escaping the package edge */
+  content: ""; position: absolute; inset: -12px; border-radius: 8px;
+  background:
+    repeating-linear-gradient(90deg, var(--gold) 0 8px, transparent 8px 22px) top    / 100% 9px no-repeat,
+    repeating-linear-gradient(90deg, var(--gold) 0 8px, transparent 8px 22px) bottom / 100% 9px no-repeat,
+    repeating-linear-gradient(0deg,  var(--gold) 0 8px, transparent 8px 22px) left   / 9px 100% no-repeat,
+    repeating-linear-gradient(0deg,  var(--gold) 0 8px, transparent 8px 22px) right  / 9px 100% no-repeat;
+  opacity: 0.85;
+}
+.pkg-sub::after {           /* bond ring around the die cavity */
+  content: ""; position: absolute; inset: 26px; border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
+  opacity: 0.6;
+}
+.pkg-lid {
+  position: absolute; left: -190px; top: -190px; width: 380px; height: 380px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  background:
+    repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.014) 0 2px, transparent 2px 6px),
+    radial-gradient(80% 80% at 30% 25%, rgba(255, 255, 255, 0.06), transparent 55%),
+    linear-gradient(150deg, #141c2c, #0a1120);
+  border: 1px solid rgba(160, 190, 230, 0.16);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  opacity: 0; will-change: transform, opacity;
+}
+body.theme-light .pkg-lid {
+  background:
+    radial-gradient(80% 80% at 30% 25%, rgba(255, 255, 255, 0.5), transparent 55%),
+    linear-gradient(150deg, #3a4a63, #232f45);
+  border-color: rgba(20, 35, 60, 0.3);
+}
+.pkg-lid span {
+  font-family: var(--display); font-weight: 700; font-size: 30px;
+  letter-spacing: 0.34em; text-indent: 0.34em; color: rgba(220, 236, 255, 0.5);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
+}
+.pkg-lid::after {           /* pin-1 index dot */
+  content: ""; position: absolute; left: 22px; top: 22px; width: 13px; height: 13px;
+  border-radius: 50%; background: rgba(220, 236, 255, 0.25);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* floating RTL code plane (2D overlay in the scene) */
+.code-plane {
+  position: absolute; left: 105px; top: -305px; width: 340px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-brd); border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 var(--glass-hi);
+  transform: rotateY(-14deg) rotateX(4deg);   /* angled back toward the die */
+  opacity: 0; will-change: opacity, transform;
+  margin: 0; padding: 0 0 6px;
+}
+.code-plane figcaption {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+  padding: 10px 14px; border-bottom: 1px solid var(--glass-brd);
+}
+.code-plane .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-m1); }
+.code-plane pre {
+  margin: 0; padding: 12px 16px; overflow: hidden;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.7; color: var(--text);
+}
+.code-plane .k { color: var(--c-m2); }
+.code-plane .n { color: var(--c-m1); }
+.code-plane .c { color: var(--text-muted); }
+
+/* ==================== pipeline tracker ==================== */
+
+.tracker {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+  z-index: 40; width: min(720px, calc(100vw - 20px));
+  padding: 10px 14px 11px;
+  border-radius: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+  transition: opacity 300ms var(--ease-out);
+}
+.tracker.hide { opacity: 0; pointer-events: none; }
+.trk-chips { display: flex; gap: 4px; }
+.trk-chip {
+  flex: 1 1 0; padding: 4px 0 3px;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em;
+  color: var(--text-muted); background: transparent;
+  border: 1px solid transparent; border-radius: 5px; cursor: pointer;
+  transition: color 180ms, border-color 180ms, background 180ms, box-shadow 180ms;
+}
+.trk-chip:hover { color: var(--text-strong); border-color: var(--border-strong); }
+.trk-chip.done { color: color-mix(in srgb, var(--accent) 72%, var(--text-muted)); }
+.trk-chip.on {
+  color: var(--c-m1);
+  border-color: color-mix(in srgb, var(--c-m1) 70%, transparent);
+  background: color-mix(in srgb, var(--c-m1) 10%, transparent);
+  box-shadow: 0 0 16px var(--accent-glow);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--c-m1) 55%, transparent);
+}
+.trk-row { display: flex; align-items: center; gap: 9px; }
+.trk-bar {
+  flex: 1 1 auto;
+  height: 3px; border-radius: 2px; background: var(--border); overflow: hidden;
+}
+.trk-pct {
+  flex: none; min-width: 32px; text-align: right;
+  font-family: var(--mono); font-size: 10px; color: var(--text-muted);
+}
+.trk-play {
+  flex: none; width: 22px; height: 22px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1px solid var(--border-strong);
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  transition: color 160ms, border-color 160ms, background 160ms;
+}
+.trk-play:hover { color: var(--text-strong); border-color: var(--accent); background: var(--accent-soft); }
+.tracker .ic-play { display: none; }
+.tracker.paused .ic-play { display: block; }
+.tracker.paused .ic-pause { display: none; }
+.trk-fill {
+  height: 100%; width: 100%;
+  background: linear-gradient(90deg, #0e9cbe, var(--c-m1));
+  border-radius: 2px;
+  transform: scaleX(0); transform-origin: left center; will-change: transform;
+}
+.trk-cap {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em;
+  color: var(--text-muted); text-align: center; min-height: 16px;
+}
+.trk-cap.swap { animation: capfade 420ms var(--ease-out); }
+@keyframes capfade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ==================== top nav ==================== */
+
+.topnav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  display: flex; align-items: center; gap: 26px;
+  padding: 14px 26px;
+  border-bottom: 1px solid transparent;
+  transition: background 240ms, border-color 240ms, padding 240ms var(--ease-out);
+}
+.topnav.scrolled {
+  background: var(--glass-bg);
+  border-bottom-color: var(--glass-brd);
+  padding-top: 10px; padding-bottom: 10px;
+}
+@supports (backdrop-filter: blur(4px)) or (-webkit-backdrop-filter: blur(4px)) {
+  .topnav.scrolled { -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2); }
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--display); font-weight: 700; letter-spacing: 0.22em;
+  font-size: 14px; color: var(--text-strong);
+}
+body.theme-light .brand img { filter: invert(1) brightness(0.35) contrast(1.4); }
+.topnav-links { display: flex; gap: 22px; margin-left: auto; }
+.topnav-links a {
+  color: var(--text-muted); font-size: 13.5px; font-weight: 500;
+  transition: color 160ms;
+}
+.topnav-links a:hover { color: var(--text-strong); }
+.topnav-actions { display: flex; align-items: center; gap: 12px; }
+.theme-btn {
+  width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid var(--border-strong); border-radius: 6px;
+  color: var(--text); cursor: pointer;
+  transition: border-color 160ms, color 160ms, background 160ms;
+}
+.theme-btn:hover { border-color: var(--accent); color: var(--text-strong); background: var(--accent-soft); }
+body.theme-dark  .ic-moon { display: none; }
+body.theme-light .ic-sun  { display: none; }
+
+/* ==================== sections ==================== */
+
+.sec { position: relative; z-index: 10; }
+
+/* hero — the home screen; copy left, the build plays centre-right */
+.hero {
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex; align-items: center;
+  padding: 110px 7vw 130px;
+}
+.hero-inner { max-width: 600px; }
+.eyebrow {
+  font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.24em;
+  color: var(--text-muted); margin-bottom: 22px;
+}
+.hero h1 {
+  font-size: clamp(44px, 6vw, 84px);
+  line-height: 1.02; letter-spacing: -0.02em; font-weight: 700;
+  margin-bottom: 26px;
+}
+.hero h1 em {
+  font-style: normal;
+  background: var(--irid);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+.lede { font-size: clamp(16px, 1.25vw, 18.5px); color: var(--text-muted); max-width: 560px; }
+.hero .lede { margin-bottom: 34px; }
+.hero-cta { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 34px; }
+.hero-chips {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  list-style: none; margin: 0; padding: 0;
+}
+.hero-chips li {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+.skip-row {
+  display: flex; align-items: flex-start; gap: 9px;
+  margin-top: 22px; max-width: 480px;
+  font-size: 12.5px; color: var(--text-muted);
+  cursor: pointer; user-select: none;
+}
+.skip-row input { accent-color: var(--accent); margin-top: 3px; flex: none; }
+.skip-row code { font-size: 11px; opacity: 0.75; }
+.scroll-hint {
+  position: absolute; left: calc(7vw + 4px); bottom: 116px; width: 22px; height: 34px;
+  border: 1.5px solid var(--border-strong); border-radius: 11px;
+}
+.scroll-hint span {
+  position: absolute; left: 50%; top: 6px; width: 3px; height: 7px;
+  margin-left: -1.5px; border-radius: 2px; background: var(--accent);
+  animation: hint 1.8s ease-in-out infinite;
+}
+@keyframes hint {
+  0%, 100% { transform: translateY(0); opacity: 1; }
+  70%      { transform: translateY(11px); opacity: 0; }
+}
+
+/* generic content blocks */
+.block { padding: 130px 7vw; max-width: 1240px; margin: 0 auto; }
+.block-head { max-width: 640px; margin-bottom: 56px; }
+.block-head h2 { font-size: clamp(30px, 3vw, 42px); letter-spacing: -0.015em; margin: 10px 0 16px; }
+
+.feat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
+}
+.feat { padding: 26px 26px 28px; transition: transform 200ms var(--ease-out), border-color 200ms; }
+.feat:hover { transform: translateY(-4px); border-color: color-mix(in srgb, var(--hueless, var(--accent)) 30%, var(--glass-brd)); }
+.feat-ic {
+  width: 40px; height: 40px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--hue, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--hue, var(--accent)) 40%, transparent);
+  background: color-mix(in srgb, var(--hue, var(--accent)) 10%, transparent);
+  margin-bottom: 18px;
+  transition: box-shadow 200ms;
+}
+.feat:hover .feat-ic { box-shadow: 0 0 18px color-mix(in srgb, var(--hue, var(--accent)) 35%, transparent); }
+.feat h3 { font-size: 17.5px; margin-bottom: 8px; }
+.feat p { color: var(--text-muted); font-size: 14px; }
+
+/* install */
+.inst-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
+}
+.inst { padding: 26px; display: flex; flex-direction: column; }
+.inst h3 { font-size: 17.5px; margin-bottom: 8px; }
+.inst > p { color: var(--text-muted); font-size: 14px; margin-bottom: 18px; flex: 1; }
+.cmd {
+  position: relative; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-2); overflow: hidden;
+}
+body.theme-light .cmd { background: #f5f8fc; }
+.cmd pre {
+  margin: 0; padding: 14px 64px 14px 16px; overflow-x: auto;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.7; color: var(--text);
+  scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;
+}
+.cmd pre::-webkit-scrollbar { height: 6px; }
+.cmd pre::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+.copy-btn {
+  position: absolute; right: 8px; top: 8px;
+  padding: 4px 10px; border-radius: 5px; cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--text-muted); font-family: var(--mono); font-size: 10.5px;
+  transition: color 160ms, border-color 160ms;
+}
+.copy-btn:hover { color: var(--text-strong); border-color: var(--accent); }
+.copy-btn.ok { color: var(--c-pass); border-color: var(--c-pass); }
+.inst-note { margin-top: 22px; font-size: 12.5px; color: var(--text-muted); font-family: var(--mono); }
+
+/* finale */
+.finale {
+  min-height: 92vh; display: flex; align-items: center; justify-content: center;
+  text-align: center; padding: 60px 7vw;
+}
+.finale h2 {
+  font-size: clamp(40px, 5.4vw, 72px); letter-spacing: -0.02em;
+  margin-bottom: 18px;
+  background: var(--irid);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+.finale .lede { margin: 0 auto 34px; text-shadow: 0 1px 16px var(--bg); }
+.finale-note { margin-top: 18px; font-size: 13px; color: var(--text-muted); text-shadow: 0 1px 16px var(--bg); }
+
+/* footer */
+.foot { position: relative; z-index: 10; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 75%, transparent); }
+.foot-inner {
+  max-width: 1240px; margin: 0 auto; padding: 40px 7vw 48px;
+  display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-start;
+}
+.foot-brand {
+  display: flex; align-items: center; gap: 9px;
+  font-family: var(--display); font-weight: 700; letter-spacing: 0.14em;
+  color: var(--text-strong); font-size: 13px;
+}
+body.theme-light .foot-brand img { filter: invert(1) brightness(0.35) contrast(1.4); }
+.foot p { flex: 1 1 380px; font-size: 12.5px; color: var(--text-muted); max-width: 560px; }
+.foot nav { display: flex; gap: 18px; margin-left: auto; }
+.foot nav a { font-size: 12.5px; color: var(--text-muted); }
+.foot nav a:hover { color: var(--text-strong); }
+
+/* ==================== reveal-on-scroll ==================== */
+
+body.js .reveal {
+  opacity: 0; transform: translateY(22px);
+  transition: opacity 640ms var(--ease-out), transform 640ms var(--ease-out);
+}
+body.js .reveal.in { opacity: 1; transform: none; }
+
+/* launch veil (smooth handoff into the cockpit) */
+.veil {
+  position: fixed; inset: 0; z-index: 300; background: var(--bg);
+  opacity: 0; pointer-events: none; transition: opacity 340ms ease;
+}
+body.leaving .veil { opacity: 1; pointer-events: auto; }
+
+/* ==================== responsive ==================== */
+
+@media (max-width: 1100px) {
+  :root { --die-scale: 0.74; }
+  .scene { left: 58%; top: 44%; }
+  .code-plane { left: 40px; top: -290px; width: 300px; }
+}
+@media (max-width: 860px) {
+  :root { --die-scale: 0.46; }
+  .topnav-links { display: none; }
+  .scroll-hint { display: none; }
+  .stage { opacity: 0.6; }
+  /* the build lives in the lower third on small screens, under the copy */
+  .scene { left: 50%; top: 71%; }
+  .hero { padding-bottom: 40vh; align-items: flex-start; padding-top: 90px; }
+  .code-plane { display: none; }
+  .block { padding: 90px 6vw; }
+  .tracker { bottom: 10px; padding: 8px 10px 9px; gap: 6px; }
+  .trk-chip { font-size: 8.5px; letter-spacing: 0.04em; }
+  .trk-cap { font-size: 10px; }
+}
+
+/* ==================== reduced motion ==================== */
+
+/* The build keeps playing under reduced motion — it is the whole page — but
+   the tracker's pause button makes it stoppable (WCAG 2.2.2). Only the
+   decorative extras go instant/static here. */
+@media (prefers-reduced-motion: reduce) {
+  body.js .reveal { opacity: 1; transform: none; transition: none; }
+  .veil, .tracker { transition: none; }
+  .trk-cap.swap { animation: none; }
+}

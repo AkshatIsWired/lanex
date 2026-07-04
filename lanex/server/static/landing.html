@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LanEx — From RTL to silicon</title>
+  <meta name="description" content="LanEx is a browser cockpit for the open-source LibreLane flow. This is its home screen — the full chip journey, from synthesis to a packaged part, plays behind the door into the cockpit." />
+  <meta property="og:title" content="LanEx — From RTL to silicon" />
+  <meta property="og:description" content="A browser cockpit for the LibreLane RTL→GDSII flow. Watch a design become a chip, then open the cockpit and build your own." />
+  <link rel="stylesheet" href="/static/fonts.css" />
+  <link rel="stylesheet" href="/static/landing.css" />
+  <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
+</head>
+<body class="theme-dark">
+<script>
+  /* Home-screen contract: if the user opted out ("skip this screen"), go
+     straight to the cockpit before anything paints. `?stay` always shows the
+     page (that is how you come back to flip the choice off). */
+  try {
+    if (localStorage.getItem("ll.landing") === "skip" &&
+        !/[?&]stay(=|&|$)/.test(window.location.search)) {
+      window.location.replace("/");
+    }
+  } catch (e) {}
+  /* Apply the persisted app theme before first paint (shared key with the
+     cockpit, so the choice carries across). Mark JS as alive so reveal
+     animations only arm when the engine will actually run them. */
+  try {
+    var q = (location.search.match(/[?&]theme=(light|dark)/) || [])[1];
+    var t = q || localStorage.getItem("ll.theme");
+    if (t === "light") { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); }
+  } catch (e) {}
+  document.body.classList.add("js");
+</script>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<!-- ==================== fixed 3D stage (decorative, self-playing) ==================== -->
+<div class="stage" id="stage" aria-hidden="true">
+  <div class="stage-grid"></div>
+  <div class="stage-glow stage-glow-a"></div>
+  <div class="stage-glow stage-glow-b"></div>
+  <div class="scene" id="scene">
+    <div class="die-float">
+      <div class="rig" id="rig">
+        <div class="die" id="die">
+          <div class="die-shadow" data-part="shadow"></div>
+          <div class="plate p-sub"   data-plate="sub"><div class="fp-core"></div></div>
+          <div class="plate p-dev"   data-plate="dev"><div class="dev-rows"></div></div>
+          <div class="plate p-nest"  data-plate="nest">
+            <!-- green rats-nest netlist: lines generated deterministically by JS -->
+            <svg id="nest-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+          </div>
+          <div class="plate p-htree" data-plate="htree">
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+              <path id="htree-path" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="square"
+                d="M50 50 H25 M50 50 H75
+                   M25 50 V25 M25 50 V75  M75 50 V25 M75 50 V75
+                   M25 25 H12.5 M25 25 H37.5  M25 75 H12.5 M25 75 H37.5
+                   M75 25 H62.5 M75 25 H87.5  M75 75 H62.5 M75 75 H87.5
+                   M12.5 25 V15 M12.5 25 V35  M37.5 25 V15 M37.5 25 V35
+                   M62.5 25 V15 M62.5 25 V35  M87.5 25 V15 M87.5 25 V35
+                   M12.5 75 V65 M12.5 75 V85  M37.5 75 V65 M37.5 75 V85
+                   M62.5 75 V65 M62.5 75 V85  M87.5 75 V65 M87.5 75 V85" />
+            </svg>
+          </div>
+          <div class="plate p-m1"   data-plate="m1"></div>
+          <div class="plate p-m2"   data-plate="m2"></div>
+          <div class="plate p-m3"   data-plate="m3"></div>
+          <div class="plate p-mt"   data-plate="mt"></div>
+          <div class="plate p-pass" data-plate="pass"><div class="pass-mark"></div></div>
+          <div class="plate p-gds"  data-plate="gds"></div>
+          <div class="sheen"  data-part="sheen"></div>
+        </div>
+
+        <!-- lithography: mask reticle above the die + sweeping UV beam -->
+        <div class="mask-plane" data-part="mask"></div>
+        <div class="uv-beam"    data-part="uv"></div>
+        <div class="uv-print"   data-part="uvprint"></div>
+
+        <!-- dicing: wafer with a 4×4 die grid; tiles + scribes + laser injected by JS -->
+        <div class="wafer" data-part="wafer">
+          <div class="wafer-disc"></div>
+          <div class="wafer-grid" id="wafer-grid"></div>
+        </div>
+
+        <!-- packaging: substrate with gold pins + lid with the mark -->
+        <div class="pkg-sub" data-part="pkgsub"></div>
+        <div class="pkg-lid" data-part="pkglid"><span>LANEX</span></div>
+      </div>
+    </div>
+    <figure class="code-plane" data-part="code">
+      <figcaption><span class="dot"></span>spm.v — serial/parallel multiplier</figcaption>
+<pre><code><span class="c">// the design ships with the cockpit</span>
+<span class="k">module</span> spm #(<span class="k">parameter</span> bits=<span class="n">32</span>) (
+    <span class="k">input</span>  clk,
+    <span class="k">input</span>  rst,
+    <span class="k">input</span>  x,
+    <span class="k">input</span>  [bits-<span class="n">1</span>:<span class="n">0</span>] a,
+    <span class="k">output</span> y
+);</code></pre>
+    </figure>
+  </div>
+  <!-- loop-reset dim + act flashes (kept out of the 3D tree: opacity on a
+       preserve-3d ancestor would flatten it) -->
+  <div class="dip"   data-part="dip"></div>
+  <div class="flash flash-gds" data-part="fgds"></div>
+  <div class="flash flash-uv"  data-part="fuv"></div>
+</div>
+
+<!-- ==================== pipeline tracker (synced to the animation) ==================== -->
+<aside class="tracker glass" id="tracker" aria-label="Chip build progress">
+  <div class="trk-chips">
+    <button class="trk-chip" data-act="0" title="Synthesis — Yosys" aria-label="Jump to synthesis">SYN</button>
+    <button class="trk-chip" data-act="1" title="Floorplan — OpenROAD" aria-label="Jump to floorplan">FP</button>
+    <button class="trk-chip" data-act="2" title="Placement" aria-label="Jump to placement">PLC</button>
+    <button class="trk-chip" data-act="3" title="Clock tree synthesis" aria-label="Jump to clock tree">CTS</button>
+    <button class="trk-chip" data-act="4" title="Routing" aria-label="Jump to routing">RTE</button>
+    <button class="trk-chip" data-act="5" title="Tape-out — GDSII stream-out" aria-label="Jump to tape-out">GDS</button>
+    <button class="trk-chip" data-act="6" title="Photolithography (at the fab)" aria-label="Jump to lithography">LITHO</button>
+    <button class="trk-chip" data-act="7" title="Wafer dicing (at the fab)" aria-label="Jump to dicing">DICE</button>
+    <button class="trk-chip" data-act="8" title="Packaging (at the fab)" aria-label="Jump to packaging">PKG</button>
+  </div>
+  <div class="trk-row">
+    <div class="trk-bar"><div class="trk-fill" id="trk-fill"></div></div>
+    <span class="trk-pct" id="trk-pct" aria-hidden="true">0%</span>
+    <button class="trk-play" id="trk-play" aria-label="Pause animation" title="Pause">
+      <svg class="ic-pause" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
+      <svg class="ic-play" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M8 5l11 7-11 7z"/></svg>
+    </button>
+  </div>
+  <p class="trk-cap" id="trk-cap">Yosys maps the RTL onto standard cells — logic becomes a netlist.</p>
+</aside>
+
+<!-- ==================== top navigation ==================== -->
+<header class="topnav" id="topnav">
+  <a class="brand" href="#top" aria-label="LanEx — back to top">
+    <img src="/static/vendor/lanex-mark.png" alt="" width="26" height="26" />
+    <span>LANEX</span>
+  </a>
+  <nav class="topnav-links" aria-label="Page sections">
+    <a href="#cockpit">Cockpit</a>
+    <a href="#install">Install</a>
+    <a href="https://github.com/AkshatIsWired/lanex/blob/main/LICENSE" target="_blank" rel="noopener" title="Apache-2.0 license">License</a>
+    <a href="https://github.com/AkshatIsWired/lanex/blob/main/NOTICE" target="_blank" rel="noopener" title="Notices &amp; disclaimer — LanEx is a viewer, not a sign-off tool">Disclaimer</a>
+  </nav>
+  <div class="topnav-actions">
+    <a class="theme-btn" href="https://github.com/AkshatIsWired/lanex" target="_blank" rel="noopener" aria-label="LanEx on GitHub" title="LanEx on GitHub">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.75 2.69 1.25 3.35.95.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 2.9-.39c.98 0 1.97.13 2.9.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.35.77 1.04.77 2.1 0 1.52-.01 2.74-.01 3.11 0 .3.2.66.8.55A10.52 10.52 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>
+    </a>
+    <button class="theme-btn" id="theme-btn" aria-label="Switch theme" title="Switch theme">
+      <svg class="ic-moon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      <svg class="ic-sun" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    </button>
+    <a class="btn btn-primary btn-launch" href="/" data-launch>Open cockpit</a>
+  </div>
+</header>
+
+<main id="main">
+  <!-- ==================== hero (the home screen) ==================== -->
+  <section class="sec hero" id="top">
+    <div class="hero-inner">
+      <p class="eyebrow reveal">LANEX · RTL → GDSII COCKPIT FOR LIBRELANE</p>
+      <h1 class="reveal">From RTL<br /><em>to silicon.</em></h1>
+      <p class="lede reveal">
+        Welcome to LanEx. Behind this door the whole journey plays on loop —
+        synthesis to tape-out, then through the fab to a packaged chip.
+        Your design takes the first six steps in the cockpit.
+      </p>
+      <div class="hero-cta reveal">
+        <a class="btn btn-primary btn-lg" href="/" data-launch>Enter the cockpit
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+        <a class="btn btn-ghost btn-lg" href="#cockpit">What's inside ↓</a>
+      </div>
+      <ul class="hero-chips reveal">
+        <li>Open source · Apache-2.0</li>
+        <li>Local or containerized engines</li>
+        <li>Numbers straight from the tools</li>
+      </ul>
+      <label class="skip-row reveal">
+        <input type="checkbox" id="skip-next" />
+        <span>Skip this screen next time — open the cockpit directly
+          <code>(/landing?stay brings it back)</code></span>
+      </label>
+    </div>
+    <div class="scroll-hint" aria-hidden="true"><span></span></div>
+  </section>
+
+  <!-- ==================== cockpit features ==================== -->
+  <section class="sec block" id="cockpit">
+    <div class="block-head reveal">
+      <p class="eyebrow">THE COCKPIT</p>
+      <h2>A cockpit, not a wrapper.</h2>
+      <p class="lede">Everything up to tape-out happens inside one browser tab —
+         with the flow's own tools doing the work and LanEx doing the watching.</p>
+    </div>
+    <div class="feat-grid">
+      <article class="feat glass reveal">
+        <div class="feat-ic" style="--hue: var(--c-m1)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-8 4 16 3-8h6"/></svg></div>
+        <h3>Live pipeline</h3>
+        <p>Every flow step with real status, streamed as it happens. Failures
+           point at the log line, not at a shrug.</p>
+      </article>
+      <article class="feat glass reveal">
+        <div class="feat-ic" style="--hue: var(--c-m3)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M4 10h16M10 4v16"/></svg></div>
+        <h3>Verbatim metrics</h3>
+        <p>Byte-faithful passthrough of the tools' own numbers. Nothing rounded
+           up, nothing invented, non-finite values handled honestly.</p>
+      </article>
+      <article class="feat glass reveal">
+        <div class="feat-ic" style="--hue: var(--c-m2)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v18M16 3v18M3 8h5M3 16h5M16 8h5M16 16h5"/></svg></div>
+        <h3>Compare &amp; explore</h3>
+        <p>Diff any two runs — config and results. Sweep parameters with DSE
+           and see the trade-off curve, not a folder of logs.</p>
+      </article>
+      <article class="feat glass reveal">
+        <div class="feat-ic" style="--hue: var(--c-poly)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l-6-6 6-6M15 6l6 6-6 6"/></svg></div>
+        <h3>RTL workspace</h3>
+        <p>Edit Verilog in the browser with linting and icarus-verilog
+           simulation — waveforms included where the bench writes them.</p>
+      </article>
+      <article class="feat glass reveal">
+        <div class="feat-ic" style="--hue: var(--c-mt)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3 3.7-3.7z"/></svg></div>
+        <h3>Tools bay</h3>
+        <p>Open your layout in KLayout, OpenROAD or Magic — launched with the
+           right environment, in the container or on your host.</p>
+      </article>
+      <article class="feat glass reveal">
+        <div class="feat-ic" style="--hue: var(--c-pass)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z"/><path d="M3.3 7l8.7 5 8.7-5M12 22V12"/></svg></div>
+        <h3>One-click toolchain</h3>
+        <p>LanEx pulls the official, version-matched LibreLane container image
+           for you — or plugs into the toolchain you already have.</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ==================== install ==================== -->
+  <section class="sec block" id="install">
+    <div class="block-head reveal">
+      <p class="eyebrow">INSTALL</p>
+      <h2>Three ways in. One cockpit.</h2>
+      <p class="lede">LanEx is a thin Python package — the heavy EDA toolchain
+         stays where it belongs, in the official LibreLane image or your
+         existing install.</p>
+    </div>
+    <div class="inst-grid">
+      <article class="inst glass reveal">
+        <h3>Fresh machine</h3>
+        <p>Clone, install, run — then let the Tools tab pull the version-matched
+           toolchain image with one click. No Docker yet? It installs that too.</p>
+        <div class="cmd"><pre><code>git clone https://github.com/AkshatIsWired/lanex.git
+cd lanex &amp;&amp; pip install .
+lanex</code></pre><button class="copy-btn" data-copy="git clone https://github.com/AkshatIsWired/lanex.git&#10;cd lanex && pip install .&#10;lanex" aria-label="Copy commands">Copy</button></div>
+      </article>
+      <article class="inst glass reveal">
+        <h3>One command</h3>
+        <p>Already have a container engine? Install and pre-pull the toolchain
+           image in the same breath.</p>
+        <div class="cmd"><pre><code>pip install . &amp;&amp; lanex --pull-image &amp;&amp; lanex</code></pre><button class="copy-btn" data-copy="pip install . && lanex --pull-image && lanex" aria-label="Copy command">Copy</button></div>
+      </article>
+      <article class="inst glass reveal">
+        <h3>Existing LibreLane</h3>
+        <p>Install LanEx into the same Python environment and just run it —
+           local tools or <code>--dockerized</code>, it detects your setup.</p>
+        <div class="cmd"><pre><code>pip install .
+lanex</code></pre><button class="copy-btn" data-copy="pip install .&#10;lanex" aria-label="Copy commands">Copy</button></div>
+      </article>
+    </div>
+    <p class="inst-note reveal">Installs from source today — PyPI release pending.</p>
+  </section>
+
+  <!-- ==================== final CTA ==================== -->
+  <section class="sec finale" id="launch">
+    <div class="finale-inner reveal">
+      <h2>Your die awaits.</h2>
+      <p class="lede">Open the cockpit, point it at your Verilog, and press Run.</p>
+      <a class="btn btn-primary btn-xl" href="/" data-launch>Launch LanEx
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </a>
+      <p class="finale-note">Lands on the Setup tab — pick a design and go.</p>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <div class="foot-inner">
+      <div class="foot-brand">
+        <img src="/static/vendor/lanex-mark.png" alt="" width="20" height="20" />
+        <span>LanEx</span>
+      </div>
+      <p>Independent open-source project, Apache-2.0. Built on
+         <a href="https://github.com/librelane/librelane" rel="noopener">LibreLane</a> —
+         not affiliated with or endorsed by its maintainers. LanEx is a viewer,
+         not a sign-off tool; lithography, dicing and packaging shown here
+         happen at a foundry, after the GDSII handoff.</p>
+      <nav aria-label="Footer">
+        <a href="https://github.com/AkshatIsWired/lanex" rel="noopener">GitHub</a>
+        <a href="https://github.com/AkshatIsWired/lanex/blob/main/NOTICE" rel="noopener">Notices</a>
+        <a href="/" data-launch>Open cockpit</a>
+      </nav>
+    </div>
+  </footer>
+</main>
+
+<!-- launch transition veil -->
+<div class="veil" id="veil" aria-hidden="true"></div>
+
+<script src="/static/landing.js" defer></script>
+</body>
+</html>
