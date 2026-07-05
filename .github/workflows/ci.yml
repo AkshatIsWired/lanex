@@ -1,11 +1,11 @@
 # CI: prove the suite is green and every JS module parses, on the Python
 # versions the package supports (fast, container-free — the tests that need a
 # toolchain are skipped/guarded). A separate `rtl2gds` job runs a REAL RTL->GDS
-# flow inside the official LibreLane image; it is heavy (pulls a ~GB image +
-# fetches a PDK, ~15-30 min), so it runs on: main, a DAILY schedule, manual
-# dispatch, and any pull request that changes architectural Python (controller/
-# server/tests) or packaging/CI — but NOT a pure UI/UX PR (server/static only).
-# Zero third-party Actions beyond the official setup-python/checkout/setup-node.
+# flow (the bundled SPM design) inside the official LibreLane image. A full SPM
+# run is only ~2-3 min, so it runs on EVERY trigger: every PR, every main push,
+# a daily schedule, and manual dispatch. Runners are ephemeral and we upload no
+# artifacts, so nothing accumulates across runs. Zero third-party Actions beyond
+# the official setup-python/checkout/setup-node.
 name: CI
 
 on:
@@ -116,57 +116,26 @@ jobs:
       - name: Compat canary (probe + version-range shims)
         run: python -m pytest lanex/tests/test_compat.py -q
 
-  # Decide whether the heavy RTL->GDS job should run for a PULL REQUEST: only
-  # when it touches architectural Python (controller/server/tests), packaging,
-  # or the CI itself — a pure UI/UX PR (server/static: JS/CSS/HTML) skips it.
-  # push/schedule/dispatch always run. No third-party action — a plain git diff.
-  detect-arch:
-    runs-on: ubuntu-latest
-    outputs:
-      run: ${{ steps.decide.outputs.run }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - id: decide
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "non-PR event -> run"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          base='${{ github.event.pull_request.base.sha }}'
-          head='${{ github.event.pull_request.head.sha }}'
-          if ! changed="$(git diff --name-only "$base" "$head" 2>/dev/null)"; then
-            echo "could not diff $base..$head -> run to be safe"
-            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          echo "changed files:"; echo "$changed"
-          if printf '%s\n' "$changed" | grep -Eq '\.py$|^pyproject\.toml$|^scripts/ci|^\.github/workflows/ci\.yml$'; then
-            echo "architectural change -> run"; echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "UI/UX/docs only -> skip"; echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  # Complete RTL->GDS smoke: scaffold the `counter` design with LanEx's own
-  # generator, then run it through the runner's local path (the real "Run flow"
-  # code path) to a GDSII. The flow needs the whole EDA toolchain + a PDK, so it
-  # runs inside the official LibreLane image via `docker run` — NOT a
-  # `container:` job: that makes GitHub inject a Node runtime the nix-based image
-  # can't exec ("no such file or directory"), which failed the first attempt.
-  # Here checkout runs on the host; only our shell runs in the image.
+  # Complete RTL->GDS smoke: run the bundled SPM example through the runner's
+  # local path (the real "Run flow" code path) to a GDSII. The flow needs the
+  # whole EDA toolchain + a PDK, so it runs inside the official LibreLane image
+  # via `docker run` — NOT a `container:` job: that makes GitHub inject a Node
+  # runtime the nix-based image can't exec ("no such file or directory"). Here
+  # checkout runs on the host; only our shell runs in the image. It runs on
+  # every trigger (every PR, main push, the daily schedule, manual dispatch) —
+  # a full SPM run is only ~2-3 min. Nothing persists: the runner is ephemeral
+  # (every run is a clean VM) and we upload no artifacts, so run output (image,
+  # PDK, the multi-hundred-MB run dir) is discarded when the job ends — no
+  # cross-run disk accumulation.
   rtl2gds:
-    name: Full RTL->GDS smoke (counter, sky130)
-    needs: detect-arch
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && needs.detect-arch.outputs.run == 'true')
+    name: Full RTL->GDS smoke (SPM, sky130)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - name: Run RTL->GDS in the LibreLane image
         run: |
+          df -h / # visibility: runner starts with ~14 GB free; SPM needs a fraction
           # Keep this image tag in sync with the librelane floor in
           # pyproject.toml (dependencies: librelane>=3.0.4,<3.1).
           docker run --rm \
