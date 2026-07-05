@@ -1,13 +1,20 @@
-# Minimal CI: prove the suite is green and every JS module parses, on the
-# Python versions the package supports. Zero third-party Actions beyond the
-# official setup-python/checkout/setup-node; no Docker needed (the tests that
-# require a container/toolchain are skipped/guarded).
+# CI: prove the suite is green and every JS module parses, on the Python
+# versions the package supports (fast, container-free — the tests that need a
+# toolchain are skipped/guarded). A separate `rtl2gds` job runs a REAL RTL->GDS
+# flow inside the official LibreLane image; it is heavy (pulls a ~GB image +
+# fetches a PDK, ~15-30 min), so it does NOT run on every pull request — only on
+# main, on a weekly schedule, on manual dispatch, or on a PR labelled
+# `full-flow`. Zero third-party Actions beyond the official
+# setup-python/checkout/setup-node.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+  workflow_dispatch:
 
 jobs:
   test:
@@ -108,3 +115,50 @@ jobs:
           pip install pytest
       - name: Compat canary (probe + version-range shims)
         run: python -m pytest lanex/tests/test_compat.py -q
+
+  # Complete RTL->GDS smoke: scaffold the `counter` design with LanEx's own
+  # generator, then run it through the runner's local path (the real "Run flow"
+  # code path) to a GDSII — inside the official LibreLane image, which ships the
+  # whole toolchain. Heavy + slow, so it is gated to skip on ordinary PRs (see
+  # the `if:`); add the `full-flow` label to a PR to force it there.
+  rtl2gds:
+    name: Full RTL->GDS smoke (counter, sky130)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'full-flow'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      # Keep this tag in sync with the librelane floor in pyproject.toml
+      # (dependencies: librelane>=3.0.4,<3.1) so the CI toolchain matches the
+      # version LanEx is tested against.
+      image: ghcr.io/librelane/librelane:3.0.4
+    env:
+      PDK_ROOT: ${{ github.workspace }}/.pdk
+      LANEX_RTL2GDS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LanEx into the image (keep its pinned librelane + toolchain)
+        run: |
+          # --no-deps: never disturb the image's librelane (that would swap the
+          # toolchain versions out from under us). LanEx adds no runtime deps.
+          python3 -m pip install --no-deps . || pip install --no-deps .
+          python3 -m pip install pytest || pip install pytest
+
+      - name: Enable the sky130 PDK (the exact version LibreLane pins)
+        run: |
+          set -eu
+          CIEL=ciel
+          command -v ciel >/dev/null 2>&1 || CIEL="python3 -m ciel"
+          VER=$(python3 -c "from lanex.controller import installer; print(installer._pinned_pdk_version('sky130') or '')")
+          if [ -z "$VER" ]; then echo "could not resolve the pinned sky130 version"; exit 1; fi
+          echo "sky130 pinned version: $VER"
+          $CIEL fetch  --pdk-root "$PDK_ROOT" --pdk-family sky130 "$VER" -l sky130_fd_sc_hd
+          $CIEL enable --pdk-root "$PDK_ROOT" --pdk-family sky130 "$VER" -l sky130_fd_sc_hd
+
+      - name: Run RTL->GDS (counter through the Classic flow, local mode)
+        run: python3 -m pytest lanex/tests/test_rtl2gds.py -q -rs
