@@ -79,3 +79,46 @@ def test_escalate_does_not_rewrite_shell_wrapped_sudo(monkeypatch) -> None:
     monkeypatch.setattr(platform_env, "host_display_available", lambda: True)
     monkeypatch.setattr(installer, "_check_cmd", lambda name: name == "pkexec")
     assert installer._escalate_argv(["sh", "-c", "sudo apt-get install x"]) is None
+
+
+# --------------------------------------------------------------------------- #
+# _run_argv() — a sudo command with a controlling terminal MUST attach to the
+# terminal, even when `sudo -n true` succeeds. Detaching (start_new_session) drops
+# the controlling tty and sudo's tty_tickets cache goes with it → "sudo: A
+# terminal is required to authenticate" (the GDS3D-deps failure the user hit).
+# --------------------------------------------------------------------------- #
+def _capture_tty(monkeypatch):
+    seen = {}
+
+    def fake_tty(argv, *, label, key):
+        seen["argv"] = list(argv)
+        seen["label"] = label
+        return {"ok": True, "rc": 0, "label": label}
+
+    monkeypatch.setattr(installer, "_run_argv_on_tty", fake_tty)
+    monkeypatch.setattr(installer, "_emit", lambda *a, **k: None)
+    return seen
+
+
+def test_run_argv_sudo_with_tty_uses_terminal_even_if_passwordless(monkeypatch) -> None:
+    monkeypatch.setattr(platform_env, "has_controlling_tty", lambda: True)
+    monkeypatch.setattr(installer, "_can_sudo", lambda: True)  # `sudo -n true` OK
+    seen = _capture_tty(monkeypatch)
+    argv = ["sudo", "apt-get", "install", "-y", "libgl1-mesa-dev"]
+    res = installer._run_argv(argv, label="gds3d deps", key="gds3d")
+    assert res.get("ok") is True
+    assert seen.get("argv") == argv  # ran on the tty, not detached
+
+
+def test_run_argv_sudo_with_tty_no_ticket_prompts_on_terminal(monkeypatch) -> None:
+    monkeypatch.setattr(platform_env, "has_controlling_tty", lambda: True)
+    monkeypatch.setattr(installer, "_can_sudo", lambda: False)  # needs a password
+    events = []
+
+    def fake_tty(argv, *, label, key):
+        return {"ok": True, "rc": 0, "label": label}
+
+    monkeypatch.setattr(installer, "_run_argv_on_tty", fake_tty)
+    monkeypatch.setattr(installer, "_emit", lambda name, payload: events.append((name, payload)))
+    installer._run_argv(["sudo", "apt-get", "install", "-y", "x"], label="l", key="k")
+    assert any(n == "installer_info" and p.get("needs_password") for n, p in events)

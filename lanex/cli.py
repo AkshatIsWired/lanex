@@ -187,42 +187,50 @@ def _pull_image_cli() -> int:
 def _lazy_open(url: str, no_browser: bool) -> None:
     if no_browser:
         return
-    import webbrowser
-
-    opened = False
-    try:
-        opened = webbrowser.open(url, new=2)
-    except Exception:  # pragma: no cover
-        opened = False
-    if opened:
-        return
-    # A fresh WSL distro usually has NO Linux browser, so webbrowser.open finds
-    # nothing and fails silently — hand the URL to Windows instead (wslview from
-    # wslu, else explorer.exe / powershell via the interop bridge), which opens
-    # the user's default Windows browser.
+    # On WSL, try the Windows browser FIRST. A fresh WSL distro has no Linux
+    # browser, but webbrowser.open() still finds the gio/xdg-open shim and
+    # returns True while that shim quietly no-ops ("gio: <url>: Operation not
+    # supported") — so the page never opens and the fallback below never runs.
+    # Handing the URL straight to Windows (wslview / powershell / explorer via
+    # the interop bridge) opens the user's default Windows browser reliably.
     try:
         from .controller import platform_env
 
-        if platform_env.is_wsl():
-            import shutil
-            import subprocess
-
-            candidates = [
-                ["wslview", url],
-                ["explorer.exe", url],
-                ["powershell.exe", "-NoProfile", "-Command", f"Start-Process '{url}'"],
-            ]
-            for argv in candidates:
-                if shutil.which(argv[0]):
-                    try:
-                        subprocess.Popen(argv, stdout=subprocess.DEVNULL,
-                                         stderr=subprocess.DEVNULL)
-                        return
-                    except Exception:
-                        continue
+        if platform_env.is_wsl() and _open_via_windows(url):
+            return
     except Exception:  # pragma: no cover - defensive
         pass
+
+    import webbrowser
+
+    try:
+        if webbrowser.open(url, new=2):
+            return
+    except Exception:  # pragma: no cover
+        pass
     sys.stderr.write(f"could not open a browser automatically — visit {url}\n")
+
+
+def _open_via_windows(url: str) -> bool:
+    """Open *url* in the user's Windows browser from WSL. True once one launches."""
+    import shutil
+    import subprocess
+
+    # powershell Start-Process is the most reliable; explorer.exe last (it exits
+    # non-zero on http URLs on some builds but still opens the browser).
+    for argv in (
+        ["wslview", url],
+        ["powershell.exe", "-NoProfile", "-Command", f"Start-Process '{url}'"],
+        ["explorer.exe", url],
+    ):
+        if not shutil.which(argv[0]):
+            continue
+        try:
+            subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 if __name__ == "__main__":  # pragma: no cover

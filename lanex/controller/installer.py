@@ -856,27 +856,44 @@ def _run_argv(argv: List[str], *, label: str, key: str) -> Dict[str, Any]:
     # give up, escalate: prompt on the terminal the GUI was launched from (the
     # reliable path on WSL), else a graphical pkexec dialog. Only fall back to a
     # copy-paste command when neither is possible.
+    from . import platform_env
     inherit_tty = False
-    if _needs_sudo(argv) and not _can_sudo():
-        esc = _escalate_argv(argv)
-        if esc is None:
-            cmd = " ".join(argv)
-            guidance = (
-                "This step needs root, but there's no terminal or graphical prompt available to "
-                "enter a password. Run it yourself, then click Recheck:\n    " + cmd
-            )
-            _emit("installer_error", {"key": key, "label": label, "message": guidance})
-            return {"ok": False, "rc": None, "needs_sudo": True, "guidance": guidance, "label": label}
-        argv, inherit_tty = esc
-        if inherit_tty:
-            _emit("installer_info", {"key": key, "label": label, "needs_password": True, "message":
-                "Administrator rights needed. A password prompt is waiting in the TERMINAL "
-                "where you launched the GUI — switch to that window and enter your password to "
-                "continue. (For security, sudo cannot prompt inside the browser.)"})
-        elif argv and argv[0] == "pkexec":
-            _emit("installer_info", {"key": key, "label": label, "needs_password": True, "message":
-                "Administrator rights needed. A system password dialog should appear — enter "
-                "your password to continue the install."})
+    if _needs_sudo(argv):
+        have_tty = platform_env.has_controlling_tty()
+        passwordless = _can_sudo()
+        if have_tty:
+            # ALWAYS attach a sudo command to the launching terminal when one
+            # exists — even if `sudo -n true` just succeeded. The non-tty branch
+            # below sets start_new_session=True (so cancel/timeout can kill the
+            # whole tree), which drops the controlling terminal; sudo's default
+            # `tty_tickets` keys the cached credential to that tty, so a detached
+            # sudo re-authenticates with no terminal and dies
+            # "sudo: A terminal is required to authenticate" — exactly the failure
+            # the user hit installing GDS3D deps. Attaching to /dev/tty lets sudo
+            # find its ticket (silent when cached) or prompt (when not).
+            inherit_tty = True
+            if not passwordless:
+                _emit("installer_info", {"key": key, "label": label, "needs_password": True, "message":
+                    "Administrator rights needed. A password prompt is waiting in the TERMINAL "
+                    "where you launched LanEx — switch to that window and enter your password to "
+                    "continue. (For security, sudo cannot prompt inside the browser.)"})
+        elif not passwordless:
+            # No terminal: fall back to a graphical pkexec dialog, else a
+            # copy-paste command.
+            esc = _escalate_argv(argv)
+            if esc is None:
+                cmd = " ".join(argv)
+                guidance = (
+                    "This step needs root, but there's no terminal or graphical prompt available to "
+                    "enter a password. Run it yourself, then click Recheck:\n    " + cmd
+                )
+                _emit("installer_error", {"key": key, "label": label, "message": guidance})
+                return {"ok": False, "rc": None, "needs_sudo": True, "guidance": guidance, "label": label}
+            argv, inherit_tty = esc
+            if argv and argv[0] == "pkexec":
+                _emit("installer_info", {"key": key, "label": label, "needs_password": True, "message":
+                    "Administrator rights needed. A system password dialog should appear — enter "
+                    "your password to continue the install."})
     _emit("installer_started", {"key": key, "argv": argv, "label": label})
     if inherit_tty:
         return _run_argv_on_tty(argv, label=label, key=key)

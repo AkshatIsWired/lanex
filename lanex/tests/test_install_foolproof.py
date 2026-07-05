@@ -463,3 +463,40 @@ def test_repair_ciel_store_missing_is_ok(tmp_path) -> None:
     res = installer.repair_ciel_store("sky130", pdk_root=str(tmp_path / "nope"))
     assert res["ok"] is True
     assert res["removed"] == []
+
+
+# --------------------------------------------------------------------------- #
+# WSL browser auto-open — webbrowser.open() returns True while the gio shim
+# no-ops ("Operation not supported"), so on WSL we hand the URL to Windows first.
+# --------------------------------------------------------------------------- #
+def test_open_via_windows_launches_first_available(monkeypatch) -> None:
+    from lanex import cli
+    import shutil as _sh
+    import subprocess as _sp
+
+    launched = {}
+    monkeypatch.setattr(_sh, "which", lambda n: "/usr/bin/wslview" if n == "wslview" else None)
+    monkeypatch.setattr(_sp, "Popen", lambda argv, **k: launched.setdefault("argv", argv))
+
+    assert cli._open_via_windows("http://127.0.0.1:8765/landing") is True
+    assert launched["argv"][0] == "wslview"
+
+
+def test_open_via_windows_false_when_nothing_present(monkeypatch) -> None:
+    from lanex import cli
+    import shutil as _sh
+    monkeypatch.setattr(_sh, "which", lambda n: None)
+    assert cli._open_via_windows("http://x") is False
+
+
+def test_lazy_open_on_wsl_skips_webbrowser(monkeypatch) -> None:
+    from lanex import cli
+
+    monkeypatch.setattr(platform_env, "is_wsl", lambda: True)
+    monkeypatch.setattr(cli, "_open_via_windows", lambda url: True)
+    import webbrowser
+    called = {"web": False}
+    monkeypatch.setattr(webbrowser, "open", lambda *a, **k: called.__setitem__("web", True) or True)
+
+    cli._lazy_open("http://127.0.0.1:8765/", no_browser=False)
+    assert called["web"] is False   # Windows opener handled it; no Linux browser attempt

@@ -1457,6 +1457,30 @@ select {
   .brand-sub { display: none; }
 }
 
+/* Browser zoom trades CSS pixels for physical ones: 100% zoom shows far fewer
+   CSS px than 80%, so the 12-tab rail overflowed into a scrollbar and the hero /
+   cards read as cramped. Compact spacing when the viewport is short or narrow —
+   this fires at 100% zoom (small CSS viewport) and is a no-op at low zoom (tall/
+   wide CSS viewport), so the roomy 80% look the user likes is preserved. Keyed on
+   viewport size, independent of the manual density toggle. */
+@media (max-height: 900px) {
+  .side-tabs { gap: var(--s-2); padding: var(--s-2); }
+  .rail-group { gap: 3px; }
+  .rail-label { margin-bottom: 0; }
+  .side-tab { padding: 7px 6px; }
+  .side-tab .ico { font-size: 18px; }
+  .side-tab .label { font-size: 10px; }
+}
+@media (max-height: 760px) {
+  .rail-label { display: none; }
+  .side-tab { padding: 5px 6px; }
+  .side-tab .ico { font-size: 17px; }
+}
+@media (max-width: 1400px) {
+  .work { padding: var(--s-4); }
+  .hero { padding: var(--s-5); }
+}
+
 /* section ^ */
 .section.section-active { display: block; }
 .section { padding: 0; }

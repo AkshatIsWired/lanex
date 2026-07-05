@@ -205,36 +205,47 @@ const CATALOG = {
 
 function openHelp(key) {
   const def = CATALOG[key];
-  const dlg = document.createElement("div");
-  dlg.className = "onboard";
-  dlg.innerHTML =
-    "<div class='onboard-card' style='max-width:680px'>" +
-    "<button class='onboard-close' aria-label='Close'>\u00d7</button>" +
-    "<h2>" + (def ? def.title : key) + "</h2>" +
+  const title = def ? def.title : key;
+  // Built on the shared `.dlg-backdrop`/`.dlg` overlay (fixed, centered, blurred
+  // backdrop). The old `.onboard` classes were deleted with the onboarding tour
+  // in round 39, so this dialog had no CSS and rendered as a plain block at the
+  // bottom of <body> \u2014 you had to scroll to see/close it. `.dlg-*` is guaranteed
+  // present (folder browser, presets, etc. use it).
+  const body =
     (def ? "<p><strong>Goal:</strong> " + def.goal + "</p>" : "") +
     (def && def.how && def.how.length
-      ? "<h3 style='margin-top:var(--s-4)'>How to use</h3><ol>" + def.how.map((x) => "<li>" + x + "</li>").join("") + "</ol>"
+      ? "<h3 style='margin:var(--s-3) 0 var(--s-2)'>How to use</h3><ol style='margin:0;padding-left:1.2em'>" +
+        def.how.map((x) => "<li style='margin-bottom:4px'>" + x + "</li>").join("") + "</ol>"
       : "") +
     (def && def.samples && def.samples.length
-      ? "<h3 style='margin-top:var(--s-4)'>Sample values</h3><pre class='code'>" +
-        def.samples.map((s) => s.key + ": " + s.sample).join("\n") +
-      "</pre>"
+      ? "<h3 style='margin:var(--s-3) 0 var(--s-2)'>Sample values</h3><pre class='code'>" +
+        def.samples.map((s) => s.key + ": " + s.sample).join("\n") + "</pre>"
       : "") +
     (def && def.pitfalls && def.pitfalls.length
-      ? "<h3 style='margin-top:var(--s-4)'>Pitfalls</h3><ul>" + def.pitfalls.map((x) => "<li>" + x + "</li>").join("") + "</ul>"
-      : "") +
+      ? "<h3 style='margin:var(--s-3) 0 var(--s-2)'>Pitfalls</h3><ul style='margin:0;padding-left:1.2em'>" +
+        def.pitfalls.map((x) => "<li style='margin-bottom:4px'>" + x + "</li>").join("") + "</ul>"
+      : "");
+  const back = document.createElement("div");
+  back.className = "dlg-backdrop";
+  back.innerHTML =
+    "<div class='dlg' style='max-width:680px' role='dialog' aria-modal='true'>" +
+    "<div class='dlg-head' style='display:flex;align-items:center;justify-content:space-between;gap:var(--s-3)'>" +
+    "<span>" + title + "</span>" +
+    "<button class='iconbtn dlg-x' aria-label='Close' style='margin:-4px -6px'>\u00d7</button></div>" +
+    "<div class='dlg-body'>" + body + "</div>" +
     "</div>";
-  dlg.addEventListener("click", (e) => {
-    if (e.target === dlg || e.target.classList.contains("onboard-close")) dlg.remove();
+  function close() {
+    back.remove();
+    document.removeEventListener("keydown", onKey);
+  }
+  function onKey(e) {
+    if (e.key === "Escape") close();
+  }
+  back.addEventListener("click", (e) => {
+    if (e.target === back || e.target.closest(".dlg-x")) close();
   });
-  document.body.appendChild(dlg);
-  // Esc closes
-  document.addEventListener("keydown", function _once(e) {
-    if (e.key === "Escape") {
-      dlg.remove();
-      document.removeEventListener("keydown", _once);
-    }
-  });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(back);
 }
 
 export const help = {
