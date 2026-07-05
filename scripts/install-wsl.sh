@@ -65,15 +65,30 @@ else
     pipx install --force "$CLONE_DIR"
 fi
 
-command -v lanex >/dev/null 2>&1 || {
-    warn "lanex is installed but not on PATH yet — open a NEW terminal (pipx"
-    warn "ensurepath edits ~/.bashrc), then run: lanex"
+say "Making the 'lanex' command available on your PATH"
+# pipx drops the launcher in its bin dir (usually ~/.local/bin), which only lands
+# on PATH in a NEW shell (ensurepath edits ~/.bashrc). This installer runs in a
+# child process via `curl | bash` and CANNOT change your current shell's PATH —
+# so without help you'd have to `source ~/.bashrc` before `lanex` is found.
+# Symlink the launcher into /usr/local/bin (already on every shell's default
+# PATH) so `lanex` works immediately, in this terminal and every future one.
+PIPX_BIN="$(pipx environment --value PIPX_BIN_DIR 2>/dev/null || true)"
+[ -n "$PIPX_BIN" ] || PIPX_BIN="$HOME/.local/bin"
+LANEX_LAUNCHER="$PIPX_BIN/lanex"
+LANEX_READY=0
+if [ ! -x "$LANEX_LAUNCHER" ]; then
+    warn "lanex was installed but its launcher wasn't found at $LANEX_LAUNCHER."
+    warn "Open a new terminal and run:  lanex"
     exit 0
-}
+fi
+if $SUDO ln -sf "$LANEX_LAUNCHER" /usr/local/bin/lanex 2>/dev/null; then
+    LANEX_READY=1                 # on the global PATH now → usable in this shell
+    hash -r 2>/dev/null || true
+fi
 
 if command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1; then
     say "Pre-pulling the LibreLane container image (one-time, ~3 GB)"
-    lanex --pull-image || warn "Image pull failed (offline / engine not ready?) — the Tools tab can retry it."
+    "$LANEX_LAUNCHER" --pull-image || warn "Image pull failed (offline / engine not ready?) — the Tools tab can retry it."
 else
     warn "No Docker/Podman found. LanEx still works: open the Tools tab and use"
     warn "'Install the toolchain (recommended)' — it installs an engine and pulls"
@@ -81,6 +96,13 @@ else
 fi
 
 say "Done — launch the cockpit with:  lanex"
+if [ "$LANEX_READY" = "1" ]; then
+    echo "The 'lanex' command is ready in THIS terminal now — no restart needed."
+else
+    echo "One step so your CURRENT shell can see it (a piped installer can't set"
+    echo "your PATH for you):  run  source ~/.bashrc   (or open a new terminal)."
+    echo "Or launch right now with the full path:  $LANEX_LAUNCHER"
+fi
 echo "Tip (WSL): launch from an interactive terminal (as you just did). If you"
 echo "ever wrap LanEx in a script/shortcut, start it via 'bash -ic lanex' —"
 echo "WSLg only brings up its GUI bridge for interactive shells, and desktop"
