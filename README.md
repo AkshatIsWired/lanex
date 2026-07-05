@@ -113,7 +113,30 @@ your normal Windows browser automatically.
 > **optional** — LanEx can install an engine for you (you confirm the password
 > prompt in your terminal if the system package needs `sudo`).
 
-### Pick the row that matches your machine
+### Easiest — one command that just works (start here if unsure)
+
+New here, or you just want it running? Open a **WSL2 Ubuntu / Debian-family
+Linux** terminal and run this single line. It installs LanEx and the packages a
+fresh machine is missing, puts the `lanex` command on your PATH, and — if you
+have Docker or Podman — pre-pulls the version-matched LibreLane image (otherwise
+the in-app Tools tab sets that up on first run). Safe to re-run; a re-run upgrades.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install-wsl.sh | bash
+```
+
+Then launch the cockpit:
+
+```bash
+lanex
+```
+
+The UI opens in your browser — that's it. **If anything in the manual options
+below looks confusing, just use this; it's built to work out of the box on any
+supported machine.** Prefer to run the steps yourself, or you're on
+Fedora / Arch / macOS or you already run LibreLane? Pick the matching row below.
+
+### Manual install — pick the row that matches your machine
 
 <table>
 <tr><th align="left" width="235">Your situation</th><th align="left">Install commands</th></tr>
@@ -130,11 +153,8 @@ lanex --pull-image     # needs Docker/Podman; skip if none yet — the Tools tab
 lanex
 ```
 
-Or let the script do exactly that (plus upgrades on re-run):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install-wsl.sh | bash
-```
+(The [one-line installer](#easiest--one-command-that-just-works-start-here-if-unsure)
+above runs exactly these steps for you, plus upgrades on re-run.)
 
 Why `pipx` and not `pip`: Ubuntu 23.04+ (including every current WSL Ubuntu)
 refuses `pip install` outside a virtualenv (PEP 668 — see
