@@ -5,11 +5,7 @@
 # You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
-"""Allow ``python -m lanex`` as an alias for the ``librelane-gui`` console script.
-
-(After the upstream ``gui`` → ``librelane.gui`` rename this becomes
-``python -m librelane.gui``.)
-"""
+"""Allow ``python -m lanex`` as an alias for the ``lanex`` console script."""
 from __future__ import annotations
 
 from .cli import main

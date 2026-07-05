@@ -94,7 +94,7 @@ _GDS_EXTS = (".gds", ".gds.gz", ".gdsii", ".oas", ".oas.gz", ".oasis")
 def _gui_version() -> str:
     try:
         import importlib.metadata as md
-        return md.version("librelane-gui")
+        return md.version("lanex")
     except Exception:
         return "unknown"
 
