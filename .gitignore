@@ -12,6 +12,8 @@ runs/
 
 # Session/scratch artifacts
 2026-*-command-message*.txt
+2026-*-local-command-*.txt
+2026-*-this-was-the-prompt-*.txt
 *command-message*.txt
 claude_*.txt
 test_results.txt

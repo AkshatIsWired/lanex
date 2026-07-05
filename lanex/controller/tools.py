@@ -442,6 +442,47 @@ def _platform_key() -> str:
     return "linux"
 
 
+def _module_available(mod: str) -> bool:
+    """Importable in THIS interpreter (pipx/venv installs keep the console
+    scripts off the system PATH while the module works fine)."""
+    try:
+        import importlib.util
+        return importlib.util.find_spec(mod) is not None
+    except Exception:
+        return False
+
+
+def _module_version(pkg: str) -> str:
+    try:
+        import importlib.metadata
+        return importlib.metadata.version(pkg)
+    except Exception:
+        return ""
+
+
+def _module_probe_fallback(key: str, info: Dict[str, Any]) -> Dict[str, Any]:
+    """When a PATH probe found nothing, check the GUI's own Python environment.
+
+    Under pipx (`pipx install lanex`) only the ``lanex`` entry point is exposed;
+    ``librelane``, ``ciel`` and ``pip`` live inside the venv, importable and
+    fully usable via ``python -m …`` — reporting them "not installed" was a lie
+    that sent users off to install a second copy. Only used when the PATH probe
+    failed, so a real system install always wins the display.
+    """
+    if info.get("installed"):
+        return info
+    mod = {"librelane": "librelane", "ciel": "ciel", "pip": "pip"}.get(key)
+    if not mod or not _module_available(mod):
+        return info
+    py = sys.executable or "python3"
+    return {
+        "installed": True,
+        "path": f"{py} -m {mod}",
+        "version": _module_version(mod),
+        "error": "",
+    }
+
+
 def _recipe_for(tool: Dict[str, Any]) -> str:
     """Format the install recipe as a UI-friendly line."""
     install = tool.get("install")
@@ -654,6 +695,7 @@ def check_tools() -> Dict[str, Any]:
     out = []
     for t in EDA_TOOLS:
         info = _probe(t["binary"], t["version_flag"])
+        info = _module_probe_fallback(t["key"], info)
         out.append(
             {
                 "key": t["key"],
@@ -678,7 +720,7 @@ def check_tools() -> Dict[str, Any]:
     # Installed PDKs: a variant is "installed" when it has been enabled into the
     # PDK root (i.e. ``$PDK_ROOT/<variant>/libs.ref`` exists). This is exactly
     # what LibreLane resolves at run time, and what the catalog keys against.
-    ciel_probe = _probe(["ciel"], ["--version"])
+    ciel_probe = _module_probe_fallback("ciel", _probe(["ciel"], ["--version"]))
     catalog = build_pdk_catalog()
     installed_pdks: List[str] = []
     installed_sizes_mb: Dict[str, int] = {}

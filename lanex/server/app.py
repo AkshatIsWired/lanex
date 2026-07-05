@@ -421,6 +421,18 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(response["blob"], 200, response["content_type"])
 
 
+def _addr_family(host: str) -> int:
+    """AF for *host* — an IPv6 literal (``::1``) needs AF_INET6 end to end.
+
+    ``ThreadingHTTPServer`` defaults to AF_INET, so without this a perfectly
+    loopback-safe ``--host ::1`` failed every bind attempt."""
+    return socket.AF_INET6 if ":" in (host or "") else socket.AF_INET
+
+
+class _ThreadingHTTPServer6(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
 def find_free_port(preferred: int = 8765, *, host: str = "127.0.0.1", retries: int = 5) -> int:
     """Pick a free port, starting at `preferred`.
 
@@ -431,7 +443,7 @@ def find_free_port(preferred: int = 8765, *, host: str = "127.0.0.1", retries: i
     last_exc: Optional[Exception] = None
     for delta in range(0, retries + 2):
         port = preferred + delta
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        with socket.socket(_addr_family(host), socket.SOCK_STREAM) as s:
             try:
                 s.bind((host, port))
             except OSError as ex:
@@ -459,7 +471,8 @@ def make_server(host: str = "127.0.0.1", port: int = 8765,
         )
     _ALLOW_REMOTE = bool(allow_remote)
     actual_port = find_free_port(port, host=host)
-    httpd = ThreadingHTTPServer((host, actual_port), LibreLaneGUIRequestHandler)
+    server_cls = _ThreadingHTTPServer6 if _addr_family(host) == socket.AF_INET6 else ThreadingHTTPServer
+    httpd = server_cls((host, actual_port), LibreLaneGUIRequestHandler)
     return httpd, actual_port
 
 

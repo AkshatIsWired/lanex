@@ -183,6 +183,17 @@ def h_about(handler: Any) -> None:
                 break
     except Exception:
         notice = None
+    if notice is None:
+        # Wheel/pipx install: the repo-relative NOTICE doesn't exist, but the
+        # file ships in the package's dist-info (pyproject license-files).
+        try:
+            dist = _md.distribution("lanex")
+            for f in (dist.files or []):
+                if f.name == "NOTICE":
+                    notice = f.locate().read_text(encoding="utf-8", errors="replace")
+                    break
+        except Exception:
+            notice = None
 
     handler._send_json({
         "name": "LanEx",
@@ -1167,7 +1178,12 @@ def h_tools_install(handler: Any) -> None:
         _respond(handler, "missing tool key", 400)
         return
     try:
-        result = installer.install_tool(key)
+        # Async: a tool install can take minutes (source builds, slow mirrors) —
+        # far past the frontend's request timeout, which used to fire a scary
+        # "request timed out" popup over a perfectly healthy install. The route
+        # returns {status:"started"} immediately; progress streams over SSE and
+        # the final outcome arrives as an `installer_result` event.
+        result = installer.install_tool_async(key)
         _respond(handler, result)
     except Exception as ex:
         _log.exception("install_tool failed")

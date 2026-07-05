@@ -215,6 +215,25 @@ def open_in_tool(tool: str, file_path: str | Path, *,
                              "(version-matched) launch with X11/WSLg forwarding."}
     except Exception:
         pass
+    # GL viewers need Mesa's DRI drivers on the host. A fresh minimal WSL/Ubuntu
+    # ships without libgl1-mesa-dri — then there is NO renderer (llvmpipe itself
+    # is one of those drivers) and the tool hangs or opens a blank window with
+    # no error. Detect it, auto-install through the usual escalation, and only
+    # fail (honestly, with the exact commands) when we genuinely can't.
+    if sys.platform.startswith("linux") and tool in ("gds3d", "klayout"):
+        try:
+            from . import installer, platform_env
+            if platform_env.mesa_dri_present() is False:
+                gres = installer.ensure_gl_runtime()
+                if not gres.get("ok"):
+                    return {"ok": False, "need": "gl-runtime",
+                            "error": f"{spec['label']} can't render: the Mesa OpenGL drivers are "
+                                     "missing on this system (fresh WSL/minimal installs ship "
+                                     "without them) and they couldn't be installed automatically. "
+                                     + (gres.get("error") or gres.get("manual")
+                                        or installer.gl_runtime_guidance())}
+        except Exception:
+            pass
     tech = _pdk_tech_files(pdk, pdk_root)
     if tool == "gds3d":
         # GDS3D can't render without a process/tech file. Find one for the PDK; if

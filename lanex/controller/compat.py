@@ -30,12 +30,27 @@ def is_available() -> bool:
     return _LIBRELANE_VERSION != "unknown"
 
 
+def _vtuple(s: str):
+    """Lenient numeric (major, minor, patch) from a version string, or None."""
+    import re
+    m = re.match(r"\s*(\d+)\.(\d+)(?:\.(\d+))?", s or "")
+    if not m:
+        return None
+    return tuple(int(g or 0) for g in m.groups())
+
+
 def _version_in_range(v: str) -> bool:
     try:
         from packaging.version import Version
         return Version(KNOWN_GOOD_MIN) <= Version(v) < Version(KNOWN_GOOD_MAX_EXCL)
     except Exception:
-        return False
+        # `packaging` is normally present via librelane's own deps, but never
+        # let its absence turn a perfectly-validated version into a scary
+        # "unvalidated" banner — fall back to a plain numeric compare.
+        got, lo, hi = _vtuple(v), _vtuple(KNOWN_GOOD_MIN), _vtuple(KNOWN_GOOD_MAX_EXCL)
+        if got is None or lo is None or hi is None:
+            return False
+        return lo <= got < hi
 
 
 @functools.lru_cache(maxsize=1)

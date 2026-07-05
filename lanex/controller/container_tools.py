@@ -93,13 +93,19 @@ def display_available() -> Dict[str, Any]:
 
 def _x11_flags() -> List[str]:
     """Container flags to forward the host display, cross-platform best-effort."""
+    from . import platform_env
+
     flags: List[str] = []
     # The container has no GPU passthrough (we never pass --gpus), so a hardware
     # GLX context can't be created — that's the `qglx_findConfig: Failed to find
     # matching FBConfig` spam and the OpenROAD/KLayout viewport/chart glitches.
     # Force Mesa's software renderer so the GUI (layout view, timing charts, the
     # hierarchy browser) renders reliably over X forwarding / WSLg / VNC.
-    flags += ["-e", "LIBGL_ALWAYS_SOFTWARE=1", "-e", "GALLIUM_DRIVER=llvmpipe"]
+    # Escape hatch (same as the native launch path): LIBRELANE_GUI_WSL_HW_GL=1 /
+    # LANEX_HW_GL=1 skips the forcing for setups that DO have in-container GL
+    # (e.g. a user who runs the engine with GPU passthrough themselves).
+    if not platform_env.hw_gl_requested():
+        flags += ["-e", "LIBGL_ALWAYS_SOFTWARE=1", "-e", "GALLIUM_DRIVER=llvmpipe"]
     disp = os.environ.get("DISPLAY")
     if sys.platform.startswith("linux"):
         if disp:

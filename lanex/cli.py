@@ -81,7 +81,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stderr.write(f"could not bind {args.host}:{args.port} ({ex})\n")
         return 2
 
-    url = f"http://{args.host}:{port}/"
+    # IPv6 literals need brackets in a URL (http://[::1]:8765/).
+    host_disp = f"[{args.host}]" if ":" in args.host else args.host
+    url = f"http://{host_disp}:{port}/"
     # The browser opens on the landing home screen; the printed URL stays the
     # cockpit root. The landing page honours the user's "skip this screen"
     # choice client-side and forwards to "/" instantly when set.
@@ -162,6 +164,17 @@ def _pull_image_cli() -> int:
         sys.stderr.write(f"pull failed: {ex}\n")
         return 1
     if rc == 0:
+        # Record the immutable digest of what we just validated against (cheap
+        # upstream-independence insurance; see installer.record_image_digest).
+        try:
+            from .controller import installer
+
+            digest = installer.record_image_digest(
+                engine, image, sg_wrap=bool(resolved.get("sg_wrap")))
+            if digest:
+                sys.stdout.write(f"Image digest recorded: {digest}\n")
+        except Exception:  # pragma: no cover - best-effort record only
+            pass
         sys.stdout.write(
             "\nImage pulled. Container run mode is ready — run `lanex` and keep the "
             "Container engine selected.\n"
@@ -176,10 +189,40 @@ def _lazy_open(url: str, no_browser: bool) -> None:
         return
     import webbrowser
 
+    opened = False
     try:
-        webbrowser.open(url, new=2)
-    except Exception as ex:  # pragma: no cover
-        sys.stderr.write(f"could not launch browser: {ex}\n")
+        opened = webbrowser.open(url, new=2)
+    except Exception:  # pragma: no cover
+        opened = False
+    if opened:
+        return
+    # A fresh WSL distro usually has NO Linux browser, so webbrowser.open finds
+    # nothing and fails silently — hand the URL to Windows instead (wslview from
+    # wslu, else explorer.exe / powershell via the interop bridge), which opens
+    # the user's default Windows browser.
+    try:
+        from .controller import platform_env
+
+        if platform_env.is_wsl():
+            import shutil
+            import subprocess
+
+            candidates = [
+                ["wslview", url],
+                ["explorer.exe", url],
+                ["powershell.exe", "-NoProfile", "-Command", f"Start-Process '{url}'"],
+            ]
+            for argv in candidates:
+                if shutil.which(argv[0]):
+                    try:
+                        subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL)
+                        return
+                    except Exception:
+                        continue
+    except Exception:  # pragma: no cover - defensive
+        pass
+    sys.stderr.write(f"could not open a browser automatically — visit {url}\n")
 
 
 if __name__ == "__main__":  # pragma: no cover

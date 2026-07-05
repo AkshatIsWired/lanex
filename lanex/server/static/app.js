@@ -266,6 +266,11 @@ function handle(ev) {
     renderRuntimeline();
   } else if (ev.type === "manual_started" || ev.type === "manual_line" || ev.type === "manual_done") {
     import("./modules/manual.js").then((m) => m.onManualEvent(ev));
+  } else if (ev.type === "installer_result") {
+    // Final outcome of an async tool install (the POST returned "started"
+    // immediately; this event carries the real result). tools.js toasts it,
+    // logs the guidance, chains the engine→image pull, and re-probes the tab.
+    import("./modules/tools.js").then((m) => m.onInstallerResult && m.onInstallerResult(ev));
   } else if (ev.type === "installer_line" || ev.type === "installer_started" || ev.type === "installer_done" || ev.type === "installer_error" || ev.type === "installer_info") {
     if (ev.line) {
       renderLogs.append({ type: "installer_line", payload: { message: ev.line } });

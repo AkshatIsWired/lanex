@@ -77,6 +77,26 @@ def is_wsl() -> bool:
     return False
 
 
+def hw_gl_requested() -> bool:
+    """User explicitly wants hardware GL (skip every software-GL forcing).
+
+    ``LIBRELANE_GUI_WSL_HW_GL=1`` is the historical name (round 27b, native
+    path); ``LANEX_HW_GL=1`` is the product-named alias. Either disables the
+    llvmpipe forcing on BOTH the native and the container launch paths, for
+    machines whose GPU/GL stack is healthy and fast.
+    """
+    return bool(os.environ.get("LIBRELANE_GUI_WSL_HW_GL") or os.environ.get("LANEX_HW_GL"))
+
+
+def software_gl_forced() -> bool:
+    """User explicitly wants software GL everywhere (``LANEX_SOFTWARE_GL=1``).
+
+    The symmetric override to :func:`hw_gl_requested` — useful off-WSL too when
+    a native GPU stack is broken (stale driver after suspend, remote X, VNC).
+    """
+    return bool(os.environ.get("LANEX_SOFTWARE_GL"))
+
+
 def wsl_gl_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """Return *base* augmented with env that forces Mesa software GL (llvmpipe).
 
@@ -89,18 +109,82 @@ def wsl_gl_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     flaky vGPU, so it works regardless of the WSLg transport state. A layout/3D
     viewer does not need the GPU, so this is the reliable default on WSL.
 
-    No-op off WSL (native HW GL is kept), and skippable with
-    ``LIBRELANE_GUI_WSL_HW_GL=1`` for boxes whose hardware GL is healthy. Pure
-    env; adds no dependency and changes nothing on macOS/Linux/Windows-native.
+    No-op off WSL (native HW GL is kept) unless ``LANEX_SOFTWARE_GL=1`` forces it
+    everywhere; skippable with ``LIBRELANE_GUI_WSL_HW_GL=1`` / ``LANEX_HW_GL=1``
+    for boxes whose hardware GL is healthy. Pure env; adds no dependency and
+    changes nothing on macOS/Windows-native.
     """
     env: Dict[str, str] = dict(base) if base else {}
-    if not is_wsl() or os.environ.get("LIBRELANE_GUI_WSL_HW_GL"):
+    if hw_gl_requested():
+        return env
+    if not (is_wsl() or software_gl_forced()):
         return env
     env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
     env.setdefault("GALLIUM_DRIVER", "llvmpipe")
     # Qt (OpenROAD GUI) falls back cleanly when its GLX probe can't use the vGPU.
     env.setdefault("QT_XCB_GL_INTEGRATION", "none")
     return env
+
+
+# Multi-arch DRI driver locations (Debian/Ubuntu multiarch, Fedora/RHEL lib64,
+# plain /usr/lib layouts). Mesa's software rasterizer (swrast/llvmpipe) and the
+# WSLg d3d12 driver both live here when libgl1-mesa-dri (or distro equivalent)
+# is installed.
+_DRI_DIRS = (
+    "/usr/lib/x86_64-linux-gnu/dri",
+    "/usr/lib/aarch64-linux-gnu/dri",
+    "/usr/lib/i386-linux-gnu/dri",
+    "/usr/lib64/dri",
+    "/usr/lib/dri",
+    "/usr/local/lib/dri",
+)
+
+
+def mesa_dri_present() -> Optional[bool]:
+    """Best-effort: are Mesa's DRI drivers (incl. llvmpipe/swrast) installed?
+
+    A fresh minimal WSL/Ubuntu ships **without** ``libgl1-mesa-dri``. Then no GL
+    renderer exists at all: a native GL viewer (GDS3D, KLayout) hangs or crashes
+    with a blank window, and forcing ``LIBGL_ALWAYS_SOFTWARE=1`` cannot help
+    because llvmpipe itself IS one of these missing drivers. Returns ``True``
+    when a driver is found, ``False`` when we can positively tell they're absent,
+    ``None`` when we can't tell (non-Linux, or a non-FHS layout like Nix/conda
+    where the drivers live elsewhere) — callers must never block on ``None``.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    search: list = list(_DRI_DIRS)
+    extra = os.environ.get("LIBGL_DRIVERS_PATH", "")
+    search.extend(p for p in extra.split(os.pathsep) if p)
+    saw_dir = False
+    for d in search:
+        try:
+            if not os.path.isdir(d):
+                continue
+            saw_dir = True
+            if any(name.endswith("_dri.so") for name in os.listdir(d)):
+                return True
+        except OSError:
+            continue
+    if saw_dir:
+        # A DRI dir exists but holds no driver — positively missing.
+        return False
+    # No DRI dir anywhere. On a dpkg system that means the package is absent
+    # (installing libgl1-mesa-dri always creates the multiarch dir); elsewhere
+    # (Nix, conda, exotic prefixes) we genuinely can't tell.
+    if shutil.which("dpkg-query"):
+        try:
+            import subprocess
+            out = subprocess.run(
+                ["dpkg-query", "-W", "-f", "${Status}", "libgl1-mesa-dri"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if out.returncode == 0 and "installed" in (out.stdout or ""):
+                return True
+            return False
+        except Exception:
+            return None
+    return None
 
 
 def wsl_gl_remediation() -> str:

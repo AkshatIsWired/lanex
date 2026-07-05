@@ -34,6 +34,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -46,6 +47,66 @@ from typing import Any, Dict, List, Optional, Tuple
 from .events import bus
 
 _active_installs: Dict[str, subprocess.Popen] = {}
+
+# Jobs the user cancelled. Consulted by every strategy/retry loop so a cancel
+# stops the WHOLE job, not just the currently-running subprocess — the old bug
+# was that killing one strategy's process made the loop move on and start the
+# NEXT strategy's multi-GB download. Cleared when a fresh job claims the key.
+_cancelled: set = set()
+_cancelled_lock = threading.Lock()
+
+
+def _mark_cancelled(key: str) -> None:
+    with _cancelled_lock:
+        _cancelled.add(key)
+
+
+def _clear_cancelled(key: str) -> None:
+    with _cancelled_lock:
+        _cancelled.discard(key)
+
+
+def _is_cancelled(key: str) -> bool:
+    with _cancelled_lock:
+        return key in _cancelled
+
+
+def _kill_proc_tree(proc: subprocess.Popen, grace: float = 2.0) -> None:
+    """Terminate *proc* AND its descendants (POSIX: the whole process group).
+
+    ``proc.terminate()`` alone kills only the direct child; install strategies
+    run ``sh -c`` scripts whose grandchildren (``ciel fetch``, ``pip``, ``curl``)
+    would survive as orphans and keep downloading — the "I cancelled and it kept
+    going" bug. Requires the process to have been spawned with
+    ``start_new_session=True`` (POSIX) for the group kill to be precise; falls
+    back to a plain terminate/kill everywhere else. Never raises.
+    """
+    def _signal_group(sig: int) -> bool:
+        if os.name != "posix":
+            return False
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+            return True
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+
+    try:
+        if not _signal_group(signal.SIGTERM):
+            proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=grace)
+    except Exception:
+        try:
+            if not _signal_group(signal.SIGKILL):
+                proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=grace)
+        except Exception:
+            pass
 
 # In-progress download/install guard, keyed by job id (tool key, ``pdk:<v>``,
 # or ``container:image``). Prevents a second concurrent download of the SAME
@@ -62,7 +123,9 @@ def _begin_job(key: str) -> bool:
         if key in _in_progress:
             return False
         _in_progress.add(key)
-        return True
+    # A fresh job must not inherit a stale cancel from a previous attempt.
+    _clear_cancelled(key)
+    return True
 
 
 def _end_job(key: str) -> None:
@@ -92,6 +155,44 @@ def _check_cmd(name: str) -> bool:
     # the GUI should offer the native Linux install instead of falsely verifying.
     from . import platform_env
     return platform_env.usable_which(name) is not None
+
+
+def _py_module_available(mod: str) -> bool:
+    """True when *mod* is importable in THIS interpreter.
+
+    A pipx/venv install of LanEx has ``pip``, ``ciel`` and ``librelane``
+    importable in its own environment while their console scripts are NOT on the
+    system ``$PATH`` (pipx only exposes the ``lanex`` entry point). A PATH-only
+    probe would wrongly report them missing and route installs down doomed
+    strategies — module probing keeps every one-click path working under pipx.
+    """
+    try:
+        import importlib.util
+        return importlib.util.find_spec(mod) is not None
+    except Exception:
+        return False
+
+
+def _ciel_argv() -> Optional[List[str]]:
+    """Argv prefix that invokes ciel: the CLI if on PATH, else ``python -m ciel``.
+
+    Returns ``None`` when ciel is neither on PATH nor importable."""
+    if _check_cmd("ciel"):
+        return ["ciel"]
+    if _py_module_available("ciel"):
+        return [sys.executable or "python3", "-m", "ciel"]
+    return None
+
+
+def _ciel_shell_cmd() -> Optional[str]:
+    """Shell-safe command string that invokes ciel (for generated sh scripts)."""
+    import shlex
+
+    if _check_cmd("ciel"):
+        return "ciel"
+    if _py_module_available("ciel"):
+        return f"{shlex.quote(sys.executable or 'python3')} -m ciel"
+    return None
 
 
 def _can_sudo() -> bool:
@@ -173,6 +274,46 @@ def ciel_home() -> str:
         return os.path.expanduser("~/.ciel")
 
 
+def repair_ciel_store(family: Optional[str] = None, *, pdk_root: Optional[str] = None) -> Dict[str, Any]:
+    """Recover a ciel PDK store wedged by an interrupted download.
+
+    An aborted ``ciel fetch`` (network timeout mid-extract) can leave a version
+    directory a later fetch can't overwrite, surfacing as
+    ``[Errno 13] Permission denied`` on ``~/.ciel/…``. This re-opens write
+    permission across the store (owner-scoped ``chmod u+w`` — no root needed for a
+    user-owned ``~/.ciel``) and, when *family* is given, removes just that
+    family's cached versions so the next install re-downloads them cleanly; other
+    installed PDKs are untouched. ``family=None`` only restores write bits and
+    deletes nothing. Best-effort; never raises.
+    """
+    root = pdk_root or os.environ.get("PDK_ROOT") or ciel_home()
+    store = os.path.join(root, "ciel")
+    out: Dict[str, Any] = {"ok": True, "store": store, "removed": []}
+    if not os.path.isdir(store):
+        out["note"] = "no ciel store found — nothing to repair"
+        return out
+    try:
+        # Re-open write perms on everything we own, so a subsequent removal (ours
+        # or ciel's) can't be blocked by a directory written without a write bit.
+        for base, dirs, files in os.walk(store):
+            for name in dirs + files:
+                p = os.path.join(base, name)
+                if os.path.islink(p):
+                    continue
+                try:
+                    os.chmod(p, os.lstat(p).st_mode | 0o200)
+                except OSError:
+                    pass
+        if family:
+            versions = os.path.join(store, _pdk_family(family), "versions")
+            if os.path.isdir(versions):
+                shutil.rmtree(versions, ignore_errors=True)
+                out["removed"].append(versions)
+        return out
+    except Exception as ex:  # pragma: no cover - defensive
+        return {"ok": False, "reason": f"{type(ex).__name__}: {ex}", "store": store}
+
+
 def _check_python_capable(pkg: str) -> bool:
     """Check if pip can install *pkg* by testing importability."""
     try:
@@ -212,7 +353,9 @@ def detect_environment() -> Dict[str, Any]:
         "arch": machine,
         "python": sys.executable,
         "python_version": sys.version,
-        "pip": _check_cmd("pip"),
+        # Module-aware: inside a pipx/venv install the console scripts are off
+        # the system PATH, but `python -m pip` works — count that as pip.
+        "pip": _check_cmd("pip") or _check_cmd("pip3") or _py_module_available("pip"),
         "pip3": _check_cmd("pip3"),
         "conda": _check_cmd("conda") or _check_cmd("mamba"),
         "apt": _check_cmd("apt-get") if is_linux else False,
@@ -227,7 +370,8 @@ def detect_environment() -> Dict[str, Any]:
         "wget": _check_cmd("wget"),
         "git": _check_cmd("git"),
         "wsl": is_win and _check_cmd("wsl"),
-        "ciel": _check_cmd("ciel"),
+        # Module-aware for the same pipx reason as pip above.
+        "ciel": _check_cmd("ciel") or _py_module_available("ciel"),
     }
 
 
@@ -498,11 +642,12 @@ def _get_pdk_version(family: str) -> Optional[str]:
     pinned = _pinned_pdk_version(family)
     if pinned:
         return pinned
-    if not _check_cmd("ciel"):
+    ciel_argv = _ciel_argv()
+    if ciel_argv is None:
         return None
     try:
         proc = subprocess.run(
-            ["ciel", "ls-remote", "--pdk-family", family],
+            ciel_argv + ["ls-remote", "--pdk-family", family],
             capture_output=True,
             text=True,
             timeout=30,
@@ -547,7 +692,8 @@ def _ciel_enable_cmd(pdk_root: str, pdk: str, libraries: Optional[List[str]] = N
     return _ciel_cmd("enable", pdk_root, pdk, libraries)
 
 
-def _ciel_provision_script(pdk_root: str, pdk: str, libraries: Optional[List[str]], *, prefix: str = "") -> str:
+def _ciel_provision_script(pdk_root: str, pdk: str, libraries: Optional[List[str]], *,
+                           prefix: str = "", ciel_cmd: str = "ciel") -> str:
     """POSIX-sh that fetches+enables the version LibreLane pins, then enables it.
 
     The pinned hash is resolved on the host (no network) and baked into the
@@ -555,6 +701,10 @@ def _ciel_provision_script(pdk_root: str, pdk: str, libraries: Optional[List[str
     the pinned hash is unavailable do we fall back to resolving the newest
     version inside the script (``ciel ls-remote`` is newest-first on a non-TTY
     stdout) — that branch also covers strategies that must install ciel first.
+
+    *ciel_cmd* is how the script invokes ciel — ``"ciel"`` when the CLI is on
+    PATH, or ``"<python> -m ciel"`` for venv/pipx installs where the module is
+    importable but the console script isn't exposed.
     """
     family = _pdk_family(pdk)
     lib_args = "".join(f" -l {lib}" for lib in (libraries or []))
@@ -564,38 +714,64 @@ def _ciel_provision_script(pdk_root: str, pdk: str, libraries: Optional[List[str
         ver_assign = f'PDK_VERSION="{pinned}"; '
     else:
         ver_assign = (
-            f'PDK_VERSION="$(ciel ls-remote --pdk-family {family} | head -n1)"; '
+            f'PDK_VERSION="$({ciel_cmd} ls-remote --pdk-family {family} | head -n1)"; '
             f'if [ -z "$PDK_VERSION" ]; then echo "ERROR: could not resolve a {family} version '
             f'(no network or ciel not reachable)"; exit 3; fi; '
         )
+    # A fetch cut off mid-download (a slow/flaky link on a multi-GB PDK) leaves a
+    # half-extracted version directory. ciel's own retry then fails with
+    # ``[Errno 13] Permission denied`` on it and EVERY retry repeats the same
+    # error — the root cause of the "PDK install permanently stuck" reports. So
+    # before each retry we clear ONLY the interrupted version dir: surgical (never
+    # touches other installed PDKs) and owner-scoped (no sudo — the user owns
+    # their ciel store; ``chmod -R u+w`` re-opens any directory ciel wrote without
+    # a write bit, which is exactly what a bare ``rm`` would otherwise choke on).
+    # This also self-heals a store already wedged by a previous interrupted run.
+    ver_dir = f'"{pdk_root}/ciel/{family}/versions/$PDK_VERSION"'
     return (
         f"{pre}"
         f"{ver_assign}"
         f'echo "Installing {family} version $PDK_VERSION"; '
         f"for i in 1 2 3 4 5; do "
-        f'ciel fetch --pdk-root "{pdk_root}" --pdk-family {family} "$PDK_VERSION"{lib_args} && break; '
-        f"echo 'ciel fetch failed, retrying in 2s...'; sleep 2; done && "
-        f'ciel enable --pdk-root "{pdk_root}" --pdk-family {family} "$PDK_VERSION"{lib_args}'
+        f'{ciel_cmd} fetch --pdk-root "{pdk_root}" --pdk-family {family} "$PDK_VERSION"{lib_args} && break; '
+        f"echo 'ciel fetch failed; clearing the interrupted partial download and retrying in 2s...'; "
+        f"chmod -R u+w {ver_dir} 2>/dev/null || true; rm -rf {ver_dir} 2>/dev/null || true; "
+        f"sleep 2; done && "
+        f'{ciel_cmd} enable --pdk-root "{pdk_root}" --pdk-family {family} "$PDK_VERSION"{lib_args}'
     )
 
 
 @_pdk_strategy(["ciel"], "ciel fetch+enable", priority=5)
 def _pdk_strategy_ciel_direct(env: Dict[str, Any], pdk: str, libraries: Optional[List[str]] = None) -> Optional[List[str]]:
     pdk_root = os.environ.get("PDK_ROOT") or ciel_home()
-    return ["sh", "-c", _ciel_provision_script(pdk_root, pdk, libraries)]
+    ciel_cmd = _ciel_shell_cmd()
+    if ciel_cmd is None:
+        return None
+    return ["sh", "-c", _ciel_provision_script(pdk_root, pdk, libraries, ciel_cmd=ciel_cmd)]
 
 
 @_pdk_strategy(["pip"], "pip → ciel fetch+enable", priority=10)
 def _pdk_strategy_ciel(env: Dict[str, Any], pdk: str, libraries: Optional[List[str]] = None) -> Optional[List[str]]:
-    if _check_cmd("ciel"):
+    if _ciel_shell_cmd() is not None:
         return None  # Direct strategy already tried and failed; do not retry.
+    import shlex
+
     pdk_root = os.environ.get("PDK_ROOT") or ciel_home()
-    return ["sh", "-c", _ciel_provision_script(pdk_root, pdk, libraries, prefix="python3 -m pip install ciel")]
+    # pip installs ciel into THIS interpreter's environment, so invoke both pip
+    # and (afterwards) ciel through sys.executable — `python3` could be a
+    # different (PEP 668-guarded system) interpreter, and the fresh ciel console
+    # script may land in a bin dir that's not on PATH.
+    py = shlex.quote(sys.executable or "python3")
+    return ["sh", "-c", _ciel_provision_script(
+        pdk_root, pdk, libraries,
+        prefix=f"{py} -m pip install ciel",
+        ciel_cmd=f"{py} -m ciel",
+    )]
 
 
 @_pdk_strategy(["conda"], "conda → ciel fetch+enable", priority=20)
 def _pdk_strategy_conda_ciel(env: Dict[str, Any], pdk: str, libraries: Optional[List[str]] = None) -> Optional[List[str]]:
-    if _check_cmd("ciel"):
+    if _ciel_shell_cmd() is not None:
         return None
     pdk_root = os.environ.get("PDK_ROOT") or ciel_home()
     conda = "mamba" if _check_cmd("mamba") else "conda"
@@ -716,6 +892,13 @@ def _run_argv(argv: List[str], *, label: str, key: str) -> Dict[str, Any]:
         }
         if sys.platform == "win32":
             settings["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        elif os.name == "posix":
+            # Own process group, so cancel/timeout can kill the WHOLE tree —
+            # `sh -c` strategies spawn grandchildren (ciel/pip/curl) that a plain
+            # terminate() would orphan mid-download. (The tty path deliberately
+            # does NOT do this: a new session has no controlling terminal, which
+            # would break sudo's /dev/tty password prompt.)
+            settings["start_new_session"] = True
         proc = subprocess.Popen(argv, **settings)
         _active_installs[key] = proc
         # Watchdog: kill a wedged install after the ceiling so it can't hold the
@@ -726,14 +909,7 @@ def _run_argv(argv: List[str], *, label: str, key: str) -> Dict[str, Any]:
             if proc.poll() is None:
                 timed_out["hit"] = True
                 _emit("installer_line", {"key": key, "line": f"Timed out after {_INSTALL_TIMEOUT_S}s — terminating.", "label": label})
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                _kill_proc_tree(proc, grace=5.0)
 
         wd = threading.Timer(_INSTALL_TIMEOUT_S, _watchdog)
         wd.daemon = True
@@ -778,8 +954,10 @@ def _verify_install(key: str) -> bool:
         "netgen": lambda: _check_cmd("netgen"),
         "verilator": lambda: _check_cmd("verilator"),
         "iverilog": lambda: _check_cmd("iverilog") and _check_cmd("vvp"),
-        "ciel": lambda: _check_cmd("ciel"),
-        "pip": lambda: _check_cmd("pip") or _check_cmd("pip3"),
+        # Module-aware: in a pipx/venv install the console script is off PATH
+        # but `python -m ciel` / `python -m pip` work fine.
+        "ciel": lambda: _check_cmd("ciel") or _py_module_available("ciel"),
+        "pip": lambda: _check_cmd("pip") or _check_cmd("pip3") or _py_module_available("pip"),
         "python": lambda: True,
         "librelane": lambda: _check_cmd("librelane"),
         "docker": lambda: _check_cmd("docker"),
@@ -847,6 +1025,59 @@ def ensure_x11_fixed_fonts() -> Dict[str, Any]:
         out.setdefault("need", "x11-fonts")
         out.setdefault("manual", _GDS3D_FONT_CMD)
     return out
+
+# RUNTIME dependency for every native GL viewer (GDS3D, KLayout, OpenROAD GUI):
+# Mesa's DRI drivers. Fresh minimal WSL/Ubuntu images ship WITHOUT
+# libgl1-mesa-dri, leaving the tool with no renderer at all — the blank
+# `[WARN: COPY MODE]` window class of bugs. Installing this set provides BOTH
+# the software rasterizer (llvmpipe/swrast — what our WSL default uses) and the
+# WSLg d3d12 hardware driver.
+_GL_RUNTIME_PACKAGES = ["libgl1", "libgl1-mesa-dri", "libegl1"]
+_GL_RUNTIME_CMD = "sudo apt-get install -y " + " ".join(_GL_RUNTIME_PACKAGES)
+
+
+def gl_runtime_guidance() -> str:
+    """Per-distro guidance for installing the Mesa GL runtime drivers."""
+    return (
+        "The Mesa OpenGL drivers are missing, so a desktop GL viewer has no way "
+        "to render (blank window / hang). Install them, then retry:\n"
+        "    Debian/Ubuntu/WSL: " + _GL_RUNTIME_CMD + "\n"
+        "    Fedora/RHEL: sudo dnf install -y mesa-dri-drivers mesa-libGL mesa-libEGL\n"
+        "    Arch: sudo pacman -S --needed mesa"
+    )
+
+
+def ensure_gl_runtime() -> Dict[str, Any]:
+    """Make Mesa's DRI GL drivers present, installing them if needed (Linux).
+
+    Called before a native GL tool launch so the user never has to discover the
+    missing-`libgl1-mesa-dri` failure mode by staring at a blank window. Same
+    escalation as every other install (passwordless sudo, else a one-time
+    terminal/pkexec password, streamed over SSE). Returns ``{ok, ...}``; on a
+    non-apt distro or when escalation isn't possible it returns ``ok: False``
+    plus the exact manual commands instead of blocking. No-op when the drivers
+    already look present or when we can't tell (never block on an uncertain
+    probe).
+    """
+    from . import platform_env
+
+    present = platform_env.mesa_dri_present()
+    if present is not False:
+        return {"ok": True, "already": True}
+    if not shutil.which("apt-get"):
+        return {"ok": False, "need": "gl-runtime", "manual": _GL_RUNTIME_CMD,
+                "error": gl_runtime_guidance()}
+    res = _run_argv(["sudo", "apt-get", "install", "-y"] + _GL_RUNTIME_PACKAGES,
+                    label="Mesa GL drivers (libgl1-mesa-dri)", key="gl-runtime")
+    installed = bool(res.get("ok")) and platform_env.mesa_dri_present() is not False
+    out: Dict[str, Any] = dict(res)
+    out["ok"] = installed
+    if not installed:
+        out.setdefault("need", "gl-runtime")
+        out.setdefault("manual", _GL_RUNTIME_CMD)
+        out.setdefault("error", gl_runtime_guidance())
+    return out
+
 
 # Header → the Debian package that provides it, for the dev-dependency check.
 _GDS3D_HEADER_PACKAGES = {
@@ -961,7 +1192,12 @@ def _install_gds3d() -> Dict[str, Any]:
     env = detect_environment()
     header_pkgs = _missing_gds3d_dev_packages()
     font_pkgs = _GDS3D_FONT_PACKAGES if _x11_fixed_fonts_missing() else []
-    apt_pkgs = header_pkgs + font_pkgs
+    # GDS3D is a GL app: without Mesa's DRI drivers (fresh minimal WSL/Ubuntu
+    # ships none) it opens a blank window or hangs — even software rendering
+    # needs them (llvmpipe IS one of those drivers). Install them alongside.
+    from . import platform_env as _penv
+    gl_pkgs = _GL_RUNTIME_PACKAGES if _penv.mesa_dri_present() is False else []
+    apt_pkgs = header_pkgs + font_pkgs + gl_pkgs
     if apt_pkgs:
         if env.get("apt"):
             apt = "apt-fast" if _check_cmd("apt-fast") else "apt-get"
@@ -969,6 +1205,8 @@ def _install_gds3d() -> Dict[str, Any]:
                   "message": "installing GDS3D dependencies: " + " ".join(apt_pkgs)})
             dep_res = _run_argv(["sudo", apt, "install", "-y"] + apt_pkgs,
                                 label="gds3d dependencies (apt)", key="gds3d")
+            if _is_cancelled("gds3d"):
+                return _cancelled_result("gds3d")
             still = _missing_gds3d_dev_packages()
             if still:
                 g = _gds3d_dep_guidance(still)
@@ -1005,6 +1243,8 @@ def _install_gds3d() -> Dict[str, Any]:
         f"echo installed to {q(str(dest))}"
     )
     res = _run_argv(["bash", "-lc", script], label="gds3d (source build)", key="gds3d")
+    if _is_cancelled("gds3d"):
+        return _cancelled_result("gds3d")
     if (res.get("rc") == 0) and (_verify_install("gds3d") or (bindir / "gds3d").exists()):
         _emit("installer_info", {"key": "gds3d",
               "message": f"GDS3D built → {bindir / 'gds3d'}. If 'gds3d' isn't found, add {bindir} to your PATH."})
@@ -1040,6 +1280,41 @@ def install_tool(key: str) -> Dict[str, Any]:
         _end_job(key)
 
 
+def install_tool_async(key: str) -> Dict[str, Any]:
+    """Non-blocking :func:`install_tool` — the HTTP route's entry point.
+
+    A tool install can legitimately take minutes (a GDS3D source build, apt on a
+    slow mirror), far past any sane HTTP timeout — the synchronous route was why
+    the UI showed "request timed out" while the build was actually fine. This
+    returns ``{status: "started"}`` immediately and runs the install in a
+    daemon thread; progress streams over the existing SSE ``installer_*`` events
+    and the final outcome is emitted as an ``installer_result`` event carrying
+    the same dict :func:`install_tool` returns.
+    """
+    if is_in_progress(key):
+        return {"ok": True, "in_progress": True, "status": "already-running",
+                "reason": f"{key} is already being installed — watch the logs (no second download started)."}
+
+    def _worker() -> None:
+        try:
+            result = install_tool(key)
+        except Exception as ex:  # never die silently in a daemon thread
+            result = {"ok": False, "reason": f"{type(ex).__name__}: {ex}"}
+        payload = {"key": key}
+        payload.update(result if isinstance(result, dict) else {"ok": bool(result)})
+        _emit("installer_result", payload)
+
+    t = threading.Thread(target=_worker, daemon=True, name=f"installer_tool[{key}]")
+    t.start()
+    return {"ok": True, "status": "started", "key": key}
+
+
+def _cancelled_result(key: str) -> Dict[str, Any]:
+    """The uniform outcome for a user-cancelled install job."""
+    _emit("installer_error", {"key": key, "message": "Installation cancelled by user."})
+    return {"ok": False, "cancelled": True, "reason": "Installation cancelled by user."}
+
+
 def _install_tool_impl(key: str) -> Dict[str, Any]:
     _emit("installer_info", {"key": key, "message": f"starting {key} install…"})
     env = detect_environment()
@@ -1048,6 +1323,10 @@ def _install_tool_impl(key: str) -> Dict[str, Any]:
     max_passes = 3
     for _ in range(max_passes):
         for strategy in _strategies_for(env):
+            # A cancel must stop the whole job here — never start the next
+            # strategy's download after the user said stop.
+            if _is_cancelled(key):
+                return _cancelled_result(key)
             label = strategy["label"]
             if label in seen_labels:
                 continue
@@ -1065,6 +1344,8 @@ def _install_tool_impl(key: str) -> Dict[str, Any]:
                 tried.append(f"{label}: skipped")
                 continue
             result = _run_argv(argv, label=label, key=key)
+            if _is_cancelled(key):
+                return _cancelled_result(key)
             # Treat "the thing is now present" as success even when the command
             # returned non-zero. Common case: `apt install docker.io` installs
             # the binary fine but its postinst can't start the daemon in a
@@ -1156,6 +1437,11 @@ def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, An
         tried: List[str] = []
         all_output: List[str] = []
         for strategy in _pdk_strategies_for(env):
+            # Cancel stops the whole job — never fall through to the next
+            # strategy's fresh multi-GB download after the user said stop.
+            if _is_cancelled(key):
+                _cancelled_result(key)
+                return
             prepare = strategy["prepare"]
             try:
                 argv = prepare(env, pdk, libraries)
@@ -1167,11 +1453,8 @@ def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, An
                 continue
             result = _run_argv(argv, label=strategy["label"], key=f"pdk:{pdk}")
             all_output.extend(result.get("output") or [])
-            if result.get("rc") == -15 or result.get("rc") == -9:
-                _emit("installer_error", {
-                    "key": f"pdk:{pdk}",
-                    "message": f"Installation cancelled by user.",
-                })
+            if _is_cancelled(key) or result.get("rc") in (-15, -9):
+                _cancelled_result(key)
                 return
             if result.get("ok"):
                 _emit("installer_info", {
@@ -1253,7 +1536,9 @@ def pull_image() -> Dict[str, Any]:
     def _worker():
         try:
             res = _run_argv(pull_cmd, label=f"{engine} pull", key=key)
-            if not res.get("ok"):
+            if res.get("ok"):
+                record_image_digest(engine, image, sg_wrap=bool(resolved.get("sg_wrap")))
+            else:
                 from . import platform_env
                 rem = platform_env.network_remediation("\n".join(res.get("output") or []))
                 if rem:
@@ -1264,6 +1549,39 @@ def pull_image() -> Dict[str, Any]:
     t = threading.Thread(target=_worker, daemon=True, name="installer_pull_image")
     t.start()
     return {"ok": True, "status": "started", "image": image, "engine": engine}
+
+
+def record_image_digest(engine: str, image: str, *, sg_wrap: bool = False) -> Optional[str]:
+    """Record the pulled image's immutable digest in ``$LANEX_HOME/image.lock``.
+
+    Cheap upstream-independence insurance: if the registry ever re-tags or
+    rebuilds ``:X.Y.Z``, the lock file proves which exact bytes this install
+    validated against (``docker pull ghcr.io/...@sha256:...`` restores them).
+    Purely a record — image resolution is unchanged (it stays LibreLane's own
+    version-tag scheme). Best-effort; never raises; returns the digest or None.
+    """
+    try:
+        argv = [engine, "image", "inspect", image, "--format", "{{index .RepoDigests 0}}"]
+        if sg_wrap:
+            from . import tools as _tools
+            argv = _tools.sg_wrap_argv(argv)
+        rc, out, _err = _shell_exec_quiet(argv, timeout=15.0)
+        digest = (out or "").strip().splitlines()[0].strip() if rc == 0 and (out or "").strip() else ""
+        from . import platform_env
+        home = platform_env.home()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "image.lock").write_text(
+            json.dumps({
+                "image": image,
+                "digest": digest,
+                "engine": engine,
+                "recorded": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return digest or None
+    except Exception:
+        return None
 
 
 def enable_docker_group() -> Dict[str, Any]:
@@ -1304,7 +1622,15 @@ def enable_docker_group() -> Dict[str, Any]:
 
 
 def cancel_install(key: str) -> Dict[str, Any]:
-    """Cancel a running install/download.
+    """Cancel a running install/download — the whole JOB, not just one process.
+
+    Two defects this closes (the "I cancelled the PDK install and it kept
+    downloading" bug): (1) killing only the current strategy's subprocess let
+    the strategy loop move on and start the NEXT strategy's fresh download —
+    the ``_cancelled`` flag now stops the loop at its next checkpoint; and
+    (2) ``terminate()`` killed only the direct ``sh`` child while its ciel/pip
+    grandchildren kept downloading as orphans — ``_kill_proc_tree`` now kills
+    the whole process group.
 
     We deliberately **keep** the download cache (ciel's tarball store, docker's
     layer cache, apt/pip caches) so the next attempt RESUMES instead of starting
@@ -1312,18 +1638,20 @@ def cancel_install(key: str) -> Dict[str, Any]:
     To actually reclaim the space, use Delete/Remove (uninstall), which removes
     the installed artefact itself.
     """
+    running = is_in_progress(key)
+    if running:
+        _mark_cancelled(key)
     proc = _active_installs.get(key)
-    if not proc:
-        _end_job(key)
-        return {"ok": False, "reason": "not running"}
-
-    proc.terminate()
-    try:
-        proc.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    _end_job(key)
-    return {"ok": True, "status": "cancelled"}
+    if proc is not None:
+        _kill_proc_tree(proc)
+        return {"ok": True, "status": "cancelled"}
+    if running:
+        # Between strategies (or before the first subprocess spawned): the flag
+        # alone stops the loop at its next checkpoint. The owning worker thread
+        # releases the job key itself.
+        return {"ok": True, "status": "cancelling"}
+    _end_job(key)  # stale key hygiene (no worker owns it)
+    return {"ok": False, "reason": "not running"}
 
 
 def _uninstall_gds3d() -> Dict[str, Any]:
@@ -1462,7 +1790,8 @@ def uninstall_pdk(pdk: str) -> Dict[str, Any]:
             }
         return {"ok": True, "method": "noop", "key": pdk, "note": "no installed versions found"}
 
-    if not _check_cmd("ciel"):
+    ciel_argv = _ciel_argv()
+    if ciel_argv is None:
         return {
             "ok": False,
             "tried": ["ciel not found"],
@@ -1475,7 +1804,7 @@ def uninstall_pdk(pdk: str) -> Dict[str, Any]:
     tried: List[str] = []
     for version, home in versions:
         result = _run_argv(
-            ["ciel", "rm", "--pdk-root", home, "--pdk-family", family, version, "--yes"],
+            ciel_argv + ["rm", "--pdk-root", home, "--pdk-family", family, version, "--yes"],
             label="ciel rm",
             key=f"pdk:{pdk}",
         )
@@ -1530,9 +1859,9 @@ def install_popen(argv: List[str]) -> Dict[str, Any]:
 def install_ciel(pdk: str, *, until_version: Optional[str] = None) -> Dict[str, Any]:
     """Install a PDK via ciel (legacy, synchronous path). Falls back to multi-layer."""
     pdk_root = os.environ.get("PDK_ROOT") or ciel_home()
-    if not _check_cmd("ciel"):
+    if _ciel_shell_cmd() is None:
         ciel_result = install_tool("ciel")
         if not ciel_result.get("ok"):
             return install_pdk(pdk)
-    script = _ciel_provision_script(pdk_root, pdk, None)
+    script = _ciel_provision_script(pdk_root, pdk, None, ciel_cmd=_ciel_shell_cmd() or "ciel")
     return _run_argv(["sh", "-c", script], label="ciel fetch+enable", key=f"pdk:{pdk}")

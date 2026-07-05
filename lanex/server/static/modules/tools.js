@@ -414,35 +414,20 @@ async function installEngine(key) {
   toast.show("Installing " + key + " — runs a system package command; watch Live Logs.", "info");
   try {
     const result = await api.installTool(key);
+    if (result.status === "started") {
+      // Async: the outcome arrives as an SSE `installer_result` event, which
+      // toasts the result and chains the image pull ("in one go") on success.
+      return;
+    }
+    handleInstallOutcome(key, result);
     if (result.ok) {
-      toast.show(key + " installed via " + (result.label || result.method || "?"), "success");
-    } else if (result.in_progress) {
-      toast.show(key + " is already installing — watch Live Logs (no second download).", "info");
-    } else {
-      toast.show(key + " install didn't complete — " + (result.guidance || result.reason || ""), "error");
-      renderLogs.append({ payload: { message: "✗ " + key + " install: " + (result.reason || "") + " " + (result.guidance || ""), level: "ERROR" } });
+      await chainImagePull();
+      return;
     }
   } catch (ex) {
     toast.show(key + " install error: " + ex.message, "error");
   }
-  // "In one go": once the engine is usable, chain straight into the image pull so
-  // a single click sets up the whole toolchain. If the engine isn't reachable yet
-  // (e.g. Docker needs a group/login), the runtime card shows the next fix instead.
-  try {
-    const info = await api.tools();
-    state.tools = info;
-    paint(info);
-    const c = info.container || {};
-    if (c.ready && !c.image_present && !_pull.active) {
-      const res = await api.containerPull();
-      if (res.ok) {
-        startPullUI();
-        renderLogs.append({ payload: { message: "→ engine ready — pulling container image " + (res.image || "") } });
-      }
-    }
-  } catch (_e) {
-    renderTools();   // re-probe → card reflects binary + daemon state
-  }
+  renderTools();   // re-probe → card reflects binary + daemon state
 }
 
 async function removeEngine(key) {
@@ -734,35 +719,87 @@ function wireUninstallButtons() {
   });
 }
 
+// Shared outcome handler for a finished install. Called with the synchronous
+// result for legacy/immediate shapes, and from the SSE `installer_result`
+// event for async installs (the POST returns {status:"started"} right away).
+function handleInstallOutcome(key, result) {
+  if (result.in_progress) {
+    toast.show(`${key} is already installing — no second download started.`, "info");
+    return;
+  }
+  if (result.cancelled) {
+    toast.show(`${key} install cancelled.`, "info");
+    renderLogs.append({ payload: { message: "• " + key + " install cancelled by user" } });
+    return;
+  }
+  if (result.ok) {
+    toast.show(`${key} installed successfully`, "success");
+    renderLogs.append({
+      payload: {
+        message:
+          "✓ " + key + " installed via " + (result.label || result.method || "?") +
+          (result.argv ? " (" + result.argv.join(" ") + ")" : "") +
+          (result.rc !== undefined ? " rc=" + result.rc : ""),
+      },
+    });
+  } else if (result.needs_sudo) {
+    // sudo can't prompt from the GUI — show the exact command to run.
+    toast.show(`${key} needs sudo — run the shown command in a terminal.`, "warn");
+    renderLogs.append({ payload: { message: result.guidance || ("Run with sudo: " + key), level: "WARN" } });
+  } else {
+    // Surface the actionable guidance (e.g. "use conda/Nix/container"), not
+    // just "failed".
+    const why = result.guidance || result.reason || "no install method on this system";
+    toast.show(`Can't auto-install ${key}: ${why}`, "error");
+    const tried = (result.tried || []).join("; ");
+    renderLogs.append({
+      payload: { message: "✗ " + key + " install failed — " + why + (tried ? " [" + tried + "]" : ""), level: "ERROR" },
+    });
+  }
+}
+
+// Final outcome of an async install, delivered over SSE (dispatched from
+// app.js). Toast + log the result, chain the engine→image pull for a one-click
+// toolchain, then re-probe so the tab reflects the new state.
+export async function onInstallerResult(ev) {
+  const key = ev.key || "tool";
+  handleInstallOutcome(key, ev);
+  if (ev.ok && (key === "docker" || key === "podman")) {
+    await chainImagePull();
+    return; // chainImagePull repaints
+  }
+  renderTools();
+}
+
+// Once a container engine is usable, chain straight into the image pull so a
+// single click sets up the whole toolchain. If the engine isn't reachable yet
+// (e.g. Docker needs a group/login), the runtime card shows the next fix.
+async function chainImagePull() {
+  try {
+    const info = await api.tools();
+    state.tools = info;
+    paint(info);
+    const c = info.container || {};
+    if (c.ready && !c.image_present && !_pull.active) {
+      const res = await api.containerPull();
+      if (res.ok) {
+        startPullUI();
+        renderLogs.append({ payload: { message: "→ engine ready — pulling container image " + (res.image || "") } });
+      }
+    }
+  } catch (_e) {
+    renderTools();   // re-probe → card reflects binary + daemon state
+  }
+}
+
 async function installByKey(key) {
   try {
     const result = await api.installTool(key);
-    if (result.ok) {
-      toast.show(`${key} installed successfully`, "success");
-      renderLogs.append({
-        payload: {
-          message:
-            "✓ " + key + " installed via " + (result.label || result.method || "?") +
-            (result.argv ? " (" + result.argv.join(" ") + ")" : "") +
-            " rc=" + result.rc,
-        },
-      });
-    } else if (result.in_progress) {
-      toast.show(`${key} is already installing — no second download started.`, "info");
-    } else if (result.needs_sudo) {
-      // sudo can't prompt from the GUI — show the exact command to run.
-      toast.show(`${key} needs sudo — run the shown command in a terminal.`, "warn");
-      renderLogs.append({ payload: { message: result.guidance || ("Run with sudo: " + key), level: "WARN" } });
-    } else {
-      // Surface the actionable guidance (e.g. "use conda/Nix/container"), not
-      // just "failed".
-      const why = result.guidance || result.reason || "no install method on this system";
-      toast.show(`Can't auto-install ${key}: ${why}`, "error");
-      const tried = (result.tried || []).join("; ");
-      renderLogs.append({
-        payload: { message: "✗ " + key + " install failed — " + why + (tried ? " [" + tried + "]" : ""), level: "ERROR" },
-      });
+    if (result.status === "started") {
+      toast.show(`${key} install started — watch Install logs; this tab updates when it finishes.`, "info");
+      return;
     }
+    handleInstallOutcome(key, result);
   } catch (ex) {
     const body = ex.body;
     if (body && body.kind === "manual") {

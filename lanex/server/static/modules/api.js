@@ -15,11 +15,12 @@ async function _fetch(path, init) {
     "Content-Type": "application/json",
     "X-Requested-With": "XMLHttpRequest"
   }, init.headers || {});
-  // Per-call AbortController + timeout (init.timeout overrides; init.signal still honoured).
+  // Per-call AbortController + timeout (init.timeout overrides; timeout: 0
+  // disables the abort entirely; init.signal still honoured).
   const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
-  const ms = init.timeout || _FETCH_TIMEOUT_MS;
+  const ms = (init.timeout === 0) ? 0 : (init.timeout || _FETCH_TIMEOUT_MS);
   let timer = null;
-  if (ctrl) timer = setTimeout(() => ctrl.abort(), ms);
+  if (ctrl && ms > 0) timer = setTimeout(() => ctrl.abort(), ms);
   let resp;
   try {
     resp = await fetch(base + path, {

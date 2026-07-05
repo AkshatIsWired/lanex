@@ -16,31 +16,60 @@ license = { text = "Apache-2.0" }
 authors = [
     { name = "AkshatIsWired", email = "akshatalt885@gmail.com" }
 ]
+keywords = [
+    "eda", "asic", "vlsi", "rtl", "gdsii", "librelane", "openlane",
+    "openroad", "yosys", "sky130", "chip-design", "gui",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Web Environment",
     "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
 # The GUI controller uses only the standard library plus what `librelane`
 # already pulls in. `librelane` itself is an *expected peer* (it is the host
 # package the GUI plugs into), declared here so a standalone install is usable.
-# A floor pin (>=3.0.4, the tested baseline) rather than an exact pin so LanEx
-# slots into an existing, possibly newer, librelane without forcing a downgrade.
+# Floor = the tested baseline. Ceiling = the validated range's upper bound
+# (mirrors controller/compat.py KNOWN_GOOD_MAX_EXCL): LanEx reaches past
+# librelane's public CLI (FlowProgressBar patch, config introspection, the
+# metrics vocabulary), so an untested future minor could break a FRESH install
+# on arrival. Users plugging into an existing, newer librelane env still get an
+# explicit compatibility banner from the startup probe rather than a hard stop.
+# Release checklist: re-validate against each new librelane minor, then bump
+# BOTH this ceiling and compat.KNOWN_GOOD_MAX_EXCL together.
 # The container image tag is derived from the *installed* version at run time
 # (see controller/container_run.image_ref), so the toolchain always matches.
-dependencies = ["librelane>=3.0.4"]
+dependencies = ["librelane>=3.0.4,<3.1"]
+
+[project.urls]
+Homepage = "https://github.com/AkshatIsWired/lanex"
+Repository = "https://github.com/AkshatIsWired/lanex"
+Issues = "https://github.com/AkshatIsWired/lanex/issues"
 
 [project.scripts]
 lanex = "lanex.cli:main"
 
+[tool.setuptools]
+# Ship LICENSE + NOTICE inside the wheel's dist-info so an installed (pipx/
+# PyPI) copy carries its own attribution — /api/about reads NOTICE from there
+# when the repo checkout isn't present.
+license-files = ["LICENSE", "NOTICE"]
+
 [tool.setuptools.packages.find]
 include = ["lanex", "lanex.*"]
+# Tests (incl. the golden-run corpus) stay in the repo; shipping them would
+# fatten every install for no runtime benefit.
+exclude = ["lanex.tests", "lanex.tests.*"]
 
 [tool.setuptools.package-data]
 lanex = [
