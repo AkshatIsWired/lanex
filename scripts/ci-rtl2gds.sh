@@ -35,5 +35,5 @@ echo "sky130 version: $VER"
 $CIEL fetch  --pdk-root "$PDK_ROOT" --pdk-family sky130 "$VER" -l sky130_fd_sc_hd
 $CIEL enable --pdk-root "$PDK_ROOT" --pdk-family sky130 "$VER" -l sky130_fd_sc_hd
 
-# The actual RTL->GDS run (scaffold counter -> FlowRunner local -> GDSII).
+# The actual RTL->GDS run (bundled SPM example -> FlowRunner local -> GDSII).
 python3 scripts/ci_rtl2gds_run.py
