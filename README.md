@@ -1,7 +1,10 @@
 <!-- LanEx — README -->
 <div align="center">
 
-<img src="lanex/server/static/vendor/lanex-logo.png" alt="LanEx" width="400">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="lanex/server/static/vendor/lanex-logo-dark.png">
+  <img src="lanex/server/static/vendor/lanex-logo-light.png" alt="LanEx" width="400">
+</picture>
 
 ### Take Verilog all the way to silicon — without living in a terminal.
 
@@ -41,6 +44,14 @@ A browser cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane
 > decks and your shuttle/MPW program's checks. LanEx is provided **AS&nbsp;IS,
 > without warranty of any kind** (Apache-2.0 — see [LICENSE](LICENSE) and
 > [NOTICE](NOTICE)).
+>
+> **LanEx is under active development and testing.** It passes tool output through
+> unmodified, but a display or data-parsing error cannot be fully excluded. **If you
+> intend to manufacture, run the LibreLane flow directly — independent of LanEx —
+> and base your decision on its native output** as well. Treat LanEx as a
+> convenience layer over the tools, not a replacement for their authoritative
+> results; you assume all risk of relying on it. This safeguards the irreversible
+> step of committing silicon and does not diminish LanEx's day-to-day accuracy.
 
 ---
 

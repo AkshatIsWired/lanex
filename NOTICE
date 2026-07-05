@@ -32,6 +32,15 @@ LanEx is NOT a sign-off tool. It does not replace foundry sign-off. Before
 committing a design to fabrication, you must verify all results against your
 foundry's official sign-off decks and your shuttle/MPW program's checks.
 
+LanEx is under active development and testing. Although it passes tool output
+through unmodified, the possibility of a display or data-parsing error cannot be
+fully excluded. If you intend to manufacture, run the LibreLane flow directly,
+independent of LanEx, and base your decision on its native output. Treat LanEx as
+a convenience layer over the tools, not a replacement for their authoritative
+results; you assume all risk of relying on it. This is a safeguard for the
+irreversible step of committing silicon and does not diminish LanEx's day-to-day
+accuracy.
+
 THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
 FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
