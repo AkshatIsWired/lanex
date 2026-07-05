@@ -140,7 +140,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "changed files:"; echo "$changed"
-          if printf '%s\n' "$changed" | grep -Eq '\.py$|^pyproject\.toml$|^scripts/ci-rtl2gds\.sh$|^\.github/workflows/ci\.yml$'; then
+          if printf '%s\n' "$changed" | grep -Eq '\.py$|^pyproject\.toml$|^scripts/ci|^\.github/workflows/ci\.yml$'; then
             echo "architectural change -> run"; echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "UI/UX/docs only -> skip"; echo "run=false" >> "$GITHUB_OUTPUT"
