@@ -35,11 +35,11 @@
       <!-- Mode switch -->
       <span class="inst-label switch-label">Mode</span>
       <div class="seg mode-seg" role="group" aria-label="Run mode">
-        <button class="seg-btn mode-btn mode-btn-active" data-mode="auto" data-tip="Run every step end-to-end and produce a GDS.">
+        <button class="seg-btn mode-btn mode-btn-active" data-mode="auto" aria-label="Full Auto" data-tip="Run every step end-to-end and produce a GDS.">
           <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg></span>
           <span>Full Auto</span>
         </button>
-        <button class="seg-btn mode-btn" data-mode="semi" data-tip="Pick the next step yourself; inspect each result before continuing.">
+        <button class="seg-btn mode-btn" data-mode="semi" aria-label="Step-by-step" data-tip="Pick the next step yourself; inspect each result before continuing.">
           <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5v14M16 5l-6 7 6 7"/></svg></span>
           <span>Step-by-step</span>
         </button>
@@ -47,11 +47,11 @@
       <!-- Run engine switch -->
       <span class="inst-label switch-label">Engine</span>
       <div class="seg engine-seg" role="group" aria-label="Run engine">
-        <button class="seg-btn engine-btn engine-btn-active" data-runmode="container" data-tip="Recommended: run inside LibreLane's container image. Every EDA tool included — host only needs Docker or Podman.">
+        <button class="seg-btn engine-btn engine-btn-active" data-runmode="container" aria-label="Container engine" data-tip="Recommended: run inside LibreLane's container image. Every EDA tool included — host only needs Docker or Podman.">
           <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2l9 5v10l-9 5-9-5V7zM3 7l9 5 9-5M12 12v10"/></svg></span>
           <span>Container</span>
         </button>
-        <button class="seg-btn engine-btn" data-runmode="local" data-tip="Run against native EDA tools already installed on this machine.">
+        <button class="seg-btn engine-btn" data-runmode="local" aria-label="Local tools engine" data-tip="Run against native EDA tools already installed on this machine.">
           <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3M5 5h14v14H5zM9 9h6v6H9z"/></svg></span>
           <span>Local tools</span>
         </button>
@@ -154,6 +154,20 @@
   <main class="work">
     <!-- SETUP -->
     <section class="section section-active" id="sec-setup">
+      <div class="section-jump-stack">
+        <nav class="section-jump" id="setup-jump" aria-label="Jump to section">
+          <span class="muted">Jump to:</span>
+          <button class="chip chip-clickable" data-jump="setup-design">Design</button>
+          <button class="chip chip-clickable" data-jump="setup-pdk">PDK &amp; SCL</button>
+          <button class="chip chip-clickable" data-jump="setup-preflight">Preflight</button>
+          <button class="chip chip-clickable" data-jump="setup-run">Run</button>
+          <button class="chip chip-clickable" data-jump="cfg-card">Constraints</button>
+          <button class="chip chip-clickable" data-jump="setup-help">Help</button>
+        </nav>
+        <!-- Constraint milestones — populated by config.js from the same groups
+             as the in-card nav; revealed when the Constraints card opens. -->
+        <nav class="section-jump section-jump-sub" id="setup-jump-config" aria-label="Constraint sections" hidden></nav>
+      </div>
       <!-- Welcome / Quickstart hero -->
       <div class="hero" id="hero">
         <div class="hero-inner">
@@ -187,7 +201,7 @@
           </ol>
 
           <!-- Design picker -->
-          <div class="picker">
+          <div class="picker" id="setup-design">
             <h2><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Your design folder</h2>
             <p class="hint">Pick the directory that contains your Verilog sources. Click <strong>Browse…</strong> to navigate without copy-pasting the path. LibreLane will scan for <code>.v</code>, <code>.sv</code>, <code>.vh</code>, <code>.mem</code>, <code>.sdc</code> and a <code>config.yaml</code> (if you have one).</p>
             <div class="picker-row">
@@ -221,7 +235,7 @@
           </div>
 
           <!-- PDK picker -->
-          <div class="picker">
+          <div class="picker" id="setup-pdk">
             <h2><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3M5 5h14v14H5zM9 9h6v6H9z"/></svg>Process + standard-cell library</h2>
             <p class="hint">Pick the silicon recipe your design will be hardened against. Most beginners use <strong>sky130A</strong> with <code>sky130_fd_sc_hd</code>.</p>
             <div class="picker-row">
@@ -232,7 +246,7 @@
           </div>
 
           <!-- Preflight readiness checklist -->
-          <div class="picker">
+          <div class="picker" id="setup-preflight">
             <h2><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>Ready to run? <button class="btn btn-ghost btn-sm" id="btn-preflight"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Re-check</button></h2>
             <p class="hint">A quick check that everything a run needs is in place — design, config, PDK and the EDA tools — so you don't hit a surprise half-way through.</p>
             <div id="preflight" class="preflight"></div>
@@ -243,7 +257,7 @@
             <label for="run-name-input">Run name <span class="hint">optional — labels this run's folder under <code>runs/</code></span></label>
             <input type="text" id="run-name-input" placeholder="e.g. spm-area-sweep-1" autocomplete="off"/>
           </div>
-          <div class="cta">
+          <div class="cta" id="setup-run">
             <button class="btn btn-cta" id="btn-run">
               <span class="big"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Run flow</span>
               <span class="hint">Compiles your HDL → GDSII. Takes 5–60 minutes.</span>
@@ -289,7 +303,7 @@
         </div>
       </details>
 
-      <details class="card">
+      <details class="card" id="setup-help">
         <summary><strong>Quick help</strong><span class="hint">What is RTL? GDSII? PDK?</span></summary>
         <div class="card-body help-prose">
           <p><strong>RTL</strong> — your design in Verilog. The behavioral description of what the chip should compute.</p>

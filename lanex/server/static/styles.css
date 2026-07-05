@@ -345,10 +345,19 @@ code {
      controls — Run/Stop, pills, icon buttons); the center status
      flexes. A fixed-width right column squeezed those items below their text
      width, clipping "Run"/the design + PDK pills. */
-  grid-template-columns: auto 1fr auto;
+  /* The centre track is minmax(min-content, 1fr): at full width it's the 1fr
+     that centres the switches; when space runs out it stops at min-content
+     instead of COLLAPSING to 0 (a 0-width centre let the non-shrinking switches
+     spill over the right group = the overzoom "buttons on top of each other"
+     bug). Once the three tracks together exceed the bar, overflow-x scrolls the
+     whole row so every control stays side by side and reachable. */
+  grid-template-columns: auto minmax(min-content, 1fr) auto;
   align-items: center;
   gap: var(--s-3);
   padding: 0 var(--s-4);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;         /* the row scrolls when zoomed in; keep it chromeless */
   background: var(--surface); /* fallback if color-mix unsupported */
   background:
     linear-gradient(180deg, rgba(77, 163, 255, 0.05) 0%, transparent 60%),
@@ -359,11 +368,14 @@ code {
   z-index: var(--z-chrome);
   position: relative;
 }
+.topbar::-webkit-scrollbar { display: none; }
 /* Underline reads as the process-layer stack: poly → met1..met5, hairline. */
 .topbar::after {
   content: "";
   position: absolute;
-  left: 0; right: 0; bottom: -1px;
+  /* bottom:0 (not -1px): overflow-y:hidden on .topbar would clip anything below
+     the box, so the layer-stack underline sits on the bottom edge instead. */
+  left: 0; right: 0; bottom: 0;
   height: 2px;
   background: linear-gradient(90deg,
     var(--poly) 0%, var(--poly) 14%,
@@ -418,12 +430,46 @@ body.theme-light .splash-logo {
   color: var(--text-muted);
 }
 
-/* Topbar center — the two segmented switches. flex-wrap so a narrow window
-   never CLIPS the engine switch (B17); overflow is no longer hidden. */
+/* Topbar center — the two segmented switches. NO min-width:0 and NO wrap: the
+   switches keep their intrinsic width so the grid's minmax(min-content,1fr)
+   centre track can't collapse under them (that collapse, plus the old wrap onto
+   a phantom second row, was the overzoom overlap). When the row can't fit, the
+   whole .topbar scrolls instead. */
 .topbar-center { display: flex; justify-content: center; align-items: center;
-  gap: var(--s-2); min-width: 0; flex-wrap: wrap; }
+  gap: var(--s-2); flex-wrap: nowrap; }
 .switch-label { align-self: center; }
 .engine-seg { margin-left: var(--s-1); }
+
+/* Zoom/narrow-width compression. The bar has a fixed height, so the Mode +
+   Engine segs must COMPRESS when space runs out — wrapping put the Engine seg
+   on a phantom second row rendered over/under the Mode seg (browser-zoom bug).
+   Stage 1: drop the "Mode"/"Engine" labels. Stage 2: icon-only seg buttons
+   (the text lives on in each button's data-tip tooltip + aria-label). */
+@media (max-width: 1180px) {
+  .topbar-center .switch-label { display: none; }
+}
+@media (max-width: 1020px) {
+  .topbar-center { flex-wrap: nowrap; }
+  .mode-seg .seg-btn > span:not(.mode-ico),
+  .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }
+  .mode-seg .seg-btn, .engine-seg .seg-btn { padding-left: var(--s-2); padding-right: var(--s-2); }
+}
+
+/* Higher browser-zoom (narrower effective width): progressively shed low-value
+   topbar chrome so the row scrolls LATER and less. These are pure width savers —
+   no-overlap is already guaranteed by the non-collapsing centre track + the
+   .topbar horizontal scroll above; these just keep the common case tidy. */
+@media (max-width: 1120px) {
+  .topbar { gap: var(--s-2); }
+  .brand-sub { display: none; }              /* keep the wordmark, drop the tagline */
+}
+@media (max-width: 980px) {
+  .brand-text { display: none; }             /* logo mark alone */
+}
+@media (max-width: 860px) {
+  #design-pill .text, #pdk-pill .text { display: none; }   /* dot keeps the status colour */
+  #design-pill, #pdk-pill { padding: 5px 8px; max-width: none; }
+}
 
 /* Mode / engine switches use the shared .seg component (B16). The active +
    disabled markers keep the class names runmode.js/setup.js already toggle. */
@@ -693,7 +739,12 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 }
 .ls-layer {
   display: grid;
-  grid-template-columns: var(--lsw, 60%) 1fr;
+  /* The bar takes --lsw (up to 90% for met5) but is capped by minmax(0,…) so it
+     SHRINKS to leave room for the tag; the tag column is `auto` (its natural
+     width, always reserved). Previously the bar was a hard --lsw and the tag a
+     1fr remainder — at 90% that remainder was too narrow, so "met5" spilled past
+     the card's right border. */
+  grid-template-columns: minmax(0, var(--lsw, 60%)) auto;
   align-items: center;
   gap: var(--s-3);
   height: 26px;

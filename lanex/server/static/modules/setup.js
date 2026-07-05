@@ -8,6 +8,7 @@ import { setupFolderBrowser, loadFilesFor } from "./fs.js";
 import { toast } from "./toast.js";
 import { renderPreflight } from "./preflight.js";
 import { icon } from "./icons.js";
+import { wireJump } from "./jumpnav.js";
 
 const RECENT_KEY = "ll.recentDesigns";
 
@@ -68,6 +69,20 @@ export function renderRecentDesigns() {
 export function setupSetup() {
   setupFolderBrowser();
   renderRecentDesigns();
+  // Section-jump bar — the Setup tab is long (design → PDK → preflight → run →
+  // constraints), so give it the same "Jump to section" chip bar the other tabs
+  // have. Constraints is a <details>; wireJump opens it before scrolling.
+  wireJump(document.getElementById("sec-setup"));
+  // Second tier: the Constraints category milestones (Tech PDK, Synthesis, …)
+  // are populated by config.js and revealed only while the Constraints card is
+  // open — progressive disclosure so the jump bar stays clean until you need them.
+  const cfgCard = document.getElementById("cfg-card");
+  const cfgSub = document.getElementById("setup-jump-config");
+  if (cfgCard && cfgSub) {
+    const syncSub = () => { cfgSub.hidden = !(cfgCard.open && cfgSub.childElementCount > 0); };
+    cfgCard.addEventListener("toggle", syncSub);
+    syncSub();
+  }
   document.getElementById("btn-set-design")?.addEventListener("click", onLoadDesign);
   document.getElementById("design-dir-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") onLoadDesign();

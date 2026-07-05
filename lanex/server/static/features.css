@@ -195,6 +195,23 @@
   flex-wrap: wrap; gap: var(--s-2); padding: var(--s-2) 0; margin-bottom: var(--s-2);
   background: var(--bg); border-bottom: 1px solid var(--border); }
 
+/* Setup's two-tier jump: the STACK owns the stickiness so the top sections and
+   the constraint milestones pin together as one block (inner navs go static).
+   Scoped to Setup — every other tab's single .section-jump is untouched. */
+.section-jump-stack { position: sticky; top: 0; z-index: var(--z-sticky);
+  background: var(--bg); margin-bottom: var(--s-2); }
+.section-jump-stack .section-jump { position: static; margin-bottom: 0; }
+/* Second tier = constraint category milestones. A single elegant scrollable
+   line (never a chunky wrapped block), muted until hovered, revealed only when
+   the Constraints card is open. */
+.section-jump-sub { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+  padding-top: 2px; }
+.section-jump-sub::-webkit-scrollbar { display: none; }
+.section-jump-sub .chip-clickable { flex: 0 0 auto; white-space: nowrap;
+  font-size: var(--t-xs); padding: 3px 9px; color: var(--text-muted); }
+.section-jump-sub .chip-clickable:hover { color: var(--accent); border-color: var(--accent); }
+.section-jump-sub[hidden] { display: none; }
+
 /* ---- Compare -------------------------------------------------------------- */
 .cmp-checks { display: flex; flex-wrap: wrap; gap: var(--s-3); margin: var(--s-2) 0; }
 .cmp-summary-card { font-weight: 600; }
@@ -512,7 +529,23 @@
 .run-scope-toggle input { accent-color: var(--accent); cursor: pointer; }
 
 /* ---- global topbar Run/Stop button -------------------------------------- */
-.topbar-run { padding: 6px 14px; font-weight: 600; white-space: nowrap; }
+/* It reuses .btn-cta for the accent gradient, but .btn-cta is the big, column-
+   stacked Setup "Run flow" button (label + hint, t-lg font). In the fixed-height
+   topbar that made it oversized, so these overrides — scoped to .topbar-run
+   ONLY, never .btn-cta — put it back to a normal single-row toolbar button that
+   lines up with the icon buttons/pills beside it. */
+.topbar-run {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--s-2);
+  height: 34px;              /* match .iconbtn so the toolbar row is even */
+  padding: 0 14px;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.10) inset, 0 4px 14px var(--accent-glow);
+}
+.topbar-run svg { flex: 0 0 auto; }
 .topbar-run.is-stop {
   background: var(--fail); border-color: var(--fail); color: var(--on-accent);
 }

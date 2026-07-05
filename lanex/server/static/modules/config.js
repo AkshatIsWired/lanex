@@ -346,6 +346,10 @@ function paint() {
   if (!nav) return;
   nav.innerHTML = "";
   root.innerHTML = "";
+  // Mirror the same category milestones into the Setup jump bar's second tier
+  // (revealed when the Constraints card is open — see setup.js).
+  const subnav = document.getElementById("setup-jump-config");
+  if (subnav) subnav.innerHTML = "";
 
   const buckets = new Map(STAGE_GROUPS.map((g) => [g.id, []]));
   const sorted = [...state.variables].sort((a, b) => a.name.localeCompare(b.name));
@@ -377,6 +381,16 @@ function paint() {
     navChip.textContent = def.name + " (" + vs.length + ")";
     navChip.addEventListener("click", () => jumpToSection(stageId, navChip));
     nav.appendChild(navChip);
+    if (subnav) {
+      const c2 = document.createElement("button");
+      c2.className = "chip chip-clickable";
+      c2.type = "button";
+      c2.textContent = def.name + " (" + vs.length + ")";
+      // From the top-of-page milestone rail: make sure the Constraints card is
+      // open, then scroll to that category.
+      c2.addEventListener("click", () => openConstraintsAndJump(stageId));
+      subnav.appendChild(c2);
+    }
     const grid = document.createElement("div");
     grid.className = "vars-form";
     for (const v of vs) grid.appendChild(buildRow(v));
@@ -389,7 +403,20 @@ function jumpToSection(id, navChip) {
   if (!target) return;
   target.scrollIntoView({ behavior: "smooth", block: "start" });
   document.querySelectorAll(".config-nav .nav-chip").forEach((c) => c.classList.remove("nav-active"));
-  navChip.classList.add("nav-active");
+  if (navChip) navChip.classList.add("nav-active");
+}
+
+// Open the (collapsed-by-default) Constraints card, then jump to a category.
+// Used by the Setup jump bar's milestone rail, which lives above the card.
+function openConstraintsAndJump(id) {
+  const card = document.getElementById("cfg-card");
+  if (card && !card.open) {
+    card.open = true;
+    // Let the <details> lay out before scrolling to the now-visible section.
+    requestAnimationFrame(() => jumpToSection(id, null));
+  } else {
+    jumpToSection(id, null);
+  }
 }
 
 function buildRow(v) {
