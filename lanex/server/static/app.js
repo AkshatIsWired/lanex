@@ -113,8 +113,9 @@ async function boot() {
     document.getElementById("palette-btn")?.addEventListener("click", openPalette);
     document.getElementById("theme-btn")?.addEventListener("click", toggleTheme);
     document.getElementById("density-btn")?.addEventListener("click", toggleDensity);
-    // Help-dialog quick links (static markup; wired once).
+    // Help-dialog quick links + the topbar Legal button (static markup; wired once).
     document.getElementById("help-license")?.addEventListener("click", showAbout);
+    document.getElementById("legal-btn")?.addEventListener("click", showAbout);
     // The "Parse" button is wired once by setupViolations() (smart kind
     // detection). The old inline handler here double-bound it — removed.
 

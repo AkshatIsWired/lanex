@@ -392,16 +392,12 @@ code {
 .brand-logo {
   height: 36px;
   width: auto;
-  filter: brightness(1.05);
-  /* Logo SVG is white-fill; on light theme flip colors for contrast. */
 }
-body.theme-light .brand-logo,
-body.theme-light .splash-logo {
-  filter: invert(1) brightness(0.45) contrast(1.5);
-}
-body.theme-light .splash-logo {
-  filter: invert(1) brightness(0.5) contrast(1.5) drop-shadow(0 0 14px color-mix(in srgb, var(--accent) 15%, transparent));
-}
+/* Theme-adaptive brand art: white-ink logos on the dark theme (default),
+   dark-ink logos on the light theme. Dedicated per-theme assets — no invert(). */
+.logo--light { display: none; }
+body.theme-light .logo--dark { display: none; }
+body.theme-light .logo--light { display: inline-block; }
 .brand-text { display: flex; flex-direction: column; line-height: 1.05; }
 .brand-name {
   font-family: var(--display);

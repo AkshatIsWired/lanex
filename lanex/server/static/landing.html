@@ -135,14 +135,15 @@
 <!-- ==================== top navigation ==================== -->
 <header class="topnav" id="topnav">
   <a class="brand" href="#top" aria-label="LanEx — back to top">
-    <img src="/static/vendor/lanex-mark.png" alt="" width="26" height="26" />
+    <img class="logo--dark" src="/static/vendor/lanex-mark-dark.png" alt="" width="26" height="26" />
+    <img class="logo--light" src="/static/vendor/lanex-mark-light.png" alt="" width="26" height="26" />
     <span>LANEX</span>
   </a>
   <nav class="topnav-links" aria-label="Page sections">
     <a href="#cockpit">Cockpit</a>
     <a href="#install">Install</a>
-    <a href="https://github.com/AkshatIsWired/lanex/blob/main/LICENSE" target="_blank" rel="noopener" title="Apache-2.0 license">License</a>
-    <a href="https://github.com/AkshatIsWired/lanex/blob/main/NOTICE" target="_blank" rel="noopener" title="Notices &amp; disclaimer — LanEx is a viewer, not a sign-off tool">Disclaimer</a>
+    <button type="button" class="nav-legal" data-legal title="Apache-2.0 license &amp; notices">License</button>
+    <button type="button" class="nav-legal" data-legal title="Notices &amp; disclaimer — LanEx is a viewer, not a sign-off tool">Disclaimer</button>
   </nav>
   <div class="topnav-actions">
     <a class="theme-btn" href="https://github.com/AkshatIsWired/lanex" target="_blank" rel="noopener" aria-label="LanEx on GitHub" title="LanEx on GitHub">
@@ -285,7 +286,8 @@ lanex</code></pre><button class="copy-btn" data-copy="pip install .&#10;lanex" a
   <footer class="foot">
     <div class="foot-inner">
       <div class="foot-brand">
-        <img src="/static/vendor/lanex-mark.png" alt="" width="20" height="20" />
+        <img class="logo--dark" src="/static/vendor/lanex-mark-dark.png" alt="" width="20" height="20" />
+        <img class="logo--light" src="/static/vendor/lanex-mark-light.png" alt="" width="20" height="20" />
         <span>LanEx</span>
       </div>
       <p>Independent open-source project, Apache-2.0. Built on
@@ -295,7 +297,7 @@ lanex</code></pre><button class="copy-btn" data-copy="pip install .&#10;lanex" a
          happen at a foundry, after the GDSII handoff.</p>
       <nav aria-label="Footer">
         <a href="https://github.com/AkshatIsWired/lanex" rel="noopener">GitHub</a>
-        <a href="https://github.com/AkshatIsWired/lanex/blob/main/NOTICE" rel="noopener">Notices</a>
+        <button type="button" class="foot-legal" data-legal>Notices</button>
         <a href="/" data-launch>Open cockpit</a>
       </nav>
     </div>
@@ -304,6 +306,16 @@ lanex</code></pre><button class="copy-btn" data-copy="pip install .&#10;lanex" a
 
 <!-- launch transition veil -->
 <div class="veil" id="veil" aria-hidden="true"></div>
+
+<!-- in-page license & notices modal (kept on-page — no external navigation) -->
+<div id="legal-modal" class="legal-modal" hidden aria-hidden="true">
+  <div class="legal-card glass" role="dialog" aria-modal="true" aria-label="License and notices">
+    <button type="button" class="legal-close" id="legal-close" aria-label="Close">✕</button>
+    <h2 class="legal-title">License &amp; notices</h2>
+    <p class="legal-lede">LanEx is provided under the <b>Apache License&nbsp;2.0</b>, AS&nbsp;IS, without warranty. It is a viewer, not a sign-off tool.</p>
+    <pre id="legal-notice" class="legal-notice">Loading…</pre>
+  </div>
+</div>
 
 <script src="/static/landing.js" defer></script>
 </body>

@@ -144,6 +144,45 @@
     });
   }
 
+  /* ---------- in-page license & notices modal (no external navigation) ---------- */
+  var legalModal = d.getElementById("legal-modal");
+  var legalNotice = d.getElementById("legal-notice");
+  var legalFallback = "LanEx is provided under the Apache License 2.0, AS IS, without warranty.";
+  var legalLoaded = false;
+  function openLegal(ev) {
+    if (ev) ev.preventDefault();
+    if (!legalModal) return;
+    legalModal.hidden = false;
+    legalModal.setAttribute("aria-hidden", "false");
+    if (legalLoaded) return;
+    legalLoaded = true;
+    fetch("/api/about", { headers: { "X-Requested-With": "XMLHttpRequest" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (legalNotice) legalNotice.textContent = (j && j.notice) ? j.notice : legalFallback;
+      })
+      .catch(function () { if (legalNotice) legalNotice.textContent = legalFallback; });
+  }
+  function closeLegal() {
+    if (!legalModal) return;
+    legalModal.hidden = true;
+    legalModal.setAttribute("aria-hidden", "true");
+  }
+  var legalTriggers = d.querySelectorAll("[data-legal]");
+  for (var lt = 0; lt < legalTriggers.length; lt++) {
+    legalTriggers[lt].addEventListener("click", openLegal);
+  }
+  var legalCloseBtn = d.getElementById("legal-close");
+  if (legalCloseBtn) legalCloseBtn.addEventListener("click", closeLegal);
+  if (legalModal) {
+    legalModal.addEventListener("click", function (ev) {
+      if (ev.target === legalModal) closeLegal();
+    });
+  }
+  d.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && legalModal && !legalModal.hidden) closeLegal();
+  });
+
   /* ================================================================
      The timeline engine
      ================================================================ */
