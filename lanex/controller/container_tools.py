@@ -152,8 +152,14 @@ def _tool_command(tool: str, *, gds: Optional[Path], pdk: Optional[str],
     if tool == "klayout":
         cmd = ["klayout"]
         if pdk and pdk_root:
-            lyp = Path(pdk_root) / pdk / "libs.tech" / "klayout" / "tech" / f"{pdk}.lyp"
-            if lyp:  # passed unconditionally; klayout ignores a missing -l gracefully
+            # Only pass ``-l`` when the layer-properties file actually exists:
+            # KLayout errors ``Unable to open file … (errno=2)`` on a missing one
+            # (it does NOT ignore it), and the file's name/location varies by PDK
+            # (gf180mcu ships gf180mcu.lyp, not gf180mcuC.lyp). find_klayout_lyp
+            # resolves it or returns None → omit the flag and open with defaults.
+            from .desktop import find_klayout_lyp
+            lyp = find_klayout_lyp(Path(pdk_root) / pdk / "libs.tech", pdk)
+            if lyp is not None:
                 cmd += ["-l", str(lyp)]
         if gds:
             cmd += [str(gds)]

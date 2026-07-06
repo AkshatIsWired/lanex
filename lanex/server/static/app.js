@@ -288,6 +288,14 @@ function handle(ev) {
       showPasswordBanner(ev.message);
       toast.show(ev.message, "warn");
     }
+    // A root-owned ciel store blocks the PDK download and can't self-heal. Offer
+    // a one-click fix (escalated `chown` scoped to ~/.ciel) beside the message.
+    if (ev.type === "installer_info" && ev.needs_root && ev.fix) {
+      showActionBanner(ev.message, ev.fix.label || "Fix permissions", () => {
+        clearActionBanner();
+        api.fixPdkPermissions().catch((e) => toast.show(e.message || "fix failed", "err"));
+      });
+    }
     // Surface non-pipeline streamed output (tool/PDK/GDS3D installs) in a
     // closeable right-side drawer, since these can be triggered from any tab.
     if (!isImagePull) {
@@ -513,6 +521,45 @@ function showPasswordBanner(message) {
 
 function clearPasswordBanner() {
   const el = document.getElementById("pw-banner");
+  if (el) el.hidden = true;
+}
+
+// Like the password banner, but with an action button (e.g. "Fix permissions"
+// for a root-owned ciel store). Reuses the .pw-banner chrome; separate element
+// so an installer_error's clearPasswordBanner() doesn't wipe it.
+function showActionBanner(message, actionLabel, onAction) {
+  let el = document.getElementById("action-banner");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "action-banner";
+    el.className = "pw-banner";
+    el.setAttribute("role", "alert");
+    document.body.appendChild(el);
+  }
+  el.innerHTML = "";
+  const ico = document.createElement("span");
+  ico.className = "pw-banner-ico";
+  ico.innerHTML = icon("alert", { size: 16 });
+  const msg = document.createElement("span");
+  msg.textContent = message;
+  const act = document.createElement("button");
+  act.className = "pw-banner-close";
+  act.textContent = actionLabel;
+  act.addEventListener("click", () => { if (onAction) onAction(); });
+  const close = document.createElement("button");
+  close.className = "pw-banner-close";
+  close.setAttribute("aria-label", "Dismiss");
+  close.textContent = "Dismiss";
+  close.addEventListener("click", clearActionBanner);
+  el.appendChild(ico);
+  el.appendChild(msg);
+  el.appendChild(act);
+  el.appendChild(close);
+  el.hidden = false;
+}
+
+function clearActionBanner() {
+  const el = document.getElementById("action-banner");
   if (el) el.hidden = true;
 }
 

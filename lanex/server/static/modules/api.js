@@ -146,6 +146,9 @@ export const api = {
   uninstallPdk: (pdk) =>
     _fetch("/api/pdk/uninstall", { method: "POST", body: JSON.stringify({ pdk }) }),
 
+  fixPdkPermissions: () =>
+    _fetch("/api/pdk/fix-permissions", { method: "POST", body: "{}" }),
+
   copySpm: (designDir) =>
     _fetch("/api/copy-spm", { method: "POST", body: JSON.stringify({ design_dir: designDir }) }),
 

@@ -1374,6 +1374,15 @@ def h_pdk_uninstall(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_pdk_fix_permissions(handler: Any) -> None:
+    """Restore ownership of a root-owned ciel PDK store to the current user."""
+    try:
+        _respond(handler, installer.fix_ciel_permissions())
+    except Exception as ex:
+        _log.exception("fix_ciel_permissions failed")
+        _respond(handler, str(ex), 500)
+
+
 def h_container_pull(handler: Any) -> None:
     """Pre-pull the version-matched LibreLane image for container run mode."""
     try:
@@ -3072,6 +3081,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/tools/install/", h_tools_install),
     ("/api/tools/uninstall/", h_tools_uninstall),
     ("/api/pdk/uninstall", h_pdk_uninstall),
+    ("/api/pdk/fix-permissions", h_pdk_fix_permissions),
     ("/api/copy-spm", h_copy_spm),
 ]
 

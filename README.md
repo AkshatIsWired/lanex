@@ -313,9 +313,36 @@ Tools tab:
 chmod -R u+w ~/.ciel && rm -rf ~/.ciel/ciel/gf180mcu/versions
 ```
 
-Add `sudo` only if that reports *Permission denied* — which means an earlier run
-created the files as root; `sudo rm -rf ~/.ciel/ciel/gf180mcu/versions` then
-clears it. You do **not** need to delete all of `~/.ciel`.
+**If it keeps failing with `Permission denied` no matter what**, an earlier
+command run with `sudo` left part of `~/.ciel` owned by `root` — which the
+automatic (owner-scoped) recovery above cannot fix. LanEx now **detects this and
+offers a one-click "Fix permissions"** button when you start the install; it
+restores ownership to you (scoped to `~/.ciel`, no `rm`). To do it by hand:
+
+```bash
+sudo chown -R "$USER" ~/.ciel
+```
+
+Prefer `chown` over `sudo rm` here — it keeps the already-downloaded PDK data
+instead of forcing a fresh multi-GB download. You do **not** need to delete
+`~/.ciel`.
+</details>
+
+<details>
+<summary><b>GDS3D (3D view) reports "no process/tech file found" for a non-sky130 PDK</b></summary>
+
+GDS3D renders the layer stack from a per-PDK **process/tech file** (`-p`). It
+ships example files for a few PDKs (sky130, sg13g2) but **not gf180mcu** and not
+every PDK. KLayout and Magic (2D) still work — they read the layer properties
+straight from the PDK. For 3D on an unsupported PDK, drop a matching GDS3D tech
+file named after the PDK into:
+
+```
+~/.lanex/tools/GDS3D/techfiles/<pdk>.txt
+```
+
+then reopen the GDS in GDS3D. (2D KLayout/Magic layer colours are resolved from
+the PDK automatically — no extra file needed.)
 </details>
 
 <details>

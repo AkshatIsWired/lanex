@@ -321,6 +321,106 @@ def repair_ciel_store(family: Optional[str] = None, *, pdk_root: Optional[str] =
         return {"ok": False, "reason": f"{type(ex).__name__}: {ex}", "store": store}
 
 
+def _ciel_root(pdk_root: Optional[str] = None) -> str:
+    """The directory that CONTAINS the ``ciel/`` store (``~/.ciel`` by default)."""
+    return pdk_root or os.environ.get("PDK_ROOT") or ciel_home()
+
+
+def _foreign_owned_sample(path: str, limit: int = 3) -> List[str]:
+    """Up to *limit* entries under *path* not owned by the current user.
+
+    Empty on platforms without ``os.getuid`` (Windows) or when everything is
+    ours. This is how we distinguish the round-42 *interrupted-download* wedge
+    (owner-scoped ``chmod``/``rm`` self-heals it) from a store a prior ``sudo``
+    run left owned by root — which owner-scoped healing can NEVER fix, so ciel
+    keeps failing with ``[Errno 13] Permission denied`` on every retry.
+    """
+    if not hasattr(os, "getuid"):
+        return []
+    me = os.getuid()
+    out: List[str] = []
+    try:
+        if os.lstat(path).st_uid != me:
+            out.append(path)
+    except OSError:
+        return out
+    for base, dirs, files in os.walk(path):
+        for name in dirs + files:
+            p = os.path.join(base, name)
+            try:
+                if os.lstat(p).st_uid != me:
+                    out.append(p)
+                    if len(out) >= limit:
+                        return out
+            except OSError:
+                continue
+    return out
+
+
+def ciel_permission_status(pdk_root: Optional[str] = None) -> Dict[str, Any]:
+    """Report whether the ciel PDK store has root-owned files blocking writes.
+
+    Returns ``{"needs_root": bool, ...}``. When True, ``chown_cmd`` is the exact
+    command that fixes it and ``message`` is a plain-language explanation — the
+    caller surfaces both instead of looping into the same ``Permission denied``.
+    """
+    root = _ciel_root(pdk_root)
+    store = os.path.join(root, "ciel")
+    sample = _foreign_owned_sample(store) if os.path.isdir(store) else []
+    if not sample:
+        return {"needs_root": False, "root": root}
+    try:
+        import getpass
+        user = getpass.getuser()
+    except Exception:
+        user = str(os.getuid()) if hasattr(os, "getuid") else "$USER"
+    chown_cmd = f"sudo chown -R {user} {root}"
+    return {
+        "needs_root": True,
+        "root": root,
+        "sample": sample,
+        "chown_cmd": chown_cmd,
+        "message": (
+            f"The PDK store at {root} contains files owned by root — most likely "
+            "from an earlier command run with sudo. ciel can't write there, so the "
+            "download keeps failing with 'Permission denied'. Restore ownership to "
+            f"you with:\n    {chown_cmd}"
+        ),
+    }
+
+
+def fix_ciel_permissions(pdk_root: Optional[str] = None) -> Dict[str, Any]:
+    """Restore ownership of the ciel store to the current user (opt-in, escalated).
+
+    Runs ``sudo chown -R <uid>:<gid> <root>`` scoped to the ciel home only, using
+    the same escalation as tool installs (a terminal /dev/tty prompt, else pkexec).
+    Never runs ``rm`` and never touches anything outside ``~/.ciel``. Async: the
+    outcome streams as ``installer_*`` events (including the password banner).
+    """
+    if not hasattr(os, "getuid"):
+        return {"ok": False, "reason": "not supported on this platform"}
+    root = _ciel_root(pdk_root)
+    if not os.path.isdir(root):
+        return {"ok": True, "note": "no ciel store — nothing to repair"}
+    key = "ciel:perms"
+    if not _begin_job(key):
+        return {"ok": True, "in_progress": True, "status": "already-running"}
+    uid, gid = os.getuid(), os.getgid()
+
+    def _worker() -> None:
+        try:
+            _emit("installer_info", {"key": key, "message": f"Repairing ownership of {root}…"})
+            # Prefixed with sudo so _run_argv routes it through the escalation path
+            # (tty prompt / pkexec); _run_argv emits installer_done/error itself.
+            _run_argv(["sudo", "chown", "-R", f"{uid}:{gid}", root],
+                      label="fix ciel permissions", key=key)
+        finally:
+            _end_job(key)
+
+    threading.Thread(target=_worker, daemon=True, name="ciel_perms").start()
+    return {"ok": True, "status": "started"}
+
+
 def _check_python_capable(pkg: str) -> bool:
     """Check if pip can install *pkg* by testing importability."""
     try:
@@ -1464,6 +1564,22 @@ def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, An
             rem = platform_env.network_remediation()
             if rem:
                 _emit("installer_error", {"key": f"pdk:{pdk}", "message": rem})
+        # A ciel store left root-owned by an earlier sudo run can't be written or
+        # self-healed (our chmod/rm are owner-scoped) — every strategy would just
+        # loop on the same 'Permission denied'. Detect it up front and surface the
+        # one-click fix + exact chown command instead of burning retries.
+        perm = ciel_permission_status()
+        if perm.get("needs_root"):
+            _emit("installer_info", {
+                "key": f"pdk:{pdk}", "needs_root": True, "message": perm["message"],
+                "fix": {"endpoint": "/api/pdk/fix-permissions", "label": "Fix permissions"},
+            })
+            _emit("installer_error", {
+                "key": f"pdk:{pdk}",
+                "message": ("PDK store has root-owned files — install can't write to it. "
+                            "Use 'Fix permissions', or run:  " + perm["chown_cmd"]),
+            })
+            return
         env = detect_environment()
         tried: List[str] = []
         all_output: List[str] = []

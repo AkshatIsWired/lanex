@@ -118,6 +118,36 @@ def gds3d_process_file(pdk: Optional[str]) -> Optional[str]:
     return None
 
 
+def find_klayout_lyp(libs_tech: Path, pdk: str) -> Optional[Path]:
+    """Best KLayout layer-properties (``.lyp``) file for *pdk* under a
+    ``libs.tech`` directory, or None.
+
+    PDKs disagree on how they name/place this file: sky130 and ihp-sg13g2 ship
+    ``klayout/tech/<variant>.lyp`` (``sky130A.lyp``, ``sg13g2.lyp``), but gf180mcu
+    ships a single family-level ``klayout/tech/gf180mcu.lyp`` — so the naive
+    ``<variant>.lyp`` lookup misses on gf180 and a bad path was passed to KLayout
+    (``Unable to open file … gf180mcuC.lyp``). Try, in order: the exact
+    ``<pdk>.lyp``, the family-level ``<family>.lyp``, then any ``.lyp`` directly
+    under ``klayout/tech/`` (which excludes the ``tech/xsect/`` cross-section
+    props — glob is non-recursive), then any under ``klayout/``.
+    """
+    tech = libs_tech / "klayout" / "tech"
+    try:
+        from . import installer
+        family = installer._pdk_family(pdk)
+    except Exception:
+        family = pdk
+    for c in (tech / f"{pdk}.lyp", tech / f"{family}.lyp"):
+        if c.is_file():
+            return c
+    for d in (tech, libs_tech / "klayout"):
+        if d.is_dir():
+            hits = sorted(p for p in d.glob("*.lyp") if p.is_file())
+            if hits:
+                return hits[0]
+    return None
+
+
 def _pdk_tech_files(pdk: Optional[str], pdk_root: Optional[str]) -> Dict[str, Optional[str]]:
     """Locate the PDK tech files desktop viewers need to render layers correctly:
     Magic's ``<pdk>.magicrc`` and KLayout's layer-properties ``<pdk>.lyp``.
@@ -147,8 +177,8 @@ def _pdk_tech_files(pdk: Optional[str], pdk_root: Optional[str]) -> Dict[str, Op
         if out["magicrc"] is None and magicrc.is_file():
             out["magicrc"] = str(magicrc)
             out["root"] = str(root)        # remember the root for PDK_ROOT env
-        lyp = base / "klayout" / "tech" / f"{pdk}.lyp"
-        if out["klayout_lyp"] is None and lyp.is_file():
+        lyp = find_klayout_lyp(base, pdk)
+        if out["klayout_lyp"] is None and lyp is not None:
             out["klayout_lyp"] = str(lyp)
             if out["root"] is None:
                 out["root"] = str(root)
