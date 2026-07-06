@@ -666,7 +666,8 @@ _RUN_TOOLS = [
 # Short TTL cache for the preflight tool/engine probe. Preflight fires on every
 # design-load and PDK change; the toolchain doesn't change between those, so a
 # few seconds of caching turns repeated multi-second `check_tools()` calls into
-# one. The Tools tab calls check_tools() directly (uncached) for freshness.
+# one. (check_tools() itself is also TTL-cached now — this outer layer predates
+# that and stays as a cheap short-circuit; both invalidate within seconds.)
 _PREFLIGHT_TOOLS_CACHE: Dict[str, Any] = {"t": 0.0, "v": None}
 
 
