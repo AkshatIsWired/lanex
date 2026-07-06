@@ -1,0 +1,82 @@
+# Differential + live-API e2e suite. SELF-CONTAINED AND REMOVABLE: this
+# workflow, scripts/ci/, and lanex/tests/test_ci_helpers.py are the whole
+# feature — deleting those three paths removes it without touching ci.yml or
+# the main test suite (see scripts/ci/README.md).
+#
+# Heavier than ci.yml's jobs (multiple full RTL->GDS runs), so it runs on main
+# pushes, a nightly schedule, and manual dispatch — NOT on every PR; ci.yml
+# stays the fast PR gate. Same ground rules as ci.yml's rtl2gds job: never a
+# `container:` job with the nix-based LibreLane image; the image has no
+# pip/pytest; runners are ephemeral and no artifacts are uploaded.
+name: Differential
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "30 7 * * *" # nightly, offset from ci.yml's 06:00 cron
+  workflow_dispatch:
+
+# Queue rather than overlap/cancel: a proving run should finish.
+concurrency:
+  group: differential-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Keep the image tag in sync with the librelane floor in pyproject.toml
+  # (dependencies: librelane>=3.0.4,<3.1) AND the pip pin below.
+  LANEX_CI_IMAGE: ghcr.io/librelane/librelane:3.0.4
+
+jobs:
+  # Four RTL->GDS runs of the same design (native lanex-less CLI, lanex local,
+  # lanex container, lanex toolwise) + hard equivalence gates. The continuous
+  # form of the manual CLI-vs-GUI identity audits.
+  differential:
+    name: Differential RTL->GDS (4 paths, SPM, sky130)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install lanex + the image-matched librelane client
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          # Host-side client pinned to the image tag so the --dockerized
+          # orchestration can't skew from the in-container flow code.
+          pip install 'librelane==3.0.4'
+      - name: Run the four legs + gates
+        run: python scripts/ci/differential_run.py
+        env:
+          LANEX_CI_WORK: ${{ github.workspace }}/ciwork
+          # GDS sha256 stays report-only: GDSII embeds write timestamps
+          # (BGNLIB/BGNSTR), so even two identical runs hash differently —
+          # measured locally, all four legs unique. Promote only after adding
+          # a timestamp-normalized GDS comparison.
+          LANEX_CI_GDS_HARD: "0"
+
+  # Live server + container engine: canary fidelity, passthrough, the
+  # cancel-kills-container regression, SSE, exports, bundle roundtrip,
+  # three-state verdicts, concurrency, spaces guard, crash-restart.
+  api-e2e:
+    name: Live API e2e (server + container flow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install lanex + the image-matched librelane client
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install 'librelane==3.0.4'
+      - name: Pull the flow image
+        run: docker pull "$LANEX_CI_IMAGE"
+      - name: Run the e2e cases
+        run: python scripts/ci/api_e2e.py
+        env:
+          LANEX_CI_WORK: ${{ github.workspace }}/ciwork
