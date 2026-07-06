@@ -10,26 +10,33 @@
 The bug: cancel reported "cancelled" but the LibreLane container kept running
 to completion, because the kill path only knew how to remove a container BY
 NAME and librelane 3.0.4 never echoes the ``docker run --rm --name <uuid>``
-line the parser watches for. The fix discovers the container by its design-dir
-bind mount and force-removes it. All engine calls are faked here — no Docker
-needed.
+line the parser watches for. The fix discovers the container two ways: a bind
+mount whose Source is the design dir (designs outside home, e.g. /tmp), or
+``Config.WorkingDir`` == design dir — the signal that matters in the common
+layout, because for a design under the user's home librelane mounts the WHOLE
+home dir and a mount-only match finds nothing (proven live: the "cancelled"
+flow kept running). All engine calls are faked here — no Docker needed.
 """
 from __future__ import annotations
 
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from lanex.controller import runner as runner_mod
 from lanex.controller.runner import FlowRunner, _containers_mounting
 
 
 class _FakeRun:
-    """Records every subprocess.run argv and serves scripted outputs."""
+    """Records every subprocess.run argv and serves scripted outputs.
 
-    def __init__(self, design_dir: str, containers: Dict[str, str]):
-        # containers: id -> mount source dir
+    ``containers``: id -> (workdir, mount_source) — mirrors the single
+    ``inspect --format '{{.Config.WorkingDir}}\\t{{json .Mounts}}'`` call the
+    discovery makes per container.
+    """
+
+    def __init__(self, design_dir: str, containers: Dict[str, Tuple[str, str]]):
         self.design_dir = design_dir
         self.containers = containers
         self.calls: List[List[str]] = []
@@ -41,20 +48,42 @@ class _FakeRun:
             out = "\n".join(self.containers) + "\n"
         elif argv[1:2] == ["inspect"]:
             cid = argv[-1]
-            src = self.containers.get(cid, "/somewhere/else")
-            out = json.dumps([{"Source": src, "Destination": src, "Type": "bind"}])
+            workdir, src = self.containers.get(cid, ("/inside", "/somewhere/else"))
+            mounts = json.dumps([{"Source": src, "Destination": src, "Type": "bind"}])
+            out = f"{workdir}\t{mounts}"
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
 
 def test_containers_mounting_matches_only_design_dir(tmp_path: Path, monkeypatch):
+    # Pure mount-source match (workdir deliberately elsewhere): /tmp-style layout.
     design = tmp_path / "mychip"
     design.mkdir()
     other = tmp_path / "otherchip"
     other.mkdir()
-    fake = _FakeRun(str(design), {"aaa111": str(design), "bbb222": str(other)})
+    fake = _FakeRun(str(design), {"aaa111": ("/inside", str(design)),
+                                  "bbb222": ("/inside", str(other))})
     monkeypatch.setattr(runner_mod.subprocess, "run", fake)
     got = _containers_mounting("docker", str(design))
     assert got == ["aaa111"]
+
+
+def test_containers_mounting_matches_workdir_when_home_is_mounted(tmp_path: Path, monkeypatch):
+    """REGRESSION (found live): for a design under the user's home, librelane
+    mounts the WHOLE home dir — Mounts never shows the design dir itself, so a
+    mount-only match found nothing and cancel left the flow running. The
+    container's WorkingDir IS the design dir and must match; a sibling
+    design's container (same home mount, different workdir) must not."""
+    home = tmp_path / "home"
+    design = home / "proj" / "mychip"
+    design.mkdir(parents=True)
+    sibling = home / "proj" / "otherchip"
+    sibling.mkdir(parents=True)
+    fake = _FakeRun(str(design), {
+        "cafe0001": (str(design), str(home)),   # ours: home mount + our workdir
+        "cafe0002": (str(sibling), str(home)),  # other design, same home mount
+    })
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake)
+    assert _containers_mounting("docker", str(design)) == ["cafe0001"]
 
 
 def test_containers_mounting_engine_down(monkeypatch, tmp_path):
@@ -70,7 +99,7 @@ def test_kill_container_discovers_by_mount(tmp_path: Path, monkeypatch):
     design = tmp_path / "spm"
     run_dir = design / "runs" / "cancel-test"
     run_dir.mkdir(parents=True)
-    fake = _FakeRun(str(design), {"deadbeef01": str(design)})
+    fake = _FakeRun(str(design), {"deadbeef01": ("/inside", str(design))})
     monkeypatch.setattr(runner_mod.subprocess, "run", fake)
     monkeypatch.setattr(
         runner_mod.shutil, "which",

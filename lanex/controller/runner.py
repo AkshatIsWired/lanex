@@ -95,12 +95,21 @@ def _relativize_to(paths: Optional[Sequence[str]], base: Path) -> List[str]:
 
 
 def _containers_mounting(engine: str, design_dir: str) -> List[str]:
-    """IDs of running containers that bind-mount *design_dir*.
+    """IDs of running containers executing a flow on *design_dir*.
 
     The cancel path uses this to find the LibreLane container when its name is
-    unknown (librelane 3.0.4 never echoes the ``--name`` it generates). The
-    design dir is the container's working mount, so an exact resolved-path match
-    identifies this run's container and nothing else.
+    unknown (librelane 3.0.4 never echoes the ``--name`` it generates). Two
+    signals identify this run's container, either suffices:
+
+    - a bind mount whose Source IS the design dir (librelane mounts the design
+      dir itself when it lies outside the home tree, e.g. under /tmp);
+    - the container's ``Config.WorkingDir`` == the design dir. This is the one
+      that fires in the COMMON layout: for a design under the user's home,
+      librelane mounts the whole home directory (Mounts shows ``/home/user``,
+      never the design dir), so a mount-only match silently finds nothing and
+      a "cancelled" flow keeps running — proven live. The workdir is set to
+      the design dir in every ``--dockerized`` invocation and pins exactly
+      this design, so the match stays surgical.
     """
     try:
         ps = subprocess.run(
@@ -118,11 +127,16 @@ def _containers_mounting(engine: str, design_dir: str) -> List[str]:
     for cid in ids:
         try:
             ins = subprocess.run(
-                [engine, "inspect", "--format", "{{json .Mounts}}", cid],
+                [engine, "inspect", "--format",
+                 "{{.Config.WorkingDir}}\t{{json .Mounts}}", cid],
                 capture_output=True, text=True, timeout=10,
             ).stdout.strip()
+            workdir, _, mounts_json = ins.partition("\t")
+            if workdir and want in (Path(workdir), Path(workdir).resolve()):
+                matches.append(cid)
+                continue
             import json as _json
-            mounts = _json.loads(ins) if ins else []
+            mounts = _json.loads(mounts_json) if mounts_json else []
             for m in mounts or []:
                 src = str((m or {}).get("Source", ""))
                 if src and Path(src).resolve() == want:
