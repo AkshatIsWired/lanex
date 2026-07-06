@@ -94,6 +94,45 @@ def _relativize_to(paths: Optional[Sequence[str]], base: Path) -> List[str]:
     return out
 
 
+def _containers_mounting(engine: str, design_dir: str) -> List[str]:
+    """IDs of running containers that bind-mount *design_dir*.
+
+    The cancel path uses this to find the LibreLane container when its name is
+    unknown (librelane 3.0.4 never echoes the ``--name`` it generates). The
+    design dir is the container's working mount, so an exact resolved-path match
+    identifies this run's container and nothing else.
+    """
+    try:
+        ps = subprocess.run(
+            [engine, "ps", "-q"], capture_output=True, text=True, timeout=10
+        )
+        ids = ps.stdout.split()
+    except Exception:  # pragma: no cover - engine/platform dependent
+        return []
+    want = None
+    try:
+        want = Path(design_dir).resolve()
+    except Exception:
+        return []
+    matches: List[str] = []
+    for cid in ids:
+        try:
+            ins = subprocess.run(
+                [engine, "inspect", "--format", "{{json .Mounts}}", cid],
+                capture_output=True, text=True, timeout=10,
+            ).stdout.strip()
+            import json as _json
+            mounts = _json.loads(ins) if ins else []
+            for m in mounts or []:
+                src = str((m or {}).get("Source", ""))
+                if src and Path(src).resolve() == want:
+                    matches.append(cid)
+                    break
+        except Exception:
+            continue
+    return matches
+
+
 def _install_progress_patch() -> None:
     """Wrap FlowProgressBar methods so step transitions emit SSE events.
 
@@ -230,11 +269,22 @@ class FlowRunner:
             self._emit(EventType.FLOW_DONE, {"tag": self._run_dir or "", "cancelled": True})
 
     def _kill_container(self) -> None:
-        """Force-remove the LibreLane container, if one is running.
+        """Force-remove this run's LibreLane container, if one is running.
 
-        ``librelane --dockerized`` starts the container with ``--rm``, so killing
-        the host process already tears it down; force-removing by name is a
-        belt-and-suspenders guarantee. Best-effort and cross-engine.
+        Killing the host-side processes is NOT enough: terminating the
+        ``docker run`` client does not stop the container, and the in-container
+        librelane runs as PID 1, which ignores an unhandled SIGTERM — so a
+        "cancelled" containerized flow kept executing to completion (proven
+        live). Two removal paths, both best-effort and cross-engine:
+
+        - By NAME, when the log parser captured librelane's ``docker run --rm
+          --name <uuid>`` echo. LibreLane 3.0.4 does not print that line (its
+          stdout shows only "Running containerized command:"), so the name is
+          usually unknown.
+        - By MOUNT DISCOVERY otherwise: list running containers and force-remove
+          any that bind-mount this run's design directory. Matching on the
+          design-dir mount keeps this surgical — a container belonging to a
+          different design (or a different tool entirely) can never match.
         """
         proc = self._container_proc
         if proc is not None:
@@ -242,21 +292,48 @@ class FlowRunner:
                 proc.terminate()
             except Exception:
                 pass
+        engines = [e for e in (shutil.which("docker"), shutil.which("podman")) if e]
+        if not engines:
+            return
         name = self._container_name
-        if not name:
-            return
-        engine = shutil.which("docker") or shutil.which("podman")
-        if not engine:
-            return
+        for engine in engines:
+            if name:
+                try:
+                    subprocess.run(
+                        [engine, "rm", "-f", name],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                    )
+                except Exception:  # pragma: no cover - engine/platform dependent
+                    pass
+            design_dir = self._design_dir_of_run()
+            if not design_dir:
+                continue
+            for cid in _containers_mounting(engine, design_dir):
+                try:
+                    subprocess.run(
+                        [engine, "rm", "-f", cid],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                    )
+                except Exception:  # pragma: no cover - engine/platform dependent
+                    pass
+
+    def _design_dir_of_run(self) -> Optional[str]:
+        """The design dir this run mounts (parent of ``runs/<tag>``), resolved.
+
+        ``_run_dir`` is assigned before the container subprocess is spawned, so
+        this is available for the whole window a container could exist in.
+        """
+        if not self._run_dir:
+            return None
         try:
-            subprocess.run(
-                [engine, "rm", "-f", name],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            )
-        except Exception:  # pragma: no cover - engine/platform dependent
-            pass
+            p = Path(self._run_dir).resolve()
+            return str(p.parent.parent) if p.parent.name == "runs" else str(p.parent)
+        except Exception:
+            return None
 
     def _kill_child_processes(self) -> None:
         """Best-effort, cross-platform termination of EDA subprocesses."""
@@ -865,6 +942,10 @@ class FlowRunner:
             self._persist_gui_meta()
 
             if self._cancel.is_set():
+                # Second removal sweep: the container may have come up after (or
+                # raced with) cancel()'s first attempt; the flow must not keep
+                # running behind a "cancelled" status.
+                self._kill_container()
                 self._mark_current_failed("cancelled")
                 self._emit(EventType.INFO, {"message": "flow cancelled by user"})
                 self._emit(EventType.FLOW_DONE, {"tag": self._run_dir or "", "cancelled": True})
@@ -1066,6 +1147,8 @@ class FlowRunner:
             self._persist_gui_meta()  # run dir exists once the first step ran
 
             if self._cancel.is_set():
+                # Second removal sweep — same reasoning as the full-run worker.
+                self._kill_container()
                 self._mark_current_failed("cancelled")
                 self._emit(EventType.INFO, {"message": "flow cancelled by user"})
                 self._emit(EventType.FLOW_DONE, {"tag": self._run_dir or "", "cancelled": True})

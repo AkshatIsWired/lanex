@@ -198,8 +198,11 @@ def build_dockerized_argv(
 # ---------------------------------------------------------------------------
 
 # LibreLane logs one line per step start (steps/step.py): ``Running '<id>' at
-# '<relpath>'…``. Skips log ``Skipping step '<name>'…``. The container engine
-# echoes its own ``… run --rm --name <uuid> …`` line first (container.py).
+# '<relpath>'…``. Skips log ``Skipping step '<name>'…``. Some librelane builds
+# echo their ``… run --rm --name <uuid> …`` docker line (container.py) — but
+# 3.0.4 does NOT (its stdout shows only "Running containerized command:"), so
+# the name capture below usually never fires; cancel therefore also discovers
+# the container by its design-dir mount (runner._containers_mounting).
 _RUNNING_RX = re.compile(r"Running '(?P<id>[A-Za-z0-9_.\-:+]+)' at\b")
 _SKIP_RX = re.compile(r"Skipping step '(?P<name>[^']+)'")
 _NAME_RX = re.compile(r"--name\s+(?P<name>[A-Za-z0-9][A-Za-z0-9._\-]*)")
