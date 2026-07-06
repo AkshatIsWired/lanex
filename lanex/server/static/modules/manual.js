@@ -48,7 +48,10 @@ async function revealCli() {
       cliBlock("Container (recommended)", r.container, r.recommended === "container") +
       cliBlock("Local tools", r.local, r.recommended === "local") +
       "<p class='hint'>Run from <code>" + fmt.escape(r.cwd || "your design dir") +
-      "</code>. The GUI will show the run as soon as it appears under <code>runs/</code>.</p>";
+      "</code>. The GUI will show the run as soon as it appears under <code>runs/</code>." +
+      (r.recorded
+        ? " This tag matches an existing run, so this is the command recorded when that run launched (not re-derived from the current environment)."
+        : "") + "</p>";
     box.querySelectorAll(".cli-copy").forEach((b) =>
       b.addEventListener("click", () => {
         navigator.clipboard?.writeText(b.dataset.cmd).then(

@@ -131,6 +131,13 @@ def _begin_job(key: str) -> bool:
 def _end_job(key: str) -> None:
     with _in_progress_lock:
         _in_progress.discard(key)
+    # Every installer job (tool/PDK/image) mutates state that check_tools()
+    # TTL-caches; drop the cache so the UI's post-job refetch is never stale.
+    try:
+        from . import tools as _tools
+        _tools._check_tools_cache.clear()
+    except Exception:
+        pass
 
 
 def is_in_progress(key: str) -> bool:
@@ -1317,6 +1324,13 @@ def install_tool_async(key: str) -> Dict[str, Any]:
             result = install_tool(key)
         except Exception as ex:  # never die silently in a daemon thread
             result = {"ok": False, "reason": f"{type(ex).__name__}: {ex}"}
+        # The install just changed the very state check_tools() caches; drop
+        # the cache so the UI's post-install refetch sees the new tool.
+        try:
+            from . import tools as _tools
+            _tools._check_tools_cache.clear()
+        except Exception:
+            pass
         payload = {"key": key}
         payload.update(result if isinstance(result, dict) else {"ok": bool(result)})
         _emit("installer_result", payload)

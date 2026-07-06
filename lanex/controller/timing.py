@@ -140,19 +140,40 @@ def _sta_dirs(run_dir: Path) -> List[Path]:
 _REPORT_FOR = {"setup": "max.rpt", "hold": "min.rpt"}
 
 
-def _pick_report(run_dir: Path, kind: str) -> Optional[Path]:
-    """The most-final STA step's path report for *kind* (setup/hold)."""
+def _pick_reports(run_dir: Path, kind: str) -> Tuple[List[Tuple[Path, Optional[str]]], Optional[Path]]:
+    """All report files for *kind* from the most-final STA step.
+
+    Multi-corner STA steps (``OpenROAD.STAPostPNR``) write one report per
+    corner in per-corner SUBDIRS (``55-openroad-stapostpnr/max_ss_100C_1v60/
+    max.rpt``); single-corner mid-PnR steps write a top-level ``max.rpt``.
+    Only checking the top level silently skipped the final signoff STA and fell
+    back to a mid-PnR report — pre-route numbers presented as if final (a run
+    failing setup in its slow corner showed MET). So: for each STA dir in
+    finality order, take the top-level report OR every per-corner one; the
+    subdir name rides along as the corner label (per-corner files have no
+    corner banner for the parser to find).
+
+    Returns ``([(report_file, corner_hint), …], step_dir)``.
+    """
     fname = _REPORT_FOR.get(kind, "max.rpt")
     dirs = _sta_dirs(run_dir)
-    # Prefer a PostPNR STA, then the latest available; fall back to any STA dir
-    # that actually has the report file.
     post = [d for d in dirs if "post" in d.name.lower()]
     ordered = (post[::-1] + dirs[::-1]) if post else dirs[::-1]
     for d in ordered:
         f = d / fname
         if f.is_file():
-            return f
-    return None
+            return [(f, None)], d
+        corner_files: List[Tuple[Path, Optional[str]]] = []
+        try:
+            for sub in sorted(d.iterdir(), key=lambda p: p.name):
+                cf = sub / fname
+                if sub.is_dir() and cf.is_file():
+                    corner_files.append((cf, sub.name))
+        except OSError:
+            continue
+        if corner_files:
+            return corner_files, d
+    return [], None
 
 
 def _histogram(slacks: List[float], bins: int = 12) -> Dict[str, Any]:
@@ -187,30 +208,47 @@ def timing_paths(run_dir: str | Path, *, kind: str = "setup", limit: int = 100) 
     run_dir = Path(run_dir)
     if kind not in _REPORT_FOR:
         kind = "setup"
-    report = _pick_report(run_dir, kind)
-    if report is None:
+    reports, step_dir = _pick_reports(run_dir, kind)
+    if not reports:
         return {"ok": False, "kind": kind,
                 "error": f"no {kind} timing report (run an STA step / complete the flow first)"}
-    try:
-        text = report.read_text(encoding="utf-8", errors="replace")
-    except Exception as ex:
-        return {"ok": False, "kind": kind, "error": str(ex)}
-    paths = parse_report_checks(text)
+    paths: List[Dict[str, Any]] = []
+    sources: List[str] = []
+    for report, corner_hint in reports:
+        try:
+            text = report.read_text(encoding="utf-8", errors="replace")
+        except Exception as ex:
+            if len(reports) == 1:
+                return {"ok": False, "kind": kind, "error": str(ex)}
+            continue
+        parsed = parse_report_checks(text)
+        if corner_hint:
+            for p in parsed:
+                if not p.get("corner"):
+                    p["corner"] = corner_hint
+        paths.extend(parsed)
+        try:
+            sources.append(str(report.relative_to(run_dir)))
+        except Exception:
+            sources.append(report.name)
+    if not paths and not sources:
+        return {"ok": False, "kind": kind,
+                "error": f"no readable {kind} timing report in {step_dir.name if step_dir else 'run'}"}
     # Drop sentinel-slack "no real path" blocks from the table/stats.
     real = [p for p in paths if p.get("slack") is not None and abs(p["slack"]) < _SENTINEL]
     real.sort(key=lambda p: p["slack"])  # worst (most negative) first
     violating = sum(1 for p in real if p.get("met") is False)
     worst = real[0]["slack"] if real else None
     corners = sorted({p["corner"] for p in real if p.get("corner")})
-    try:
-        rel = str(report.relative_to(run_dir))
-    except Exception:
-        rel = report.name
+    step_name = step_dir.name if step_dir is not None else ""
+    fname = _REPORT_FOR[kind]
+    source = sources[0] if len(sources) == 1 else f"{step_name}/*/{fname} ({len(sources)} corners)"
     return {
         "ok": True,
         "kind": kind,
-        "source": rel,
-        "step": report.parent.name,
+        "source": source,
+        "sources": sources,
+        "step": step_name,
         "corners": corners,
         "total": len(real),
         "violating": violating,

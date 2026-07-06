@@ -124,15 +124,27 @@ function renderDrc(r, violations) {
 function renderLvs(r, resp) {
   const out = document.getElementById("violations-output");
   if (!out) return;
+  const status = (resp && resp.status) || "unknown";
+  const verdict = (resp && resp.verdict) || "";
+  let head;
+  if (status === "clean") {
+    head = "<div class='empty'><span class='ico'>" + icon('check',{size:40}) + "</span>" +
+      "<h3>LVS clean</h3><p>" + fmt.escape(verdict || "Circuits match uniquely.") + "</p></div>";
+  } else if (status === "mismatch") {
+    head = "<p><span class='pill pill-fail'>LVS mismatch</span> " +
+      fmt.escape(verdict || "Netgen reports the netlists do not match.") + "</p>";
+  } else {
+    head = "<p><span class='pill pill-warn'>LVS verdict unreadable</span> " +
+      "No Netgen final-verdict line found in this report — open the raw report to inspect it.</p>";
+  }
   const counts = (resp && resp.counts) || {};
   const keys = Object.keys(counts);
   const body = keys.length
     ? "<table class='cmp-table'><tbody>" + keys.map((k) =>
         "<tr><td>" + fmt.escape(k.replace(/_/g, " ")) + "</td><td class='cmp-num'>" +
         fmt.escape(String(counts[k])) + "</td></tr>").join("") + "</tbody></table>"
-    : "<p class='muted'>No unmatched-device/net/pin counts found in this Netgen report. " +
-      "Open the raw report for the full LVS comparison.</p>";
-  out.innerHTML = header(r, resp && resp.raw_chars ? resp.raw_chars + " chars" : "") + body;
+    : "";
+  out.innerHTML = header(r, resp && resp.raw_chars ? resp.raw_chars + " chars" : "") + head + body;
 }
 
 function renderText(r, text) {

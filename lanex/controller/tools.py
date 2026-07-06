@@ -28,6 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -495,16 +496,33 @@ def _recipe_for(tool: Dict[str, Any]) -> str:
     return str(install.get(pk, ""))
 
 
-def _dir_size_mb(path: Path) -> Optional[int]:
+# A PDK tree is hundreds of thousands of files; sizing six of them cold took
+# tens of seconds and made /api/tools appear hung. Sizes barely change, so
+# cache per path and give the walk a deadline — an unfinished walk returns
+# None (the UI simply omits the size) rather than a made-up partial number.
+_DIR_SIZE_TTL_S = 600.0
+_dir_size_cache: Dict[str, Tuple[float, Optional[int]]] = {}
+
+
+def _dir_size_mb(path: Path, *, deadline_s: float = 3.0) -> Optional[int]:
     """Real on-disk size of a directory tree, in MB (best-effort, bounded).
 
     Used for *installed* PDKs so we show a measured number instead of guessing.
     Walks with ``os.scandir`` and silently skips unreadable entries.
     """
+    key = str(path)
+    hit = _dir_size_cache.get(key)
+    now = time.time()
+    if hit and (now - hit[0]) < _DIR_SIZE_TTL_S and hit[1] is not None:
+        return hit[1]
+    stop_at = now + deadline_s
     try:
         total = 0
         stack = [str(path)]
         while stack:
+            if time.time() > stop_at:
+                _dir_size_cache[key] = (now, None)
+                return None
             d = stack.pop()
             try:
                 with os.scandir(d) as it:
@@ -520,7 +538,9 @@ def _dir_size_mb(path: Path) -> Optional[int]:
                             continue
             except OSError:
                 continue
-        return int(total / (1024 * 1024))
+        result = int(total / (1024 * 1024))
+        _dir_size_cache[key] = (now, result)
+        return result
     except Exception:
         return None
 
@@ -533,6 +553,17 @@ def _version_tuple(s: str) -> Tuple[int, ...]:
     return tuple(int(x) for x in m.group(1).split("."))
 
 
+# ``<engine> info`` against a hung daemon blocks until its timeout, and one
+# status call fans out into several probes (docker, podman, docker-via-sg —
+# from both resolve_engine and container_engine). Uncached at 12s each that
+# stacked past 30s and froze /api/tools + /api/preflight on hosts with a
+# wedged Docker (observed live). A short TTL keeps the answer fresh (a daemon
+# started mid-window is seen on the next probe) while collapsing the fan-out
+# to at most one real probe per engine per window.
+_ENGINE_PROBE_TTL_S = 8.0
+_engine_probe_cache: Dict[str, Tuple[float, Tuple[bool, str]]] = {}
+
+
 def _engine_usable(engine: str, *, via_sg: bool = False) -> Tuple[bool, str]:
     """Is the engine actually usable (daemon reachable / store ready)?
 
@@ -540,12 +571,20 @@ def _engine_usable(engine: str, *, via_sg: bool = False) -> Tuple[bool, str]:
     ``sg docker -c`` so we can tell whether Docker-group activation (without a
     re-login) would work.
     """
+    key = f"{engine}:sg={via_sg}"
+    hit = _engine_probe_cache.get(key)
+    now = time.time()
+    if hit and (now - hit[0]) < _ENGINE_PROBE_TTL_S:
+        return hit[1]
     cmd = ["sg", "docker", "-c", "docker info"] if via_sg else [engine, "info"]
-    rc, out, err = _shell_exec(cmd, timeout=12.0)
+    rc, out, err = _shell_exec(cmd, timeout=6.0)
     if rc == 0:
-        return True, ""
-    lines = (err or out or "").strip().splitlines()
-    return False, (lines[-1][:200] if lines else f"{engine} not reachable")
+        result: Tuple[bool, str] = (True, "")
+    else:
+        lines = (err or out or "").strip().splitlines()
+        result = (False, (lines[-1][:200] if lines else f"{engine} not reachable"))
+    _engine_probe_cache[key] = (now, result)
+    return result
 
 
 def _docker_group_status() -> Tuple[bool, bool, bool]:
@@ -686,12 +725,25 @@ def container_engine() -> Dict[str, Any]:
     }
 
 
-def check_tools() -> Dict[str, Any]:
-    """Probe every tool and return a JSON-safe dict.
+# Full probe = a dozen version subprocesses + engine probes + PDK sizing; the
+# SPA calls /api/tools on tab open and preflight polls too. 8s of freshness is
+# plenty (installs take minutes and re-query long after expiry) and turns
+# repeat calls into dict lookups instead of multi-second re-probes.
+_CHECK_TOOLS_TTL_S = 8.0
+_check_tools_cache: List[Tuple[float, Dict[str, Any]]] = []
+
+
+def check_tools(*, force: bool = False) -> Dict[str, Any]:
+    """Probe every tool and return a JSON-safe dict (TTL-cached).
 
     Each tool gets: ``key, label, installed, path, version, what,
-    category, install_recipe``.
+    category, install_recipe``. ``force=True`` bypasses the cache (used right
+    after an install/uninstall mutates the very state this reports).
     """
+    if not force and _check_tools_cache:
+        ts, cached = _check_tools_cache[0]
+        if (time.time() - ts) < _CHECK_TOOLS_TTL_S:
+            return cached
     out = []
     for t in EDA_TOOLS:
         info = _probe(t["binary"], t["version_flag"])
@@ -743,13 +795,16 @@ def check_tools() -> Dict[str, Any]:
             else ("Pick a PDK below and click Install." if not installed_pdks else "")
         ),
     }
-    return {
+    result = {
         "platform": _platform_key(),
         "tools": out,
         "pdk": pdk_out,
         "pdk_catalog": catalog,
         "container": container_engine(),
     }
+    _check_tools_cache.clear()
+    _check_tools_cache.append((time.time(), result))
+    return result
 
 
 def _pdk_roots() -> List[Path]:

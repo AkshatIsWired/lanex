@@ -381,11 +381,18 @@ def h_tools(handler: Any) -> None:
 def h_run_status(handler: Any) -> None:
     from ..server.app import get_runner
     r = get_runner()
+    # A run cancelled before LibreLane created its run dir leaves status
+    # pointing at a path that never came to exist, while /api/runs (rightly)
+    # doesn't list it. Report None instead of a phantom path so the two
+    # endpoints can't contradict each other.
+    run_dir = r.run_dir
+    if run_dir and not Path(run_dir).is_dir():
+        run_dir = None
     _respond(handler, {
         "running": r.running,
         "cancelled": r.cancelled,
         "paused": r.paused,
-        "run_dir": r.run_dir,
+        "run_dir": run_dir,
         "step_statuses": r.step_statuses,
     })
 
@@ -489,6 +496,46 @@ def h_read_text(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def _config_source_count(design_dir: Path, cfg_name: Optional[str]) -> Optional[int]:
+    """How many files the config's ``VERILOG_FILES`` actually resolves to.
+
+    Mirrors LibreLane's semantics for the common forms: a ``dir::`` prefix is
+    relative to the config's directory, globs expand, lists and
+    whitespace-separated strings both work. Returns ``None`` (pill stays
+    count-only) when the config can't be read or has no VERILOG_FILES —
+    a guessed number here would defeat the point of the label.
+    """
+    if not cfg_name:
+        return None
+    cfgp = design_dir / cfg_name
+    try:
+        if cfg_name.endswith(".json"):
+            data = json.loads(cfgp.read_text(encoding="utf-8"))
+        elif cfg_name.endswith((".yaml", ".yml")):
+            import yaml as _yaml
+            data = _yaml.safe_load(cfgp.read_text(encoding="utf-8"))
+        else:
+            return None
+        if not isinstance(data, dict):
+            return None
+        vf = data.get("VERILOG_FILES")
+        if vf is None:
+            return None
+        items = [str(x) for x in vf] if isinstance(vf, list) else str(vf).split()
+        count = 0
+        for s in items:
+            if s.startswith("dir::"):
+                s = s[len("dir::"):]
+            if any(ch in s for ch in "*?["):
+                count += sum(1 for m in design_dir.glob(s) if m.is_file())
+            else:
+                fp = Path(s) if os.path.isabs(s) else design_dir / s
+                count += 1 if fp.is_file() else 0
+        return count
+    except Exception:
+        return None
+
+
 def h_design_summary(handler: Any) -> None:
     # C5 — decision (kept intentionally unconfined): this endpoint reads an
     # arbitrary directory the user is about to pick as their design. It is the
@@ -517,7 +564,15 @@ def h_design_summary(handler: Any) -> None:
         if srcs.get("ok"):
             v_count = len(srcs.get("sources", []))
             mem_count = len(srcs.get("memories", []))
-            pills.append({"type": "info", "text": f"{v_count} Verilog sources"})
+            # This is "HDL files found in the folder" (recursive, minus runs/),
+            # NOT "files the config compiles" — testbenches outside src/ count
+            # here but not in VERILOG_FILES. Say what it is so the number can't
+            # be read as the flow's source list.
+            cfg_count = _config_source_count(p, cfg)
+            label = f"{v_count} HDL file{'s' if v_count != 1 else ''} found"
+            if cfg_count is not None and cfg_count != v_count:
+                label += f" (config uses {cfg_count})"
+            pills.append({"type": "info", "text": label})
             if mem_count:
                 pills.append({"type": "info", "text": f"{mem_count} memory files"})
         # Flag a missing config so the UI can offer "Auto-generate config" — but
@@ -525,6 +580,8 @@ def h_design_summary(handler: Any) -> None:
         config_missing = cfg is None
         if config_missing and v_count:
             pills.append({"type": "warn", "text": "no config — can auto-generate"})
+        if _whitespace_path_error(str(p)):
+            pills.append({"type": "warn", "text": "path contains spaces — runs will fail; use a space-free folder"})
         pills.append({"type": "pending", "text": str(p)})
         _respond(handler, {"pills": pills, "config_missing": config_missing,
                            "has_sources": bool(v_count)})
@@ -776,7 +833,11 @@ def h_set_design_dir(handler: Any) -> None:
         _respond(handler, "directory not found", 400)
         return
     _set_active_design_dir(str(p))
-    _respond(handler, {"design_dir": str(p)})
+    out: Dict[str, Any] = {"design_dir": str(p)}
+    ws_err = _whitespace_path_error(str(p))
+    if ws_err:
+        out["warning"] = ws_err
+    _respond(handler, out)
 
 
 def h_diff(handler: Any) -> None:
@@ -925,12 +986,37 @@ def _hash_files(paths: Optional[List[str]]) -> Optional[str]:
     return h.hexdigest()
 
 
+def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None) -> Optional[str]:
+    """Refuse to launch a flow from a path LibreLane cannot handle.
+
+    LibreLane's Yosys/Tcl scripts split file lists on whitespace, so a design
+    dir (or PDK root) containing a space fails mid-flow with a misleading
+    ``ERROR: File '/home/user/my' not found`` (proven live: the same design
+    ran 76/76 green through a space-free symlink). Failing here, with the real
+    reason, beats a cryptic Yosys error three steps in. Viewing/importing runs
+    from spaced paths stays allowed — only *launching* a flow is blocked.
+    """
+    for label, p in (("design directory", design_dir), ("PDK root", pdk_root)):
+        if p and any(ch.isspace() for ch in str(p)):
+            return (
+                f"the {label} path contains spaces ('{p}') — LibreLane's "
+                "Yosys/Tcl scripts split paths on whitespace and the flow will "
+                "fail with a misleading 'File not found'. Move/rename the "
+                "folder to a space-free path (e.g. my_chip) and re-open it."
+            )
+    return None
+
+
 def h_run_start(handler: Any) -> None:
     from ..server.app import get_runner
     body = getattr(handler, "_body", {})
     design_dir = _get_active_design_dir()
     if not design_dir:
         _respond(handler, "no active design dir", 400)
+        return
+    ws_err = _whitespace_path_error(design_dir)
+    if ws_err:
+        _respond(handler, ws_err, 400)
         return
     config_file = None
     for ext in ["json", "yaml", "tcl"]:
@@ -990,6 +1076,10 @@ def h_run_start(handler: Any) -> None:
                         400,
                     )
                     return
+        ws_err = _whitespace_path_error(design_dir, pdk_root)
+        if ws_err:
+            _respond(handler, ws_err, 400)
+            return
         # Snapshot of exactly what the GUI launched, persisted into the run dir
         # as gui-run.json so the user can reproduce this run later (issue #4).
         # LibreLane writes the resolved config; this captures the GUI-only choices
@@ -1061,6 +1151,30 @@ def _resolve_config_file(design_dir: str) -> Optional[Path]:
     return None
 
 
+def _recorded_cli_command(design_dir: str, tag: str) -> Optional[Dict[str, Any]]:
+    """The CLI command recorded in an existing run's ``gui-run.json``, or None.
+
+    Only returns a payload when the recorded dict has both command strings —
+    a partial record falls through to live assembly rather than serving half
+    an answer.
+    """
+    try:
+        run_dir = Path(design_dir) / "runs" / tag
+        meta_file = run_dir / "gui-run.json"
+        if not meta_file.is_file():
+            return None
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        cmd = meta.get("cli_command")
+        if not isinstance(cmd, dict) or not (cmd.get("container") and cmd.get("local")):
+            return None
+        out = dict(cmd)
+        out["recorded"] = True
+        out["source"] = str(meta_file)
+        return out
+    except Exception:
+        return None
+
+
 def h_cli_command(handler: Any) -> None:
     """Return the exact ``librelane`` CLI equivalent to a GUI run config, so the
     user can copy it and run it themselves (manual mode). Read-only."""
@@ -1070,6 +1184,16 @@ def h_cli_command(handler: Any) -> None:
     if not design_dir:
         _respond(handler, "no active design dir", 400)
         return
+    # A tag naming an EXISTING run returns that run's recorded command verbatim
+    # (gui-run.json, written at launch). Re-deriving it here would re-resolve
+    # PDK_ROOT from the *current* env — if the env changed since the run, the
+    # "reproduce" command would silently diverge from what actually ran.
+    tag = body.get("tag") or ""
+    if tag:
+        recorded = _recorded_cli_command(design_dir, tag)
+        if recorded is not None:
+            _respond(handler, recorded)
+            return
     config_file = _resolve_config_file(design_dir)
     if config_file is None:
         _respond(handler, "no config.{json,yaml,tcl} in design directory", 400)
@@ -1227,6 +1351,7 @@ def h_tools_uninstall(handler: Any) -> None:
         return
     try:
         result = installer.uninstall_tool(key)
+        tools_mod._check_tools_cache.clear()
         _respond(handler, result)
     except Exception as ex:
         _log.exception("uninstall_tool failed")
@@ -1241,6 +1366,7 @@ def h_pdk_uninstall(handler: Any) -> None:
         return
     try:
         result = installer.uninstall_pdk(pdk)
+        tools_mod._check_tools_cache.clear()
         _respond(handler, result)
     except Exception as ex:
         _log.exception("uninstall_pdk failed")
@@ -2296,6 +2422,10 @@ def h_dse_start(handler: Any) -> None:
     design_dir = _get_active_design_dir()
     if not design_dir:
         _respond(handler, "no active design dir", 400)
+        return
+    ws_err = _whitespace_path_error(design_dir)
+    if ws_err:
+        _respond(handler, ws_err, 400)
         return
     config_file = _config_file_for(design_dir)
     if config_file is None:

@@ -857,24 +857,31 @@ def get_step_output(run_dir: str | Path, step_id: str, *, tail_bytes: int = 6000
 
     Step directories are ``<NNN>-<step-id-lowercased-dashed>`` (e.g.
     ``66-checker-magicdrc`` for ``Checker.MagicDRC``) and the log inside is
-    ``<suffix>.log``. We match on the suffix so the caller can pass the real
-    step id straight from the flow graph. ANSI is stripped and the log is
-    tail-capped so a huge log can't blow up the response.
+    ``<suffix>.log``. Both the qualified step id (``Checker.MagicDRC``) and the
+    on-disk directory name (``66-checker-magicdrc``, with or without the ``NN-``
+    prefix) are accepted — API users reading ids off the run dir kept passing
+    the dir form and getting an unexplained miss. A miss now lists the valid
+    directory names instead of a bare "not found". ANSI is stripped and the
+    log is tail-capped so a huge log can't blow up the response.
     """
     run = Path(run_dir)
     want = step_id.lower().replace(".", "-")
-    match: Optional[Path] = None
+    step_dirs: List[Path] = []
     try:
         for e in sorted(run.iterdir(), key=lambda d: d.name):
             if e.is_dir() and _is_step_dir(e.name):
-                suffix = "-".join(e.name.split("-")[1:])
-                if suffix.lower() == want:
-                    match = e
-                    break
+                step_dirs.append(e)
     except Exception:
-        match = None
+        pass
+    match: Optional[Path] = None
+    for e in step_dirs:
+        suffix = "-".join(e.name.split("-")[1:])
+        if want in (suffix.lower(), e.name.lower()):
+            match = e
+            break
     if match is None:
-        return {"ok": False, "step": step_id, "reason": "step not found in this run"}
+        return {"ok": False, "step": step_id, "reason": "step not found in this run",
+                "valid_steps": [e.name for e in step_dirs]}
 
     suffix = "-".join(match.name.split("-")[1:])
     log = match / f"{suffix}.log"
@@ -1214,7 +1221,7 @@ def export_run(run_dir: str | Path, fmt: str = "csv") -> Dict[str, Any]:
         w.writerow(["metric", "value"])
         for k in sorted(metrics):
             v = metrics[k]
-            w.writerow([k, "" if v is None else v])
+            w.writerow([k, "" if v is None else _metric_text(v)])
         return {"ok": True, "content_type": "text/csv; charset=utf-8",
                 "filename": f"{tag}-metrics.csv", "text": buf.getvalue()}
 
@@ -1239,10 +1246,24 @@ def export_run(run_dir: str | Path, fmt: str = "csv") -> Dict[str, Any]:
     return {"ok": False, "error": f"unsupported format '{fmt}'"}
 
 
+def _metric_text(v: Any) -> str:
+    """Non-finite values print as the API/CSV tokens (``Infinity``, ``-Infinity``,
+    ``NaN``). Python's default ``str()`` gives ``inf``/``nan``, which made the MD
+    export disagree with the CSV export of the very same run."""
+    if isinstance(v, float):
+        if v == float("inf"):
+            return "Infinity"
+        if v == float("-inf"):
+            return "-Infinity"
+        if v != v:  # NaN
+            return "NaN"
+    return str(v)
+
+
 def _fmt_val(r: Dict[str, Any]) -> str:
     v = r.get("value")
     unit = r.get("unit") or ""
-    return f"{v} {unit}".strip()
+    return f"{_metric_text(v)} {unit}".strip()
 
 
 def _export_md(tag: str, rows: List[Dict[str, Any]], verdict: Dict[str, Any],
@@ -1265,7 +1286,7 @@ def _export_md(tag: str, rows: List[Dict[str, Any]], verdict: Dict[str, Any],
         lines.append(f"| {r['label']} | {_fmt_val(r)} |")
     lines += ["", "## All metrics", "", "| Metric | Value |", "| --- | --- |"]
     for k in sorted(metrics):
-        lines.append(f"| `{k}` | {metrics[k]} |")
+        lines.append(f"| `{k}` | {_metric_text(metrics[k])} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -1310,7 +1331,7 @@ def _export_html(run: Path, tag: str, rows: List[Dict[str, Any]], verdict: Dict[
         for r in rows
     )
     metric_rows = "".join(
-        f"<tr><td><code>{_esc(k)}</code></td><td>{_esc(metrics[k])}</td></tr>"
+        f"<tr><td><code>{_esc(k)}</code></td><td>{_esc(_metric_text(metrics[k]))}</td></tr>"
         for k in sorted(metrics)
     )
     img = _preview_data_uri(run)

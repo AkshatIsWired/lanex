@@ -82,22 +82,59 @@ def parse_drc(path: str | Path) -> Dict[str, Any]:
 
 
 def parse_lvs(path: str | Path) -> Dict[str, Any]:
-    """Best-effort LVS-bytes parser for Netgen reports.
+    """Three-state LVS parser for Netgen reports: clean / mismatch / unknown.
 
-    Netgen output is mostly free-form text; we don't try to pull geometry,
-    just pull out the unmatched counts if they look like ``unmatched nets = N``.
+    The verdict comes ONLY from Netgen's own final-verdict line (``Final
+    result: Circuits match uniquely.`` / ``Netlists do not match.``) — the rest
+    of the report is free-form comparison tables whose numbers are NOT error
+    counts. In particular the two-column inventory (``Number of devices: 362
+    |Number of devices: 362``) shows both circuits' totals side by side; a
+    loose ``devices: (\\d+)`` match read that as 362 *unmatched* devices on a
+    perfectly clean run. Counts are therefore only extracted when explicitly
+    labelled ``unmatched …``, and a missing verdict is reported as
+    ``status: "unknown"`` — never silently as clean or dirty.
     """
     path = Path(path)
     text = Path(path).read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
     import re as _re
 
-    matches: Dict[str, int] = {}
+    counts: Dict[str, int] = {}
     for label in ("devices", "nets", "pins"):
-        m = _re.search(rf"(?:unmatched\s+)?{label}\s*[:=]\s*(\d+)", text, _re.IGNORECASE)
+        m = _re.search(rf"unmatched\s+{label}\s*[:=]\s*(\d+)", text, _re.IGNORECASE)
         if m:
-            matches[f"unmatched_{label}"] = int(m.group(1))
+            counts[f"unmatched_{label}"] = int(m.group(1))
+
+    verdict: Optional[str] = None
+    for line in reversed(text.splitlines()):
+        if _re.match(r"\s*Final result\s*:", line, _re.IGNORECASE):
+            verdict = line.strip()
+            break
+
+    def _classify(s: str) -> Optional[str]:
+        low = s.lower()
+        if "do not match" in low or "mismatch" in low:
+            return "mismatch"
+        if "match uniquely" in low or "circuits match" in low or "netlists match" in low:
+            # "match uniquely with port errors" is still an LVS failure.
+            return "mismatch" if "error" in low else "clean"
+        return None
+
+    status = _classify(verdict) if verdict else None
+    if status is None:
+        # No verdict line — fall back to unambiguous whole-text markers only.
+        if _re.search(r"netlists do not match|circuits do not match", text, _re.IGNORECASE):
+            status = "mismatch"
+        elif _re.search(r"circuits match uniquely", text, _re.IGNORECASE):
+            status = "clean"
+        else:
+            status = "unknown"
+    if status == "clean" and any(counts.values()):
+        # Verdict and explicit unmatched counts disagree — surface, don't pick.
+        status = "mismatch"
     return {
         "path": str(path),
         "raw_chars": len(text),
-        "counts": matches,
+        "status": status,
+        "verdict": verdict,
+        "counts": counts,
     }

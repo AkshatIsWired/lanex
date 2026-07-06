@@ -19,6 +19,13 @@ the SSE path (``sse.py`` → ``_write``) run every payload through :func:`json_s
 so the wire is standards-compliant JSON everywhere. Keeping the function in this
 neutral module avoids the ``app`` ⇄ ``sse`` import cycle (``app`` imports
 ``sse`` at module load, so ``sse`` cannot import back from ``app``).
+
+Token convention (API contract): a non-finite metric value appears on the wire
+as the JSON *string* ``"Infinity"`` / ``"-Infinity"`` / ``"NaN"`` — by design,
+not a bug. API consumers must treat those three strings as the numeric
+non-finite values; the bundled frontend does (``fmt.metric``), and the text
+exports use the same spellings (CSV passes LibreLane's own ``Infinity``
+through; the MD/HTML exports normalise to it) so every surface agrees.
 """
 from __future__ import annotations
 
