@@ -444,8 +444,15 @@ def case_e3_cancel_kills() -> str:
     assert s == 200, f"cancel → {s} {d}"
     assert wait_for(lambda: not docker_ps(), 20, 1, "container removal"), \
         f"container still running 20s after cancel: {docker_ps()}"
-    _s, status = http("GET", "/api/run/status")
-    assert status.get("running") is False, "status still running after cancel"
+
+    # The container dies first; the worker thread flips `running` when it
+    # finalizes (client teardown -> EOF -> cancel bookkeeping). On a slow
+    # runner that lags a few seconds behind the removal — allow it.
+    def _idle() -> bool:
+        _s, st = http("GET", "/api/run/status")
+        return isinstance(st, dict) and st.get("running") is False
+    assert wait_for(_idle, 60, 2, "runner idle after cancel"), \
+        "status still running 60s after the container was removed"
 
     run_dir = CTX.canary_design / "runs" / "cancelkill"
     count = len(list(run_dir.glob("[0-9]*"))) if run_dir.is_dir() else 0
@@ -489,6 +496,10 @@ def case_e9_spaces_guard() -> str:
 
 
 def case_e10_crash_restart(server: Server) -> str:
+    def _idle() -> bool:
+        _s, st = http("GET", "/api/run/status")
+        return isinstance(st, dict) and st.get("running") is False
+    assert wait_for(_idle, 60, 2, "runner idle before E10"), "runner busy from a previous case"
     s, d = start_run("crashy", {})
     assert s == 200, f"run/start → {s} {d}"
     assert wait_for(lambda: bool(docker_ps()), 300, 2, "flow container up")
@@ -516,7 +527,7 @@ def case_e10_crash_restart(server: Server) -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    log("api_e2e driver r4")  # bump when editing: proves which code CI/logs ran
+    log("api_e2e driver r5")  # bump when editing: proves which code CI/logs ran
     WORK.mkdir(parents=True, exist_ok=True)
     pdk_root = PDK_ROOT
     ensure_pdk(pdk_root)
