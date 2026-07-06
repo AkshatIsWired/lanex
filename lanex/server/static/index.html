@@ -10,6 +10,11 @@
   <link rel="stylesheet" href="/static/features.css" />
   <link rel="stylesheet" href="/static/ide.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
+  <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
+       real icon (zero extra deps; static manifest, no service worker). -->
+  <link rel="manifest" href="/static/manifest.json" />
+  <meta name="theme-color" content="#0e1524" />
+  <link rel="apple-touch-icon" href="/static/vendor/icon-192.png" />
 </head>
 <body class="theme-dark">
   <!-- Splash: covers the whole window until boot() finishes. -->

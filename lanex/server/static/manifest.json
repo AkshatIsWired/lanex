@@ -1,0 +1,33 @@
+{
+  "name": "LanEx — RTL to GDSII cockpit",
+  "short_name": "LanEx",
+  "description": "A browser cockpit for the LibreLane RTL-to-GDSII chip flow.",
+  "id": "/landing",
+  "start_url": "/landing",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#0e1524",
+  "theme_color": "#0e1524",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/static/vendor/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/vendor/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/vendor/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
