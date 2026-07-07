@@ -72,8 +72,11 @@ def _load(design_dir: str | Path) -> List[Dict[str, Any]]:
 
 
 def _save(design_dir: str | Path, cells: List[Dict[str, Any]]) -> None:
+    from . import platform_env
     f = _sidecar_path(design_dir)
-    f.write_text(json.dumps({"cells": cells}, indent=2) + "\n", encoding="utf-8")
+    # Atomic: a crash mid-write must not corrupt the sidecar (a corrupt sidecar
+    # reads back as "no cells" and the next save persists the loss).
+    platform_env.atomic_write_text(f, json.dumps({"cells": cells}, indent=2) + "\n")
 
 
 def list_cells(design_dir: str | Path) -> Dict[str, Any]:
@@ -124,6 +127,9 @@ def save_cell(
             return {"ok": False, "error": f"unknown cell view '{kind}'"}
         fname = (payload or {}).get("filename") or f"{name}.{kind}"
         fname = Path(fname).name  # strip any directory component
+        # These paths ride whitespace-joined list overrides (EXTRA_LEFS=a b) —
+        # a space in the filename would split into phantom paths mid-flow.
+        fname = re.sub(r"\s+", "_", fname)
         ext_ok = any(fname.lower().endswith(e) for e in spec["exts"])
         if not ext_ok:
             return {"ok": False,
@@ -142,16 +148,31 @@ def save_cell(
             target.write_bytes(raw)
         except Exception as ex:
             return {"ok": False, "error": str(ex)}
-        saved_views[kind] = "dir::" + str(target.relative_to(d))
+        # Forward slashes: ``dir::`` paths resolve in both run modes and on
+        # Windows-authored designs (mirrors custommacros).
+        saved_views[kind] = "dir::" + str(target.relative_to(d)).replace("\\", "/")
 
     if not saved_views.get("lef"):
         return {"ok": False, "error": "a LEF view is required (the cell's abstract/footprint)"}
+
+    # Swap-out names ride the whitespace-joined EXTRA_EXCLUDED_CELLS override —
+    # a name with whitespace would corrupt every other entry in the list.
+    swap_clean: List[str] = []
+    for s in (swap_out or []):
+        s = str(s or "").strip()
+        if not s:
+            continue
+        if any(ch.isspace() for ch in s):
+            return {"ok": False,
+                    "error": f"swap-out cell name '{s}' contains whitespace — "
+                             "cell names never do; check for a stray space"}
+        swap_clean.append(s)
 
     cells = [c for c in _load(d) if c.get("name") != name]
     entry = {
         "name": name,
         "enabled": bool(enabled),
-        "swap_out": [s for s in (swap_out or []) if s],
+        "swap_out": swap_clean,
         "views": saved_views,
     }
     cells.append(entry)

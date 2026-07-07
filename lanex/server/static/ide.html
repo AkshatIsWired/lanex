@@ -11,8 +11,11 @@
   <link rel="stylesheet" href="/static/ide.css" />
   <!-- PWA: installable standalone-window app (Chromium/Edge). Static manifest. -->
   <link rel="manifest" href="/static/manifest.json" />
-  <meta name="theme-color" content="#0e1524" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f7fb" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1524" />
   <link rel="apple-touch-icon" href="/static/vendor/icon-192.png" />
+  <!-- Lint/sim output and editor text must not be rewritten by auto-translate. -->
+  <meta name="google" content="notranslate" />
 </head>
 <body class="ide-body theme-dark">
   <header class="ide-topbar">

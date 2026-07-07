@@ -39,8 +39,8 @@ from ..controller import (
     tools as tools_mod,
 )
 # Phase 1–4 controller modules (verify, compare, dse, reverify, editor, lint,
-# simulate, layout2d, layout3d, cells, plugins) are imported lazily inside their
-# handlers so each phase stays independently importable/testable.
+# simulate, cells, plugins) are imported lazily inside their handlers so each
+# phase stays independently importable/testable.
 
 _log = logging.getLogger("librelane.gui.routes")
 
@@ -912,7 +912,11 @@ def _clean_overrides(overrides: Dict[str, Any]) -> Dict[str, Any]:
             items = [x for x in v if not (x is None or (isinstance(x, str) and x.strip() == ""))]
             if not items:
                 continue
-            clean[k] = list(items)
+            # LibreLane parses list overrides as ONE whitespace-separated string
+            # (KEY=a b c). A raw Python list would be f-string'd into its repr
+            # (KEY=['a', 'b']) downstream — join it here so an API caller who
+            # posts a JSON array gets faithful semantics, not corruption.
+            clean[k] = " ".join(str(x) for x in items)
             continue
         clean[k] = v
     return clean
@@ -952,11 +956,15 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any]) -> Dict[str, Any]
     # override — a Dict would be misparsed as a flat Tcl list — so they go through
     # a JSON overlay config file merged by Config.load. Per-run only.
     extra_config_files: List[str] = []
+    macro_warning: Optional[str] = None
     try:
         from ..controller import custommacros
         overlay = custommacros.write_overlay(design_dir)
         if overlay:
             extra_config_files.append(overlay)
+            # Honest heads-up when the overlay will REPLACE (not merge with) a
+            # Tcl config's MACROS — surfaced in the run-start response.
+            macro_warning = custommacros.merge_warning(design_dir)
     except Exception:
         _log.exception("custom-macro overlay failed (continuing without it)")
     return {
@@ -966,6 +974,7 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any]) -> Dict[str, Any]
         "extra_sources": body.get("sources") or None,
         "extra_extras": body.get("extras") or None,
         "extra_config_files": extra_config_files or None,
+        "macro_warning": macro_warning,
     }
 
 
@@ -987,7 +996,8 @@ def _hash_files(paths: Optional[List[str]]) -> Optional[str]:
     return h.hexdigest()
 
 
-def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None) -> Optional[str]:
+def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None,
+                           files: Optional[List[str]] = None) -> Optional[str]:
     """Refuse to launch a flow from a path LibreLane cannot handle.
 
     LibreLane's Yosys/Tcl scripts split file lists on whitespace, so a design
@@ -996,6 +1006,11 @@ def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None) -> O
     ran 76/76 green through a space-free symlink). Failing here, with the real
     reason, beats a cryptic Yosys error three steps in. Viewing/importing runs
     from spaced paths stays allowed — only *launching* a flow is blocked.
+
+    *files* extends the same check to individually selected source/extra
+    paths: the GUI whitespace-joins them into list overrides
+    (``VERILOG_FILES=a.v b.v``), so a FILENAME with a space splits into two
+    phantom paths even when the design dir itself is clean.
     """
     for label, p in (("design directory", design_dir), ("PDK root", pdk_root)):
         if p and any(ch.isspace() for ch in str(p)):
@@ -1004,6 +1019,14 @@ def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None) -> O
                 "Yosys/Tcl scripts split paths on whitespace and the flow will "
                 "fail with a misleading 'File not found'. Move/rename the "
                 "folder to a space-free path (e.g. my_chip) and re-open it."
+            )
+    for p in (files or []):
+        if p and any(ch.isspace() for ch in str(p)):
+            return (
+                f"the selected file '{p}' has whitespace in its path — "
+                "LibreLane parses file lists as whitespace-separated, so this "
+                "file would split into phantom paths mid-flow. Rename it "
+                "(e.g. my_file.v) and re-select it."
             )
     return None
 
@@ -1077,7 +1100,9 @@ def h_run_start(handler: Any) -> None:
                         400,
                     )
                     return
-        ws_err = _whitespace_path_error(design_dir, pdk_root)
+        ws_err = _whitespace_path_error(
+            design_dir, pdk_root,
+            files=list(body.get("sources") or []) + list(body.get("extras") or []))
         if ws_err:
             _respond(handler, ws_err, 400)
             return
@@ -1138,6 +1163,9 @@ def h_run_start(handler: Any) -> None:
             flow_name=flow_name,
             gui_meta=gui_meta,
         )
+        if _asm.get("macro_warning") and isinstance(result, dict):
+            result = dict(result)
+            result["warning"] = _asm["macro_warning"]
         _respond(handler, result)
     except Exception as ex:
         _log.exception("run start failed")
@@ -1722,7 +1750,18 @@ def _final_odb(run_dir: "Path") -> Optional["Path"]:
             hits = sorted(d.glob("*.odb"))
             if hits:
                 return hits[0]
-    hits = sorted(run_dir.rglob("*.odb"))
+
+    # Fallback: the odb of the LATEST step. Step dirs are "NN-step-name"; sort
+    # by the numeric ordinal (lexicographic order breaks past 99 steps: "100-"
+    # sorts before "55-").
+    def _ordinal(p: "Path") -> tuple:
+        for part in p.relative_to(run_dir).parts:
+            prefix, sep, _ = part.partition("-")
+            if sep and prefix.isdigit():
+                return (int(prefix), str(p))
+        return (-1, str(p))
+
+    hits = sorted(run_dir.rglob("*.odb"), key=_ordinal)
     return hits[-1] if hits else None
 
 
@@ -1755,6 +1794,17 @@ def h_open_in_tool(handler: Any) -> None:
     if location == "container":
         from ..controller import container_tools
         design_dir = _get_active_design_dir()
+        # An explicitly requested file is honoured or refused — NEVER silently
+        # swapped for the final GDS (the host path honours any file; silently
+        # opening a different file than asked is a fidelity bug).
+        if target is not None and tool in ("magic", "klayout") \
+                and target.suffix.lower() not in (".gds", ".gz"):
+            _respond(handler, {"ok": False, "error":
+                               f"container {tool} launch opens GDS files only; "
+                               f"'{target.name}' is not a GDS. Omit 'path' to open "
+                               "the run's final GDS, or use a host launch for other "
+                               "file types."}, 200)
+            return
         gds = target if (target and target.suffix.lower() in (".gds", ".gz")) else _final_gds(run_dir)
         odb = _final_odb(run_dir) if tool == "openroad" else None
         if tool in ("magic", "klayout") and gds is None:

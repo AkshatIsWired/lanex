@@ -274,18 +274,45 @@ export const sse = {
 function _wire(es) {
   if (!es) return;
   es.addEventListener("hello", (e) => {
+    _connIndicator(true);
     try { _broadcast({ type: "hello", data: JSON.parse(e.data) }); } catch (_) {}
   });
   es.addEventListener("ping", () => {
-    /* keep-alive */
+    _connIndicator(true); // keep-alive doubles as a liveness signal
   });
   es.onmessage = (e) => {
+    _connIndicator(true);
     try {
       const data = JSON.parse(e.data);
       _broadcast(Object.assign({ type: data.type || "info" }, data));
     } catch (_) {}
   };
   es.addEventListener("end", () => { /* server closes the stream after flow_done */ });
+  // A dropped stream (server died, laptop slept) must be VISIBLE: EventSource
+  // retries silently forever, and until it reconnects the UI would just go
+  // quietly stale. Show a small fixed chip while disconnected.
+  es.onerror = () => _connIndicator(false);
+  es.onopen = () => _connIndicator(true);
+}
+
+// Fixed "reconnecting" chip — created lazily, removed the moment the stream is
+// healthy again. Pure DOM, no dependency on other modules (api.js is a leaf).
+function _connIndicator(ok) {
+  let el = document.getElementById("sse-conn-chip");
+  if (ok) {
+    if (el) el.remove();
+    return;
+  }
+  if (el) return;
+  el = document.createElement("div");
+  el.id = "sse-conn-chip";
+  el.setAttribute("role", "status");
+  el.textContent = "Connection to the LanEx server lost — reconnecting…";
+  el.style.cssText =
+    "position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9999;" +
+    "background:var(--danger,#b23b3b);color:#fff;padding:6px 14px;border-radius:999px;" +
+    "font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;";
+  document.body.appendChild(el);
 }
 
 function _broadcast(ev) {
@@ -322,9 +349,14 @@ export const fmt = {
     // them via _json_safe; humanise rather than print raw "Infinity"/"NaN".
     if (value === "Infinity" || value === Infinity) return "∞";
     if (value === "-Infinity" || value === -Infinity) return "−∞";
-    if (value === "NaN" || (typeof value === "number" && Number.isNaN(value))) return "n/a";
+    // "NaN" is a REAL tool-reported value — label it as such. "—" (see above)
+    // stays reserved for a metric that is absent; the two must not blur.
+    if (value === "NaN" || (typeof value === "number" && Number.isNaN(value))) return "NaN";
     if (typeof value === "number") {
       if (!Number.isFinite(value)) return value > 0 ? "∞" : "−∞";
+      // Sub-milli magnitudes would round to "0.000" and read as exactly zero
+      // (e.g. a +0.0004 worst slack) — show them in exponential instead.
+      if (value !== 0 && Math.abs(value) < 0.001) return value.toExponential(2);
       if (Math.abs(value) < 100) return value.toFixed(3);
       return Math.round(value).toLocaleString();
     }

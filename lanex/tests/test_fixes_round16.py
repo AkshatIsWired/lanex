@@ -86,8 +86,9 @@ def test_slice_steps_honours_from_to_skip():
         ["s.synth", "s.floorplan", "s.place"]
     assert FlowRunner._slice_steps(steps, None, None, ["s.place"]) == \
         ["s.lint", "s.synth", "s.floorplan", "s.route", "s.gds"]
-    # Inverted window falls back to the full list.
-    assert FlowRunner._slice_steps(steps, "s.route", "s.synth", []) == steps
+    # Inverted window is a user mistake — running the FULL flow instead would
+    # silently ignore their intent; no steps means the caller raises clearly.
+    assert FlowRunner._slice_steps(steps, "s.route", "s.synth", []) == []
 
 
 def test_dockerized_argv_from_to_emit_flags():
@@ -104,22 +105,38 @@ def test_dockerized_argv_from_to_emit_flags():
 
 
 # --------------------------------------------------------------------------- #3/#6
-def test_container_tool_argv_magic_uses_rcfile_and_mounts():
+def test_container_tool_argv_magic_uses_rcfile_and_mounts(tmp_path):
     from lanex.controller import container_tools
+
+    # The rc must EXIST to ride along (round-52: never pass a nonexistent
+    # -rcfile — same guard the klayout -l flag gained in round 50).
+    root = tmp_path / "pdks"
+    rc = root / "sky130A" / "libs.tech" / "magic" / "sky130A.magicrc"
+    rc.parent.mkdir(parents=True)
+    rc.write_text("# rc", encoding="utf-8")
 
     argv = container_tools.build_argv(
         "docker", "ghcr.io/librelane/librelane:3.0.4", "magic",
         design_dir=Path("/proj"), work_dir=Path("/proj/runs/r1"),
         gds=Path("/proj/runs/r1/final/gds/top.gds"),
-        pdk="sky130A", pdk_root="/pdks",
+        pdk="sky130A", pdk_root=str(root),
     )
     s = " ".join(argv)
     assert s.startswith("docker run --rm")
     assert "-v /proj:/proj" in s          # design dir mounted at same path
-    assert "-v /pdks:/pdks" in s          # PDK root mounted
-    assert "PDK_ROOT=/pdks" in s
-    assert "magic -rcfile /pdks/sky130A/libs.tech/magic/sky130A.magicrc" in s
+    assert f"-v {root}:{root}" in s       # PDK root mounted
+    assert f"PDK_ROOT={root}" in s
+    assert f"magic -rcfile {rc}" in s
     assert s.endswith("/proj/runs/r1/final/gds/top.gds")
+
+    # Missing rc -> the flag is omitted entirely (bare magic), never a dud path.
+    argv2 = container_tools.build_argv(
+        "docker", "img", "magic",
+        design_dir=Path("/proj"), work_dir=Path("/proj/runs/r1"),
+        gds=Path("/proj/runs/r1/final/gds/top.gds"),
+        pdk="nosuchpdk", pdk_root=str(root),
+    )
+    assert "-rcfile" not in " ".join(argv2)
 
 
 def test_container_tool_openroad_is_gui():

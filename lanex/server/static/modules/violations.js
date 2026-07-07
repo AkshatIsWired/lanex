@@ -77,7 +77,7 @@ async function onSelectReport(r) {
   try {
     if (isDrc) {
       const resp = await api.reportsDrc(r.path);
-      renderDrc(r, resp.violations || []);
+      renderDrc(r, resp);
     } else if (isLvs) {
       const resp = await api.reportsLvs(r.path);
       renderLvs(r, resp);
@@ -96,12 +96,28 @@ function header(r, extra) {
     (extra ? " <span class='muted'>· " + fmt.escape(extra) + "</span>" : "") + "</div>";
 }
 
-function renderDrc(r, violations) {
+function renderDrc(r, resp) {
   const out = document.getElementById("violations-output");
   if (!out) return;
+  const violations = (resp && resp.violations) || [];
+  const status = (resp && resp.status) || "parsed"; // older servers: no field
+  // Three states, never two: a missing/unreadable report must NOT look like a
+  // clean one — "0 violations" is only green when the parser really read it.
+  if (status === "missing") {
+    out.innerHTML = header(r) +
+      "<p><span class='pill pill-fail'>Report not found</span> " +
+      fmt.escape((resp && resp.error) || "The report file does not exist (was the run deleted or moved?).") + "</p>";
+    return;
+  }
+  if (status === "error") {
+    out.innerHTML = header(r) +
+      "<p><span class='pill pill-warn'>Report unreadable</span> " +
+      fmt.escape((resp && resp.error) || "Could not parse this DRC report — open the raw file to inspect it.") + "</p>";
+    return;
+  }
   if (!violations.length) {
     out.innerHTML = header(r) +
-      "<div class='empty'><span class='ico'>" + icon('check',{size:40}) + "</span><h3>No violations</h3><p>Clean DRC report.</p></div>";
+      "<div class='empty'><span class='ico'>" + icon('check',{size:40}) + "</span><h3>No violations</h3><p>Clean DRC report (parsed).</p></div>";
     return;
   }
   const cards = violations.slice(0, 50).map((v) => {

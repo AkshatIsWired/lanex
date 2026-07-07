@@ -148,6 +148,31 @@ def find_klayout_lyp(libs_tech: Path, pdk: str) -> Optional[Path]:
     return None
 
 
+def find_magicrc(libs_tech: Path, pdk: str) -> Optional[Path]:
+    """Best Magic startup rc for *pdk* under a ``libs.tech`` directory, or None.
+
+    Mirrors :func:`find_klayout_lyp`: PDKs mostly ship a per-variant
+    ``magic/<pdk>.magicrc``, but the same family-level naming variance that
+    broke the KLayout ``.lyp`` lookup on gf180 (round 50) can bite here too —
+    so try exact → family → any ``magic/*.magicrc``. A missing rc must result
+    in NO ``-rcfile`` flag, never a nonexistent path passed to Magic.
+    """
+    magic = libs_tech / "magic"
+    try:
+        from . import installer
+        family = installer._pdk_family(pdk)
+    except Exception:
+        family = pdk
+    for c in (magic / f"{pdk}.magicrc", magic / f"{family}.magicrc"):
+        if c.is_file():
+            return c
+    if magic.is_dir():
+        hits = sorted(p for p in magic.glob("*.magicrc") if p.is_file())
+        if hits:
+            return hits[0]
+    return None
+
+
 def _pdk_tech_files(pdk: Optional[str], pdk_root: Optional[str]) -> Dict[str, Optional[str]]:
     """Locate the PDK tech files desktop viewers need to render layers correctly:
     Magic's ``<pdk>.magicrc`` and KLayout's layer-properties ``<pdk>.lyp``.
@@ -173,8 +198,8 @@ def _pdk_tech_files(pdk: Optional[str], pdk_root: Optional[str]) -> Dict[str, Op
             continue
         seen.add(key)
         base = root / pdk / "libs.tech"
-        magicrc = base / "magic" / f"{pdk}.magicrc"
-        if out["magicrc"] is None and magicrc.is_file():
+        magicrc = find_magicrc(base, pdk)
+        if out["magicrc"] is None and magicrc is not None:
             out["magicrc"] = str(magicrc)
             out["root"] = str(root)        # remember the root for PDK_ROOT env
         lyp = find_klayout_lyp(base, pdk)
@@ -328,8 +353,20 @@ def open_in_tool(tool: str, file_path: str | Path, *,
         if sys.platform != "win32":
             kwargs["start_new_session"] = True  # detach from the server process
         subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool only
-        return {"ok": True, "tool": tool, "label": spec["label"], "file": str(f),
-                "used_tech": bool((use_tech and (tech.get("magicrc") or tech.get("klayout_lyp")))
-                                  or tech.get("gds3d_process"))}
+        out: Dict[str, Any] = {
+            "ok": True, "tool": tool, "label": spec["label"], "file": str(f),
+            "used_tech": bool((use_tech and (tech.get("magicrc") or tech.get("klayout_lyp")))
+                              or tech.get("gds3d_process")),
+            "tech_root": tech.get("root"),
+        }
+        # Provenance: when the tech files came from a DIFFERENT PDK root than the
+        # run's (fallback search), the render may use a different PDK version
+        # than the one that produced this GDS — say so instead of staying silent.
+        if (out["used_tech"] and pdk_root and tech.get("root")
+                and str(Path(tech["root"]).resolve()) != str(Path(pdk_root).resolve())):
+            out["tech_note"] = (f"PDK tech files loaded from {tech['root']} — not the run's "
+                                f"own PDK root ({pdk_root}); layer rendering may differ if the "
+                                "versions differ.")
+        return out
     except Exception as ex:  # pragma: no cover - platform dependent
         return {"ok": False, "error": str(ex)}

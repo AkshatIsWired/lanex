@@ -487,3 +487,30 @@ def network_status() -> dict:
         "dns_ok": resolves,
         "remediation": rem,
     }
+
+
+def atomic_write_text(path, text: str, *, encoding: str = "utf-8") -> None:
+    """Write *text* to *path* atomically (temp file + ``os.replace``).
+
+    A plain ``write_text`` truncates in place, so a crash mid-write leaves
+    invalid JSON — for the GUI's sidecars (custom cells/macros, notes,
+    gui-run.json) that silently reads back as "no data", losing user state.
+    ``os.replace`` is atomic on POSIX and Windows (same filesystem, which a
+    sibling temp file guarantees). Raises on failure like ``write_text``.
+    """
+    import os as _os
+    import tempfile as _tempfile
+    from pathlib import Path as _Path
+
+    p = _Path(path)
+    fd, tmp = _tempfile.mkstemp(prefix=p.name + ".", suffix=".tmp", dir=str(p.parent))
+    try:
+        with _os.fdopen(fd, "w", encoding=encoding) as fh:
+            fh.write(text)
+        _os.replace(tmp, str(p))
+    except Exception:
+        try:
+            _os.unlink(tmp)
+        except OSError:
+            pass
+        raise

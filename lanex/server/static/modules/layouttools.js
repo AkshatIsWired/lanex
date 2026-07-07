@@ -85,6 +85,8 @@ async function launch(btn, tag) {
       r = await api.openInTool(tool, tag, undefined, useTech);
       if (r && r.ok) toast.show("Launched " + (r.label || tool) +
         (tool !== "gds3d" ? (useTech && r.used_tech ? " (PDK colours)" : " (default view)") : ""), "success");
+      // Provenance: tech files resolved from a different PDK root than the run's.
+      if (r && r.ok && r.tech_note) toast.show(r.tech_note, "warn");
     }
     if (!(r && r.ok)) {
       const msg = (r && (r.error || r.need)) || "could not launch";

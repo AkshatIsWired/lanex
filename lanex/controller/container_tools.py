@@ -144,8 +144,14 @@ def _tool_command(tool: str, *, gds: Optional[Path], pdk: Optional[str],
     if tool == "magic":
         cmd = ["magic"]
         if pdk and pdk_root:
-            magicrc = Path(pdk_root) / pdk / "libs.tech" / "magic" / f"{pdk}.magicrc"
-            cmd += ["-rcfile", str(magicrc)]
+            # Same guard the klayout branch below gained in round 50: only pass
+            # -rcfile when the rc actually exists (family-level naming variance
+            # + a nonexistent path would error Magic out), resolved through the
+            # shared exact→family→glob lookup.
+            from .desktop import find_magicrc
+            magicrc = find_magicrc(Path(pdk_root) / pdk / "libs.tech", pdk)
+            if magicrc is not None:
+                cmd += ["-rcfile", str(magicrc)]
         if gds:
             cmd += [str(gds)]
         return cmd

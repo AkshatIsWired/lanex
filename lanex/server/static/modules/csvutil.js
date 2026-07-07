@@ -2,7 +2,11 @@
 // DSE). Pure, zero dependency, RFC-4180 quoting.
 
 export function csvCell(v) {
-  const s = (v === null || v === undefined) ? "" : String(v);
+  let s = (v === null || v === undefined) ? "" : String(v);
+  // Spreadsheet formula-injection hardening: a NON-numeric cell starting with
+  // = + - @ or a tab would execute as a formula when the CSV is opened in
+  // Excel/Sheets. Plain numbers (incl. negatives/exponents) pass unchanged.
+  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d*\.?\d+([eE][+-]?\d+)?$/.test(s)) s = "'" + s;
   return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 

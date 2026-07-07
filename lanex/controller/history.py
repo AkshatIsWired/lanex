@@ -122,7 +122,22 @@ def _success_from_metrics(metrics: Dict[str, Any], *, run_dir: Optional[Path] = 
                 return False
         elif v is not None and v:
             return False
-    # No metrics but completed -> still a success (e.g. a partial -F/-T run).
+    # No metrics but completed -> still a success (e.g. a partial -F/-T run) —
+    # but only when every step dir actually finished (has state_out.json). A
+    # final/ dir sitting next to an aborted step means the run dir is mangled;
+    # claiming green there would let the Runs list disagree with Verify.
+    if run_dir is not None and not metrics:
+        try:
+            for entry in run_dir.iterdir():
+                if not entry.is_dir():
+                    continue
+                prefix, sep, _ = entry.name.partition("-")
+                if not prefix.isdigit() or not sep:
+                    continue
+                if (entry / "state_in.json").is_file() and not (entry / "state_out.json").is_file():
+                    return False
+        except Exception:
+            pass
     return True if run_dir is not None else bool(metrics)
 
 

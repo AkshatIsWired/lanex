@@ -387,6 +387,7 @@ async function onRunClick() {
       toast.show("Run refused: " + (res.reason || "unknown"), "error");
       return;
     }
+    if (res.warning) toast.show(res.warning, "warn");
     paintRunning(true);
     openLogsTab();
   } catch (ex) {

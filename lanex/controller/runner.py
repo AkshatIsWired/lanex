@@ -562,8 +562,10 @@ class FlowRunner:
             meta["written_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             import json as _json
 
-            (run_dir / "gui-run.json").write_text(
-                _json.dumps(_safe_jsonable(meta), indent=2) + "\n", encoding="utf-8"
+            from . import platform_env
+            platform_env.atomic_write_text(
+                run_dir / "gui-run.json",
+                _json.dumps(_safe_jsonable(meta), indent=2) + "\n",
             )
             self._gui_meta_written = True
         except Exception:  # pragma: no cover - fs/permission dependent
@@ -1075,7 +1077,10 @@ class FlowRunner:
         lo = step_ids.index(frm) if (frm and frm in step_ids) else 0
         hi = step_ids.index(to) if (to and to in step_ids) else len(step_ids) - 1
         if hi < lo:
-            lo, hi = 0, len(step_ids) - 1
+            # An inverted range is a user mistake — running the FULL flow instead
+            # (the old behaviour) silently ignores their intent. Return no steps
+            # so the caller raises "no steps to run (check From/To/Skip)".
+            return []
         skipset = set(skip or [])
         return [s for s in step_ids[lo:hi + 1] if s not in skipset]
 

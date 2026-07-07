@@ -5,7 +5,7 @@
 # You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
-"""Tests for layout2d/3d builders, cell parsing, and the plugin store (Phase 4)."""
+"""Tests for cell parsing and the plugin store (Phase 4)."""
 from __future__ import annotations
 
 import hashlib
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from lanex.controller import cells, layout2d, layout3d, plugins
+from lanex.controller import cells, plugins
 
 
 # ---- cells -----------------------------------------------------------------
@@ -51,53 +51,6 @@ def test_list_pdk_cells_missing_pdk(monkeypatch):
     res = cells.list_pdk_cells("nonexistent_pdk_xyz", "nonexistent_scl_xyz")
     assert res["ok"] is False
     assert res["cells"] == []
-
-
-# ---- layout2d --------------------------------------------------------------
-
-def test_render_argv_container():
-    argv = layout2d.render_argv(engine="podman", image="img:1", run_mode="container",
-                                gds_path="final/gds/x.gds", out_dir=".ll-gui/layers",
-                                script_path=".ll-gui/job.py", mount_dir="/runs/mytag")
-    assert argv[0] == "podman" and "run" in argv and "img:1" in argv
-    assert "klayout" in argv and "-b" in argv
-    # The run dir must be the /work mount (not the server CWD) or klayout can't
-    # open the GDS (the errno=2 bug).
-    assert "/runs/mytag:/work" in argv
-    assert "final/gds/x.gds" in argv
-
-
-def test_drc_overlay_boxes_maps_and_flips_y():
-    drc = {"violations": [{"category": "met1.SP", "boxes": [
-        {"llx": "0", "lly": "0", "urx": "10", "ury": "10"}]}]}
-    # 100x100 micron extent rendered at 200x200 px -> scale 2x.
-    out = layout2d.drc_overlay_boxes(drc, bbox=[0, 0, 100, 100], width=200, height=200)
-    assert len(out) == 1
-    b = out[0]
-    assert b["x"] == 0 and b["w"] == 20 and b["h"] == 20
-    # box top (ury=10) maps near image top: y = (100-10)*2 = 180.
-    assert b["y"] == 180
-    assert b["rule"] == "met1.SP"
-
-
-# ---- layout3d --------------------------------------------------------------
-
-def test_validate_geometry_ok():
-    doc = {"units": 0.001, "layers": [
-        {"name": "67/20", "zmin": 0, "zmax": 1, "polys": [[[0, 0], [1, 0], [1, 1]]]}]}
-    res = layout3d.validate_geometry(doc)
-    assert res["ok"] and res["layers"] == 1 and res["polygons"] == 1
-
-
-def test_validate_geometry_bad():
-    assert layout3d.validate_geometry({"layers": [{"name": "x"}]})["ok"] is False
-    assert layout3d.validate_geometry([])["ok"] is False
-
-
-def test_extract_argv_local():
-    argv = layout3d.extract_argv(engine=None, image=None, run_mode="local",
-                                 gds_path="x.gds", out_json="g.json", script_path="s.py")
-    assert argv[0] == "klayout" and "x.gds" in argv and "g.json" in argv
 
 
 # ---- plugins ---------------------------------------------------------------

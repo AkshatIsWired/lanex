@@ -111,7 +111,10 @@ def test_clean_overrides_strips_empty_keeps_falsy():
     assert out["FP_CORE_UTIL"] == "55"
     assert out["SYNTH_NO_FLAT"] is False
     assert out["GRT_ANTENNA_REPAIR_ITERS"] == 0
-    assert out["VERILOG_FILES"] == ["a.v"]
+    # Lists are whitespace-joined — that's how LibreLane parses a list override
+    # (KEY=a b); a raw list would corrupt into its Python repr downstream.
+    assert out["VERILOG_FILES"] == "a.v"
+    assert _clean_overrides({"EXTRA_LEFS": ["a.lef", "b.lef"]})["EXTRA_LEFS"] == "a.lef b.lef"
 
 
 # ----------------------------------------------------- #9/#10 container tool argv

@@ -34,11 +34,33 @@ def parse_drc(path: str | Path) -> Dict[str, Any]:
     """Run LibreLane's DRC parser and yield a JSON-safe DRC report.
 
     Decides parser based on file extension or magic byte sniffing.
+
+    Three-state (mirrors :func:`parse_lvs`): the payload carries ``status`` =
+    ``"parsed"`` (the parser really read the report — 0 violations then means
+    *clean*), ``"missing"`` (no such file), or ``"error"`` (unreadable/empty).
+    A missing or empty report must never be indistinguishable from a clean one
+    — the old behaviour returned a bare 0-violation report for a missing file,
+    which the UI rendered as a green "Clean DRC report".
     """
     path = Path(path)
     if not path.is_file():
-        return to_json(DRCReport(module="UNKNOWN", bbox_count=0, violations=[]))
+        out = to_json(DRCReport(module="UNKNOWN", bbox_count=0, violations=[]))
+        out["status"] = "missing"
+        out["error"] = f"report file not found: {path}"
+        return out
     name = path.name.lower()
+    try:
+        empty = path.stat().st_size == 0 or not path.read_text(
+            encoding="utf-8", errors="replace").strip()
+    except Exception:
+        empty = False
+    if empty:
+        # A real Magic/OpenROAD DRC report always has content (header/counts);
+        # an empty file is a truncated or failed write, not a clean result.
+        out = to_json(DRCReport(module="UNKNOWN", bbox_count=0, violations=[]))
+        out["status"] = "error"
+        out["error"] = "report file is empty — the DRC step may not have finished writing it"
+        return out
     with path.open("r", encoding="utf-8", errors="replace") as f:
         try:
             from librelane.common.drc import DRC  # type: ignore
@@ -48,7 +70,7 @@ def parse_drc(path: str | Path) -> Dict[str, Any]:
             else:
                 drc, count = DRC.from_magic(f)
         except Exception as ex:
-            return to_json(
+            out = to_json(
                 DRCReport(
                     module="UNKNOWN",
                     bbox_count=0,
@@ -61,6 +83,9 @@ def parse_drc(path: str | Path) -> Dict[str, Any]:
                     )],
                 )
             )
+            out["status"] = "error"
+            out["error"] = str(ex)
+            return out
     violations: List[Violation] = []
     for vio in drc.violations.values():
         try:
@@ -78,7 +103,9 @@ def parse_drc(path: str | Path) -> Dict[str, Any]:
                 boxes=[_box_to_dict(b) for b in vio.bounding_boxes],
             )
         )
-    return to_json(DRCReport(module=drc.module, bbox_count=count, violations=violations))
+    out = to_json(DRCReport(module=drc.module, bbox_count=count, violations=violations))
+    out["status"] = "parsed"
+    return out
 
 
 def parse_lvs(path: str | Path) -> Dict[str, Any]:

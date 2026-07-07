@@ -20,6 +20,10 @@ def test_parse_drc_missing_file(tmp_path: Path):
     out = reports.parse_drc(tmp_path / "nope.drc")
     assert out["bbox_count"] == 0
     assert out["violations"] == []
+    # Three-state: a missing report must NEVER be indistinguishable from a
+    # clean one (the UI shows green only for status == "parsed").
+    assert out["status"] == "missing"
+    assert out["error"]
 
 
 def test_parse_drc_empty_file(tmp_path: Path):
@@ -29,8 +33,9 @@ def test_parse_drc_empty_file(tmp_path: Path):
     f.write_text("", encoding="utf-8")
     out = reports.parse_drc(f)
     assert out is not None
-    # Empty file -> either parser returns (0 violations, 0 bboxes) or raises.
     assert "bbox_count" in out
+    # Empty file = truncated/failed write, not a clean result.
+    assert out["status"] == "error"
 
 
 def test_parse_lvs_extracts_counts(tmp_path: Path):

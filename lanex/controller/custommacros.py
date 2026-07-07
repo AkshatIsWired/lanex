@@ -95,8 +95,11 @@ def _load(design_dir: str | Path) -> List[Dict[str, Any]]:
 
 
 def _save(design_dir: str | Path, macros: List[Dict[str, Any]]) -> None:
+    from . import platform_env
     f = _sidecar_path(design_dir)
-    f.write_text(json.dumps({"macros": macros}, indent=2) + "\n", encoding="utf-8")
+    # Atomic: a crash mid-write must not corrupt the sidecar (a corrupt sidecar
+    # reads back as "no macros" and the next save persists the loss).
+    platform_env.atomic_write_text(f, json.dumps({"macros": macros}, indent=2) + "\n")
 
 
 def _confined(design_dir: Path, target: Path) -> bool:
@@ -190,6 +193,9 @@ def save_macro(
         if spec is None:
             return {"ok": False, "error": f"unknown macro view '{kind}'"}
         fname = Path((payload or {}).get("filename") or f"{name}.{kind}").name
+        # Space-free on disk: several LibreLane steps hand view paths to Tcl
+        # scripts that split lists on whitespace — don't seed that failure.
+        fname = re.sub(r"\s+", "_", fname)
         if not any(fname.lower().endswith(e) for e in spec["exts"]):
             return {"ok": False, "error": f"{kind} file should end with {' or '.join(spec['exts'])}"}
         try:
@@ -289,21 +295,49 @@ def _macro_to_config(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _user_config_macros(design_dir: Path) -> Dict[str, Any]:
-    """Best-effort read of any ``MACROS`` already in the user's JSON config, so an
-    overlay augments rather than silently replaces it. Tcl/unreadable configs or a
-    non-dict ``MACROS`` are skipped (the overlay then carries only GUI macros)."""
+    """Best-effort read of any ``MACROS`` already in the user's JSON/YAML config,
+    so an overlay augments rather than silently replaces it. Tcl/unreadable
+    configs or a non-dict ``MACROS`` are skipped (the overlay then carries only
+    GUI macros — see :func:`merge_warning` for the honest heads-up)."""
     for ext in ("json", "yaml", "yml"):
         f = design_dir / f"config.{ext}"
         if not f.is_file():
             continue
         try:
-            doc = json.loads(f.read_text(encoding="utf-8")) if ext == "json" else None
+            if ext == "json":
+                doc = json.loads(f.read_text(encoding="utf-8"))
+            else:
+                # YAML configs are first-class in LibreLane; parse with the same
+                # library it uses (already a dependency) so a config.yaml MACROS
+                # is MERGED rather than silently replaced by the overlay.
+                import yaml  # type: ignore
+                doc = yaml.safe_load(f.read_text(encoding="utf-8"))
         except Exception:
             return {}
         if isinstance(doc, dict) and isinstance(doc.get("MACROS"), dict):
             return dict(doc["MACROS"])
         return {}
     return {}
+
+
+def merge_warning(design_dir: str | Path) -> Optional[str]:
+    """A plain-language warning when enabled GUI macros will REPLACE (not merge
+    with) macros in the user's own config — i.e. a Tcl config that mentions
+    ``MACROS`` (we can't parse Tcl to merge it). ``None`` when there's nothing
+    to warn about."""
+    d = Path(design_dir).resolve()
+    if not any(m.get("enabled", True) for m in _load(d)):
+        return None
+    tcl = d / "config.tcl"
+    if tcl.is_file() and not any((d / f"config.{e}").is_file() for e in ("json", "yaml", "yml")):
+        try:
+            if "MACROS" in tcl.read_text(encoding="utf-8", errors="replace"):
+                return ("your config.tcl defines MACROS, which the GUI cannot merge — "
+                        "for this run the GUI-managed macros will replace it. Move the "
+                        "config's MACROS into config.json/yaml to combine both.")
+        except Exception:
+            return None
+    return None
 
 
 def build_macros_dict(design_dir: str | Path) -> Dict[str, Any]:
@@ -336,7 +370,8 @@ def write_overlay(design_dir: str | Path) -> Optional[str]:
             pass
         return None
     try:
-        overlay.write_text(json.dumps({"MACROS": macros}, indent=2) + "\n", encoding="utf-8")
+        from . import platform_env
+        platform_env.atomic_write_text(overlay, json.dumps({"MACROS": macros}, indent=2) + "\n")
     except Exception:
         return None
     return str(overlay)

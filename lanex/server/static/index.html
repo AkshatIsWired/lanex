@@ -13,8 +13,12 @@
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
        real icon (zero extra deps; static manifest, no service worker). -->
   <link rel="manifest" href="/static/manifest.json" />
-  <meta name="theme-color" content="#0e1524" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f7fb" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1524" />
   <link rel="apple-touch-icon" href="/static/vendor/icon-192.png" />
+  <!-- Metric tables must never be rewritten by browser auto-translate (it
+       mangles numeric text nodes) — this page displays signoff numbers. -->
+  <meta name="google" content="notranslate" />
 </head>
 <body class="theme-dark">
   <!-- Splash: covers the whole window until boot() finishes. -->
