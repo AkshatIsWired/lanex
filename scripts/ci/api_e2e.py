@@ -25,6 +25,9 @@ engine available. Cases (all must pass; each prints PASS/FAIL + detail):
   E10 crash-restart honesty — kill -9 mid-run (bypasses the cancel path BY
       DESIGN, so the orphan container is expected and cleaned here), restart,
       the interrupted run lists honestly and is not "ready"
+  E11 custom cell + macro fidelity — a cell (EXTRA_LEFS/EXTRA_EXCLUDED_CELLS)
+      and a hard macro (MACROS overlay) saved over HTTP land VERBATIM in the
+      run's resolved.json, and gui-run.json records the overlay + its hash
 """
 from __future__ import annotations
 
@@ -524,10 +527,103 @@ def case_e10_crash_restart(server: Server) -> str:
     return f"orphan(s) cleaned: {len(orphans)}; run listed post-restart, ready={v.get('ready')!r}"
 
 
+def case_e11_custom_cell_macro() -> str:
+    """Custom cell + hard macro over HTTP → resolved.json, no silent drift.
+
+    Proves the ONE code path every launch shares (_assemble_overrides): the
+    cell rides EXTRA_LEFS + EXTRA_EXCLUDED_CELLS overrides, the macro rides
+    the .gui-macros.json overlay config. The flow only runs to the first step
+    (Verilator.Lint) — LibreLane resolves + validates the whole config at run
+    start, which is exactly the fidelity under test; the dummy GDS/LEF bytes
+    never get consumed by lint. Byte-real assertions:
+      - resolved.json EXTRA_LEFS contains the uploaded cell LEF (absolute)
+      - resolved.json EXTRA_EXCLUDED_CELLS carries the swap-out name
+      - resolved.json MACROS.<name> exists with gds/lef views + the instance
+      - gui-run.json lists the overlay in extra_config_files and its recorded
+        sha256 matches the overlay file on disk (reproducibility contract)
+    """
+    import base64
+    import hashlib
+
+    def _idle() -> bool:
+        _s, st = http("GET", "/api/run/status")
+        return isinstance(st, dict) and st.get("running") is False
+    assert wait_for(_idle, 60, 2, "runner idle before E11"), "runner busy"
+
+    design = WORK / "spm_macro"
+    if design.exists():
+        shutil.rmtree(design)
+    shutil.copytree(REPO / "spm", design)
+    s, d = http("POST", "/api/set-design-dir", {"path": str(design)})
+    assert s == 200, f"set-design-dir → {s} {d}"
+
+    b64 = lambda b: base64.b64encode(b).decode("ascii")  # noqa: E731
+    s, d = http("POST", "/api/custom-cells/save", {
+        "design_dir": str(design), "name": "ci_cell",
+        "swap_out": ["sky130_fd_sc_hd__and2_1"],
+        "views": {"lef": {"filename": "ci_cell.lef", "content_b64": b64(b"MACRO ci_cell\nEND ci_cell\n")}},
+    })
+    assert s == 200 and (d or {}).get("ok", True), f"custom-cells/save → {s} {d}"
+    s, d = http("POST", "/api/custom-macros/save", {
+        "design_dir": str(design), "name": "ci_mac",
+        "instances": [{"name": "u_ci_mac", "location": None, "orientation": "N"}],
+        "views": {
+            "gds": {"filename": "ci_mac.gds", "content_b64": b64(b"\x00GDS")},
+            "lef": {"filename": "ci_mac.lef", "content_b64": b64(b"MACRO ci_mac\nEND ci_mac\n")},
+        },
+    })
+    assert s == 200 and (d or {}).get("ok", True), f"custom-macros/save → {s} {d}"
+
+    body = {"tag": "macrocheck",
+            "overrides": {"PDK": PDK, "STD_CELL_LIBRARY": SCL},
+            "sources": [], "extras": [], "mode": "full", "run_mode": "container",
+            "to": "Verilator.Lint"}
+    s, d = http("POST", "/api/run/start", body)
+    assert s == 200, f"run/start → {s} {d}"
+    status = poll_flow_done(FLOW_TIMEOUT)
+    failed = {k: v for k, v in (status.get("step_statuses") or {}).items()
+              if v == "failed"}
+    assert not failed, f"steps failed: {failed}"
+
+    run_dir = design / "runs" / "macrocheck"
+    resolved = json.loads((run_dir / "resolved.json").read_text(encoding="utf-8"))
+
+    lefs = resolved.get("EXTRA_LEFS") or []
+    lefs = lefs if isinstance(lefs, list) else [lefs]
+    assert any(str(p).endswith("ci_cell.lef") for p in lefs), \
+        f"cell LEF missing from EXTRA_LEFS: {lefs}"
+    excl = resolved.get("EXTRA_EXCLUDED_CELLS") or []
+    excl = excl if isinstance(excl, list) else [excl]
+    assert "sky130_fd_sc_hd__and2_1" in [str(x) for x in excl], \
+        f"swap-out cell missing from EXTRA_EXCLUDED_CELLS: {excl}"
+
+    macros = resolved.get("MACROS") or {}
+    assert "ci_mac" in macros, f"macro missing from resolved MACROS: {list(macros)}"
+    mac = macros["ci_mac"]
+    assert any(str(p).endswith("ci_mac.gds") for p in (mac.get("gds") or [])), mac
+    assert any(str(p).endswith("ci_mac.lef") for p in (mac.get("lef") or [])), mac
+    assert "u_ci_mac" in (mac.get("instances") or {}), mac
+
+    meta = json.loads((run_dir / "gui-run.json").read_text(encoding="utf-8"))
+    ecf = meta.get("extra_config_files") or []
+    assert ecf and any(str(p).endswith(".gui-macros.json") for p in ecf), \
+        f"overlay not recorded in gui-run.json: {ecf}"
+    overlay = Path(ecf[0])
+    assert overlay.is_file(), f"overlay vanished: {overlay}"
+    want_hash = hashlib.sha256(overlay.read_bytes()).hexdigest()
+    assert meta.get("extra_config_hash") == want_hash, \
+        "gui-run.json overlay hash != overlay file on disk"
+
+    if getattr(CTX, "canary_design", None):
+        s, _d = http("POST", "/api/set-design-dir", {"path": str(CTX.canary_design)})
+        assert s == 200
+    return "cell in EXTRA_LEFS/EXCLUDED, macro in MACROS w/ instance, overlay hash verified"
+
+
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    log("api_e2e driver r5")  # bump when editing: proves which code CI/logs ran
+    log("api_e2e driver r6")  # bump when editing: proves which code CI/logs ran
     WORK.mkdir(parents=True, exist_ok=True)
     pdk_root = PDK_ROOT
     ensure_pdk(pdk_root)
@@ -545,6 +641,7 @@ def main() -> int:
         ("E9 spaces-in-path guard", case_e9_spaces_guard),
         ("E3 cancel kills the container", case_e3_cancel_kills),
         ("E10 crash-restart honesty", lambda: case_e10_crash_restart(server)),
+        ("E11 custom cell + macro fidelity", case_e11_custom_cell_macro),
     ]
     results: List[Tuple[str, bool, str]] = []
     try:
