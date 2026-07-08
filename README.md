@@ -15,7 +15,7 @@ A browser cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane
 [![License](https://img.shields.io/badge/license-Apache%202.0-2f6fe0.svg?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-2f6fe0?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-stdlib%20only-4da3ff?style=flat-square)](#architecture)
-[![Tests](https://img.shields.io/badge/tests-415%20passing-3fb950?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/tests-487%20passing-3fb950?style=flat-square)](#testing)
 [![Built on LibreLane](https://img.shields.io/badge/built%20on-LibreLane-2f6fe0?style=flat-square)](https://github.com/librelane/librelane)
 
 <a href="#install"><b>Install</b></a> &nbsp;·&nbsp;
@@ -525,7 +525,7 @@ lanex/
 ├─ controller/   pure-Python core (librelane + stdlib only)
 ├─ server/       http.server + SSE; no third-party deps
 │  └─ static/    vanilla ES-module SPA + vendored ECharts
-└─ tests/        415 tests, incl. a golden-run corpus
+└─ tests/        487 tests, incl. a golden-run corpus
 ```
 
 ---
@@ -534,7 +534,7 @@ lanex/
 
 ```bash
 pip install pytest
-python3 -m pytest lanex/tests -q     # 415 passed, 3 skipped
+python3 -m pytest lanex/tests -q     # 487 passed, 3 skipped
 ```
 
 The suite includes a golden-run corpus (a clean run and a non-finite-metric run)
