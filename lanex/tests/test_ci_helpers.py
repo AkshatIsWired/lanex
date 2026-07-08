@@ -34,6 +34,7 @@ if str(_SC) not in sys.path:
 import bundle_verify  # noqa: E402
 import compare_flat  # noqa: E402
 import csv_cross  # noqa: E402
+import layout_probe  # noqa: E402
 from differential_run import build_native_argv  # noqa: E402
 from flatten_metrics import descend, flatten  # noqa: E402
 from hash_tree import manifest  # noqa: E402
@@ -242,3 +243,81 @@ def test_drivers_importable():
     import differential_run  # noqa: F401
     import leg_local_run  # noqa: F401
     import sse_capture  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# layout_probe — the G8 "correct, non-empty layout reaches the viewers" check.
+# These prove the DETECTOR: a real GDS passes; empty/truncated/not-a-GDS fail;
+# and the viewer would pick the same file routes._final_gds does.
+# ---------------------------------------------------------------------------
+
+_VALID_GDS = b"\x00\x06\x00\x02\x00\x07" + b"\x00" * 64  # HEADER record + filler
+
+
+def test_layout_probe_accepts_real_gds(tmp_path: Path):
+    f = tmp_path / "spm.gds"
+    f.write_bytes(_VALID_GDS)
+    st = layout_probe.gds_status(f)
+    assert st["ok"] is True
+
+
+def test_layout_probe_rejects_empty(tmp_path: Path):
+    f = tmp_path / "spm.gds"
+    f.write_bytes(b"")
+    st = layout_probe.gds_status(f)
+    assert st["ok"] is False and "empty" in st["reason"].lower()
+
+
+def test_layout_probe_rejects_truncated_or_nongds(tmp_path: Path):
+    f = tmp_path / "spm.gds"
+    f.write_bytes(b"NOT a gdsii stream at all")
+    st = layout_probe.gds_status(f)
+    assert st["ok"] is False and "gds" in st["reason"].lower()
+
+
+def test_layout_probe_accepts_gzipped(tmp_path: Path):
+    import gzip
+    # gzipped under a .gds name, and a real .gds.gz.
+    (tmp_path / "a.gds").write_bytes(gzip.compress(_VALID_GDS))
+    (tmp_path / "b.gds.gz").write_bytes(gzip.compress(_VALID_GDS))
+    assert layout_probe.gds_status(tmp_path / "a.gds")["ok"] is True
+    assert layout_probe.gds_status(tmp_path / "b.gds.gz")["ok"] is True
+    # a .gz that is not gzip data is rejected.
+    (tmp_path / "c.gds.gz").write_bytes(b"plain, not gzip")
+    assert layout_probe.gds_status(tmp_path / "c.gds.gz")["ok"] is False
+
+
+def test_layout_probe_missing_file(tmp_path: Path):
+    assert layout_probe.gds_status(tmp_path / "nope.gds")["ok"] is False
+
+
+def test_pick_final_gds_mirrors_gui_order(tmp_path: Path):
+    # routes._final_gds searches final/{gds,klayout_gds,mag_gds}; gds wins.
+    (tmp_path / "final" / "mag_gds").mkdir(parents=True)
+    (tmp_path / "final" / "mag_gds" / "spm.gds").write_bytes(_VALID_GDS)
+    (tmp_path / "final" / "gds").mkdir(parents=True)
+    (tmp_path / "final" / "gds" / "spm.gds").write_bytes(_VALID_GDS)
+    pick = layout_probe.pick_final_gds(tmp_path)
+    assert pick is not None and pick.parent.name == "gds"
+
+
+def test_viewer_gds_status_end_to_end(tmp_path: Path):
+    # Healthy run: the viewer file is valid.
+    good = tmp_path / "runs" / "good"
+    (good / "final" / "gds").mkdir(parents=True)
+    (good / "final" / "gds" / "spm.gds").write_bytes(_VALID_GDS)
+    st = layout_probe.viewer_gds_status(good)
+    assert st["ok"] is True and st["path"].endswith("spm.gds")
+
+    # Failed run left a 0-byte GDS: the probe FLAGS it (this is the day the
+    # differential G8 gate would go red and stop a bad hand-off).
+    bad = tmp_path / "runs" / "bad"
+    (bad / "final" / "gds").mkdir(parents=True)
+    (bad / "final" / "gds" / "spm.gds").write_bytes(b"")
+    st = layout_probe.viewer_gds_status(bad)
+    assert st["ok"] is False
+
+    # A run with no GDS at all is also not viewable.
+    none = tmp_path / "runs" / "none"
+    (none / "final").mkdir(parents=True)
+    assert layout_probe.viewer_gds_status(none)["ok"] is False

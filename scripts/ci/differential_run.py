@@ -29,6 +29,9 @@ Gates (HARD unless noted):
          per-leg design dir + run tag out of path values
   G7     per-leg honesty floor: flow finished, no failed step, non-empty GDS,
          metrics.json parses (enforced inside each leg runner)
+  G8     the exact GDS a layout viewer (KLayout/Magic/GDS3D) would open for each
+         leg is a real, non-empty, valid GDSII — proves correct layout output
+         reaches the tools, and catches an empty/truncated hand-off
 
 Each leg's runs/ tree is harvested (metrics/resolved/step list/final list/GDS
 hash) then deleted before the next leg — the runner disk is ~14 GB total.
@@ -52,6 +55,7 @@ sys.path.insert(0, str(SC))
 sys.path.insert(0, str(REPO))
 
 import compare_flat  # noqa: E402
+import layout_probe  # noqa: E402
 from flatten_metrics import flatten  # noqa: E402
 
 IMAGE = os.environ.get("LANEX_CI_IMAGE", "ghcr.io/librelane/librelane:3.0.4")
@@ -277,11 +281,23 @@ def harvest(design: Path, tag: str, leg: str) -> Dict[str, Optional[str]]:
     (hd / "gds.txt").write_text(
         f"{sha}  {gds[0].stat().st_size}  {gds[0].name}\n", encoding="utf-8")
 
-    log(f"[{leg}] harvested: {len(steps)} steps, {len(finals)} final files, gds sha {sha[:16]}…")
+    # G8 data: validate the EXACT GDS the GUI's layout viewers would open (the
+    # file handed to KLayout/Magic/GDS3D), so CI proves a real, drawable layout
+    # reaches the tools — not an empty/truncated one. Done here while runs/ still
+    # exists (it's deleted below); the verdict rides in leg_meta to gate G8.
+    view = layout_probe.viewer_gds_status(run_dir)
+    (hd / "viewer_gds.txt").write_text(
+        f"{'ok' if view['ok'] else 'BAD'}  {view['reason']}  {view.get('path')}\n",
+        encoding="utf-8")
+
+    log(f"[{leg}] harvested: {len(steps)} steps, {len(finals)} final files, gds sha {sha[:16]}…"
+        f" · viewer GDS {'valid' if view['ok'] else 'INVALID: ' + str(view['reason'])}")
     _rmtree_robust(design / "runs")
     df()
     return {"gds_sha": sha, "steps": str(len(steps)),
-            "resolved": "yes" if resolved.is_file() else "no"}
+            "resolved": "yes" if resolved.is_file() else "no",
+            "viewer_gds_ok": "yes" if view["ok"] else "no",
+            "viewer_gds_reason": str(view["reason"])}
 
 
 def _compare(name: str, a: Path, b: Path, extra: List[str]) -> Tuple[str, bool]:
@@ -339,6 +355,15 @@ def gates(done_legs: List[str], leg_meta: Dict[str, Dict[str, Optional[str]]],
         results.append((name, True, ok))
     else:
         log("G6 skipped: resolved.json absent on a compared leg")
+
+    # G8: the exact GDS each leg would hand to a layout viewer must be a real,
+    # non-empty, drawable GDSII — proves correct output reaches the tools and
+    # would FAIL the day a run hands over an empty/truncated file.
+    for leg in done_legs:
+        ok = leg_meta[leg].get("viewer_gds_ok") == "yes"
+        if not ok:
+            print(f"G8 viewer GDS invalid for {leg}: {leg_meta[leg].get('viewer_gds_reason')}")
+        results.append((f"G8 viewer GDS is a valid non-empty GDSII: {leg}", True, ok))
 
     return results
 
