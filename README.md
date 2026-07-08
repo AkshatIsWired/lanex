@@ -126,11 +126,13 @@ your normal Windows browser automatically.
 
 ### Easiest — one command that just works (start here if unsure)
 
-New here, or you just want it running? Open a **WSL2 Ubuntu / Debian-family
-Linux** terminal and run this single line. It installs LanEx and the packages a
-fresh machine is missing, puts the `lanex` command on your PATH, and — if you
-have Docker or Podman — pre-pulls the version-matched LibreLane image (otherwise
-the in-app Tools tab sets that up on first run). Safe to re-run; a re-run upgrades.
+New here, or you just want it running? This single line works on **any
+Debian / Ubuntu-family Linux — native (Ubuntu, Debian, Mint, Pop!\_OS, …) or
+inside WSL2 on Windows** (it only needs `apt`; on Windows you run it in a WSL2
+terminal). It installs LanEx and the packages a fresh machine is missing, puts
+the `lanex` command on your PATH, and — if you have Docker or Podman — pre-pulls
+the version-matched LibreLane image (otherwise the in-app Tools tab sets that up
+on first run). Safe to re-run; **a re-run also upgrades LanEx in place**.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install-wsl.sh | bash
@@ -144,28 +146,38 @@ lanex
 
 The UI opens in your browser — that's it. **If anything in the manual options
 below looks confusing, just use this; it's built to work out of the box on any
-supported machine.** Prefer to run the steps yourself, or you're on
-Fedora / Arch / macOS or you already run LibreLane? Pick the matching row below.
+supported machine.** On **Fedora / Arch / macOS**, or if you **already run
+LibreLane**, the script isn't for you — pick the matching self-contained row
+below instead.
 
 ### Manual install — pick the row that matches your machine
 
-<table>
-<tr><th align="left" width="235">Your situation</th><th align="left">Install commands</th></tr>
+Each row is **complete on its own** — copy the whole block, top to bottom, from
+a fresh terminal. They intentionally repeat shared steps so you never have to
+stitch two rows together.
 
-<tr><td><b>1 · Fresh WSL2 Ubuntu / Debian / Ubuntu</b><br><sub>nothing installed yet — the recommended path</sub></td>
+<table>
+<tr><th align="left" width="235">Your situation</th><th align="left">Install commands (self-contained)</th></tr>
+
+<tr><td><b>1 · Debian / Ubuntu-family Linux</b><br><sub>native <i>or</i> WSL2; nothing installed yet — the recommended path</sub></td>
 <td>
 
 ```bash
+# 1. system packages a fresh/minimal image is missing
 sudo apt update && sudo apt install -y pipx git xfonts-base libgl1 libgl1-mesa-dri libegl1
+# 2. put pipx-installed commands on your PATH (for this shell too)
 pipx ensurepath && exec bash
-git clone https://github.com/AkshatIsWired/lanex && cd lanex
-pipx install .
-lanex --pull-image     # needs Docker/Podman; skip if none yet — the Tools tab installs one
+# 3. install LanEx (from PyPI once published; until then, from a clone)
+pipx install lanex || { git clone https://github.com/AkshatIsWired/lanex && cd lanex && pipx install .; }
+# 4. optional: pre-pull the version-matched LibreLane image (needs Docker/Podman;
+#    skip if you have neither — the in-app Tools tab installs an engine for you)
+lanex --pull-image
+# 5. launch
 lanex
 ```
 
 (The [one-line installer](#easiest--one-command-that-just-works-start-here-if-unsure)
-above runs exactly these steps for you, plus upgrades on re-run.)
+runs exactly these steps for you, and upgrades on re-run.)
 
 Why `pipx` and not `pip`: Ubuntu 23.04+ (including every current WSL Ubuntu)
 refuses `pip install` outside a virtualenv (PEP 668 — see
@@ -174,47 +186,53 @@ and puts `lanex` on your PATH. The apt line pre-installs the X11 fonts and Mesa
 GL drivers that minimal images ship without — missing them is why desktop
 viewers open blank windows or crash.</td></tr>
 
-<tr><td><b>2 · Any Linux / macOS with Python ≥ 3.10</b><br><sub>no LibreLane yet</sub></td>
+<tr><td><b>2 · Fedora / Arch / other Linux</b><br><sub>no LibreLane yet, Python ≥ 3.10</sub></td>
 <td>
 
 ```bash
-pipx install lanex          # once on PyPI; today: git clone + pipx install . as in row 1
-lanex --pull-image && lanex
+# 1. pipx + git + the Mesa GL drivers desktop viewers need (pick your distro)
+sudo dnf install -y pipx git mesa-dri-drivers    # Fedora
+# sudo pacman -S --needed python-pipx git mesa    # Arch
+# 2. PATH, then install LanEx (PyPI once published; else from a clone)
+pipx ensurepath && exec bash
+pipx install lanex || { git clone https://github.com/AkshatIsWired/lanex && cd lanex && pipx install .; }
+# 3. launch (add `lanex --pull-image` first if you have Docker/Podman)
+lanex
 ```
 
-No `pipx` on your distro? <code>python3 -m pip install --user pipx</code> (or
-<code>brew install pipx</code> on macOS), or use a plain venv:
-<code>python3 -m venv ~/.lanex-venv && ~/.lanex-venv/bin/pip install . && ~/.lanex-venv/bin/lanex</code>.
-Fedora/Arch users installing the desktop GL viewers later: the equivalents of
-row 1's apt line are <code>sudo dnf install mesa-dri-drivers</code> /
-<code>sudo pacman -S mesa</code> (LanEx also offers this as a one-click fix when
-needed).</td></tr>
+No `pipx` package? `python3 -m pip install --user pipx` first. (LanEx also offers
+the missing GL drivers as a one-click fix from the Tools tab when a viewer needs
+them.)</td></tr>
 
-<tr><td><b>3 · You already run LibreLane</b><br><sub>in a venv / conda env</sub></td>
+<tr><td><b>3 · macOS</b><br><sub>Python ≥ 3.10, no LibreLane yet</sub></td>
 <td>
 
 ```bash
-pip install .               # inside that SAME env (from a clone of this repo)
+# 1. pipx via Homebrew, then install LanEx (PyPI once published; else a clone)
+brew install pipx git && pipx ensurepath && exec zsh
+pipx install lanex || { git clone https://github.com/AkshatIsWired/lanex && cd lanex && pipx install .; }
+# 2. launch (Container engine recommended: `brew install --cask docker` or `brew install podman`)
+lanex
+```
+
+LibreLane's heavy tools run in the container image, so Docker/Podman is the
+smooth path on macOS; the Tools tab can install one for you.</td></tr>
+
+<tr><td><b>4 · You already run LibreLane</b><br><sub>in a venv / conda env</sub></td>
+<td>
+
+```bash
+# activate your existing librelane env FIRST, then, from a clone of this repo:
+git clone https://github.com/AkshatIsWired/lanex && cd lanex
+pip install .               # plain pip is correct INSIDE an activated env
 lanex
 ```
 
 PEP 668 only guards the <i>system</i> interpreter — plain <code>pip</code> is
-correct (and pipx would be wrong) inside your env: LanEx must share the
+correct (and pipx would be <i>wrong</i>) inside your env: LanEx must share the
 environment to see your <code>librelane</code> and native toolchain. Use the
 <b>Local tools</b> engine for your native tools, or <b>Container</b> for
 <code>librelane --dockerized</code>. Nothing extra to install.</td></tr>
-
-<tr><td><b>4 · One command, GUI + toolchain</b></td>
-<td>
-
-```bash
-pipx install . && lanex --pull-image && lanex
-```
-
-`--pull-image` pulls the version-matched LibreLane container headless and exits
-(it also records the image's immutable digest in <code>~/.lanex/image.lock</code>
-for reproducibility), then `lanex` opens the cockpit with the toolchain already
-in place.</td></tr>
 </table>
 
 **Do not** use `pip install --break-system-packages` (it can corrupt your
@@ -232,6 +250,61 @@ silently if you later move or delete the clone).
 <tr><td><b>Recommended extras</b><br><sub>optional niceties</sub></td>
 <td>The Tools tab's <b>Recommended extra tools</b> group one-click-installs <b>Icarus Verilog</b> (RTL simulation in the IDE), <b>Graphviz</b> (synthesis schematics), and <b>GDS3D</b> (3D layout viewer, built from source with all its X11/GL dependencies handled). System packages that need <code>sudo</code> prompt for your password in the launch terminal — LanEx never asks for your password in the browser.</td></tr>
 </table>
+
+### Updating LanEx
+
+New releases are published as versioned packages, so an update is deliberate —
+you stay on your current version until you choose to move up. Update the way you
+installed:
+
+<table>
+<tr><th align="left" width="235">How you installed</th><th align="left">Update command</th></tr>
+
+<tr><td><b>One-line installer</b></td>
+<td>Re-run the same line — it upgrades in place:<br>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install-wsl.sh | bash
+```
+</td></tr>
+
+<tr><td><b>pipx (from PyPI)</b></td>
+<td>
+
+```bash
+pipx upgrade lanex
+```
+</td></tr>
+
+<tr><td><b>pipx (from a git clone)</b></td>
+<td>
+
+```bash
+cd lanex && git pull && pipx install . --force
+```
+</td></tr>
+
+<tr><td><b>pip inside your own env</b></td>
+<td>
+
+```bash
+cd lanex && git pull && pip install . --force    # from a clone, in the activated env
+```
+</td></tr>
+
+<tr><td><b>Want the newest, unreleased code?</b><br><sub>testers / bleeding edge</sub></td>
+<td>
+
+```bash
+pipx install "git+https://github.com/AkshatIsWired/lanex@main" --force
+```
+
+Tracks the tip of `main` — newer than any release, but not yet version-blessed.</td></tr>
+</table>
+
+After updating, if the LibreLane engine version moved, re-pull the matched image
+from the **Tools** tab (or `lanex --pull-image`) so the container stays in lockstep.
+Check your installed version any time with `pipx list` (or `pip show lanex`).
 
 ### Troubleshooting
 
