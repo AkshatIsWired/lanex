@@ -1,0 +1,28 @@
+======================= ss_100C_1v60 Corner ====================
+
+Startpoint: a[3] (input port clocked by clk)
+Endpoint: _0421_ (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+
+  Fanout     Cap    Slew   Delay    Time   Description
+-----------------------------------------------------------------
+                          0.0000    0.0000   clock clk (rise edge)
+                          0.0000    0.0000   clock network delay (ideal)
+                          6.0341    6.0341   data required time
+                          9.9950    9.9950   data arrival time
+-----------------------------------------------------------------
+                         -0.285741   slack (VIOLATED)
+
+
+Startpoint: b[7] (input port clocked by clk)
+Endpoint: _0512_ (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+
+  Fanout     Cap    Slew   Delay    Time   Description
+-----------------------------------------------------------------
+                          6.5000    6.5000   data required time
+                          6.4000    6.4000   data arrival time
+-----------------------------------------------------------------
+                          0.100000   slack (MET)

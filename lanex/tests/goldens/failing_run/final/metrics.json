@@ -1,0 +1,18 @@
+{
+  "design__instance__area": 2450.0,
+  "design__instance__count": 1120,
+  "timing__setup__ws": -0.285741,
+  "timing__setup__tns": -12.4033,
+  "timing__setup_vio__count": 186,
+  "timing__hold__ws": 0.0521,
+  "timing__hold__tns": 0.0,
+  "timing__hold_vio__count": 0,
+  "magic__drc_error__count": 42,
+  "route__drc_errors": 3,
+  "design__lvs_error__count": 5,
+  "route__antenna_violation__count": 2,
+  "design__instance_unmapped__count": 0,
+  "design__lint_error__count": 0,
+  "synthesis__check_error__count": 0,
+  "flow__errors__count": 0
+}

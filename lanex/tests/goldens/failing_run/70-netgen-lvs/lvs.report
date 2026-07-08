@@ -1,0 +1,13 @@
+Netgen 1.5.272 Compare Circuits
+
+Circuit 1: spm                        |Circuit 2: spm
+------------------------------------- |-------------------------------------
+Number of devices: 362                |Number of devices: 362
+Number of nets: 395                   |Number of nets: 390
+------------------------------------- |-------------------------------------
+
+Net mismatches found.
+unmatched nets = 5
+unmatched pins = 1
+
+Final result: Netlists do not match.

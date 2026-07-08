@@ -330,12 +330,18 @@ const _LT = String.fromCharCode(60);
 const _GT = String.fromCharCode(62);
 const _QUOT = String.fromCharCode(34);
 const _APOS = String.fromCharCode(39);
+// Every HTML entity is `&<name>;` — the prefix is ALWAYS the ampersand
+// (`_AMP`), never the character being escaped. Using the char itself (e.g.
+// `_LT + "lt;"` → `<lt;`) left the raw `<`/`>`/`"`/`'` in the output, which is
+// both visible corruption (tool text like `spacing < 0.14um`) and an
+// HTML-injection hole. Built from char codes so no literal entity appears in
+// this source file.
 const _ESCAPE = {
   [_AMP]: _AMP + "amp;",
-  [_LT]: _LT + "lt;",
-  [_GT]: _GT + "gt;",
-  [_QUOT]: _QUOT + "quot;",
-  [_APOS]: _APOS + "#39;",
+  [_LT]: _AMP + "lt;",
+  [_GT]: _AMP + "gt;",
+  [_QUOT]: _AMP + "quot;",
+  [_APOS]: _AMP + "#39;",
 };
 
 export const fmt = {

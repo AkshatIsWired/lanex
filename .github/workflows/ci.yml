@@ -51,6 +51,9 @@ jobs:
             node --check "$f"
           done
 
+      - name: Frontend behaviour test (executes the display functions)
+        run: node lanex/tests/frontend_test.mjs
+
       - name: Static hygiene (no emoji pictographs — round-26 rule, locks D10)
         run: |
           # Fail if any U+1F300–U+1FAFF pictograph creeps back into first-party
