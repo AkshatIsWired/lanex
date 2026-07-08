@@ -368,16 +368,38 @@ def gates(done_legs: List[str], leg_meta: Dict[str, Dict[str, Optional[str]]],
     return results
 
 
+# What each gate proves — the implication shown in the summary. Matched by the
+# gate-name prefix (the leg name is appended at runtime).
+_GATE_WHY = {
+    "G1/G2": "The four build paths produce identical metrics — the GUI's numbers equal the plain CLI's.",
+    "G3": "Identical step inventory — no path silently skips or adds a flow step.",
+    "G4": "Identical final/ file set — every deliverable the CLI makes, the GUI makes too.",
+    "G5": "GDS bytes differ ONLY by the timestamp GDSII embeds — report-only, never gates (identical layout, different write time).",
+    "G6": "Identical resolved config — the same inputs really drove all four runs (Fear B).",
+    "G8": "The exact GDS a layout viewer would open is a real, non-empty GDSII — no blank-window hand-off (Fear C).",
+}
+
+
+def _gate_why(name: str) -> str:
+    for prefix, why in _GATE_WHY.items():
+        if name.startswith(prefix):
+            return why
+    return "Cross-path equivalence check."
+
+
 def write_summary(results: List[Tuple[str, bool, bool]],
                   leg_meta: Dict[str, Dict[str, Optional[str]]]) -> None:
-    lines = ["## Differential RTL->GDS", "",
-             "| Leg | steps | resolved.json | GDS sha256 |", "|---|---|---|---|"]
+    lines = ["## Differential RTL->GDS (SPM, sky130 — 4 build paths)", "",
+             "_The same design built four ways (native CLI / lanex local / lanex container / "
+             "lanex toolwise); every HARD gate must match across all four._", "",
+             "| Leg | steps | resolved.json | viewer GDS | GDS sha256 |", "|---|--:|---|---|---|"]
     for leg, m in leg_meta.items():
-        lines.append(f"| {leg} | {m['steps']} | {m['resolved']} | `{(m['gds_sha'] or '')[:16]}…` |")
-    lines += ["", "| Gate | Mode | Result |", "|---|---|---|"]
+        vg = "✓ valid" if m.get("viewer_gds_ok") == "yes" else "✗ " + str(m.get("viewer_gds_reason", "?"))
+        lines.append(f"| {leg} | {m['steps']} | {m['resolved']} | {vg} | `{(m['gds_sha'] or '')[:16]}…` |")
+    lines += ["", "| Gate | Mode | Result | What it proves |", "|---|---|---|---|"]
     for name, hard, ok in results:
         lines.append(f"| {name} | {'HARD' if hard else 'report-only'} | "
-                     f"{'✓ pass' if ok else '✗ FAIL'} |")
+                     f"{'✓ pass' if ok else '✗ FAIL'} | {_gate_why(name)} |")
     text = "\n".join(lines) + "\n"
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")

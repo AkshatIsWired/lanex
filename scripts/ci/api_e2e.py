@@ -660,9 +660,30 @@ def main() -> int:
         for cid in docker_ps():
             subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=60)
 
-    lines = ["## API e2e", "", "| Case | Result | Detail |", "|---|---|---|"]
+    # What each live case proves — the implication column.
+    why = {
+        "E1": "User overrides land verbatim in resolved.json and design sources are untouched (Fear B).",
+        "E2": "Every metric the API returns equals final/metrics.json byte-for-byte over HTTP (Fear A).",
+        "E3": "Cancel really kills the container — a cancelled run leaves no orphan flow.",
+        "E4": "The live SSE stream announces every step that hit disk — the pipeline view can't lie.",
+        "E5": "CSV/MD exports match the metrics; non-finite tokens spelled consistently (Fear C).",
+        "E6": "A run bundle is byte-faithful and re-imports to identical metrics (Fear C).",
+        "E7": "A mutilated/corrupt run reads as unknown/not-ready — never a false green (Fear A).",
+        "E8": "A second run is refused mid-flow — no two flows clobber one run dir.",
+        "E9": "A spaced path is blocked at launch with the real reason, not a cryptic mid-flow error.",
+        "E10": "After a kill-9 crash+restart the interrupted run lists honestly and is not 'ready'.",
+        "E11": "A custom cell + hard macro saved over HTTP reach resolved.json exactly as configured (Fear B).",
+    }
+
+    def _why(name: str) -> str:
+        tag = name.split()[0]
+        return why.get(tag, "Live end-to-end fidelity check.")
+
+    lines = ["## API e2e (live server + container flow)", "",
+             "_Real HTTP against a booted server with docker — the audited lifecycle, re-proven each run._", "",
+             "| Case | Result | What it proves | Detail |", "|---|---|---|---|"]
     for name, ok, detail in results:
-        lines.append(f"| {name} | {'✓ pass' if ok else '✗ FAIL'} | {detail[:160]} |")
+        lines.append(f"| {name} | {'✓ pass' if ok else '✗ FAIL'} | {_why(name)} | {detail[:120]} |")
     text = "\n".join(lines) + "\n"
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")

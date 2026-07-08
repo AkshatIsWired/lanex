@@ -43,7 +43,17 @@ jobs:
           pip install pytest
 
       - name: Python tests
-        run: python -m pytest lanex/tests -q
+        run: python -m pytest lanex/tests -q --junitxml=pytest-report.xml
+
+      # Rich Summary-tab report: every test group + what a failure there means.
+      # Only the 3.12 leg writes it (the matrix runs 4×); always() so a failing
+      # run still gets the grouped breakdown instead of a bare red X.
+      - name: Test summary (implications of every group)
+        if: ${{ always() && matrix.python-version == '3.12' }}
+        run: |
+          python scripts/ci/test_summary.py pytest-report.xml \
+            --title "Unit tests — ${{ matrix.python-version }} (497 across 3.10–3.13)"
+          python scripts/ci/summary_static.py
 
       - name: JavaScript syntax check
         run: |

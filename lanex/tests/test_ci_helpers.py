@@ -243,6 +243,37 @@ def test_drivers_importable():
     import differential_run  # noqa: F401
     import leg_local_run  # noqa: F401
     import sse_capture  # noqa: F401
+    import test_summary  # noqa: F401
+    import summary_static  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# test_summary — the Summary-tab renderer. A pytest JUnit report must turn into
+# a grouped markdown table with per-group pass/fail + an implication line.
+# ---------------------------------------------------------------------------
+def test_test_summary_renders_grouped_table(tmp_path: Path):
+    import test_summary
+
+    xml = tmp_path / "j.xml"
+    xml.write_text(
+        '<testsuites><testsuite>'
+        '<testcase classname="lanex.tests.test_goldens" name="a" time="0.1"/>'
+        '<testcase classname="lanex.tests.test_goldens" name="b" time="0.1"/>'
+        '<testcase classname="lanex.tests.test_verify" name="c" time="0.2">'
+        '<failure>boom</failure></testcase>'
+        '<testcase classname="lanex.tests.test_history" name="d" time="0.0">'
+        '<skipped/></testcase>'
+        '</testsuite></testsuites>',
+        encoding="utf-8",
+    )
+    out = test_summary.render(xml, "Unit tests")
+    assert "2 passed · 1 failed · 1 skipped" in out
+    # Grouped by file, with the curated implication text.
+    assert "`test_goldens`" in out and "byte/value-faithful" in out
+    # A failing group is marked, not hidden.
+    assert "✗ 1 FAIL" in out and "`test_verify`" in out
+    # An unmapped file would still appear with the generic note (none here).
+    assert "| `test_history` |" in out
 
 
 # ---------------------------------------------------------------------------
