@@ -25,6 +25,7 @@ const MOD = resolve(HERE, "..", "server", "static", "modules");
 
 const { fmt } = await import(resolve(MOD, "api.js"));
 const { csvCell } = await import(resolve(MOD, "csvutil.js"));
+const { clampZoom } = await import(resolve(MOD, "zoom.js"));
 
 let passed = 0;
 function check(name, fn) {
@@ -107,6 +108,17 @@ check("csvCell: real numbers (incl. negative / exponent) pass unchanged", () => 
 check("csvCell: values with commas/quotes are RFC-4180 quoted", () => {
   assert.equal(csvCell("a,b"), '"a,b"');
   assert.equal(csvCell('he said "hi"'), '"he said ""hi"""');
+});
+
+check("clampZoom: bounds, snap, garbage → 1", () => {
+  assert.equal(clampZoom(1), 1);
+  assert.equal(clampZoom(0.05), 0.5);      // floor
+  assert.equal(clampZoom(9), 2);           // ceiling
+  assert.equal(clampZoom(1.2000000000000002), 1.2); // float dust snapped
+  assert.equal(clampZoom("1.3"), 1.3);     // localStorage strings
+  assert.equal(clampZoom("junk"), 1);
+  assert.equal(clampZoom(-1), 1);
+  assert.equal(clampZoom(NaN), 1);
 });
 
 console.log(`\nfrontend_test: ${passed} checks passed` +

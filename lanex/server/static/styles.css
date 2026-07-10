@@ -530,6 +530,21 @@ body.theme-light .logo--light { display: inline-block; }
   justify-content: center;
 }
 .iconbtn:hover { border-color: var(--accent); color: var(--accent); }
+/* UI zoom control — the standalone app window has no browser zoom menu. */
+.zoom-ctl { display: inline-flex; align-items: center; gap: 2px; }
+.zoom-pct {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  height: 34px;
+  min-width: 46px;
+  padding: 0 6px;
+  border-radius: var(--r-md);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.zoom-pct:hover { border-color: var(--accent); color: var(--accent); }
 .iconbtn .badge {
   position: absolute;
   top: -6px; right: -6px;

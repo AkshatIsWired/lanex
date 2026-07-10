@@ -8,6 +8,7 @@ import { Editor } from "./editor.js";
 import { parseVCD, vcdToCSV } from "./vcd.js";
 import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
+import { applyZoom, currentZoom } from "../zoom.js";
 
 const state = { designDir: null, files: [], openAbs: null, runMode: "container", wave: null };
 let _inited = false;
@@ -26,11 +27,13 @@ function applyTheme() {
 }
 function setupThemeSync() {
   applyTheme();
+  applyZoom(currentZoom());            // pop-out matches the cockpit's UI zoom
   window.addEventListener("storage", (e) => {
     if (!e || e.key === "ll.theme") {
       applyTheme();
       document.dispatchEvent(new CustomEvent("g:theme_changed", { detail: { dark: !document.body.classList.contains("theme-light") } }));
     }
+    if (!e || e.key === "ll.zoom") applyZoom(currentZoom());
   });
 }
 

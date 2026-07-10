@@ -7,6 +7,7 @@ import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkP
 import { setupTheme, toggleTheme } from "./modules/theme.js";
 import { setupHotkeys } from "./modules/hotkeys.js";
 import { setupDensity, toggleDensity } from "./modules/density.js";
+import { setupZoom } from "./modules/zoom.js";
 import { setupPalette, openPalette } from "./modules/palette.js";
 import { setupRunMode } from "./modules/runmode.js";
 import { renderConfig } from "./modules/config.js";
@@ -84,6 +85,7 @@ async function boot() {
     setupTabs();
     setupTheme();
     setupDensity();
+    setupZoom();
     setupPalette();
     setupRunMode();
     setupLogs();
