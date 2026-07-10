@@ -7,7 +7,7 @@
 #      http://www.apache.org/licenses/LICENSE-2.0
 """LanEx entry point — the ``lanex`` console script.
 
-LanEx is a standalone browser cockpit for the LibreLane RTL-to-GDSII flow. It
+LanEx is a standalone cockpit for the LibreLane RTL-to-GDSII flow. It
 ships as its own console script (``lanex``) and drives an installed ``librelane``
 plus the EDA tools it orchestrates; it does not modify or depend on internals of
 ``librelane.__main__``.
@@ -44,7 +44,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     import argparse  # stdlib
     parser = argparse.ArgumentParser(
         prog="lanex",
-        description="Launch LanEx — a browser cockpit for the LibreLane RTL-to-GDSII flow.",
+        description="Launch LanEx — a cockpit for the LibreLane RTL-to-GDSII flow.",
     )
     parser.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765, help="preferred port (default 8765)")

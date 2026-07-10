@@ -8,7 +8,7 @@
 
 ### Take Verilog all the way to silicon — without living in a terminal.
 
-A browser cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane/librelane) RTL&nbsp;→&nbsp;GDSII chip flow.
+A cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane/librelane) RTL&nbsp;→&nbsp;GDSII chip flow.
 
 <br>
 
@@ -144,7 +144,7 @@ Then launch the cockpit:
 lanex
 ```
 
-The UI opens in your browser — that's it. **If anything in the manual options
+The UI opens automatically — that's it. **If anything in the manual options
 below looks confusing, just use this; it's built to work out of the box on any
 supported machine.** On **Fedora / Arch / macOS**, or if you **already run
 LibreLane**, the script isn't for you — pick the matching self-contained row

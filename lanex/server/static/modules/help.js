@@ -162,7 +162,7 @@ const CATALOG = {
     title: "Layout tab",
     goal: "View the run's final layout and open it in your own desktop tools (KLayout / Magic / GDS3D), or in the version-matched container.",
     how: [
-      "Pick a run; the 2D view is the KLayout PNG the flow already rendered (pan / zoom). No klayout subprocess in the browser.",
+      "Pick a run; the 2D view is the KLayout PNG the flow already rendered (pan / zoom). No klayout subprocess needed.",
       "Open in KLayout / Magic launches your installed tool on the run's GDS; toggle “PDK layer colours” for the techfile view vs the tool's plain default.",
       "Open in the container runs the matched-version tool from the LibreLane image (forwards your X11 display) — use this when your host tool is too old for the PDK techfile.",
       "3D opens GDS3D (a desktop app) on the layer stack; install it from Tools if missing.",

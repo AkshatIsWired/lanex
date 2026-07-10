@@ -73,7 +73,7 @@ def display_available() -> Dict[str, Any]:
     if plat.startswith("linux"):
         if not disp:
             return {"ok": False, "reason": "no DISPLAY set — are you on a headless server? "
-                    "Container GUIs need an X11 display (or WSLg). Use the in-browser "
+                    "Container GUIs need an X11 display (or WSLg). Use the built-in "
                     "layout preview instead, or run on a desktop session."}
         if not Path("/tmp/.X11-unix").exists():
             return {"ok": False, "reason": "X11 socket /tmp/.X11-unix not found. If you're on "
