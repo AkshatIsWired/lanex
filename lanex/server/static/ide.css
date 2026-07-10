@@ -1,5 +1,5 @@
 /* ide.css — the RTL IDE (/ide) layout. Token-only, reuses styles.css :root. */
-.ide-body { margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
+.ide-body { margin: 0; height: calc(100vh / var(--ll-zoom, 1)); display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
 .ide-topbar { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-4); border-bottom: 1px solid var(--border); background: var(--surface); }
 .ide-spacer { flex: 1; }
 .ide-note { color: var(--text-muted); font-size: var(--t-sm); }
@@ -112,7 +112,7 @@
    scrollbar, so the element overflows a few px to the right and the absolutely
    positioned ✕ exit button gets pushed half off-screen. */
 .panel-fullscreen { position: fixed !important; inset: 0; z-index: var(--z-modal);
-  width: auto !important; height: auto !important; max-width: 100vw; max-height: 100vh !important;
+  width: auto !important; height: auto !important; max-width: calc(100vw / var(--ll-zoom, 1)); max-height: calc(100vh / var(--ll-zoom, 1)) !important;
   margin: 0 !important; background: var(--bg); border: 0; border-radius: 0;
   padding: var(--s-4); overflow: auto; box-shadow: none; }
 .panel-fs-host { display: flex; flex-direction: column; }
@@ -130,11 +130,11 @@
 
 /* Embedded IDE (the "RTL IDE" tab inside the main cockpit). Fills the work
    area; its own grid scrolls internally instead of growing the page. */
-.ide-embed { display: flex; flex-direction: column; height: calc(100vh - 96px);
+.ide-embed { display: flex; flex-direction: column; height: calc(100vh / var(--ll-zoom, 1) - 96px);
   border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
 .ide-embed .ide-topbar { border-bottom: 1px solid var(--border); }
 .ide-embed .ide-grid { flex: 1; min-height: 0; }
-body.density-compact .ide-embed { height: calc(100vh - 80px); }
+body.density-compact .ide-embed { height: calc(100vh / var(--ll-zoom, 1) - 80px); }
 @media (max-width: 960px) {
   .ide-embed .ide-grid { grid-template-columns: 180px 1fr; }
   .ide-embed .ide-sim { display: none; }

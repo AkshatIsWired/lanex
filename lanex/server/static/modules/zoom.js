@@ -31,6 +31,12 @@ export function applyZoom(z) {
   const v = clampZoom(z);
   try {
     document.documentElement.style.zoom = v === 1 ? "" : String(v);
+    // CSS `zoom` scales layout, but vw/vh units keep resolving against the
+    // REAL viewport — so a `height:100vh` shell renders v× too tall/short
+    // (zoom in → scrollbars, zoom out → dead space). Stylesheets divide
+    // their viewport units by this variable to compensate.
+    if (v === 1) document.documentElement.style.removeProperty("--ll-zoom");
+    else document.documentElement.style.setProperty("--ll-zoom", String(v));
   } catch (_e) {}
   try {
     if (v === 1) localStorage.removeItem(KEY);

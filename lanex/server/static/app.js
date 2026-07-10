@@ -86,6 +86,9 @@ async function boot() {
     setupTheme();
     setupDensity();
     setupZoom();
+    // The standalone app window has no browser reload button; F5/Ctrl+R still
+    // work, but give staleness an obvious escape hatch.
+    document.getElementById("reload-btn")?.addEventListener("click", () => location.reload());
     setupPalette();
     setupRunMode();
     setupLogs();
@@ -320,6 +323,13 @@ function handle(ev) {
           logInstallerLine("→ installer rc=" + ev.rc + " (recheck Tools tab)");
         }
         renderTools();
+        // A finished PDK install changes what Setup can offer — re-fetch the
+        // PDK list and repopulate the picker so the new PDK appears without a
+        // manual page reload (the app window has no browser refresh button).
+        if (ev.type === "installer_done" && typeof ev.key === "string" && ev.key.startsWith("pdk:")) {
+          api.pdks().then((p) => { state.pdks = p; }).catch(() => {});
+          populatePdkPicker().catch(() => {});
+        }
       }
     }
   } else if (ev.type === "progress") {

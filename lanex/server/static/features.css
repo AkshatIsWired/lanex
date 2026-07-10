@@ -6,7 +6,7 @@
 .toast-host {
   position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: var(--z-toast);
   display: flex; flex-direction: column; gap: var(--s-2);
-  max-width: min(380px, 92vw);
+  max-width: min(380px, calc(92vw / var(--ll-zoom, 1)));
 }
 .toast {
   display: flex; align-items: flex-start; gap: var(--s-2);
@@ -130,7 +130,7 @@
 .report-row .rname { font-family: var(--mono); font-size: var(--t-xs); flex: 1; word-break: break-all; }
 
 /* ---- Right-side log drawer (out-of-pipeline streamed logs) ---------------- */
-.log-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw);
+.log-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, calc(92vw / var(--ll-zoom, 1)));
   z-index: var(--z-drawer); display: flex; flex-direction: column; background: var(--surface);
   border-left: 1px solid var(--border); box-shadow: -8px 0 24px rgba(0,0,0,0.35); }
 .log-drawer[hidden] { display: none; }
@@ -281,7 +281,7 @@
 /* ---- 2D / 3D viewers ------------------------------------------------------ */
 .v2d-wrap { display: flex; gap: var(--s-3); }
 .v2d-layers { display: flex; flex-direction: column; gap: var(--s-1); min-width: 160px; }
-.v2d-stage { position: relative; background: var(--canvas, #fff); border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; height: 60vh; }
+.v2d-stage { position: relative; background: var(--canvas, #fff); border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; height: calc(60vh / var(--ll-zoom, 1)); }
 .v2d-layer { position: absolute; top: 0; left: 0; max-width: 100%; mix-blend-mode: multiply; }
 .v2d-img { display: block; will-change: transform; }
 /* "Open in desktop tool" row (2D + 3D). */
@@ -306,7 +306,7 @@
 .wiz-actions { display: flex; justify-content: space-between; margin-top: var(--s-3); }
 
 /* ---- Learn panel ---------------------------------------------------------- */
-.learn-panel { position: fixed; top: 0; right: 0; width: min(440px, 92vw); height: 100vh; background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--sh-3); z-index: var(--z-drawer); display: flex; flex-direction: column; }
+.learn-panel { position: fixed; top: 0; right: 0; width: min(440px, calc(92vw / var(--ll-zoom, 1))); height: calc(100vh / var(--ll-zoom, 1)); background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--sh-3); z-index: var(--z-drawer); display: flex; flex-direction: column; }
 /* display:flex overrides the hidden attribute → restore hide-on-hidden so the ✕ closes it. */
 .learn-panel[hidden] { display: none; }
 .learn-panel:not([hidden]) { animation: drawer-in var(--dur-3) var(--ease-out); }
@@ -348,7 +348,7 @@
 .ac-banner-row { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
 .ac-banner-icon { font-size: 1.3rem; }
 .ac-banner-text { flex: 1; min-width: 220px; color: var(--text); font-size: var(--t-sm); }
-.ac-modal { width: min(680px, 94vw); }
+.ac-modal { width: min(680px, calc(94vw / var(--ll-zoom, 1))); }
 .ac-body { padding: var(--s-3); overflow: auto; }
 .ac-detected {
   display: grid; gap: var(--s-2); margin: var(--s-3) 0;
@@ -408,7 +408,7 @@
 .cc-help h3 { margin: var(--s-3) 0 var(--s-1); color: var(--text-strong); }
 .cc-help ul, .cc-help ol { margin: 0 0 var(--s-2); padding-left: 1.4em; }
 .cc-help li { margin: 3px 0; }
-.cc-help-modal { width: min(760px, 94vw); }
+.cc-help-modal { width: min(760px, calc(94vw / var(--ll-zoom, 1))); }
 
 /* ---- Manual / advanced (#4) -------------------------------------------- */
 .manual-card { margin-bottom: var(--s-4); }
@@ -465,7 +465,7 @@
   backdrop-filter: blur(2px); padding: var(--s-4); }
 .dlg { background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--r-lg); box-shadow: var(--sh-3);
-  width: min(480px, 96vw); max-height: 90vh; overflow: auto; }
+  width: min(480px, calc(96vw / var(--ll-zoom, 1))); max-height: calc(90vh / var(--ll-zoom, 1)); overflow: auto; }
 .dlg-head { padding: var(--s-3) var(--s-4); font-weight: 600; font-size: var(--t-md, 15px);
   border-bottom: 1px solid var(--border); }
 .dlg-body { padding: var(--s-4); color: var(--text); font-size: var(--t-sm); }
@@ -480,7 +480,7 @@
 /* Wide dialog variant — the folder browser (fs-modal) keeps `hidden` toggling
    (fs.js), so it lives as a persistent element, not a dialog.js instance. */
 .dlg-backdrop[hidden] { display: none; }
-.dlg-wide { width: min(720px, 94vw); height: 70vh; display: flex; flex-direction: column; }
+.dlg-wide { width: min(720px, calc(94vw / var(--ll-zoom, 1))); height: calc(70vh / var(--ll-zoom, 1)); display: flex; flex-direction: column; }
 .dlg-wide .dlg-body { flex: 1; min-height: 0; display: flex; flex-direction: column;
   gap: var(--s-3); overflow: hidden; }
 .fs-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
@@ -552,7 +552,7 @@
 .topbar-run.is-stop:hover { filter: brightness(1.08); }
 
 /* ---- bundle download checklist dialog ---------------------------------- */
-.dlg-checklist { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-2); max-height: 50vh; overflow: auto; }
+.dlg-checklist { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-2); max-height: calc(50vh / var(--ll-zoom, 1)); overflow: auto; }
 .dlg-check-tools { display: flex; gap: var(--s-2); margin-bottom: var(--s-1); }
 .dlg-check { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; font-size: var(--t-sm); }
 .dlg-check input { accent-color: var(--accent); cursor: pointer; }

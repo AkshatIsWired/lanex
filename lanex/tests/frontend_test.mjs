@@ -17,6 +17,7 @@
 //   node lanex/tests/frontend_test.mjs      → exit 0 = pass, 1 = fail
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -119,6 +120,26 @@ check("clampZoom: bounds, snap, garbage → 1", () => {
   assert.equal(clampZoom("junk"), 1);
   assert.equal(clampZoom(-1), 1);
   assert.equal(clampZoom(NaN), 1);
+});
+
+check("zoom: stylesheets compensate viewport units via --ll-zoom", () => {
+  // CSS `zoom` scales layout px but vw/vh keep resolving against the real
+  // viewport — without the compensation the shell under/overflows the window
+  // at any zoom ≠ 100% (round-56 user bug). zoom.js must publish the factor
+  // and every cockpit stylesheet's viewport unit must divide by it.
+  const STATIC = resolve(HERE, "..", "server", "static");
+  assert.match(readFileSync(resolve(MOD, "zoom.js"), "utf8"),
+    /setProperty\("--ll-zoom"/);
+  for (const f of ["styles.css", "features.css", "ide.css"]) {
+    const css = readFileSync(resolve(STATIC, f), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "");   // comments may mention 100vw freely
+    assert.match(css, /var\(--ll-zoom, 1\)/, `${f} lost the zoom compensation`);
+    for (const ln of css.split("\n")) {
+      if (/\d(vw|vh)\b/.test(ln) && !ln.includes("--ll-zoom")) {
+        assert.fail(`${f}: viewport unit without --ll-zoom compensation: ${ln.trim()}`);
+      }
+    }
+  }
 });
 
 console.log(`\nfrontend_test: ${passed} checks passed` +

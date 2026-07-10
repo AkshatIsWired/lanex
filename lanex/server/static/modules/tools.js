@@ -637,6 +637,8 @@ function paint(info) {
               if (state.tools.pdk.installed_sizes_mb) delete state.tools.pdk.installed_sizes_mb[pdk];
             }
             if (state.tools) paint(state.tools);
+            // Keep the Setup tab honest too — its picker re-fetches /api/pdks.
+            import("./setup.js").then((m) => m.populatePdkPicker && m.populatePdkPicker()).catch(() => {});
           } else {
             toast.show(`PDK ${pdk} uninstall failed`, "error");
             renderLogs.append({ payload: { message: "✗ PDK " + pdk + " uninstall failed: " + (result.reason || "unknown"), level: "ERROR" } });

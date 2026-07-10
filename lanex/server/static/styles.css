@@ -107,9 +107,9 @@
   --t-sm: 12.5px;
   --t-md: 14px;
   --t-lg: 16px;
-  --t-xl: clamp(18px, 1.1vw + 12px, 21px);
-  --t-2xl: clamp(24px, 1.8vw + 14px, 30px);
-  --t-3xl: clamp(34px, 2.6vw + 20px, 46px);
+  --t-xl: clamp(18px, calc(1.1vw / var(--ll-zoom, 1) + 12px), 21px);
+  --t-2xl: clamp(24px, calc(1.8vw / var(--ll-zoom, 1) + 14px), 30px);
+  --t-3xl: clamp(34px, calc(2.6vw / var(--ll-zoom, 1) + 20px), 46px);
 
   /* fonts — display = instrument labeling, body = dense UI, mono = chip data */
   --display: "Space Grotesk", "Inter var", system-ui, sans-serif;
@@ -222,7 +222,7 @@ html, body {
   font-family: var(--sans);
   font-size: var(--t-md);
   line-height: 1.5;
-  min-height: 100vh;
+  min-height: calc(100vh / var(--ll-zoom, 1));
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -332,8 +332,8 @@ code {
     "topbar    topbar"
     "side      work"
     "status    status";
-  height: 100vh;
-  width: 100vw;
+  height: calc(100vh / var(--ll-zoom, 1));
+  width: calc(100vw / var(--ll-zoom, 1));
   overflow: hidden;
 }
 
@@ -1265,7 +1265,7 @@ select {
   flex-direction: column;
   /* Bounded but generous: the step output / logs scroll inside, and the console
      uses the available vertical space instead of a thin strip (issue #8a). */
-  height: clamp(360px, 62vh, 900px);
+  height: clamp(360px, calc(62vh / var(--ll-zoom, 1)), 900px);
   overflow: hidden;
 }
 .pipe-console .side-pane-tabs { border-radius: var(--radius) var(--radius) 0 0; }
@@ -1323,7 +1323,7 @@ select {
   padding: var(--s-3);
   border-radius: var(--r-md);
   border: 1px solid var(--border);
-  height: calc(100vh - 280px);
+  height: calc(100vh / var(--ll-zoom, 1) - 280px);
   overflow: auto;
   line-height: 1.5;
 }
@@ -1429,7 +1429,7 @@ select {
   color: var(--text);
   border-radius: var(--r-lg);
   padding: 0;
-  width: min(560px, 92vw);
+  width: min(560px, calc(92vw / var(--ll-zoom, 1)));
   box-shadow: var(--sh-3);
 }
 .help-dialog::backdrop { background: rgba(0,0,0,0.5); }
@@ -1675,8 +1675,8 @@ h3 { font-size: var(--t-md); font-weight: 600; color: var(--text-strong); margin
 }
 .cmdk-panel {
   position: relative;
-  margin: 12vh auto 0;
-  width: min(620px, 92vw);
+  margin: calc(12vh / var(--ll-zoom, 1)) auto 0;
+  width: min(620px, calc(92vw / var(--ll-zoom, 1)));
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-lg);
@@ -1698,7 +1698,7 @@ h3 { font-size: var(--t-md); font-weight: 600; color: var(--text-strong); margin
   border-bottom: 1px solid var(--border);
   outline: none;
 }
-.cmdk-list { max-height: 50vh; overflow: auto; padding: var(--s-2); }
+.cmdk-list { max-height: calc(50vh / var(--ll-zoom, 1)); overflow: auto; padding: var(--s-2); }
 .cmdk-item {
   display: flex; align-items: center; gap: var(--s-3);
   padding: var(--s-2) var(--s-3);
@@ -1843,7 +1843,7 @@ body.density-compact .steps-3 { margin-bottom: var(--s-4); }
 .smodal-backdrop[hidden] { display: none; }
 .smodal {
   display: flex; flex-direction: column;
-  width: min(960px, 92vw); max-height: 84vh;
+  width: min(960px, calc(92vw / var(--ll-zoom, 1))); max-height: calc(84vh / var(--ll-zoom, 1));
   background: var(--surface); border: 1px solid var(--border-strong);
   border-radius: var(--r-lg); box-shadow: var(--sh-3);
   overflow: hidden;
