@@ -51,7 +51,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--allow-remote", action="store_true",
                         help="permit binding a non-loopback host (exposes the GUI to your "
                              "network — there is no authentication; use with care)")
-    parser.add_argument("--no-browser", action="store_true", help="don't open the default browser")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="don't auto-open anything (headless; visit the printed URL)")
+    parser.add_argument("--tab", action="store_true",
+                        help="open in a normal browser tab instead of the standalone "
+                             "app window (also: LANEX_NO_APP_WINDOW=1)")
     parser.add_argument("--design-dir", default=None, help="initial design directory")
     parser.add_argument("--pdk-root", default=None, help="PDK_ROOT (override)")
     parser.add_argument("--pull-image", action="store_true",
@@ -106,7 +110,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception as ex:  # pragma: no cover - defensive
             sys.stderr.write(f"could not set --design-dir: {ex}\n")
 
-    threading.Timer(0.5, _lazy_open, args=(home_url, args.no_browser)).start()
+    threading.Timer(0.5, _lazy_open, args=(home_url, args.no_browser, args.tab)).start()
     try:
         serve_forever(httpd, open_after=False)
     except KeyboardInterrupt:
@@ -184,9 +188,37 @@ def _pull_image_cli() -> int:
     return rc
 
 
-def _lazy_open(url: str, no_browser: bool) -> None:
+def _lazy_open(url: str, no_browser: bool, tab: bool = False) -> None:
     if no_browser:
         return
+    # Preferred: a standalone app window (Chromium-family `--app=` — own
+    # window, no tabs/URL bar, own taskbar entry). `--tab` or
+    # LANEX_NO_APP_WINDOW=1 opts out; every failure falls through to the
+    # plain-tab logic below, so nothing here can leave the user with no UI.
+    if not tab:
+        try:
+            from .controller import appwindow, platform_env
+
+            res = appwindow.launch_app_window(url)
+            if res.get("ok"):
+                sys.stdout.write("LanEx opened in its own app window.\n")
+                if res.get("method") == "windows-app" and platform_env.is_wsl():
+                    # The one failure we cannot detect from inside WSL: broken
+                    # Windows→WSL localhost forwarding (the window opens but
+                    # cannot connect). Give the remedy up front.
+                    sys.stdout.write(
+                        "   If the window cannot reach LanEx, run `wsl --shutdown` "
+                        "from Windows once, or use `lanex --tab`.\n")
+                sys.stdout.flush()
+                return
+            if not appwindow.app_window_disabled():
+                sys.stdout.write(
+                    f"No app window ({res.get('detail')}) — opening a browser tab "
+                    "instead. For an app window install Chrome/Edge/Chromium, or "
+                    "use your browser's menu → 'Install LanEx'.\n")
+                sys.stdout.flush()
+        except Exception:  # pragma: no cover - defensive
+            pass
     # On WSL, try the Windows browser FIRST. A fresh WSL distro has no Linux
     # browser, but webbrowser.open() still finds the gio/xdg-open shim and
     # returns True while that shim quietly no-ops ("gio: <url>: Operation not

@@ -117,8 +117,8 @@ you need no native EDA installs at all.
 
 **Supported platforms** (the same set LibreLane supports): Linux, macOS, and
 Windows **via WSL2**. On Windows, do everything below inside a WSL2 Ubuntu
-terminal — LanEx and LibreLane are Linux programs there; the browser UI opens in
-your normal Windows browser automatically.
+terminal — LanEx and LibreLane are Linux programs there; the UI opens as a
+native Windows window automatically.
 
 > **Prerequisites:** Python ≥ 3.10. Docker or Podman is recommended but
 > **optional** — LanEx can install an engine for you (you confirm the password
@@ -144,7 +144,10 @@ Then launch the cockpit:
 lanex
 ```
 
-The UI opens automatically — that's it. **If anything in the manual options
+The UI opens automatically in its **own app window** — a standalone window with
+its own taskbar entry, no tabs and no URL bar (it uses your installed
+Chrome/Edge/Chromium for the rendering; with none installed it falls back to a
+normal browser tab, and `lanex --tab` forces the tab). That's it. **If anything in the manual options
 below looks confusing, just use this; it's built to work out of the box on any
 supported machine.** On **Fedora / Arch / macOS**, or if you **already run
 LibreLane**, the script isn't for you — pick the matching self-contained row
@@ -422,9 +425,32 @@ the PDK automatically — no extra file needed.)
 <summary><b>No browser opens when I run <code>lanex</code> (WSL)</b></summary>
 
 Fresh WSL distros have no Linux browser. LanEx detects WSL and hands the URL to
-Windows automatically (via `wslview`/`explorer.exe`), opening your normal
-Windows browser. If nothing opens, the URL is printed in the terminal — open
+Windows automatically (the app window uses Windows Edge/Chrome; the tab
+fallback goes via `wslview`/`explorer.exe`), opening a native Windows window.
+If nothing opens, the URL is printed in the terminal — open
 `http://localhost:8765` yourself.
+</details>
+
+<details>
+<summary><b>The app window is blank / can't connect, or I'd rather have a plain tab</b></summary>
+
+`lanex` opens a standalone app window by rendering through your installed
+Chromium-family browser (Chrome, Edge, Chromium, Brave, Vivaldi — on WSL the
+*Windows* Edge/Chrome, so the window is native Windows). Every failure falls
+back to a normal browser tab on its own; these are the corner cases:
+
+- **Blank window on WSL** — Windows→WSL localhost forwarding is wedged (rare;
+  usually after hibernate). Run `wsl --shutdown` from Windows once and relaunch,
+  or use `lanex --tab`.
+- **No Chromium-family browser installed** (e.g. Firefox-only) — you get a
+  normal tab plus a printed hint. Install Chromium/Chrome/Edge for the app
+  window, or use your browser's own menu → **Install LanEx** (the PWA gives the
+  same standalone window and a permanent launcher icon).
+- **Snap/Flatpak browsers** (stock Ubuntu Chromium) work too; they just share
+  the browser's default profile (their sandbox can't write `~/.lanex`) — purely
+  cosmetic.
+- **Force a specific browser** with `LANEX_BROWSER=/path/to/browser`; opt out
+  entirely with `lanex --tab` or `LANEX_NO_APP_WINDOW=1`.
 </details>
 
 <details>
@@ -442,6 +468,8 @@ A Windows console default, not a LanEx issue: right-click the console title bar
 | `LANEX_HOME` | Config/state directory (default `~/.lanex`; the old `~/.librelane-gui` is honoured for existing installs) |
 | `LANEX_HW_GL=1` (alias `LIBRELANE_GUI_WSL_HW_GL=1`) | Skip the software-GL forcing for desktop viewers (native + container launches) |
 | `LANEX_SOFTWARE_GL=1` | Force software GL for desktop viewers even off-WSL |
+| `LANEX_BROWSER` | Browser for the standalone app window (a name like `chromium` or an absolute path); default = first Chromium-family browser found |
+| `LANEX_NO_APP_WINDOW=1` | Never open the standalone app window — always use a normal browser tab (same as `lanex --tab`) |
 | `LIBRELANE_IMAGE_OVERRIDE` | Use a specific container image instead of the version-matched default |
 | `PDK_ROOT` | PDK store location (same variable LibreLane/ciel use) |
 
@@ -450,7 +478,8 @@ A Windows console default, not a LanEx issue: right-click the console title bar
 ## Quickstart
 
 ```bash
-lanex                                  # localhost cockpit, opens a browser
+lanex                                  # localhost cockpit in its own app window
+lanex --tab                            # …in a normal browser tab instead
 lanex --design-dir path/to/my_chip     # open already pointed at a design
 lanex --no-browser --port 9000         # headless / custom port
 lanex --host 0.0.0.0 --allow-remote    # expose on your network (no auth — take care)
