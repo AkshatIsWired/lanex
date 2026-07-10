@@ -200,7 +200,7 @@ stitch two rows together.
 
 ```bash
 # 1. system packages a fresh/minimal image is missing
-sudo apt update && sudo apt install -y pipx python3-venv xfonts-base libgl1 libgl1-mesa-dri libegl1
+sudo apt update && sudo apt install -y pipx python3-venv git xfonts-base libgl1 libgl1-mesa-dri libegl1
 # 2. put pipx-installed commands on your PATH (future shells AND this one)
 pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
 # 3. install LanEx straight from the repo tarball (no git needed;
@@ -229,8 +229,8 @@ viewers open blank windows or crash.</td></tr>
 
 ```bash
 # 1. pipx + the Mesa GL drivers/fonts desktop viewers need (pick your distro)
-sudo dnf install -y pipx mesa-dri-drivers xorg-x11-fonts-misc          # Fedora
-# sudo pacman -S --needed python-pipx mesa xorg-fonts-misc base-devel  # Arch
+sudo dnf install -y pipx git mesa-dri-drivers xorg-x11-fonts-misc      # Fedora
+# sudo pacman -S --needed python-pipx git mesa xorg-fonts-misc base-devel  # Arch
 # 2. PATH, then install LanEx from the repo tarball (PyPI once published)
 pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
 pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz
@@ -533,6 +533,9 @@ back to a normal browser tab on its own; these are the corner cases:
   cosmetic.
 - **Force a specific browser** with `LANEX_BROWSER=/path/to/browser`; opt out
   entirely with `lanex --tab` or `LANEX_NO_APP_WINDOW=1`.
+- **Need to reload?** The window has no browser toolbar, but the topbar has a
+  reload button, and `F5` / `Ctrl+R` still work. The UI also refreshes its own
+  data after installs, so this is rarely needed.
 </details>
 
 <details>
