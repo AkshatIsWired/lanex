@@ -1824,7 +1824,8 @@ def h_open_in_tool(handler: Any) -> None:
             return
         target = gds
     use_tech = body.get("use_tech", True) is not False
-    _respond(handler, desktop.open_in_tool(tool, target, pdk=pdk, pdk_root=pdk_root, use_tech=use_tech), 200)
+    _respond(handler, desktop.open_in_tool(tool, target, pdk=pdk, pdk_root=pdk_root,
+                                           use_tech=use_tech, run_dir=run_dir), 200)
 
 
 def _run_pdk(run_dir: "Path") -> Tuple[Optional[str], Optional[str]]:

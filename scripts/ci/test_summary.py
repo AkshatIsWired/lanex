@@ -57,6 +57,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_watch_pin": "Run watch/pin/notes persist and read back correctly.",
     "test_dse_reverify": "DSE sweeps + targeted re-verify launch through the SAME assembly path as a normal run (Fear B).",
     "test_viewers_plugins": "Cell parsing + the plugin store (checksum-verified installs) behave.",
+    "test_viewer_handoff": "Every layout viewer receives ALL the run data it can render: OpenROAD gets db+liberty+sdc+spef and the marker/DRC inventory (clean-vs-violations said out loud); KLayout gets the DRC/XOR marker databases; Magic/GDS3D flags stay existence-guarded.",
     "test_packaging": "The built wheel ships the frontend assets — no 'installs but blank page'.",
 }
 

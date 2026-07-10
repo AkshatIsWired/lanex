@@ -137,7 +137,8 @@ def _mount(host_path: Path) -> List[str]:
 
 def _tool_command(tool: str, *, gds: Optional[Path], pdk: Optional[str],
                   pdk_root: Optional[str], odb: Optional[Path],
-                  script: Optional[Path] = None) -> List[str]:
+                  script: Optional[Path] = None,
+                  marker_dbs: Optional[List[Path]] = None) -> List[str]:
     """The argv to run *inside* the container for *tool*. *script* is a generated
     startup .tcl (written by the caller into a mounted dir) used to load the run
     into OpenROAD / set Netgen up."""
@@ -169,6 +170,11 @@ def _tool_command(tool: str, *, gds: Optional[Path], pdk: Optional[str],
                 cmd += ["-l", str(lyp)]
         if gds:
             cmd += [str(gds)]
+            # Load the run's DRC/XOR report databases into the marker browser
+            # (-m binds to the layout given just before it). The paths live in
+            # the run dir, which is mounted, so they resolve in-container.
+            for db in marker_dbs or []:
+                cmd += ["-m", str(db)]
         return cmd
     if tool == "openroad":
         # Open the GUI with the run's database already loaded. `read_db` restores
@@ -201,6 +207,7 @@ def build_argv(
     pdk: Optional[str] = None,
     pdk_root: Optional[str] = None,
     script: Optional[Path] = None,
+    marker_dbs: Optional[List[Path]] = None,
 ) -> List[str]:
     """Assemble the full ``<engine> run --rm … <image> <tool> …`` command."""
     argv: List[str] = [engine, "run", "--rm", "-i"]
@@ -218,7 +225,8 @@ def build_argv(
             argv += ["-e", f"PDK={pdk}", "-e", f"PDKPATH={Path(pdk_root) / pdk}"]
     argv += ["-w", str(work_dir)]
     argv += [image]
-    argv += _tool_command(tool, gds=gds, pdk=pdk, pdk_root=pdk_root, odb=odb, script=script)
+    argv += _tool_command(tool, gds=gds, pdk=pdk, pdk_root=pdk_root, odb=odb, script=script,
+                          marker_dbs=marker_dbs)
     return argv
 
 
@@ -358,6 +366,53 @@ def _write_startup_script(tool: str, work_dir: Path, *, odb: Optional[Path],
             if tf["spef"] is not None and tf["libs"]:
                 _try(f"read_spef -corner {_tcl_word(corner)} {{{tf['spef']}}}",
                      f"parasitics loaded ({tf['spef'].name})", "read_spef failed")
+            # ---- DRC / marker inventory ------------------------------------
+            # Modern OpenROAD stores DRC results as marker categories INSIDE the
+            # OpenDB (the old gui::load_drc tcl command no longer exists — the
+            # DRC Viewer's file loading is menu-only). DetailedRouting writes a
+            # "DRC" category into the .odb, so after read_db the viewer already
+            # has the data. What was missing is the EXPLANATION: a clean run has
+            # zero markers and the viewer looks "broken empty". Enumerate the
+            # categories, say clean-vs-violations out loud, and when there ARE
+            # violations pop the viewer open on the offending category.
+            lines.append(
+                "if {[catch {\n"
+                "  set _lx_total 0\n"
+                "  set _lx_cats {}\n"
+                "  set _lx_sel {}\n"
+                "  foreach _lx_c [[ord::get_db_block] getMarkerCategories] {\n"
+                "    set _lx_n [$_lx_c getMarkerCount]\n"
+                "    incr _lx_total $_lx_n\n"
+                "    lappend _lx_cats \"[$_lx_c getName]=$_lx_n\"\n"
+                "    if {$_lx_n > 0 && $_lx_sel eq {}} { set _lx_sel [$_lx_c getName] }\n"
+                "  }\n"
+                "  if {[llength $_lx_cats] == 0} {\n"
+                "    puts \"LanEx: no DRC/marker data stored in this database — the DRC Viewer starts empty (Tools > DRC Viewer > Load can open a report file).\"\n"
+                "  } elseif {$_lx_total == 0} {\n"
+                "    puts \"LanEx: DRC markers: [join $_lx_cats {, }] — zero violations; an EMPTY DRC Viewer is the correct result for this run.\"\n"
+                "  } else {\n"
+                "    puts \"LanEx: DRC markers: [join $_lx_cats {, }] — opening the DRC Viewer.\"\n"
+                "    catch {gui::show_widget drc_viewer}\n"
+                "    catch {gui::select_marker_category $_lx_sel}\n"
+                "  }\n"
+                "} _lx_err]} { puts \"LanEx: marker inventory failed: $_lx_err\" }\n"
+            )
+            # Point at the on-disk DRT report too (the DRC Viewer's Load button
+            # accepts it), with its violation count so empty-vs-broken is never
+            # ambiguous.
+            try:
+                from .desktop import find_run_reports
+                rep = find_run_reports(work_dir)
+            except Exception:
+                rep = {}
+            if rep.get("drt_drc"):
+                v = rep.get("drt_violations")
+                vtxt = f"{v} violation(s)" if v is not None else "count unknown"
+                lines.append(
+                    "puts {LanEx: DetailedRouting DRC report on disk: "
+                    f"{rep['drt_drc']} ({vtxt}) — DRC Viewer > Load opens it; "
+                    "Magic/KLayout DRC results live in the Verify tab.}\n"
+                )
             # A friendly hint in the OpenROAD console on what's now possible.
             ready = bool(tf["libs"] and tf["sdc"] is not None)
             lines.append(
@@ -429,6 +484,17 @@ def open_in_container_tool(
     work_dir = Path(work_dir).resolve()
     gds_p = Path(gds).resolve() if gds else None
     odb_p = Path(odb).resolve() if odb else None
+    # KLayout: attach the run's DRC/XOR marker databases (same gating as the
+    # host launch — only when the GDS belongs to this run, since the markers
+    # name the run's top cell).
+    marker_dbs: List[Path] = []
+    if tool == "klayout" and gds_p is not None:
+        try:
+            if gds_p.is_relative_to(work_dir):
+                from .desktop import find_run_reports
+                marker_dbs = find_run_reports(work_dir).get("marker_dbs") or []
+        except Exception:
+            marker_dbs = []
     # Generate the tool's startup script (loads the .odb into OpenROAD; sets up
     # Netgen) into the mounted run dir so the GUI opens with the run loaded.
     script_p = _write_startup_script(tool, work_dir, odb=odb_p, pdk=pdk, pdk_root=pdk_root)
@@ -436,6 +502,7 @@ def open_in_container_tool(
         engine, image, tool,
         design_dir=design_dir, work_dir=work_dir,
         gds=gds_p, odb=odb_p, pdk=pdk, pdk_root=pdk_root, script=script_p,
+        marker_dbs=marker_dbs,
     )
     run_env = os.environ.copy()
     try:
@@ -457,14 +524,22 @@ def open_in_container_tool(
         subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool/engine only
         hint = None
         if tool == "openroad":
-            hint = (f"OpenROAD GUI opening with the run loaded ({odb_p.name})."
+            hint = (f"OpenROAD GUI opening with the run loaded ({odb_p.name}). The console "
+                    "explains the DRC Viewer's contents (an empty viewer on a clean run is "
+                    "correct); qglx/GL warnings there are harmless."
                     if odb_p else
                     "OpenROAD GUI opened, but this run has no final .odb to load "
                     "(it may not have reached routing). Use File ▸ Open in the GUI.")
         elif tool == "netgen":
             hint = ("Netgen console opening. The PDK LVS setup is pre-sourced; run "
                     "`lvs` with the run's layout + schematic netlists.")
-        return {"ok": True, "tool": tool, "label": spec["label"], "argv": argv,
-                "used_odb": bool(tool == "openroad" and odb_p), "hint": hint}
+        elif tool == "klayout" and marker_dbs:
+            hint = (f"{len(marker_dbs)} DRC/XOR marker database(s) loaded — open KLayout's "
+                    "marker browser to step through violations.")
+        out = {"ok": True, "tool": tool, "label": spec["label"], "argv": argv,
+               "used_odb": bool(tool == "openroad" and odb_p), "hint": hint}
+        if marker_dbs:
+            out["marker_dbs"] = [str(p) for p in marker_dbs]
+        return out
     except Exception as ex:  # pragma: no cover - platform dependent
         return {"ok": False, "error": str(ex)}

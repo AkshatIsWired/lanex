@@ -173,6 +173,72 @@ def find_magicrc(libs_tech: Path, pdk: str) -> Optional[Path]:
     return None
 
 
+def _latest_step_dir(run_dir: Path, pattern: str) -> Optional[Path]:
+    """The highest-ordinal step dir matching *pattern* (``NN-step-name`` layout).
+
+    Sorted by the NUMERIC ordinal, not lexicographically — "104-" must beat
+    "44-" (same lesson as routes._final_odb)."""
+    try:
+        hits = [p for p in run_dir.glob(pattern) if p.is_dir()]
+    except Exception:
+        return None
+
+    def _ordinal(p: Path) -> tuple:
+        prefix, sep, _ = p.name.partition("-")
+        return (int(prefix) if sep and prefix.isdigit() else -1, p.name)
+
+    hits.sort(key=_ordinal)
+    return hits[-1] if hits else None
+
+
+def find_run_reports(run_dir: str | Path) -> Dict[str, Any]:
+    """Viewer-loadable DRC/XOR artifacts a LibreLane run leaves in its step dirs.
+
+    These never reach ``final/`` — they live in the producing step's own dir —
+    so every viewer launch used to ignore them:
+
+    * ``drt_drc``      — the DetailedRouting (TritonRoute) text report; the format
+      the OpenROAD GUI's DRC Viewer ▸ Load accepts. Empty file = clean run.
+    * ``drt_violations`` — count of ``violation type:`` entries in it (0 = clean),
+      None when unreadable.
+    * ``marker_dbs``   — KLayout report databases (``-m`` flag): the KLayout-DRC
+      and Magic-DRC ``.lyrdb``, DetailedRouting's ``.drc.xml``, and the
+      streamout XOR ``xor.xml`` — all ``<report-database>`` files the KLayout
+      marker browser opens directly.
+
+    Best-effort; missing pieces are simply absent. Never raises."""
+    out: Dict[str, Any] = {"drt_drc": None, "drt_violations": None, "marker_dbs": []}
+    try:
+        run_dir = Path(run_dir)
+        drt = _latest_step_dir(run_dir, "*-openroad-detailedrouting*")
+        if drt is not None:
+            hits = sorted(p for p in drt.glob("*.drc") if p.is_file())
+            if hits:
+                out["drt_drc"] = hits[0]
+                try:
+                    text = hits[0].read_text(encoding="utf-8", errors="replace")
+                    out["drt_violations"] = sum(
+                        1 for ln in text.splitlines() if ln.lstrip().startswith("violation type:"))
+                except Exception:
+                    out["drt_violations"] = None
+        # KLayout marker databases, most-specific first. Each is optional.
+        for step_glob, file_glob in (
+            ("*-klayout-drc*", "reports/*.lyrdb"),
+            ("*-magic-drc*", "reports/*.lyrdb"),
+            ("*-openroad-detailedrouting*", "*.drc.xml"),
+            ("*-klayout-xor*", "xor*.xml"),
+        ):
+            step = _latest_step_dir(run_dir, step_glob)
+            if step is None:
+                continue
+            hits = sorted(p for p in step.glob(file_glob) if p.is_file())
+            if hits:
+                out["marker_dbs"].append(hits[0])
+    except Exception:
+        pass
+    return out
+
+
 def _pdk_tech_files(pdk: Optional[str], pdk_root: Optional[str]) -> Dict[str, Optional[str]]:
     """Locate the PDK tech files desktop viewers need to render layers correctly:
     Magic's ``<pdk>.magicrc`` and KLayout's layer-properties ``<pdk>.lyp``.
@@ -210,7 +276,7 @@ def _pdk_tech_files(pdk: Optional[str], pdk_root: Optional[str]) -> Dict[str, Op
     return out
 
 
-def _build_argv(tool: str, binary: str, f: str, tech: Dict[str, Optional[str]], use_tech: bool) -> List[str]:
+def _build_argv(tool: str, binary: str, f: str, tech: Dict[str, Any], use_tech: bool) -> List[str]:
     """Per-tool argv. When *use_tech* and the PDK tech files are found, inject them
     so layers render (a bare ``magic <gds>`` falls back to the 'minimum' tech and
     shows nothing). *use_tech* False = the tool's default view (lets the user pick
@@ -222,9 +288,17 @@ def _build_argv(tool: str, binary: str, f: str, tech: Dict[str, Optional[str]], 
         return [binary, f]
     if tool == "klayout":
         # -l loads the PDK layer-properties so metals/vias get the right colours.
+        argv = [binary]
         if use_tech and tech.get("klayout_lyp"):
-            return [binary, "-l", tech["klayout_lyp"], f]
-        return [binary, f]
+            argv += ["-l", tech["klayout_lyp"]]
+        argv.append(f)
+        # -m loads a report database (DRC/XOR markers) into the layout just
+        # given — so the run's violations render in the marker browser instead
+        # of being invisible. One flag per database; order after the layout
+        # matters (KLayout binds -m to the previous layout on the command line).
+        for db in tech.get("marker_dbs") or []:
+            argv += ["-m", str(db)]
+        return argv
     if tool == "gds3d":
         # GDS3D REQUIRES a process file (-p) describing the layer stack; without it
         # it opens nothing. The caller resolves it into tech["gds3d_process"].
@@ -237,7 +311,8 @@ def _build_argv(tool: str, binary: str, f: str, tech: Dict[str, Optional[str]], 
 
 def open_in_tool(tool: str, file_path: str | Path, *,
                  pdk: Optional[str] = None, pdk_root: Optional[str] = None,
-                 use_tech: bool = True) -> Dict[str, Any]:
+                 use_tech: bool = True,
+                 run_dir: Optional[str | Path] = None) -> Dict[str, Any]:
     """Launch *tool* on *file_path* (already traversal-validated by the caller).
 
     *pdk*/*pdk_root* (from the run's resolved config) let us pass the PDK tech
@@ -325,6 +400,19 @@ def open_in_tool(tool: str, file_path: str | Path, *,
                                                       "sudo apt-get install -y xfonts-base")}
         except Exception:
             pass
+    # KLayout: attach the run's DRC/XOR marker databases so violations render.
+    # Only when the opened file belongs to that run — markers name the run's top
+    # cell, so pinning them onto an unrelated GDS (a cell, another design) would
+    # show markers over the wrong geometry.
+    if tool == "klayout" and run_dir is not None:
+        try:
+            rd = Path(run_dir).resolve()
+            if f.resolve().is_relative_to(rd):
+                dbs = find_run_reports(rd).get("marker_dbs") or []
+                if dbs:
+                    tech["marker_dbs"] = dbs
+        except Exception:
+            pass
     argv = _build_argv(tool, binary, str(f), tech, use_tech)
     # Magic's magicrc resolves $PDK_ROOT/$PDK/$PDKPATH; export them so it doesn't
     # error out with the 'minimum' tech and close immediately.
@@ -359,6 +447,10 @@ def open_in_tool(tool: str, file_path: str | Path, *,
                               or tech.get("gds3d_process")),
             "tech_root": tech.get("root"),
         }
+        if tech.get("marker_dbs"):
+            out["marker_dbs"] = [str(p) for p in tech["marker_dbs"]]
+            out["hint"] = (f"{len(tech['marker_dbs'])} DRC/XOR marker database(s) loaded — "
+                           "open KLayout's marker browser to step through violations.")
         # Provenance: when the tech files came from a DIFFERENT PDK root than the
         # run's (fallback search), the render may use a different PDK version
         # than the one that produced this GDS — say so instead of staying silent.
