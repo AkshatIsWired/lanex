@@ -90,6 +90,17 @@ def test_build_tools_retry_stage_present() -> None:
     assert "base-devel" in body and "build-essential" in body
 
 
+def test_every_pkg_stage_installs_git() -> None:
+    # Regression (round 56): the universal installer dropped git — the old
+    # install-wsl.sh had it — and the in-app GDS3D build then failed on fresh
+    # WSL with "needs: git". Every Linux package stage must offer git.
+    body = INSTALL.read_text()
+    for stage in ("apt_stage", "dnf_stage", "pacman_stage", "zypper_stage"):
+        start = body.index(f"{stage}()")
+        end = body.index("\n}", start)
+        assert " git" in body[start:end], f"{stage} no longer installs git"
+
+
 def test_shim_delegates_to_universal_installer() -> None:
     body = SHIM.read_text()
     assert "install.sh" in body

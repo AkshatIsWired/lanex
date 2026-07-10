@@ -120,6 +120,10 @@ apt_stage() {
     # Nice-to-haves: each degrades alone. pipx: not packaged before Ubuntu 22.04
     # / Debian 12 (those pythons are too old anyway — caught below).
     $A install -y pipx || warn "no apt 'pipx' package — will fall back to pip/venv."
+    # git: the in-app GDS3D viewer build clones its source, and git-based
+    # installs need it. Its absence surfaces much later as a confusing
+    # "gds3d install failed — needs: git" in the Tools tab.
+    $A install -y git || warn "git failed to install — the GDS3D build (Tools tab) needs it."
     # X11 fixed fonts + Mesa GL: without them GDS3D segfaults and GL viewers
     # open blank windows. Cosmetic for the cockpit itself → never fatal.
     $A install -y xfonts-base libgl1 libgl1-mesa-dri libegl1 \
@@ -131,6 +135,7 @@ dnf_stage() {
     $SUDO dnf install -y python3 python3-pip \
         || die "dnf could not install python3. Fix dnf, then re-run."
     $SUDO dnf install -y pipx || warn "no dnf 'pipx' package — will fall back to pip/venv."
+    $SUDO dnf install -y git || warn "git failed to install — the GDS3D build (Tools tab) needs it."
     $SUDO dnf install -y mesa-dri-drivers xorg-x11-fonts-misc \
         || warn "GL/font packages failed — desktop viewers may need them later."
 }
@@ -140,6 +145,7 @@ pacman_stage() {
     $SUDO pacman -Sy --noconfirm --needed python \
         || die "pacman could not install python. Fix pacman, then re-run."
     $SUDO pacman -S --noconfirm --needed python-pipx || warn "no 'python-pipx' — will fall back to pip/venv."
+    $SUDO pacman -S --noconfirm --needed git || warn "git failed to install — the GDS3D build (Tools tab) needs it."
     $SUDO pacman -S --noconfirm --needed mesa xorg-fonts-misc \
         || warn "GL/font packages failed — desktop viewers may need them later."
 }
@@ -149,6 +155,7 @@ zypper_stage() {
     $SUDO zypper --non-interactive install python3 python3-pip \
         || die "zypper could not install python3. Fix zypper, then re-run."
     $SUDO zypper --non-interactive install python3-pipx || warn "no 'python3-pipx' — will fall back to pip/venv."
+    $SUDO zypper --non-interactive install git-core || warn "git failed to install — the GDS3D build (Tools tab) needs it."
     $SUDO zypper --non-interactive install Mesa-dri xorg-x11-fonts-legacy \
         || warn "GL/font packages failed — desktop viewers may need them later."
 }
