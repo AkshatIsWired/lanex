@@ -88,6 +88,9 @@ async function boot() {
     // The standalone app window has no browser reload button; F5/Ctrl+R still
     // work, but give staleness an obvious escape hatch.
     document.getElementById("reload-btn")?.addEventListener("click", () => location.reload());
+    // Wire the topbar Logs toggle so a closed install-log drawer can always be
+    // reopened (it stays hidden until an install produces output).
+    import("./modules/logdrawer.js").then((d) => d.setupLogDrawer()).catch(() => {});
     setupPalette();
     setupRunMode();
     setupLogs();

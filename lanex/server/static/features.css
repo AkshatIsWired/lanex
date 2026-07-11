@@ -142,6 +142,10 @@
 .log-drawer-btn { font-size: var(--t-xs); padding: 2px 8px; }
 .log-drawer-body { flex: 1; overflow: auto; margin: 0; padding: var(--s-3);
   font-family: var(--mono); font-size: var(--t-xs); white-space: pre-wrap; color: var(--text); }
+/* Topbar Logs toggle: a dot marks output waiting behind a closed drawer. */
+#logs-btn.has-activity::after { content: ""; position: absolute; top: -3px; right: -3px;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface); }
 
 /* ---- Desktop viewers card ------------------------------------------------- */
 .tool-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); padding: var(--s-2) 0; border-bottom: 1px solid var(--border); }

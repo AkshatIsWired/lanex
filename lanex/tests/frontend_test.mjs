@@ -26,7 +26,7 @@ const MOD = resolve(HERE, "..", "server", "static", "modules");
 
 const { fmt } = await import(resolve(MOD, "api.js"));
 const { csvCell } = await import(resolve(MOD, "csvutil.js"));
-const { clampZoom } = await import(resolve(MOD, "zoom.js"));
+const { clampZoom, compactionLevel } = await import(resolve(MOD, "zoom.js"));
 
 let passed = 0;
 function check(name, fn) {
@@ -120,6 +120,19 @@ check("clampZoom: bounds, snap, garbage → 1", () => {
   assert.equal(clampZoom("junk"), 1);
   assert.equal(clampZoom(-1), 1);
   assert.equal(clampZoom(NaN), 1);
+});
+
+check("compactionLevel: zoom-in sheds chrome so toolbars fit, never fires at <=100%", () => {
+  // Gated to zoom-IN — at 100%/zoom-out the @media breakpoints own small windows,
+  // so a common short laptop (1366x768) at default zoom keeps its full chrome.
+  assert.equal(compactionLevel(1, 1366, 768), 0);
+  assert.equal(compactionLevel(0.8, 1024, 640), 0);
+  // Big screen: progressive compaction as zoom climbs (effective space shrinks).
+  assert.equal(compactionLevel(1, 1920, 1080), 0);
+  assert.equal(compactionLevel(1.3, 1920, 1080), 1);   // effective ~1477x831 → stage 1
+  assert.equal(compactionLevel(1.6, 1920, 1080), 2);   // effective ~1200x675 → stage 2
+  // Short window zooms straight past stage 1 (height threshold bites first).
+  assert.equal(compactionLevel(1.2, 1366, 768), 2);    // effective ~1138x640 → stage 2
 });
 
 check("zoom: stylesheets compensate viewport units via --ll-zoom", () => {

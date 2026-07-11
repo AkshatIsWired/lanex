@@ -467,6 +467,31 @@ body.theme-light .logo--light { display: inline-block; }
   #design-pill, #pdk-pill { padding: 5px 8px; max-width: none; }
 }
 
+/* Zoom-aware compaction. CSS `zoom` (the topbar/rail zoom control) scales the
+   layout but does NOT shrink the media-query viewport, so zooming IN never
+   triggered the width/height compaction above — the toolbars just grew past the
+   window and scrolled. zoom.js measures the EFFECTIVE space (viewport ÷ zoom)
+   and sets .zc1/.zc2 on <html>, so the same low-value chrome is shed under zoom
+   and BOTH toolbars fit instead of scrolling. Uniform zoom is preserved (no
+   counter-scaling), so tooltip/menu positioning is unchanged. */
+html.zc1 .topbar-center .switch-label,
+html.zc1 .brand-sub,
+html.zc1 .rail-label { display: none; }          /* topbar: drop labels; rail: drop group headers */
+html.zc1 .topbar { gap: var(--s-2); }
+html.zc1 .side-tabs { gap: var(--s-2); }
+html.zc1 .rail-group { gap: 4px; }
+
+html.zc2 .brand-text,
+html.zc2 #design-pill .text,
+html.zc2 #pdk-pill .text { display: none; }       /* logo mark + status dots only */
+html.zc2 #design-pill, html.zc2 #pdk-pill { padding: 5px 8px; max-width: none; }
+html.zc2 .mode-seg .seg-btn > span:not(.mode-ico),
+html.zc2 .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }   /* icon-only switches */
+html.zc2 .mode-seg .seg-btn, html.zc2 .engine-seg .seg-btn { padding-left: var(--s-2); padding-right: var(--s-2); }
+/* icon-only rail reclaims the vertical space so the rail fits without its own scroll */
+html.zc2 .side-tab .label { display: none; }
+html.zc2 .side-tab { justify-content: center; }
+
 /* Mode / engine switches use the shared .seg component (B16). The active +
    disabled markers keep the class names runmode.js/setup.js already toggle. */
 .mode-seg .seg-btn, .engine-seg .seg-btn { display: inline-flex; align-items: center; gap: var(--s-2); white-space: nowrap; }
