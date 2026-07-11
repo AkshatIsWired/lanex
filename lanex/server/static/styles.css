@@ -460,8 +460,10 @@ body.theme-light .logo--light { display: inline-block; }
    gaps (keeps every control, just narrower). --- */
 @media (max-width: 1600px) {
   /* The logo mark already carries the "LanEx" wordmark, so drop the separate
-     text lockup entirely when tight — cleaner than a cramped mark-beside-wordmark. */
-  .topbar-center .switch-label, .brand-text, .rail-label { display: none; }
+     text lockup entirely when tight — cleaner than a cramped mark-beside-wordmark.
+     The License button is the lowest-value control (rarely opened, also on ⌘K),
+     so it goes first — it was the one item still tipping the row into a scroll. */
+  .topbar-center .switch-label, .brand-text, .rail-label, #legal-btn { display: none; }
   .cmdk-launcher .cmdk-lbl, .cmdk-launcher .cmdk-hintkey { display: none; }
   .topbar { gap: var(--s-2); }
   .side-tabs { gap: var(--s-2); }
@@ -469,7 +471,8 @@ body.theme-light .logo--light { display: inline-block; }
 }
 html.zc1 .topbar-center .switch-label,
 html.zc1 .brand-text,
-html.zc1 .rail-label { display: none; }
+html.zc1 .rail-label,
+html.zc1 #legal-btn { display: none; }
 html.zc1 .cmdk-launcher .cmdk-lbl, html.zc1 .cmdk-launcher .cmdk-hintkey { display: none; }
 html.zc1 .topbar { gap: var(--s-2); }
 html.zc1 .side-tabs { gap: var(--s-2); }
