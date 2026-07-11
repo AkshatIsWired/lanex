@@ -442,52 +442,53 @@ body.theme-light .logo--light { display: inline-block; }
 .switch-label { align-self: center; }
 .engine-seg { margin-left: var(--s-1); }
 
-/* ================= Topbar / rail compaction (THREE stages) =================
+/* ================= Topbar / rail compaction (FOUR stages) =================
    The topbar carries a lot of controls (~15) and used to scroll when they didn't
    fit. Fixed px/@media thresholds couldn't cover every screen × zoom × font ×
    loaded-content combination, so the TRIGGER is measurement-based: zoom.js
    `fitChrome()` measures whether the real rendered topbar/rail overflow and
-   escalates html.zc1 → zc2 → zc3 only as far as needed (un-compacting when there's
-   room). The rules below DEFINE what each stage sheds — ordered lowest-value FIRST
-   so identity chrome (the brand wordmark) survives until it's genuinely needed;
-   otherwise a few px of overflow would drop the whole logo lockup and leave an
-   obvious empty gap. Everything hidden stays reachable via the palette (⌘K)+hotkeys. */
+   escalates html.zc1 → zc2 → zc3 → zc4 only as far as needed (un-compacting when
+   there's room). The rules below DEFINE what each stage sheds — ordered
+   LOWEST-VALUE FIRST so the things users notice most (the brand wordmark and the
+   named buttons like License) survive the longest; a few px of overflow now just
+   drops redundant labels, not identity chrome. Everything hidden stays reachable
+   via the command palette (⌘K) + hotkeys. */
 
 /* segs never wrap onto a phantom second row (the old browser-zoom overlap). */
 .mode-seg, .engine-seg, .seg { flex-wrap: nowrap; }
 .mode-seg, .engine-seg { flex-shrink: 0; }
 
-/* --- Stage 1: shed the lowest-value TEXT/chrome only (barely noticeable, frees
-   real width): Mode/Engine labels, the palette "Commands ⌘K" label, rail group
-   headers, the rarely-used License button; tighten gaps. WORDMARK STAYS. --- */
+/* --- Stage 1: redundant TEXT labels + gaps only (barely noticeable). Keeps every
+   button, the wordmark, the pills, and the switch text. --- */
 html.zc1 .topbar-center .switch-label,
 html.zc1 .cmdk-launcher .cmdk-lbl, html.zc1 .cmdk-launcher .cmdk-hintkey,
-html.zc1 .rail-label,
-html.zc1 #legal-btn { display: none; }
+html.zc1 .rail-label { display: none; }
 html.zc1 .topbar { gap: var(--s-2); }
 html.zc1 .side-tabs { gap: var(--s-2); }
 html.zc1 .rail-group { gap: 4px; }
 
-/* --- Stage 2 (builds on 1): drop the wordmark lockup (the logo mark already reads
-   "LanEx"), icon-only Mode/Engine switches, design/PDK pills down to their dots. --- */
-html.zc2 .brand-text,
-html.zc2 #design-pill .text,
-html.zc2 #pdk-pill .text { display: none; }
-html.zc2 #design-pill, html.zc2 #pdk-pill { padding: 5px 8px; max-width: none; }
+/* --- Stage 2: icon-only Mode/Engine switches + pills to their dots. STILL keeps
+   every button AND the wordmark AND the License button. --- */
 html.zc2 .mode-seg .seg-btn > span:not(.mode-ico),
 html.zc2 .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }
 html.zc2 .mode-seg .seg-btn, html.zc2 .engine-seg .seg-btn { padding-left: var(--s-2); padding-right: var(--s-2); }
+html.zc2 #design-pill .text, html.zc2 #pdk-pill .text { display: none; }
+html.zc2 #design-pill, html.zc2 #pdk-pill { padding: 5px 8px; max-width: none; }
 
-/* --- Stage 3 (most compact): shrink the icon buttons, icon-only Run + rail, and
-   hide the remaining low-value buttons (all still on the palette + hotkeys). --- */
+/* --- Stage 3: drop the wordmark lockup (logo mark already reads "LanEx"), shrink
+   the icon buttons, icon-only Run. --- */
+html.zc3 .brand-text { display: none; }
 html.zc3 .iconbtn { width: 28px; height: 28px; }
 html.zc3 .zoom-pct { height: 28px; min-width: 38px; padding: 0 4px; }
 html.zc3 .topbar-right { gap: 4px; }
-html.zc3 #btn-new-project, html.zc3 #btn-learn,
-html.zc3 #density-btn, html.zc3 .topbar-divider { display: none; }
 html.zc3 #btn-run-global > span { display: none; }       /* icon-only Run */
-html.zc3 .side-tab .label { display: none; }              /* icon-only rail */
-html.zc3 .side-tab { justify-content: center; }
+
+/* --- Stage 4 (most compact): only now hide the low-frequency buttons — including
+   License — and go icon-only on the rail. --- */
+html.zc4 #btn-new-project, html.zc4 #btn-learn, html.zc4 #density-btn,
+html.zc4 #legal-btn, html.zc4 .topbar-divider { display: none; }
+html.zc4 .side-tab .label { display: none; }              /* icon-only rail */
+html.zc4 .side-tab { justify-content: center; }
 
 /* Mode / engine switches use the shared .seg component (B16). The active +
    disabled markers keep the class names runmode.js/setup.js already toggle. */

@@ -28,28 +28,31 @@ export function clampZoom(v) {
 function chromeOverflows() {
   const tb = document.querySelector(".topbar");
   const rail = document.querySelector(".side-tabs");
-  // +2px guards against sub-pixel rounding jitter causing a false overflow.
-  const tbOver = !!tb && tb.scrollWidth > tb.clientWidth + 2;
-  const railOver = !!rail && rail.scrollHeight > rail.clientHeight + 2;
+  // +3px guards against sub-pixel rounding jitter causing a false overflow (which
+  // would compact — hide a label/button — while there's really still room).
+  const tbOver = !!tb && tb.scrollWidth > tb.clientWidth + 3;
+  const railOver = !!rail && rail.scrollHeight > rail.clientHeight + 3;
   return tbOver || railOver;
 }
 
-// Escalate compaction until the chrome fits (0 = full; 1 = low-value labels;
-// 2 = wordmark + icon-only switches + pill dots; 3 = shrink + hide low-value
-// buttons + icon-only rail). Lowest-value chrome goes first, so the brand
-// wordmark only drops when a stage-1 shed wasn't enough — no dropping the whole
-// logo lockup for a few px of overflow. Returns the stage it settled on.
+// Escalate compaction until the chrome fits (0 = full; 1 = redundant labels;
+// 2 = icon-only switches + pill dots; 3 = wordmark + shrink; 4 = hide low-value
+// buttons incl. License + icon-only rail). Lowest-value chrome goes first, so the
+// wordmark and named buttons (License) survive until a lighter shed wasn't enough
+// — never dropped for a few px of overflow. Returns the stage it settled on.
 export function fitChrome() {
   try {
     const cl = document.documentElement.classList;
-    cl.remove("zc1", "zc2", "zc3");
+    cl.remove("zc1", "zc2", "zc3", "zc4");
     if (!chromeOverflows()) return 0;
     cl.add("zc1");
     if (!chromeOverflows()) return 1;
     cl.add("zc2");
     if (!chromeOverflows()) return 2;
     cl.add("zc3");
-    return 3;
+    if (!chromeOverflows()) return 3;
+    cl.add("zc4");
+    return 4;
   } catch (_e) {
     return 0;
   }
