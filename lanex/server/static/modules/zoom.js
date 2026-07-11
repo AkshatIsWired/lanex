@@ -34,17 +34,22 @@ function chromeOverflows() {
   return tbOver || railOver;
 }
 
-// Escalate compaction until the chrome fits (0 = full, 1 = labels dropped,
-// 2 = icon-only + low-value controls hidden). Returns the stage it settled on.
+// Escalate compaction until the chrome fits (0 = full; 1 = low-value labels;
+// 2 = wordmark + icon-only switches + pill dots; 3 = shrink + hide low-value
+// buttons + icon-only rail). Lowest-value chrome goes first, so the brand
+// wordmark only drops when a stage-1 shed wasn't enough — no dropping the whole
+// logo lockup for a few px of overflow. Returns the stage it settled on.
 export function fitChrome() {
   try {
     const cl = document.documentElement.classList;
-    cl.remove("zc1", "zc2");
+    cl.remove("zc1", "zc2", "zc3");
     if (!chromeOverflows()) return 0;
     cl.add("zc1");
     if (!chromeOverflows()) return 1;
     cl.add("zc2");
-    return 2;
+    if (!chromeOverflows()) return 2;
+    cl.add("zc3");
+    return 3;
   } catch (_e) {
     return 0;
   }

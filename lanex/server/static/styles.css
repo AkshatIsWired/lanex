@@ -442,35 +442,34 @@ body.theme-light .logo--light { display: inline-block; }
 .switch-label { align-self: center; }
 .engine-seg { margin-left: var(--s-1); }
 
-/* ================= Topbar / rail compaction (two stages) =================
+/* ================= Topbar / rail compaction (THREE stages) =================
    The topbar carries a lot of controls (~15) and used to scroll when they didn't
-   fit — at high zoom AND at 100% on narrower screens. Fixed px/@media thresholds
-   couldn't cover every screen × zoom × font × loaded-content combination (a 1850px
-   window overflowed at 110% but fit at 120%). So the TRIGGER is measurement-based:
-   zoom.js `fitChrome()` measures whether the real rendered topbar/rail overflow and
-   toggles html.zc1 / html.zc2, escalating only as far as needed and un-compacting
-   when there's room. The rules below just DEFINE what each stage sheds; everything
-   hidden stays reachable via the command palette (⌘K) + hotkeys.
-   Stage 1 = drop text labels / group headers / the palette label / the wordmark /
-   the low-value License button. Stage 2 (builds on 1) = icon-only switches + rail +
-   Run + palette, smaller icon buttons, pills to dots, hide the other low-value
-   controls. Uniform zoom is preserved — tooltip.js compensates for the zoom factor. */
+   fit. Fixed px/@media thresholds couldn't cover every screen × zoom × font ×
+   loaded-content combination, so the TRIGGER is measurement-based: zoom.js
+   `fitChrome()` measures whether the real rendered topbar/rail overflow and
+   escalates html.zc1 → zc2 → zc3 only as far as needed (un-compacting when there's
+   room). The rules below DEFINE what each stage sheds — ordered lowest-value FIRST
+   so identity chrome (the brand wordmark) survives until it's genuinely needed;
+   otherwise a few px of overflow would drop the whole logo lockup and leave an
+   obvious empty gap. Everything hidden stays reachable via the palette (⌘K)+hotkeys. */
 
 /* segs never wrap onto a phantom second row (the old browser-zoom overlap). */
 .mode-seg, .engine-seg, .seg { flex-wrap: nowrap; }
 .mode-seg, .engine-seg { flex-shrink: 0; }
 
-/* --- Stage 1: labels, group headers, palette label, wordmark, License --- */
+/* --- Stage 1: shed the lowest-value TEXT/chrome only (barely noticeable, frees
+   real width): Mode/Engine labels, the palette "Commands ⌘K" label, rail group
+   headers, the rarely-used License button; tighten gaps. WORDMARK STAYS. --- */
 html.zc1 .topbar-center .switch-label,
-html.zc1 .brand-text,
+html.zc1 .cmdk-launcher .cmdk-lbl, html.zc1 .cmdk-launcher .cmdk-hintkey,
 html.zc1 .rail-label,
 html.zc1 #legal-btn { display: none; }
-html.zc1 .cmdk-launcher .cmdk-lbl, html.zc1 .cmdk-launcher .cmdk-hintkey { display: none; }
 html.zc1 .topbar { gap: var(--s-2); }
 html.zc1 .side-tabs { gap: var(--s-2); }
 html.zc1 .rail-group { gap: 4px; }
 
-/* --- Stage 2 (builds on stage 1): icon-only + shrink + hide low-value controls --- */
+/* --- Stage 2 (builds on 1): drop the wordmark lockup (the logo mark already reads
+   "LanEx"), icon-only Mode/Engine switches, design/PDK pills down to their dots. --- */
 html.zc2 .brand-text,
 html.zc2 #design-pill .text,
 html.zc2 #pdk-pill .text { display: none; }
@@ -478,15 +477,17 @@ html.zc2 #design-pill, html.zc2 #pdk-pill { padding: 5px 8px; max-width: none; }
 html.zc2 .mode-seg .seg-btn > span:not(.mode-ico),
 html.zc2 .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }
 html.zc2 .mode-seg .seg-btn, html.zc2 .engine-seg .seg-btn { padding-left: var(--s-2); padding-right: var(--s-2); }
-html.zc2 .side-tab .label { display: none; }
-html.zc2 .side-tab { justify-content: center; }
-html.zc2 .iconbtn { width: 28px; height: 28px; }
-html.zc2 .zoom-pct { height: 28px; min-width: 38px; padding: 0 4px; }
-html.zc2 .topbar-right { gap: 4px; }
-html.zc2 #btn-new-project, html.zc2 #btn-learn, html.zc2 #legal-btn,
-html.zc2 #density-btn, html.zc2 .topbar-divider { display: none; }
-html.zc2 #btn-run-global > span { display: none; }
-html.zc2 .cmdk-launcher .cmdk-lbl, html.zc2 .cmdk-launcher .cmdk-hintkey { display: none; }
+
+/* --- Stage 3 (most compact): shrink the icon buttons, icon-only Run + rail, and
+   hide the remaining low-value buttons (all still on the palette + hotkeys). --- */
+html.zc3 .iconbtn { width: 28px; height: 28px; }
+html.zc3 .zoom-pct { height: 28px; min-width: 38px; padding: 0 4px; }
+html.zc3 .topbar-right { gap: 4px; }
+html.zc3 #btn-new-project, html.zc3 #btn-learn,
+html.zc3 #density-btn, html.zc3 .topbar-divider { display: none; }
+html.zc3 #btn-run-global > span { display: none; }       /* icon-only Run */
+html.zc3 .side-tab .label { display: none; }              /* icon-only rail */
+html.zc3 .side-tab { justify-content: center; }
 
 /* Mode / engine switches use the shared .seg component (B16). The active +
    disabled markers keep the class names runmode.js/setup.js already toggle. */
