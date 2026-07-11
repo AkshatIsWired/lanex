@@ -443,32 +443,24 @@ body.theme-light .logo--light { display: inline-block; }
 .engine-seg { margin-left: var(--s-1); }
 
 /* ================= Topbar / rail compaction (two stages) =================
-   The topbar carries a lot of controls, so below ~1460px of REAL width — OR when
-   the UI-zoom control shrinks the effective space (zoom.js sets html.zc1/.zc2) —
-   it can't hold full chrome and used to scroll. Two stages shed low-value chrome
-   so BOTH toolbars fit instead. Each stage is written for the @media (a narrow
-   real window, incl. a laptop at 100%) AND the .zcN class (zoomed in) so both
-   paths compact identically. Uniform zoom is preserved — tooltip.js compensates
-   for the zoom factor, so no counter-scaling is needed.
-   Everything hidden here stays reachable via the command palette (⌘K) + hotkeys. */
+   The topbar carries a lot of controls (~15) and used to scroll when they didn't
+   fit — at high zoom AND at 100% on narrower screens. Fixed px/@media thresholds
+   couldn't cover every screen × zoom × font × loaded-content combination (a 1850px
+   window overflowed at 110% but fit at 120%). So the TRIGGER is measurement-based:
+   zoom.js `fitChrome()` measures whether the real rendered topbar/rail overflow and
+   toggles html.zc1 / html.zc2, escalating only as far as needed and un-compacting
+   when there's room. The rules below just DEFINE what each stage sheds; everything
+   hidden stays reachable via the command palette (⌘K) + hotkeys.
+   Stage 1 = drop text labels / group headers / the palette label / the wordmark /
+   the low-value License button. Stage 2 (builds on 1) = icon-only switches + rail +
+   Run + palette, smaller icon buttons, pills to dots, hide the other low-value
+   controls. Uniform zoom is preserved — tooltip.js compensates for the zoom factor. */
 
 /* segs never wrap onto a phantom second row (the old browser-zoom overlap). */
 .mode-seg, .engine-seg, .seg { flex-wrap: nowrap; }
 .mode-seg, .engine-seg { flex-shrink: 0; }
 
-/* --- Stage 1: drop text labels / group headers + the palette label, tighten
-   gaps (keeps every control, just narrower). --- */
-@media (max-width: 1600px) {
-  /* The logo mark already carries the "LanEx" wordmark, so drop the separate
-     text lockup entirely when tight — cleaner than a cramped mark-beside-wordmark.
-     The License button is the lowest-value control (rarely opened, also on ⌘K),
-     so it goes first — it was the one item still tipping the row into a scroll. */
-  .topbar-center .switch-label, .brand-text, .rail-label, #legal-btn { display: none; }
-  .cmdk-launcher .cmdk-lbl, .cmdk-launcher .cmdk-hintkey { display: none; }
-  .topbar { gap: var(--s-2); }
-  .side-tabs { gap: var(--s-2); }
-  .rail-group { gap: 4px; }
-}
+/* --- Stage 1: labels, group headers, palette label, wordmark, License --- */
 html.zc1 .topbar-center .switch-label,
 html.zc1 .brand-text,
 html.zc1 .rail-label,
@@ -478,25 +470,7 @@ html.zc1 .topbar { gap: var(--s-2); }
 html.zc1 .side-tabs { gap: var(--s-2); }
 html.zc1 .rail-group { gap: 4px; }
 
-/* --- Stage 2 (builds on stage 1): icon-only switches + rail, smaller buttons,
-   hide low-value controls so the row genuinely fits at any zoom (no residual
-   scroll). --- */
-@media (max-width: 1380px) {
-  .brand-text { display: none; }                 /* logo mark alone */
-  #design-pill .text, #pdk-pill .text { display: none; }
-  #design-pill, #pdk-pill { padding: 5px 8px; max-width: none; }
-  .mode-seg .seg-btn > span:not(.mode-ico),
-  .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }
-  .mode-seg .seg-btn, .engine-seg .seg-btn { padding-left: var(--s-2); padding-right: var(--s-2); }
-  .side-tab .label { display: none; }
-  .side-tab { justify-content: center; }
-  .iconbtn { width: 28px; height: 28px; }
-  .zoom-pct { height: 28px; min-width: 38px; padding: 0 4px; }
-  .topbar-right { gap: 4px; }
-  #btn-new-project, #btn-learn, #legal-btn, #density-btn, .topbar-divider { display: none; }
-  #btn-run-global > span { display: none; }       /* icon-only Run */
-  .cmdk-launcher .cmdk-lbl, .cmdk-launcher .cmdk-hintkey { display: none; }  /* icon-only palette */
-}
+/* --- Stage 2 (builds on stage 1): icon-only + shrink + hide low-value controls --- */
 html.zc2 .brand-text,
 html.zc2 #design-pill .text,
 html.zc2 #pdk-pill .text { display: none; }
