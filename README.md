@@ -298,7 +298,7 @@ silently if you later move or delete the clone).
 <tr><th align="left" width="220">You need</th><th align="left">One click away</th></tr>
 
 <tr><td><b>The EDA toolchain</b></td>
-<td>Tools tab → <b>Install the toolchain (recommended)</b>. One click pulls the version-matched LibreLane container image; keep the <b>Container</b> engine selected and you're done — zero native tool installs.<br><br><b>No Docker or Podman?</b> The same card installs one for you first, then pulls the image, all in one go. It runs the official installer (e.g. <code>curl -fsSL https://get.docker.com | sudo sh</code> on Linux; on macOS it installs Docker Desktop — retrying over leftovers from an old install — or podman <i>including</i> its one-time <code>podman machine</code> VM setup); you confirm the password prompt in your terminal.</td></tr>
+<td>Tools tab → <b>Install the toolchain (recommended)</b>. One click pulls the version-matched LibreLane container image; keep the <b>Container</b> engine selected and you're done — zero native tool installs.<br><br><b>No Docker or Podman?</b> The same card installs one for you first, then pulls the image, all in one go. It runs the official installer (e.g. <code>curl -fsSL https://get.docker.com | sudo sh</code> on Linux; on macOS it installs Docker Desktop — retrying over leftovers from an old install — or podman <i>including</i> its one-time <code>podman machine</code> VM setup); you confirm the password prompt in your terminal (on macOS, a native password dialog).</td></tr>
 
 <tr><td><b>Recommended extras</b><br><sub>optional niceties</sub></td>
 <td>The Tools tab's <b>Recommended extra tools</b> group one-click-installs <b>Icarus Verilog</b> (RTL simulation in the IDE), <b>Graphviz</b> (synthesis schematics), and <b>GDS3D</b> (3D layout viewer — built from source on Linux with all its X11/GL dependencies handled; on macOS the prebuilt app from the GDS3D repo is installed, which on Apple Silicon runs under Rosetta 2: <code>softwareupdate --install-rosetta</code>). System packages that need <code>sudo</code> prompt for your password in the launch terminal — LanEx never asks for your password in the browser.</td></tr>
@@ -370,6 +370,76 @@ Tracks the tip of `main` — newer than any release, but not yet version-blessed
 After updating, if the LibreLane engine version moved, re-pull the matched image
 from the **Tools** tab (or `lanex --pull-image`) so the container stays in lockstep.
 Check your installed version any time with `pipx list` (or `pip show lanex`).
+
+### Uninstalling LanEx
+
+Removal is in three layers — the app, its data, and the heavy things it *helped*
+you install (the container image, PDKs, EDA tools). Do as many as you want; each
+is independent.
+
+**1 · Remove the app** — match how you installed:
+
+<table>
+<tr><th align="left" width="235">How you installed</th><th align="left">Remove command</th></tr>
+
+<tr><td><b>pipx</b> (one-line installer, tarball, PyPI, or git)</td>
+<td>
+
+```bash
+pipx uninstall lanex
+```
+</td></tr>
+
+<tr><td><b>pip inside your own env</b></td>
+<td>
+
+```bash
+pip uninstall lanex
+```
+</td></tr>
+
+<tr><td><b>venv fallback</b> (installer used this when pipx was unavailable)</td>
+<td>
+
+```bash
+rm -rf ~/.lanex/venv
+sudo rm -f /usr/local/bin/lanex     # only if the installer made this symlink
+```
+</td></tr>
+</table>
+
+If the installer added a `PATH` line for `~/.local/bin` to your `~/.bashrc` /
+`~/.zshrc`, delete that line too (harmless if left).
+
+**2 · Remove LanEx's data** (settings, saved cells/macros overlays, the built
+GDS3D copy, the image digest lock, the app-window profile):
+
+```bash
+rm -rf ~/.lanex
+```
+
+Nothing outside `~/.lanex` holds LanEx state — this is a clean wipe.
+
+**3 · Remove the heavy things LanEx installed for you** (all optional — skip any
+you still use elsewhere):
+
+```bash
+# The LibreLane container image (~10 GB) — the tag matches your LibreLane version
+docker rmi $(docker images -q ghcr.io/librelane/librelane)     # or: podman rmi …
+
+# EDA tools installed from the Tools tab (only the ones you added)
+brew uninstall --cask docker-desktop klayout      # macOS
+brew uninstall podman yosys verilator icarus-verilog graphviz
+sudo apt remove yosys iverilog verilator graphviz klayout   # Debian/Ubuntu
+
+# PDKs (downloaded by ciel — SHARED with a native LibreLane install; only
+# remove if you don't use LibreLane outside LanEx)
+rm -rf ~/.ciel ~/.volare
+```
+
+On macOS, `podman machine rm` deletes podman's Linux VM before
+`brew uninstall podman` if you want the disk back. Docker Desktop can also be
+removed from **Applications** or via its own **Troubleshoot → Uninstall**.
 
 ### Troubleshooting
 
@@ -477,6 +547,21 @@ affects the interactive desktop viewers launched from the container.
 * **Docker Desktop installed but "not usable"** — open `Docker.app` once and
   approve its first-run prompts; the daemon only exists while Docker Desktop is
   running. Then click **Pull image**.
+* **`sudo: a terminal is required to read the password`** during
+  `brew install --cask docker-desktop` — the cask needs admin rights to link
+  Docker's CLI tools into `/usr/local`, and there's no terminal when LanEx runs
+  from the app window/pipx. LanEx now points Homebrew at a graphical password
+  prompt (a macOS dialog appears — enter your login password). If it still fails,
+  install Docker Desktop from
+  [docker.com](https://docs.docker.com/desktop/setup/install/mac-install/), open
+  it once, then click **Pull image**.
+* **`error getting credentials … "docker-credential-desktop": executable file
+  not found in $PATH`** when pulling — Docker stores credentials via a helper
+  that lives inside `Docker.app` and isn't always on `PATH`. LanEx adds Docker's
+  bundled bin dir to `PATH` and, if the helper still can't be found, retries the
+  pull without it (the LibreLane image is public, so no login is needed). Manual
+  fix: run Docker Desktop once (it symlinks the helper into `/usr/local/bin`), or
+  pull with a `DOCKER_CONFIG` pointed at a config that has no `"credsStore"` line.
 * **`Error: It seems there is already a Binary at '/usr/local/bin/docker-credential-…'`** —
   leftovers from a previous Docker install. LanEx retries with `--force`
   automatically; manually: `brew install --cask docker-desktop --force`.

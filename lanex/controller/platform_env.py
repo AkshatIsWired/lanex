@@ -264,7 +264,15 @@ def ensure_darwin_path() -> None:
     if sys.platform != "darwin":
         return
     extras = ["/opt/homebrew/bin", "/usr/local/bin",
-              os.path.expanduser("~/.local/bin")]
+              os.path.expanduser("~/.local/bin"),
+              # Docker Desktop keeps `docker` AND its credential helpers
+              # (docker-credential-desktop/-osxkeychain) inside the .app bundle;
+              # the privileged /usr/local/bin symlinks only appear after Docker's
+              # first run. Without this dir on PATH, `docker pull` dies with
+              # `docker-credential-desktop: executable file not found in $PATH`
+              # even though Docker Desktop is installed and running.
+              "/Applications/Docker.app/Contents/Resources/bin",
+              os.path.expanduser("~/Applications/Docker.app/Contents/Resources/bin")]
     parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
     add = [d for d in extras if d not in parts and os.path.isdir(d)]
     if add:

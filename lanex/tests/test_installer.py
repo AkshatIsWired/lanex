@@ -90,7 +90,7 @@ def test_escalate_does_not_rewrite_shell_wrapped_sudo(monkeypatch) -> None:
 def _capture_tty(monkeypatch):
     seen = {}
 
-    def fake_tty(argv, *, label, key):
+    def fake_tty(argv, *, label, key, env_extra=None):
         seen["argv"] = list(argv)
         seen["label"] = label
         return {"ok": True, "rc": 0, "label": label}
@@ -115,7 +115,7 @@ def test_run_argv_sudo_with_tty_no_ticket_prompts_on_terminal(monkeypatch) -> No
     monkeypatch.setattr(installer, "_can_sudo", lambda: False)  # needs a password
     events = []
 
-    def fake_tty(argv, *, label, key):
+    def fake_tty(argv, *, label, key, env_extra=None):
         return {"ok": True, "rc": 0, "label": label}
 
     monkeypatch.setattr(installer, "_run_argv_on_tty", fake_tty)

@@ -912,6 +912,41 @@ def _pdk_strategy_conda_ciel(env: Dict[str, Any], pdk: str, libraries: Optional[
 # Install execution
 # ---------------------------------------------------------------------------
 
+# A tiny GUI askpass helper for Homebrew's internal `sudo` on macOS. A cask like
+# Docker Desktop shells out to `sudo` to link its CLI tools into /usr/local; when
+# LanEx is launched from the app window or pipx there is no controlling terminal,
+# so that sudo dies "a terminal is required to read the password". Homebrew adds
+# `sudo -A` (askpass) when SUDO_ASKPASS is set, so we point it at this script,
+# which pops a native macOS password dialog and prints the password to stdout.
+# Cancel → osascript errors → empty output → sudo aborts cleanly.
+_DARWIN_ASKPASS_SCRIPT = (
+    "#!/bin/sh\n"
+    "/usr/bin/osascript"
+    " -e 'display dialog \"LanEx needs administrator rights to finish the install"
+    " (Homebrew links command-line tools into /usr/local). Enter your macOS login"
+    " password to continue.\" with title \"LanEx installer\" default answer \"\""
+    " with hidden answer buttons {\"Cancel\", \"OK\"} default button \"OK\"'"
+    " -e 'text returned of result'\n"
+)
+
+
+def _darwin_askpass_path() -> Optional[str]:
+    """Path to the GUI askpass helper (created on first use); None off macOS."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        from . import platform_env
+        d = platform_env.home() / "tools"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / "askpass.sh"
+        if not p.is_file() or p.read_text(encoding="utf-8") != _DARWIN_ASKPASS_SCRIPT:
+            p.write_text(_DARWIN_ASKPASS_SCRIPT, encoding="utf-8")
+        os.chmod(p, 0o700)
+        return str(p)
+    except Exception:
+        return None
+
+
 def _install_env() -> Dict[str, str]:
     """Environment for an install subprocess (PEP-668 bypass + Linux-only PATH)."""
     from . import platform_env
@@ -924,10 +959,16 @@ def _install_env() -> Dict[str, str]:
     # On WSL, keep package managers / build tools from resolving Windows binaries
     # on the inherited /mnt/c PATH.
     env["PATH"] = platform_env.linux_only_path(env.get("PATH"))
+    # macOS: let Homebrew's internal sudo prompt for the password graphically
+    # (there is no terminal when launched from the app window / pipx).
+    ap = _darwin_askpass_path()
+    if ap:
+        env["SUDO_ASKPASS"] = ap
     return env
 
 
-def _run_argv_on_tty(argv: List[str], *, label: str, key: str) -> Dict[str, Any]:
+def _run_argv_on_tty(argv: List[str], *, label: str, key: str,
+                     env_extra: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Run a privileged install attached to the controlling terminal.
 
     ``sudo`` prompts for the password on the terminal where the GUI was
@@ -942,8 +983,11 @@ def _run_argv_on_tty(argv: List[str], *, label: str, key: str) -> Dict[str, Any]
         _emit("installer_error", {"key": key, "label": label, "message": guidance})
         return {"ok": False, "rc": None, "needs_sudo": True, "guidance": guidance, "label": label}
     try:
+        _env = _install_env()
+        if env_extra:
+            _env.update(env_extra)
         proc = subprocess.Popen(argv, stdin=tty_fd, stdout=tty_fd, stderr=tty_fd,
-                                env=_install_env())
+                                env=_env)
         _active_installs[key] = proc
 
         def _watchdog() -> None:
@@ -981,13 +1025,15 @@ def _run_argv_on_tty(argv: List[str], *, label: str, key: str) -> Dict[str, Any]
 
 
 def _run_argv(argv: List[str], *, label: str, key: str,
-              timeout_s: Optional[float] = None) -> Dict[str, Any]:
+              timeout_s: Optional[float] = None,
+              env_extra: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Run an install command, streaming output to the event bus.
 
     *timeout_s* overrides the default watchdog ceiling — the image pull passes a
     higher one because a multi-GB download on a slow line legitimately exceeds
     the 1-hour default (the engine resumes cached layers on retry, but killing a
-    healthy download is still wrong)."""
+    healthy download is still wrong). *env_extra* is merged over the install
+    environment (e.g. an isolated ``DOCKER_CONFIG`` for a credential-less pull)."""
     deadline_s = float(timeout_s or _INSTALL_TIMEOUT_S)
     # A sudo command can't prompt for a password through the browser. Rather than
     # give up, escalate: prompt on the terminal the GUI was launched from (the
@@ -1033,16 +1079,19 @@ def _run_argv(argv: List[str], *, label: str, key: str,
                     "your password to continue the install."})
     _emit("installer_started", {"key": key, "argv": argv, "label": label})
     if inherit_tty:
-        return _run_argv_on_tty(argv, label=label, key=key)
+        return _run_argv_on_tty(argv, label=label, key=key, env_extra=env_extra)
     try:
         # PEP 668 bypass so pip works system-wide (typical on Debian/Ubuntu);
         # Linux-only PATH so WSL doesn't resolve Windows build tools.
+        _env = _install_env()
+        if env_extra:
+            _env.update(env_extra)
         settings: Dict[str, Any] = {
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
             "bufsize": 1,
             "text": True,
-            "env": _install_env(),
+            "env": _env,
         }
         if sys.platform == "win32":
             settings["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -1525,6 +1574,50 @@ def _brew_no_bottle(output: str) -> bool:
     return "no bottle available" in (output or "").lower()
 
 
+def _docker_cred_helper_error(output: str) -> bool:
+    """Did `docker pull` fail because its credential helper isn't runnable?
+
+    Docker Desktop writes ``credsStore: desktop`` into ``~/.docker/config.json``,
+    so the CLI shells out to ``docker-credential-desktop`` for EVERY pull — even
+    an anonymous one from a public registry. When that helper isn't on the pull
+    subprocess's PATH the pull dies before any download with
+    ``error getting credentials - err: exec: "docker-credential-desktop":
+    executable file not found in $PATH``."""
+    low = (output or "").lower()
+    return (("getting credentials" in low or "docker-credential" in low)
+            and ("not found" in low or "no such file" in low
+                 or "executable file" in low))
+
+
+def _no_creds_docker_env() -> Dict[str, str]:
+    """An isolated ``DOCKER_CONFIG`` with no credential store, for anonymous pulls.
+
+    Copies the user's ``~/.docker/config.json`` (to keep proxies / other
+    settings) but strips ``credsStore``/``credHelpers``, so ``docker pull`` of the
+    public LibreLane image doesn't invoke a credential helper that isn't on PATH.
+    Scoped to the pull via ``DOCKER_CONFIG`` — the user's real config is untouched.
+    """
+    from . import platform_env
+    data: Dict[str, Any] = {}
+    try:
+        src = Path(os.path.expanduser("~/.docker/config.json"))
+        if src.is_file():
+            data = json.loads(src.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.pop("credsStore", None)
+    data.pop("credHelpers", None)
+    cfg_dir = platform_env.home() / "docker-nocreds"
+    try:
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "config.json").write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+    return {"DOCKER_CONFIG": str(cfg_dir)}
+
+
 def _podman_path() -> Optional[str]:
     """Absolute path to ``podman`` right after a brew install (PATH-independent)."""
     from . import platform_env
@@ -1595,6 +1688,14 @@ def _install_engine_macos(key: str) -> Dict[str, Any]:
         return {"ok": False, "reason": g, "guidance": g}
 
     if key == "docker":
+        # The cask links Docker's CLI tools into /usr/local, which needs root.
+        # Launched from the app window / pipx there is no terminal, so Homebrew's
+        # internal sudo used to die "a terminal is required". _install_env sets
+        # SUDO_ASKPASS → Homebrew runs `sudo -A` → a native macOS password dialog
+        # appears. Tell the user to expect it.
+        _emit("installer_info", {"key": key, "needs_password": True, "message":
+              "Installing Docker Desktop. macOS will show a password dialog so Homebrew "
+              "can link Docker's command-line tools — enter your login password to continue."})
         argv = [brew, "install", "--cask", "docker-desktop"]
         res = _run_argv(argv, label="brew install --cask docker-desktop", key=key)
         if _is_cancelled(key):
@@ -1973,6 +2074,15 @@ def pull_image() -> Dict[str, Any]:
             # 4h ceiling instead of the default 1h: a multi-GB pull on a slow
             # connection is healthy long past the generic install watchdog.
             res = _run_argv(pull_cmd, label=f"{engine} pull", key=key, timeout_s=4 * 3600)
+            if (not res.get("ok")) and _docker_cred_helper_error("\n".join(res.get("output") or [])):
+                # Docker Desktop's credsStore helper isn't on PATH. The LibreLane
+                # image is public, so retry with an isolated config that has no
+                # credential store — no login is needed for a public pull.
+                _emit("installer_info", {"key": key, "message":
+                      "Docker's credential helper isn't on PATH — retrying the pull without it "
+                      "(the LibreLane image is public, so no login is required)…"})
+                res = _run_argv(pull_cmd, label=f"{engine} pull (no credential helper)",
+                                key=key, timeout_s=4 * 3600, env_extra=_no_creds_docker_env())
             if res.get("ok"):
                 record_image_digest(engine, image, sg_wrap=bool(resolved.get("sg_wrap")))
             else:

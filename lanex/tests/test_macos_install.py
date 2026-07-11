@@ -28,10 +28,13 @@ All hermetic: subprocess/argv runners are monkeypatched, nothing executes.
 """
 from __future__ import annotations
 
+import json
+import os
 import sys
 from pathlib import Path
 
 from lanex.controller import container_tools, installer, platform_env
+from lanex.controller import tools as tools_mod
 
 
 # ---------------------------------------------------------------- GDS3D ----
@@ -293,3 +296,135 @@ def test_resolve_user_bin_finds_klayout_app_bundle(monkeypatch):
     assert platform_env.resolve_user_bin("klayout") == app_bin
     # No fabricated hits for tools without a known bundle.
     assert platform_env.resolve_user_bin("magic") is None
+
+
+# ------------------------------ bug 1: sudo-in-cask needs a GUI askpass ----
+
+def test_ensure_darwin_path_adds_docker_app_bin(monkeypatch):
+    # docker-credential-desktop lives inside Docker.app; without its bin dir on
+    # PATH `docker pull` dies "docker-credential-desktop: executable file not
+    # found in $PATH" even with Docker Desktop installed.
+    docker_bin = "/Applications/Docker.app/Contents/Resources/bin"
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setattr(platform_env.os.path, "isdir", lambda d: d == docker_bin)
+    platform_env.ensure_darwin_path()
+    assert docker_bin in os.environ["PATH"].split(":")
+
+
+def test_darwin_askpass_helper_is_runnable_osascript(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(platform_env, "home", lambda: tmp_path)
+    p = installer._darwin_askpass_path()
+    assert p is not None
+    script = Path(p)
+    assert script.is_file() and os.access(p, os.X_OK)
+    body = script.read_text()
+    assert body.startswith("#!/bin/sh")
+    assert "osascript" in body and "with hidden answer" in body
+
+
+def test_darwin_askpass_none_off_macos(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert installer._darwin_askpass_path() is None
+
+
+def test_install_env_sets_sudo_askpass_on_macos(monkeypatch, tmp_path):
+    # Homebrew adds `sudo -A` (graphical prompt) only when SUDO_ASKPASS is set —
+    # that's what makes the docker-desktop cask installable with no terminal.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(platform_env, "home", lambda: tmp_path)
+    env = installer._install_env()
+    assert env.get("SUDO_ASKPASS", "").endswith("askpass.sh")
+    assert os.path.isfile(env["SUDO_ASKPASS"])
+
+
+def test_install_env_no_askpass_off_macos(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert "SUDO_ASKPASS" not in installer._install_env()
+
+
+def test_docker_install_announces_password_dialog(monkeypatch):
+    # The user must be told a macOS password dialog is coming (it's not obvious).
+    events = []
+    monkeypatch.setattr(installer, "_emit",
+                        lambda kind, payload: events.append((kind, payload)))
+    monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda *a, **k: {"ok": True, "rc": 0, "output": []})
+    monkeypatch.setattr(installer, "_is_cancelled", lambda key: False)
+    monkeypatch.setattr(installer.subprocess, "Popen", lambda *a, **k: None)
+    installer._install_engine_macos("docker")
+    msgs = [p.get("message", "") for _, p in events]
+    assert any("password dialog" in m for m in msgs)
+    assert any(p.get("needs_password") for _, p in events)
+
+
+# ---------------- bug 2: pull past a broken Docker credential helper ----
+
+def test_docker_cred_helper_error_detected():
+    real = ('error getting credentials - err: exec: "docker-credential-desktop": '
+            "executable file not found in $PATH, out: ``")
+    assert installer._docker_cred_helper_error(real) is True
+    assert installer._docker_cred_helper_error("no space left on device") is False
+    assert installer._docker_cred_helper_error("") is False
+
+
+def test_no_creds_docker_env_strips_credstore(monkeypatch, tmp_path):
+    home = tmp_path / "lanexhome"
+    docker_cfg = tmp_path / "dot-docker"
+    docker_cfg.mkdir()
+    (docker_cfg / "config.json").write_text(json.dumps({
+        "credsStore": "desktop",
+        "credHelpers": {"ghcr.io": "desktop"},
+        "proxies": {"default": {"httpProxy": "http://x"}},
+    }))
+    monkeypatch.setattr(platform_env, "home", lambda: home)
+    monkeypatch.setattr(os.path, "expanduser",
+                        lambda p: str(docker_cfg / "config.json")
+                        if p == "~/.docker/config.json" else p)
+    env = installer._no_creds_docker_env()
+    cfg_path = Path(env["DOCKER_CONFIG"]) / "config.json"
+    data = json.loads(cfg_path.read_text())
+    assert "credsStore" not in data and "credHelpers" not in data
+    # Unrelated settings survive so a proxied setup still works.
+    assert data.get("proxies", {}).get("default", {}).get("httpProxy") == "http://x"
+
+
+def test_pull_retries_without_credential_helper(monkeypatch):
+    calls = []
+
+    def fake_run_argv(argv, *, label="", key="", timeout_s=None, env_extra=None):
+        calls.append({"argv": list(argv), "env_extra": env_extra})
+        if len(calls) == 1:
+            return {"ok": False, "rc": 1, "output": [
+                'error getting credentials - err: exec: '
+                '"docker-credential-desktop": executable file not found in $PATH']}
+        return {"ok": True, "rc": 0, "output": ["Status: Downloaded"]}
+
+    class _SyncThread:
+        def __init__(self, target=None, **kw):
+            self._t = target
+
+        def start(self):
+            if self._t:
+                self._t()
+
+    monkeypatch.setattr(installer.shutil, "which",
+                        lambda n: "/x/docker" if n == "docker" else None)
+    monkeypatch.setattr(tools_mod, "resolve_engine",
+                        lambda: {"ready": True, "engine": "docker"})
+    monkeypatch.setattr(installer, "_run_argv", fake_run_argv)
+    monkeypatch.setattr(installer, "_begin_job", lambda key: True)
+    monkeypatch.setattr(installer, "_end_job", lambda key: None)
+    monkeypatch.setattr(installer, "_no_creds_docker_env",
+                        lambda: {"DOCKER_CONFIG": "/tmp/nocreds"})
+    monkeypatch.setattr(installer, "record_image_digest",
+                        lambda *a, **k: "sha256:deadbeef")
+    monkeypatch.setattr(installer.threading, "Thread", _SyncThread)
+
+    res = installer.pull_image()
+    assert res["ok"] is True
+    assert len(calls) == 2               # first pull failed, retried
+    assert calls[0]["env_extra"] is None
+    assert calls[1]["env_extra"] == {"DOCKER_CONFIG": "/tmp/nocreds"}
