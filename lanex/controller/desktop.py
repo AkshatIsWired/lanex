@@ -331,7 +331,7 @@ def open_in_tool(tool: str, file_path: str | Path, *,
         bin_name = spec["bin"]
         return {"ok": False, "need": bin_name,
                 "error": f"{spec['label']} ({bin_name}) isn't installed on this machine. "
-                         f"Install it (Tools / Add-ons), then retry. This only works when the "
+                         f"Install it from the Tools tab, then retry. This only works when the "
                          f"GUI runs on your own computer."}
     # A desktop tool needs a graphical session; on a headless box (SSH / server,
     # no $DISPLAY) it would flash-and-exit with no window and no error. Tell the

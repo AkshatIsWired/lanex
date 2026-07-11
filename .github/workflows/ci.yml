@@ -96,7 +96,6 @@ jobs:
               "lanex/server/static/modules/api.js",     # modules/
               "lanex/server/static/modules/ide/",       # nested modules
               "lanex/server/static/vendor/",            # echarts + fonts + logos
-              "lanex/controller/plugins_registry.json",
               "lanex/controller/templates/",            # project templates w/ .v sources
           ]
           def present(n):

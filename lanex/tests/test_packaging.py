@@ -61,9 +61,6 @@ def _needed_data_files() -> set:
                 if f.endswith((".py", ".pyc")):
                     continue
                 needed.add(os.path.realpath(os.path.join(dirpath, f)))
-    # Curated registries beside the controller code.
-    for j in (_GUI / "controller").glob("*.json"):
-        needed.add(os.path.realpath(str(j)))
     return needed
 
 
@@ -82,7 +79,6 @@ def test_at_least_the_known_assets_exist():
     # Guards against the walk silently matching nothing (e.g. a moved dir).
     assert (_GUI / "server" / "static" / "app.js").is_file()
     assert (_GUI / "server" / "static" / "index.html").is_file()
-    assert list((_GUI / "controller").glob("*.json")), "curated registry json(s) missing"
     assert (_GUI / "controller" / "templates").is_dir()
 
 

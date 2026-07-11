@@ -38,8 +38,8 @@ def home() -> Path:
       2. ``$LIBRELANE_GUI_HOME`` if set — deprecated, honoured for one release
          (warn-logged) so an existing install isn't stranded.
       3. ``~/.lanex`` — the new default. If it doesn't exist yet but the old
-         ``~/.librelane-gui`` does, the old dir is used (keeps known-designs.json,
-         plugins, and the GDS3D tool tree working without a manual migration).
+         ``~/.librelane-gui`` does, the old dir is used (keeps known-designs.json
+         and the GDS3D tool tree working without a manual migration).
     """
     env_new = os.environ.get("LANEX_HOME")
     if env_new:

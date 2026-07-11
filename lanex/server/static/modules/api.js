@@ -92,6 +92,8 @@ export const api = {
     _fetch("/api/reveal", { method: "POST", body: JSON.stringify({ tag, path }) }),
   desktopTools: () => _fetch("/api/desktop-tools"),
   containerTools: () => _fetch("/api/container-tools"),
+  containerToolOpen: (tool) =>
+    _fetch("/api/container-tools/open", { method: "POST", body: JSON.stringify({ tool }) }),
   openInTool: (tool, tag, path, useTech, location) =>
     _fetch("/api/open-in-tool", { method: "POST", body: JSON.stringify({
       tool, tag, path, use_tech: useTech !== false, location: location || "host" }) }),
@@ -219,7 +221,7 @@ export const api = {
   simCancel: () => _fetch("/api/sim/cancel", { method: "POST", body: "{}" }),
   waveformUrl: (path) => "/api/waveform?path=" + encodeURIComponent(path),
 
-  // ---------- Phase 4: viewers + plugins
+  // ---------- Phase 4: viewers + cells
   // (2D/3D layout = the flow's KLayout PNG + "Open in desktop tool"; the old
   //  in-browser klayout-render endpoints were removed — see desktop.py.)
   cells: (pdk, scl) =>
@@ -242,12 +244,6 @@ export const api = {
     _fetch("/api/custom-macros/remove", { method: "POST", body: JSON.stringify({ name, design_dir: designDir }) }),
   customMacroEnable: (name, enabled, designDir) =>
     _fetch("/api/custom-macros/enable", { method: "POST", body: JSON.stringify({ name, enabled, design_dir: designDir }) }),
-  pluginsRegistry: () => _fetch("/api/plugins/registry"),
-  pluginsInstalled: () => _fetch("/api/plugins/installed"),
-  pluginInstall: (id) => _fetch("/api/plugins/install", { method: "POST", body: JSON.stringify({ id }) }),
-  pluginRemove: (id) => _fetch("/api/plugins/remove", { method: "POST", body: JSON.stringify({ id }) }),
-  pluginEnable: (id, enabled) =>
-    _fetch("/api/plugins/enable", { method: "POST", body: JSON.stringify({ id, enabled }) }),
 };
 
 // ----------------------------- SSE ------------------------------------------

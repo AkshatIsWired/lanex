@@ -16,5 +16,5 @@ export async function showAbout() {
       }
     }
   } catch (_e) { /* endpoint absent → license line only; never fabricate NOTICE text */ }
-  alertDialog({ title: "License & notices", body });
+  alertDialog({ title: "License & notices", body, html: true });
 }

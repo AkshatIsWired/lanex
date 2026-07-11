@@ -957,8 +957,15 @@ def _run_argv_on_tty(argv: List[str], *, label: str, key: str) -> Dict[str, Any]
             pass
 
 
-def _run_argv(argv: List[str], *, label: str, key: str) -> Dict[str, Any]:
-    """Run an install command, streaming output to the event bus."""
+def _run_argv(argv: List[str], *, label: str, key: str,
+              timeout_s: Optional[float] = None) -> Dict[str, Any]:
+    """Run an install command, streaming output to the event bus.
+
+    *timeout_s* overrides the default watchdog ceiling — the image pull passes a
+    higher one because a multi-GB download on a slow line legitimately exceeds
+    the 1-hour default (the engine resumes cached layers on retry, but killing a
+    healthy download is still wrong)."""
+    deadline_s = float(timeout_s or _INSTALL_TIMEOUT_S)
     # A sudo command can't prompt for a password through the browser. Rather than
     # give up, escalate: prompt on the terminal the GUI was launched from (the
     # reliable path on WSL), else a graphical pkexec dialog. Only fall back to a
@@ -1032,10 +1039,10 @@ def _run_argv(argv: List[str], *, label: str, key: str) -> Dict[str, Any]:
         def _watchdog() -> None:
             if proc.poll() is None:
                 timed_out["hit"] = True
-                _emit("installer_line", {"key": key, "line": f"Timed out after {_INSTALL_TIMEOUT_S}s — terminating.", "label": label})
+                _emit("installer_line", {"key": key, "line": f"Timed out after {int(deadline_s)}s — terminating.", "label": label})
                 _kill_proc_tree(proc, grace=5.0)
 
-        wd = threading.Timer(_INSTALL_TIMEOUT_S, _watchdog)
+        wd = threading.Timer(deadline_s, _watchdog)
         wd.daemon = True
         wd.start()
         out_lines: List[str] = []
@@ -1680,9 +1687,25 @@ def pull_image() -> Dict[str, Any]:
         # same layers. The frontend re-attaches to the running pull's stream.
         return {"ok": True, "in_progress": True, "status": "already-running", "image": image, "engine": engine}
 
+    # Disk headroom warning (never blocks): the compressed download plus the
+    # extracted layers need several GB. The engine's store usually lives on the
+    # root filesystem; a best-effort probe there catches the common failure of
+    # a pull dying at 90% with a cryptic "no space left on device".
+    try:
+        free_gb = shutil.disk_usage("/").free / (1024 ** 3)
+        if free_gb < 12:
+            _emit("installer_info", {"key": key, "message": (
+                f"Low disk space: ~{free_gb:.1f} GB free on /. The LibreLane image needs "
+                "roughly 10 GB (download + extracted layers) — the pull may fail with "
+                "'no space left on device'. Free some space if it does.")})
+    except Exception:
+        pass
+
     def _worker():
         try:
-            res = _run_argv(pull_cmd, label=f"{engine} pull", key=key)
+            # 4h ceiling instead of the default 1h: a multi-GB pull on a slow
+            # connection is healthy long past the generic install watchdog.
+            res = _run_argv(pull_cmd, label=f"{engine} pull", key=key, timeout_s=4 * 3600)
             if res.get("ok"):
                 record_image_digest(engine, image, sg_wrap=bool(resolved.get("sg_wrap")))
             else:

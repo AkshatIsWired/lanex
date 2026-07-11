@@ -104,7 +104,7 @@ EDA_TOOLS: List[Dict[str, Any]] = [
         "binary": ["pip", "pip3"],
         "version_flag": ["--version"],
         "install": ["python3", "-m", "pip", "install", "--upgrade", "pip"],
-        "what": "Python package manager. Needed to install LibreLane and plugins.",
+        "what": "Python package manager. Needed to install LibreLane.",
         "category": "core",
     },
     {
@@ -115,6 +115,7 @@ EDA_TOOLS: List[Dict[str, Any]] = [
         "install": ["python3", "-m", "pip", "install", "--upgrade", "librelane"],
         "what": "The flow orchestrator itself.",
         "category": "core",
+        "in_image": True,
     },
     {
         "key": "yosys",
@@ -132,6 +133,7 @@ EDA_TOOLS: List[Dict[str, Any]] = [
         },
         "what": "Logic synthesis: turns your Verilog RTL into a gate-level netlist.",
         "category": "eda",
+        "in_image": True,
     },
     {
         "key": "openroad",
@@ -148,6 +150,7 @@ EDA_TOOLS: List[Dict[str, Any]] = [
         },
         "what": "PnR (place-and-route) and STA. The biggest, slowest tool in the chain.",
         "category": "eda",
+        "in_image": True,
         # No pip/apt/brew package exists. The supported way to get it is the
         # version-matched LibreLane container (or conda/Nix for advanced users),
         # so the GUI points at "Pull image" instead of a host Install button.
@@ -165,6 +168,7 @@ EDA_TOOLS: List[Dict[str, Any]] = [
         },
         "what": "Layout viewer/editor; renders the GDS preview you see at the end.",
         "category": "eda",
+        "in_image": True,
     },
     {
         "key": "magic",
@@ -178,6 +182,7 @@ EDA_TOOLS: List[Dict[str, Any]] = [
         },
         "what": "Layout editor; performs signoff DRC and writes the canonical GDSII.",
         "category": "eda",
+        "in_image": True,
         "container_only": True,
     },
     {
@@ -192,6 +197,7 @@ EDA_TOOLS: List[Dict[str, Any]] = [
         },
         "what": "LVS checker: verifies that the routed layout matches your RTL.",
         "category": "eda",
+        "in_image": True,
         "container_only": True,
     },
     {
@@ -206,6 +212,7 @@ EDA_TOOLS: List[Dict[str, Any]] = [
         },
         "what": "Verilog linter; catches RTL issues before they reach synthesis.",
         "category": "eda",
+        "in_image": True,
     },
     {
         "key": "iverilog",
@@ -222,6 +229,7 @@ EDA_TOOLS: List[Dict[str, Any]] = [
                 "Optional; not used by the hardening flow.",
         "category": "eda",
         "optional": True,
+        "in_image": True,
     },
     {
         "key": "graphviz",
@@ -697,6 +705,15 @@ def container_engine() -> Dict[str, Any]:
         elif podman_path and not podman_usable:
             daemon_msg = podman_msg
 
+    # Is a pull already running server-side? Lets a reloaded page re-attach its
+    # progress UI instead of showing a stale "image not pulled" + Pull button.
+    pulling = False
+    try:
+        from . import installer as _installer
+        pulling = bool(_installer.is_in_progress("container:image"))
+    except Exception:
+        pulling = False
+
     return {
         "available": bool(docker_path or podman_path),
         "engine": engine,
@@ -711,6 +728,7 @@ def container_engine() -> Dict[str, Any]:
         "image_present": image_present,
         "image_size_mb": image_size_mb,
         "image_approx_mb": 3000,
+        "pulling": pulling,
         "docker": {
             "present": bool(docker_path),
             "usable": docker_usable,
@@ -763,6 +781,9 @@ def check_tools(*, force: bool = False) -> Dict[str, Any]:
                 "approx_mb": _APPROX_TOOL_MB.get(t["key"]),
                 # No host package — get it via the container image (Pull image).
                 "container_only": bool(t.get("container_only", False)),
+                # Ships inside the LibreLane container image, so once the image
+                # is pulled the tool is usable with zero native install.
+                "in_container": bool(t.get("in_image", False)),
                 # A Windows build was found on the WSL PATH but isn't usable by the
                 # Linux flow (so it's reported missing, with this flag for the UI).
                 "windows_only": bool(info.get("windows_only", False)),

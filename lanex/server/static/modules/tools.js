@@ -188,7 +188,7 @@ function sizeStr(mb, { approx = false } = {}) {
 // (b) count layers from the discrete status lines for real progress, and
 // (c) explicitly say "still downloading" during quiet stretches so it never
 // looks hung.
-const _pull = { active: false, start: 0, timer: null, last: "", lastAt: 0, total: 0, downloaded: 0, pulled: 0, done: false };
+const _pull = { active: false, start: 0, timer: null, last: "", lastAt: 0, total: 0, downloaded: 0, pulled: 0, done: false, blobs: null };
 
 function _pullElapsed() {
   return Math.max(0, Math.round((Date.now() - _pull.start) / 1000));
@@ -213,19 +213,16 @@ function pullProgressHtml() {
     "<pre class='code' id='runtime-pull-line' style='margin-top:var(--s-2);max-height:120px;overflow:auto;white-space:pre-wrap'>" +
     fmt.escape(_pull.last || "starting…") +
     "</pre>" +
-    "<p class='hint'>~3 GB, downloaded once. Large layers stream silently — the timer above is your sign it's still working. You can leave this tab.</p>" +
+    "<div style='display:flex;align-items:center;gap:var(--s-3)'>" +
+    "<p class='hint' style='margin:0;flex:1'>~3 GB, downloaded once. Large layers stream silently — the timer above is your sign it's still working. You can leave this tab.</p>" +
+    "<button class='btn btn-ghost' id='runtime-pull-cancel' style='font-size:11px;padding:2px 8px' " +
+    "title='Stops the download. Already-fetched layers stay cached, so a retry resumes.'>Cancel</button>" +
+    "</div>" +
     "</div>"
   );
 }
 
-export function startPullUI() {
-  _pull.active = true;
-  _pull.start = Date.now();
-  _pull.lastAt = Date.now();
-  _pull.last = "contacting registry…";
-  _pull.total = _pull.downloaded = _pull.pulled = 0;
-  _pull.done = false;
-  paintRuntimeCard(state.tools && state.tools.container);
+function _pullTicker() {
   clearInterval(_pull.timer);
   _pull.timer = setInterval(() => {
     const el = document.getElementById("runtime-pull-elapsed");
@@ -242,6 +239,30 @@ export function startPullUI() {
   }, 1000);
 }
 
+export function startPullUI() {
+  _pull.active = true;
+  _pull.start = Date.now();
+  _pull.lastAt = Date.now();
+  _pull.last = "contacting registry…";
+  _pull.total = _pull.downloaded = _pull.pulled = 0;
+  _pull.done = false;
+  _pull.blobs = null;
+  paintRuntimeCard(state.tools && state.tools.container);
+  _pullTicker();
+}
+
+// A page reload mustn't lose a running pull: the server keeps downloading, so
+// re-attach the progress UI to the live SSE stream (elapsed restarts from the
+// re-attach; the layer counters rebuild from subsequent lines).
+function resumePullUI() {
+  _pull.active = true;
+  _pull.start = Date.now();
+  _pull.lastAt = Date.now();
+  _pull.last = "re-attached to the running pull — waiting for the next status line…";
+  _pull.done = false;
+  _pullTicker();
+}
+
 export function updatePullProgress(line) {
   if (!line) return;
   _pull.last = line;
@@ -251,6 +272,19 @@ export function updatePullProgress(line) {
   else if (/Download complete/.test(line)) _pull.downloaded++;
   else if (/Pull complete/.test(line)) _pull.pulled++;
   else if (/Status: (Downloaded|Image is up to date)/.test(line)) _pull.done = true;
+  else {
+    // Podman phrasing: "Copying blob <id> …" per layer, then
+    // "Writing manifest to image destination" when everything landed.
+    const blob = line.match(/Copying blob (\S+)/);
+    if (blob) {
+      _pull.blobs = _pull.blobs || new Set();
+      _pull.blobs.add(blob[1]);
+      _pull.total = _pull.blobs.size;
+      if (/\bdone\b/i.test(line)) _pull.downloaded++;
+    } else if (/Writing manifest to image destination/.test(line)) {
+      _pull.done = true;
+    }
+  }
   const el = document.getElementById("runtime-pull-line");
   if (el) el.textContent = line;
   const lay = document.getElementById("runtime-pull-layers");
@@ -258,8 +292,11 @@ export function updatePullProgress(line) {
 }
 
 export function finishPull(rc) {
+  const wasCancelled = _pull.cancelledByUser;
+  _pull.cancelledByUser = false;
   _pull.active = false;
   clearInterval(_pull.timer);
+  if (wasCancelled) { renderTools(); return; }   // the cancel click already toasted
   if (rc === 0) toast.show("Image pulled — Container mode is ready.", "success");
   else toast.show("Image pull failed (rc=" + rc + "). See Live Logs.", "error");
   renderTools();   // re-probe → image_present / daemon state refresh
@@ -307,13 +344,16 @@ function paintRuntimeCard(container) {
     const imgSize = c.image_present
       ? sizeStr(c.image_size_mb)
       : sizeStr(c.image_approx_mb, { approx: true });
+    // The server reports an in-flight pull (c.pulling) so a reloaded page
+    // re-attaches to it instead of offering a second Pull button.
+    if (c.pulling && !_pull.active) resumePullUI();
     let pullArea;
     if (_pull.active) pullArea = pullProgressHtml();
     else if (c.image_present)
       pullArea = "<span class='pill pill-pass'><span class='d'></span><span class='text'>image pulled</span></span>";
     else
       pullArea = "<span class='pill pill-warn'><span class='d'></span><span class='text'>image not pulled</span></span>" +
-        "<button class='btn btn-primary' id='btn-pull-image'>Pull image</button>";
+        "<button class='btn btn-primary' id='btn-pull-image' title='Recommended: one download gives you every EDA tool, version-matched'>Pull image (recommended)</button>";
     root.innerHTML =
       "<div class='tool-card installed-installed'>" +
       "<div class='row1'><span class='name'>✓ " + fmt.escape(engineLabel) + " ready</span>" +
@@ -348,7 +388,7 @@ function paintRuntimeCard(container) {
       "<pre class='code' style='white-space:pre-wrap'>" + fmt.escape(c.daemon_msg || "engine not reachable") + "</pre>" +
       (canEnable
         ? "<p class='hint'><strong>Easiest fix:</strong> click <em>Enable Docker for my user</em> — it adds you to the <code>docker</code> group and the GUI activates it immediately (via <code>sg</code>), so <strong>no logout is needed</strong>. Or switch to rootless Podman.</p>"
-        : "<p class='hint'><strong>Easiest fix:</strong> install rootless <strong>Podman</strong> (works immediately). For Docker: <code>sudo systemctl enable --now docker</code>, and <code>sudo usermod -aG docker $USER</code> (then a new login or re-open the GUI).</p>") +
+        : "<p class='hint'><strong>Easiest fix:</strong> install rootless <strong>Podman</strong> (works immediately). For Docker: <code>sudo systemctl enable --now docker</code>, and <code>sudo usermod -aG docker $USER</code> (then a new login or re-open the GUI). On macOS: start Docker Desktop, or <code>podman machine init && podman machine start</code>.</p>") +
       "<div class='meta' style='display:flex;gap:var(--s-2);flex-wrap:wrap;align-items:center'>" +
       actions +
       "</div>" +
@@ -400,6 +440,18 @@ function paintRuntimeCard(container) {
     } catch (ex) {
       toast.show("Pull failed: " + ex.message, "error");
     }
+  });
+  document.getElementById("runtime-pull-cancel")?.addEventListener("click", async () => {
+    _pull.cancelledByUser = true;
+    try {
+      const r = await api.cancelInstall("container:image");
+      toast.show(r && r.ok ? "Image pull cancelled — fetched layers stay cached, a retry resumes." : "Nothing to cancel.", "info");
+    } catch (ex) {
+      toast.show("Cancel failed: " + (ex.message || ex), "error");
+    }
+    _pull.active = false;
+    clearInterval(_pull.timer);
+    renderTools();
   });
   document.getElementById("btn-install-docker")?.addEventListener("click", () => installEngine("docker"));
   document.getElementById("btn-install-podman")?.addEventListener("click", () => installEngine("podman"));
@@ -453,25 +505,43 @@ async function removeEngine(key) {
 // in the Advanced local-toolchain grid to avoid duplicate cards.
 const RECOMMENDED_KEYS = new Set(["iverilog", "graphviz"]);
 
+// Tools the container image can open as an interactive window/console with no
+// run context (matches controller/container_tools._CONTAINER_TOOLS).
+const CONTAINER_LAUNCHABLE = new Set(["magic", "klayout", "openroad", "netgen"]);
+
 function paint(info) {
   paintRuntimeCard(info.container);
   renderRecommendedTools(info);
   const root = document.getElementById("tools-grid");
   root.innerHTML = "";
+  // "In container" is only a usable fact once an engine is ready AND the image
+  // is actually pulled — a flag without those would promise a tool that a click
+  // can't deliver.
+  const cont = info.container || {};
+  const contReady = !!(cont.ready && cont.image_present);
   for (const t of info.tools) {
     if (RECOMMENDED_KEYS.has(t.key)) continue;
+    const inCont = !!(t.in_container && contReady);
     const card = document.createElement("div");
-    card.className = "tool-card " + (t.installed ? "installed-installed" : "installed-missing");
+    card.className = "tool-card " + ((t.installed || inCont) ? "installed-installed" : "installed-missing");
     card.dataset.key = t.key;
+    const openBtn = inCont && CONTAINER_LAUNCHABLE.has(t.key)
+      ? "<button class='btn btn-ghost ct-open' data-key='" + t.key + "' " +
+        "title='Open the version-matched " + fmt.escape(t.label) + " from the LibreLane image'>Open (container)</button>"
+      : "";
     const installBtn = !t.installed
-      ? buttonHtml(t)
+      ? buttonHtml(t, { inContainer: inCont })
       : buttonUninstallHtml(t);
     card.innerHTML =
       "<div class='row1'>" +
       "<span class='name'>" + fmt.escape(t.label) + "</span>" +
+      (inCont
+        ? "<span class='pill pill-pass' style='margin-left:auto;margin-right:var(--s-2);font-size:10px' title='Ships in the pulled LibreLane image — usable with no native install'><span class='d'></span><span class='text'>in container</span></span>"
+        : "") +
       (t.installed
-        ? "<span class='dot-installed' title='installed'></span>"
-        : "<span class='dot-missing' title='missing'></span>") +
+        ? "<span class='dot-installed' title='installed locally'></span>"
+        : (inCont ? "<span class='dot-installed' title='available via the container image'></span>"
+                  : "<span class='dot-missing' title='missing'></span>")) +
       "</div>" +
       "<div class='what'>" + fmt.escape(t.what || "") + "</div>" +
       (t.windows_only
@@ -480,7 +550,9 @@ function paint(info) {
       "<div class='meta'>" +
       (t.installed
         ? "Path: <span style='font-family:monospace'>" + fmt.escape(t.path || "—") + "</span>"
-        : "<span class='pill pill-fail'><span class='d'></span><span class='text'>missing</span></span>") +
+        : (inCont
+            ? "<span class='pill pill-warn'><span class='d'></span><span class='text'>not installed locally</span></span>"
+            : "<span class='pill pill-fail'><span class='d'></span><span class='text'>missing</span></span>")) +
       (t.approx_mb ? " <span class='muted' style='font-size:var(--t-xs)' title='approximate installed size'>" + sizeStr(t.approx_mb, { approx: true }) + "</span>" : "") +
       "</div>" +
       // Surface the probed version (no hard-coded compat matrix — just the fact,
@@ -488,9 +560,23 @@ function paint(info) {
       (t.installed && t.version
         ? "<div class='meta muted' style='font-size:var(--t-xs)' title='reported by the tool'>" + fmt.escape(t.version) + "</div>"
         : "") +
+      (openBtn ? "<div class='meta' style='margin-top:var(--s-2)'>" + openBtn + "</div>" : "") +
       installBtn;
     root.appendChild(card);
   }
+  root.querySelectorAll(".ct-open").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const key = b.dataset.key;
+      b.disabled = true;
+      try {
+        const r = await api.containerToolOpen(key);
+        if (r && r.ok) toast.show(r.hint || (key + " opening from the container image… (first window can take a few seconds)"), "success");
+        else toast.show((r && r.error) || (key + " could not be launched"), r && r.need === "image" ? "warn" : "error");
+      } catch (ex) {
+        toast.show(key + " launch error: " + (ex.message || ex), "error");
+      }
+      b.disabled = false;
+    }));
   paintToolBar(info);
 
   // PDK store — catalog cards + one-click install
@@ -669,18 +755,26 @@ function paintToolBar(info) {
   else icon.classList.add("badge-fail");
 }
 
-function buttonHtml(t) {
+function buttonHtml(t, { inContainer = false } = {}) {
   // OpenROAD/Magic/Netgen have no pip/apt/brew package — a host "Install" button
   // there only ever fails. Point at the container image instead (the supported,
   // cross-platform path), with conda/Nix as the advanced fallback.
   if (t.container_only) {
+    if (inContainer) {
+      return "<div class='muted' style='font-size:var(--t-xs);line-height:1.4'>" +
+        "No host package — this tool runs from the container image (already pulled). " +
+        "<span title='" + fmt.escape(t.install_recipe || "") + "'>(advanced local install: conda/Nix)</span></div>";
+    }
     return "<div class='muted' style='font-size:var(--t-xs);line-height:1.4'>" +
       "No host package — get it via the <strong>container image</strong>: switch the top-bar engine to " +
       "<em>Container</em> and click <em>Pull image</em>. " +
       "<span title='" + fmt.escape(t.install_recipe || "") + "'>(advanced: conda/Nix)</span></div>";
   }
   if (Array.isArray(t.install_recipe) || t.install_recipe) {
-    return "<button class='install-btn' data-key='" + t.key + "'>Install</button>";
+    // When the container copy already covers the tool, the native install is an
+    // extra, not a requirement — label it so.
+    return "<button class='install-btn' data-key='" + t.key + "'>" +
+      (inContainer ? "Install locally" : "Install") + "</button>";
   }
   return "<span class='muted'>" + fmt.escape(t.install_recipe || "manual install") + "</span>";
 }
@@ -838,7 +932,7 @@ function showInstallModal(key, recipe) {
     "This tool isn't pip-installable; please use the recipe below for your platform." +
     "</p>" +
     '<pre class="code">' +
-    recipe.replace(/[<>&]/g, (c) => ({ "<": "<", ">": ">", "&": "&" })[c]) +
+    fmt.escape(recipe) +
     "</pre>" +
     "</div>";
   modal.style.display = "grid";

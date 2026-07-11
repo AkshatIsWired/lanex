@@ -93,10 +93,12 @@ export async function choiceDialog({ title = "", body = "", choices = [] } = {})
   });
 }
 
-export async function alertDialog({ title = "Notice", body = "" } = {}) {
+export async function alertDialog({ title = "Notice", body = "", html = false } = {}) {
+  // `html: true` renders `body` as pre-built markup — the CALLER is then
+  // responsible for escaping any untrusted text inside it (see about.js).
   await _open({
     title: _esc(title),
-    bodyHtml: body ? "<p>" + _esc(body) + "</p>" : "",
+    bodyHtml: html ? String(body || "") : (body ? "<p>" + _esc(body) + "</p>" : ""),
     buttons: [{ label: "OK", value: true, cls: "btn-primary" }],
   });
 }

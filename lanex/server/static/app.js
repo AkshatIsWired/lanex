@@ -25,7 +25,6 @@ import { help } from "./modules/help.js";
 import { toast } from "./modules/toast.js";
 import { setupWizard } from "./modules/wizard.js";
 import { setupLearn } from "./modules/learn.js";
-import { loadEnabledPlugins } from "./modules/plugins.js";
 import { icon } from "./modules/icons.js";
 import { setupFullscreen } from "./modules/fullscreen.js";
 import { showAbout } from "./modules/about.js";
@@ -216,9 +215,6 @@ async function boot() {
     setStatus("ready");
     if (splash) splash.classList.add("hide");
     document.getElementById("app").style.display = "";
-
-    // Load any enabled front-end plugins through the SDK surface (best-effort).
-    loadEnabledPlugins();
   } catch (err) {
     failUI(err);
   }
@@ -662,8 +658,6 @@ document.addEventListener("g:active_design_changed", (e) => {
 document.addEventListener("g:tab_activated", (e) => {
   if (e.detail?.tab === "tools") {
     import("./modules/tools.js").then((m) => m.renderTools());
-    // Add-ons / plugins now live inside the Tools tab.
-    import("./modules/plugins.js").then((m) => m.renderPlugins());
   }
   if (e.detail?.tab === "analytics") {
     import("./modules/analytics.js").then((m) => m.renderAnalyticsFull());

@@ -78,8 +78,7 @@ lanex = [
   "server/static/**/*", "server/static/*",
   "server/static/modules/*.js", "server/static/modules/ide/*.js",
   "server/static/vendor/**/*",
-  # Curated registries + project templates (nested src/ and verify/ included).
-  "controller/*.json",
+  # Project templates (nested src/ and verify/ included).
   "controller/templates/**/*",
   "controller/templates/*/*", "controller/templates/*/*/*",
 ]

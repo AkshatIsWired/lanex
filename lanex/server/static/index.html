@@ -519,7 +519,6 @@
         <button class="chip chip-clickable" data-jump="local-tools-card">Local tools</button>
         <button class="chip chip-clickable" data-jump="tools-pdk">PDK</button>
         <button class="chip chip-clickable" data-jump="tools-viewers">Viewers</button>
-        <button class="chip chip-clickable" data-jump="tools-plugins">Plugins</button>
       </nav>
       <h2 id="tools-toolchain">Install the toolchain <span class="hint">recommended — one click</span></h2>
       <p class="hint">The simplest way to get every EDA tool (OpenROAD · Yosys · Magic · KLayout · Netgen · Verilator) is the version-matched LibreLane container image. With Docker or Podman present, one click pulls it and <code>Container</code> run mode needs <strong>no native tool installs at all</strong>. No engine yet? The card below installs Docker or Podman for you, then pulls the image — all in one go.</p>
@@ -555,11 +554,6 @@
       <h2 id="tools-viewers">Desktop layout viewers</h2>
       <p class="hint">Interactive layout viewing uses your own desktop tools (the GUI launches them on a run's GDS from the Layout tab). KLayout &amp; Magic ship in the LibreLane container image. The 3D viewer <strong>GDS3D</strong> installs from the <em>Recommended extra tools</em> section above.</p>
       <div id="desktop-viewers"></div>
-
-      <h2 id="tools-plugins">Add-ons &amp; plugins</h2>
-      <p class="hint">Curated, checksum-verified plugins only. Front-end plugins load through a constrained SDK surface.</p>
-      <div id="plugins-body"></div>
-      <div id="plugin-tab-host"></div>
     </section>
 
     <!-- ANALYTICS -->

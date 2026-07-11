@@ -1,5 +1,5 @@
 /* features.css — styles for the Phase 0–4 additions (verification, compare, DSE,
-   cells, plugins, viewers, wizard, learn). Token-only: every color,
+   cells, viewers, wizard, learn). Token-only: every color,
    space, radius, and shadow comes from styles.css :root. No hardcoded hex. */
 
 /* ---- Toasts (bottom-right; class-styled, dismissable) --------------------- */
@@ -265,19 +265,6 @@
 .cell-card { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); padding: var(--s-2); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); }
 .cell-card code { overflow-wrap: anywhere; }
 
-/* ---- Plugins -------------------------------------------------------------- */
-.plugins-grid { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
-.plugin-card { padding: var(--s-3); }
-.plugin-head { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
-.plugin-name { font-weight: 600; color: var(--text-strong); }
-.plugin-actions { display: flex; gap: var(--s-2); align-items: center; margin-top: var(--s-2); }
-.chip-ok { background: var(--pass-soft); color: var(--pass); }
-.plugin-disclaimer {
-  border: 1px solid var(--warn); background: var(--warn-soft); color: var(--text);
-  border-radius: var(--r-sm); padding: var(--s-3); margin-bottom: var(--s-4); font-size: var(--t-sm); line-height: 1.5;
-}
-.plugin-disclaimer strong { color: var(--text-strong); }
-
 /* ---- 2D / 3D viewers ------------------------------------------------------ */
 .v2d-wrap { display: flex; gap: var(--s-3); }
 .v2d-layers { display: flex; flex-direction: column; gap: var(--s-1); min-width: 160px; }
@@ -476,6 +463,10 @@
   font-family: var(--mono); font-size: var(--t-sm); box-sizing: border-box; }
 .dlg-actions { display: flex; gap: var(--s-2); justify-content: flex-end;
   padding: var(--s-3) var(--s-4); border-top: 1px solid var(--border); }
+/* License & notices (about.js): the NOTICE file is long — keep its own scroll
+   region and preserve its line breaks inside the dialog. */
+.about-notice { white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: calc(52vh / var(--ll-zoom, 1)); overflow: auto; }
 
 /* Wide dialog variant — the folder browser (fs-modal) keeps `hidden` toggling
    (fs.js), so it lives as a persistent element, not a dialog.js instance. */

@@ -39,7 +39,7 @@ from ..controller import (
     tools as tools_mod,
 )
 # Phase 1–4 controller modules (verify, compare, dse, reverify, editor, lint,
-# simulate, cells, plugins) are imported lazily inside their handlers so each
+# simulate, cells) are imported lazily inside their handlers so each
 # phase stays independently importable/testable.
 
 _log = logging.getLogger("librelane.gui.routes")
@@ -1741,6 +1741,21 @@ def h_container_tools(handler: Any) -> None:
     })
 
 
+def h_container_tool_open(handler: Any) -> None:
+    """Launch a tool from the container image WITHOUT a run context (Tools tab).
+
+    Opens the bare tool (Magic/KLayout/OpenROAD GUI/Netgen console) so a user
+    who has the image but no native install can still use it directly. Run-aware
+    launches (final GDS, PDK tech files, marker DBs) stay on /api/open-in-tool."""
+    from ..controller import container_tools
+    body = getattr(handler, "_body", {})
+    tool = body.get("tool") or ""
+    base = _get_active_design_dir()
+    base_dir = Path(base) if base and Path(base).is_dir() else Path.home()
+    _respond(handler, container_tools.open_in_container_tool(
+        tool, design_dir=base_dir, work_dir=base_dir), 200)
+
+
 def _final_odb(run_dir: "Path") -> Optional["Path"]:
     """The run's final OpenDB database (.odb), for OpenROAD GUI."""
     final = run_dir / "final"
@@ -2823,7 +2838,7 @@ def h_waveform(handler: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 4 — 2D/3D viewers + cells + plugins
+# Phase 4 — 2D/3D viewers + cells
 # ---------------------------------------------------------------------------
 
 def _final_gds(run_dir: Path) -> Optional[Path]:
@@ -2965,66 +2980,6 @@ def h_cells(handler: Any) -> None:
     _respond(handler, cells.list_pdk_cells(pdk, scl or None))
 
 
-def h_plugins_registry(handler: Any) -> None:
-    from ..controller import plugins
-    _respond(handler, {"plugins": plugins.fetch_registry()})
-
-
-def h_plugins_installed(handler: Any) -> None:
-    from ..controller import plugins
-    _respond(handler, {"installed": plugins.list_installed()})
-
-
-def h_plugins_install(handler: Any) -> None:
-    from ..controller import plugins
-    body = getattr(handler, "_body", {})
-    pid = body.get("id")
-    if not pid:
-        _respond(handler, "missing id", 400)
-        return
-    manifest = next((m for m in plugins.fetch_registry() if m.get("id") == pid), None)
-    if manifest is None:
-        _respond(handler, "plugin not in curated registry", 404)
-        return
-    result = plugins.install(manifest)
-    if not result.get("ok"):
-        if result.get("in_progress"):
-            _respond(handler, result)
-            return
-        _respond(handler, result.get("error"), 400)
-        return
-    _respond(handler, result)
-
-
-def h_plugins_remove(handler: Any) -> None:
-    from ..controller import plugins
-    body = getattr(handler, "_body", {})
-    pid = body.get("id")
-    if not pid:
-        _respond(handler, "missing id", 400)
-        return
-    result = plugins.remove(pid)
-    if not result.get("ok"):
-        _respond(handler, result.get("error"), 400)
-        return
-    _respond(handler, result)
-
-
-def h_plugins_enable(handler: Any) -> None:
-    from ..controller import plugins
-    body = getattr(handler, "_body", {})
-    pid = body.get("id")
-    enabled = bool(body.get("enabled"))
-    if not pid:
-        _respond(handler, "missing id", 400)
-        return
-    result = plugins.set_enabled(pid, enabled)
-    if not result.get("ok"):
-        _respond(handler, result.get("error"), 400)
-        return
-    _respond(handler, result)
-
-
 # ---------------------------------------------------------------------------
 # Route table
 # ---------------------------------------------------------------------------
@@ -3060,11 +3015,6 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/custom-macros/remove", h_custom_macro_remove),
     ("/api/custom-macros/enable", h_custom_macro_enable),
     ("/api/custom-macros", h_custom_macros),
-    ("/api/plugins/registry", h_plugins_registry),
-    ("/api/plugins/installed", h_plugins_installed),
-    ("/api/plugins/install", h_plugins_install),
-    ("/api/plugins/remove", h_plugins_remove),
-    ("/api/plugins/enable", h_plugins_enable),
     ("/api/health", h_health),
     ("/api/about", h_about),
     ("/api/steps", h_steps),
@@ -3094,6 +3044,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/reveal", h_reveal),
     ("/api/desktop-tools", h_desktop_tools),
     ("/api/container-tools", h_container_tools),
+    ("/api/container-tools/open", h_container_tool_open),
     ("/api/open-in-tool", h_open_in_tool),
     ("/api/runs/", h_run),
     ("/api/tools", h_tools),

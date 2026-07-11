@@ -62,6 +62,21 @@ def container_tools() -> List[Dict[str, Any]]:
     ]
 
 
+def _image_present(engine: str, image: str, *, sg_wrap: bool = False) -> bool:
+    """Is *image* already in the engine's local store? Best-effort: on a probe
+    error (timeout, odd engine) assume present rather than block the launch."""
+    try:
+        from . import tools as tools_mod
+
+        argv = [engine, "image", "inspect", image, "--format", "{{.Id}}"]
+        if sg_wrap:
+            argv = tools_mod.sg_wrap_argv(argv)
+        rc, _out, _err = tools_mod._shell_exec(argv, timeout=8.0)
+        return rc == 0
+    except Exception:
+        return True
+
+
 def display_available() -> Dict[str, Any]:
     """Best-effort check that a GUI launched in a container could reach a display.
 
@@ -472,6 +487,14 @@ def open_in_container_tool(
                              "then retry — container tools need it."}
         engine = resolved.get("engine") or "docker"
         image = image_ref()
+        if not _image_present(engine, image, sg_wrap=bool(resolved.get("sg_wrap"))):
+            # Without this guard `docker run` would silently pull the multi-GB
+            # image in the background (stdout is detached) — the launch looks
+            # like a no-op for minutes. Route the user to the visible pull.
+            return {"ok": False, "need": "image",
+                    "error": f"The LibreLane image ({image}) isn't pulled yet. "
+                             "Open Tools and click ‘Pull image’ first — the download "
+                             "streams there with progress."}
     except Exception as ex:  # pragma: no cover - import/env dependent
         return {"ok": False, "error": f"could not resolve container engine: {ex}"}
 

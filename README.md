@@ -111,9 +111,15 @@ affiliated with or endorsed by the LibreLane project or its maintainers.
 
 LanEx is a small Python GUI — the standard library plus `librelane`. Install it
 once; from there it can **install LibreLane and every EDA tool for you**, or plug
-straight into a toolchain you already run. The recommended toolchain is
-LibreLane's official, version-matched **container image**: one click pulls it and
-you need no native EDA installs at all.
+straight into a toolchain you already run.
+
+> **Recommended toolchain: pull the container image.** LibreLane publishes an
+> official image with **every EDA tool baked in at the exact versions the flow
+> was tested against** (OpenROAD · Yosys · Magic · KLayout · Netgen · Verilator).
+> One download — `lanex --pull-image`, or **Tools → Pull image** in the app — and
+> you need **no native EDA installs at all**, on every supported platform. Native
+> tool installs are the advanced path; version-mismatch bugs (a system Yosys or
+> Magic too old/new for your LibreLane) simply can't happen with the image.
 
 **Supported platforms** (the same set LibreLane supports): Linux, macOS, and
 Windows **via WSL2**. On Windows, do everything below inside a WSL2 Ubuntu
@@ -573,7 +579,8 @@ lanex --host 0.0.0.0 --allow-remote    # expose on your network (no auth — tak
 **Your first chip in five clicks:**
 
 1. **Setup** → pick your HDL folder (or click **Use the SPM example**).
-2. **Tools** → confirm everything is installed (install anything red).
+2. **Tools** → click **Pull image** (recommended: one download = every EDA tool,
+   version-matched — no native installs). Keep the **Container** engine selected.
 3. Confirm the **PDK** + standard-cell library match your target.
 4. Choose **Full Auto** or **Step-by-step** in the top bar.
 5. Press **Run**. Watch the pipeline light up; the GDS lands on **Preview**.
