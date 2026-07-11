@@ -120,5 +120,25 @@ export function setupZoom() {
   } catch (_e) {}
   // A late-loading webfont can reflow the text wider than the fallback measured.
   try { document.fonts && document.fonts.ready.then(scheduleFit); } catch (_e) {}
+  // The "⋯ more" menu holds the low-frequency controls when the bar is compact.
+  const moreBtn = document.getElementById("topbar-more");
+  const extra = document.getElementById("topbar-extra");
+  if (moreBtn && extra) {
+    const closeMenu = () => {
+      extra.classList.remove("tb-open");
+      moreBtn.setAttribute("aria-expanded", "false");
+    };
+    moreBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = extra.classList.toggle("tb-open");
+      moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    // Picking an item, clicking outside, or Escape closes the menu.
+    extra.addEventListener("click", closeMenu);
+    document.addEventListener("click", (e) => {
+      if (!extra.contains(e.target) && !moreBtn.contains(e.target)) closeMenu();
+    });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
+  }
   scheduleFit();
 }

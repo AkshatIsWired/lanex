@@ -355,9 +355,12 @@ code {
   align-items: center;
   gap: var(--s-3);
   padding: 0 var(--s-4);
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;         /* the row scrolls when zoomed in; keep it chromeless */
+  /* overflow VISIBLE so the "⋯ more" dropdown (an absolutely-positioned child)
+     isn't clipped by the bar. fitChrome() guarantees the row itself fits at any
+     zoom/width, so the old overflow-x:auto scroll fallback is no longer needed —
+     and it can't coexist with a visible axis anyway (CSS forces both to auto). */
+  overflow: visible;
+  scrollbar-width: none;
   background: var(--surface); /* fallback if color-mix unsupported */
   background:
     linear-gradient(180deg, rgba(77, 163, 255, 0.05) 0%, transparent 60%),
@@ -458,6 +461,11 @@ body.theme-light .logo--light { display: inline-block; }
 .mode-seg, .engine-seg, .seg { flex-wrap: nowrap; }
 .mode-seg, .engine-seg { flex-shrink: 0; }
 
+/* Low-frequency controls live in this inline group at full width; when compact
+   they collapse into the "⋯ more" dropdown (stage 2) rather than disappearing. */
+.topbar-extra { display: flex; align-items: center; gap: var(--s-2); }
+#topbar-more { display: none; }
+
 /* --- Stage 1: redundant TEXT labels + gaps only (barely noticeable). Keeps every
    button, the wordmark, the pills, and the switch text. --- */
 html.zc1 .topbar-center .switch-label,
@@ -467,26 +475,45 @@ html.zc1 .topbar { gap: var(--s-2); }
 html.zc1 .side-tabs { gap: var(--s-2); }
 html.zc1 .rail-group { gap: 4px; }
 
-/* --- Stage 2: icon-only Mode/Engine switches + pills to their dots. STILL keeps
-   every button AND the wordmark AND the License button. --- */
-html.zc2 .mode-seg .seg-btn > span:not(.mode-ico),
-html.zc2 .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }
-html.zc2 .mode-seg .seg-btn, html.zc2 .engine-seg .seg-btn { padding-left: var(--s-2); padding-right: var(--s-2); }
-html.zc2 #design-pill .text, html.zc2 #pdk-pill .text { display: none; }
-html.zc2 #design-pill, html.zc2 #pdk-pill { padding: 5px 8px; max-width: none; }
+/* --- Stage 2: collapse the low-frequency buttons (New / Learn / Density / Help /
+   License) into the "⋯ more" dropdown. They are NOT hidden — one click on ⋯ shows
+   them as labelled rows. This is what stops buttons from "disappearing". --- */
+html.zc2 #topbar-more { display: inline-flex; }
+html.zc2 .topbar-extra {
+  position: absolute; top: calc(100% + 6px); right: 8px;
+  flex-direction: column; align-items: stretch; gap: 2px;
+  min-width: 190px; padding: 6px; display: none;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-md); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  z-index: var(--z-chrome);
+}
+html.zc2 .topbar-extra.tb-open { display: flex; }
+html.zc2 .topbar-extra .iconbtn {
+  width: 100%; height: 34px; justify-content: flex-start;
+  gap: 10px; padding: 0 10px; border-color: transparent;
+}
+html.zc2 .topbar-extra .iconbtn::after {   /* icon + readable label in the menu */
+  content: attr(aria-label); font-size: 12.5px; color: var(--text); white-space: nowrap;
+}
+html.zc2 .topbar-extra .iconbtn:hover { border-color: var(--accent); }
 
-/* --- Stage 3: drop the wordmark lockup (logo mark already reads "LanEx"), shrink
-   the icon buttons, icon-only Run. --- */
-html.zc3 .brand-text { display: none; }
-html.zc3 .iconbtn { width: 28px; height: 28px; }
-html.zc3 .zoom-pct { height: 28px; min-width: 38px; padding: 0 4px; }
-html.zc3 .topbar-right { gap: 4px; }
-html.zc3 #btn-run-global > span { display: none; }       /* icon-only Run */
+/* --- Stage 3: icon-only Mode/Engine switches + design/PDK pills to their dots. --- */
+html.zc3 .mode-seg .seg-btn > span:not(.mode-ico),
+html.zc3 .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }
+html.zc3 .mode-seg .seg-btn, html.zc3 .engine-seg .seg-btn { padding-left: var(--s-2); padding-right: var(--s-2); }
+html.zc3 #design-pill .text, html.zc3 #pdk-pill .text { display: none; }
+html.zc3 #design-pill, html.zc3 #pdk-pill { padding: 5px 8px; max-width: none; }
 
-/* --- Stage 4 (most compact): only now hide the low-frequency buttons — including
-   License — and go icon-only on the rail. --- */
-html.zc4 #btn-new-project, html.zc4 #btn-learn, html.zc4 #density-btn,
-html.zc4 #legal-btn, html.zc4 .topbar-divider { display: none; }
+/* --- Stage 4 (most compact): drop the wordmark, shrink the icon buttons,
+   icon-only Run, icon-only rail. --- */
+html.zc4 .brand-text { display: none; }
+html.zc4 .iconbtn { width: 26px; height: 26px; }
+html.zc4 .zoom-pct { height: 26px; min-width: 34px; padding: 0 3px; font-size: 10.5px; }
+html.zc4 .topbar-right { gap: 3px; }
+html.zc4 .topbar { padding-left: var(--s-2); padding-right: var(--s-2); gap: var(--s-1); }
+html.zc4 .zoom-ctl { gap: 0; }
+html.zc4 .pill { padding: 4px 6px; }
+html.zc4 #btn-run-global > span { display: none; }        /* icon-only Run */
 html.zc4 .side-tab .label { display: none; }              /* icon-only rail */
 html.zc4 .side-tab { justify-content: center; }
 
