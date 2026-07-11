@@ -77,6 +77,89 @@ def _image_present(engine: str, image: str, *, sg_wrap: bool = False) -> bool:
         return True
 
 
+def _xquartz_status() -> Dict[str, Any]:
+    """XQuartz prerequisites on macOS: ``{installed, running, tcp_ok}``.
+
+    ``tcp_ok`` is tri-state (True/False/None-unknown): containers reach XQuartz
+    over TCP (``host.docker.internal:0``), and modern XQuartz ships with
+    ``nolisten_tcp`` ON by default — so an installed, running XQuartz still
+    refuses container connections until that preference is flipped. Checking it
+    here turns "no window, no error" into an exact one-line fix. Never raises."""
+    installed = (Path("/opt/X11/bin/Xquartz").exists()
+                 or Path("/Applications/Utilities/XQuartz.app").exists())
+    running = False
+    try:
+        sock_dir = Path("/tmp/.X11-unix")
+        running = sock_dir.is_dir() and any(sock_dir.iterdir())
+    except Exception:
+        running = False
+    if not running:
+        try:
+            running = subprocess.run(["/usr/bin/pgrep", "-xq", "Xquartz"],
+                                     capture_output=True, timeout=5).returncode == 0
+        except Exception:
+            pass
+    tcp_ok: Optional[bool] = None
+    for domain in ("org.xquartz.X11", "org.macosforge.xquartz.X11"):
+        try:
+            r = subprocess.run(["defaults", "read", domain, "nolisten_tcp"],
+                               capture_output=True, text=True, timeout=5)
+            if r.returncode == 0:
+                tcp_ok = (r.stdout or "").strip() in ("0", "false", "NO")
+                break
+        except Exception:
+            continue
+    return {"installed": installed, "running": running, "tcp_ok": tcp_ok}
+
+
+def _darwin_display_status(xq: Dict[str, Any]) -> Dict[str, Any]:
+    """Compose the macOS ``{ok, reason}`` verdict from an XQuartz status.
+
+    Pure so tests can drive every branch. NOTE: the server's own ``$DISPLAY``
+    is deliberately NOT a prerequisite — container launches use
+    ``host.docker.internal:0`` (TCP), which works whether or not the shell that
+    started LanEx had DISPLAY exported."""
+    if not xq.get("installed"):
+        return {"ok": False, "reason":
+                "Container GUIs on macOS need XQuartz. Install it with "
+                "`brew install --cask xquartz`, log out and back in (or reboot), "
+                "then retry."}
+    if not xq.get("running"):
+        return {"ok": False, "reason":
+                "XQuartz is installed but not running. Start it (`open -a XQuartz`), "
+                "then retry. First time only: in XQuartz → Settings → Security enable "
+                "“Allow connections from network clients”, restart XQuartz, and run "
+                "`xhost +localhost` in its terminal."}
+    if xq.get("tcp_ok") is False:
+        return {"ok": False, "reason":
+                "XQuartz is running but refuses network (container) connections. "
+                "Run `defaults write org.xquartz.X11 nolisten_tcp -bool false`, "
+                "restart XQuartz, run `xhost +localhost`, then retry. (Same switch: "
+                "XQuartz → Settings → Security → “Allow connections from network "
+                "clients”.)"}
+    return {"ok": True, "reason":
+            "XQuartz detected. If a window doesn't appear, run `xhost +localhost` "
+            "in an XQuartz terminal once."}
+
+
+def _darwin_allow_x11_clients(env: Dict[str, str]) -> None:
+    """Best-effort ``xhost +localhost``/``+127.0.0.1`` before a container launch.
+
+    This is the one manual XQuartz step everyone forgets; running it here (with
+    XQuartz's own xhost, against the local display) removes it. Silent no-op on
+    any failure — the launch hint still tells the user the manual command."""
+    xhost = "/opt/X11/bin/xhost"
+    if not Path(xhost).exists():
+        return
+    xenv = dict(env)
+    xenv.setdefault("DISPLAY", ":0")
+    for host in ("+localhost", "+127.0.0.1"):
+        try:
+            subprocess.run([xhost, host], env=xenv, capture_output=True, timeout=5)
+        except Exception:
+            return
+
+
 def display_available() -> Dict[str, Any]:
     """Best-effort check that a GUI launched in a container could reach a display.
 
@@ -95,10 +178,7 @@ def display_available() -> Dict[str, Any]:
                     "Wayland, run the GUI under XWayland, or install an X server."}
         return {"ok": True, "reason": "X11 display detected."}
     if plat == "darwin":
-        return {"ok": bool(disp), "reason": "macOS needs XQuartz running and "
-                "`xhost + 127.0.0.1` (or `xhost +localhost`) so the container can "
-                "reach the display. Start XQuartz, then retry." if not disp else
-                "XQuartz display detected — if the window doesn't appear run `xhost +localhost`."}
+        return _darwin_display_status(_xquartz_status())
     if plat.startswith("win"):
         return {"ok": bool(disp), "reason": "On Windows use WSL2 with WSLg (Win 11) — DISPLAY "
                 "is provided automatically. Run the GUI from inside WSL." if not disp else
@@ -106,8 +186,12 @@ def display_available() -> Dict[str, Any]:
     return {"ok": bool(disp), "reason": "unknown platform; DISPLAY " + ("set" if disp else "missing")}
 
 
-def _x11_flags() -> List[str]:
-    """Container flags to forward the host display, cross-platform best-effort."""
+def _x11_flags(engine: str = "docker") -> List[str]:
+    """Container flags to forward the host display, cross-platform best-effort.
+
+    *engine* matters only on macOS: the in-container alias for the host is
+    ``host.docker.internal`` under Docker Desktop but ``host.containers.internal``
+    under a podman machine (older podman doesn't define the docker spelling)."""
     from . import platform_env
 
     flags: List[str] = []
@@ -134,7 +218,9 @@ def _x11_flags() -> List[str]:
             flags += ["-e", f"XAUTHORITY={xauth}", "-v", f"{xauth}:{xauth}"]
     elif sys.platform == "darwin":
         # XQuartz listens on TCP; containers reach it via the host gateway.
-        flags += ["-e", "DISPLAY=host.docker.internal:0"]
+        host_alias = ("host.containers.internal" if (engine or "").startswith("podman")
+                      else "host.docker.internal")
+        flags += ["-e", f"DISPLAY={host_alias}:0"]
     elif sys.platform.startswith("win"):
         if disp:
             flags += ["-e", f"DISPLAY={disp}"]
@@ -226,7 +312,7 @@ def build_argv(
 ) -> List[str]:
     """Assemble the full ``<engine> run --rm … <image> <tool> …`` command."""
     argv: List[str] = [engine, "run", "--rm", "-i"]
-    argv += _x11_flags()
+    argv += _x11_flags(engine)
     # Mount the design dir (covers the run + its GDS/odb) at its own path.
     argv += _mount(design_dir)
     # Mount + export the PDK so tech files resolve inside the container. Mount
@@ -537,6 +623,8 @@ def open_in_container_tool(
             argv = tools_mod.sg_wrap_argv(argv)
     except Exception:
         pass
+    if sys.platform == "darwin":
+        _darwin_allow_x11_clients(run_env)
     try:
         kwargs: Dict[str, Any] = {
             "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,

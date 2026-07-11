@@ -250,6 +250,27 @@ def usable_which(name: str, path: Optional[str] = None) -> Optional[str]:
     return shutil.which(name, path=linux_only_path(path))
 
 
+def ensure_darwin_path() -> None:
+    """On macOS, append Homebrew's fixed prefixes (+ ``~/.local/bin``) to PATH.
+
+    LanEx is often launched from a context that never sourced ``brew shellenv``
+    (pipx entry point, the app-window launcher, a bare login shell) — then
+    every probe and subprocess misses ``/opt/homebrew/bin`` (Apple Silicon) and
+    freshly brew-installed tools (podman, yosys, klayout…) look "not
+    installed". Appending (never prepending) fills the gap without overriding
+    the user's own PATH order. No-op off macOS; idempotent; only existing dirs
+    are added. Call once at startup — subprocesses inherit the fix.
+    """
+    if sys.platform != "darwin":
+        return
+    extras = ["/opt/homebrew/bin", "/usr/local/bin",
+              os.path.expanduser("~/.local/bin")]
+    parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    add = [d for d in extras if d not in parts and os.path.isdir(d)]
+    if add:
+        os.environ["PATH"] = os.pathsep.join(parts + add)
+
+
 def user_bin_dirs() -> list:
     """Well-known install dirs the GUI drops tools into that may be off ``$PATH``.
 
@@ -289,7 +310,27 @@ def resolve_user_bin(name: str, alts: Optional[list] = None,
             p = os.path.join(d, cand)
             if os.path.isfile(p) and os.access(p, os.X_OK):
                 return p
+    if sys.platform == "darwin":
+        for cand in candidates:
+            for p in _DARWIN_APP_BINARIES.get(cand.lower(), []):
+                p = os.path.expanduser(p)
+                if os.path.isfile(p) and os.access(p, os.X_OK):
+                    return p
     return None
+
+
+# macOS installs GUI tools as .app bundles with NO CLI link on PATH — the brew
+# cask / official .dmg drop KLayout in /Applications and `which klayout` finds
+# nothing, so the tool showed "missing" while plainly installed. The bundle's
+# inner binary is directly runnable with the same argv as the Linux build.
+_DARWIN_APP_BINARIES = {
+    "klayout": [
+        "/Applications/klayout.app/Contents/MacOS/klayout",
+        "/Applications/KLayout.app/Contents/MacOS/klayout",
+        "/Applications/KLayout/klayout.app/Contents/MacOS/klayout",
+        "~/Applications/klayout.app/Contents/MacOS/klayout",
+    ],
+}
 
 
 def sanitized_env(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:

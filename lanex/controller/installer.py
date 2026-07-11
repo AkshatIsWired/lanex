@@ -467,7 +467,9 @@ def detect_environment() -> Dict[str, Any]:
         "conda": _check_cmd("conda") or _check_cmd("mamba"),
         "apt": _check_cmd("apt-get") if is_linux else False,
         "apt_fast": _check_cmd("apt-fast") if is_linux else False,
-        "brew": _check_cmd("brew") if is_macos else False,
+        # PATH-independent: brew's two canonical prefixes are probed directly,
+        # since a pipx/app-window launch may never have sourced `brew shellenv`.
+        "brew": (_check_cmd("brew") or _brew_path() is not None) if is_macos else False,
         "choco": _check_cmd("choco") if is_win else False,
         "scoop": _check_cmd("scoop") if is_win else False,
         "docker": _check_cmd("docker"),
@@ -607,20 +609,40 @@ def _strategy_docker_script(env: Dict[str, Any], key: str) -> Optional[List[str]
 
 # ---- Strategy: brew (macOS) ----
 
+def _brew_path() -> Optional[str]:
+    """Absolute path to ``brew``, even when it's off this process's PATH.
+
+    LanEx may be launched from a context that never sourced ``brew shellenv``
+    (pipx run from a bare login shell, an app-window launcher). Homebrew's two
+    canonical prefixes are fixed: /opt/homebrew (Apple Silicon) and /usr/local
+    (Intel). Returning the absolute path keeps every brew strategy working
+    regardless of the server's PATH."""
+    from . import platform_env
+    hit = platform_env.usable_which("brew")
+    if hit:
+        return hit
+    for cand in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+        if os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
 @_strategy(["brew"], "brew install (macOS)", priority=40)
 def _strategy_brew(env: Dict[str, Any], key: str) -> Optional[List[str]]:
     # Homebrew core has these; OpenROAD/Magic/Netgen are not in core (use
     # conda/nix/Docker on macOS).
+    brew = _brew_path() or "brew"
     mapping = {
-        "yosys": ["brew", "install", "yosys"],
-        "klayout": ["brew", "install", "--cask", "klayout"],
-        "verilator": ["brew", "install", "verilator"],
-        "iverilog": ["brew", "install", "icarus-verilog"],
-        "graphviz": ["brew", "install", "graphviz"],
-        # Docker Desktop ships as a cask; Podman is a formula (run
-        # `podman machine init && podman machine start` once after install).
-        "docker": ["brew", "install", "--cask", "docker"],
-        "podman": ["brew", "install", "podman"],
+        "yosys": [brew, "install", "yosys"],
+        "klayout": [brew, "install", "--cask", "klayout"],
+        "verilator": [brew, "install", "verilator"],
+        "iverilog": [brew, "install", "icarus-verilog"],
+        "graphviz": [brew, "install", "graphviz"],
+        # docker/podman never reach this generic strategy on macOS —
+        # install_tool routes them to _install_engine_macos (cask rename,
+        # --force retry, podman machine setup). Kept for completeness.
+        "docker": [brew, "install", "--cask", "docker-desktop"],
+        "podman": [brew, "install", "podman"],
     }
     return mapping.get(key)
 
@@ -648,8 +670,9 @@ def _strategy_scoop(env: Dict[str, Any], key: str) -> Optional[List[str]]:
     mapping = {
         "klayout": ["scoop", "install", "klayout"],
         "graphviz": ["scoop", "install", "graphviz"],
-        "docker": ["scoop", "install", "docker"],
-        "podman": ["scoop", "install", "podman"],
+        # docker/podman removed on purpose: scoop's packages are the bare CLI
+        # clients with NO engine — they'd verify as "installed" while every
+        # container operation fails. Docker Desktop (choco) is the real path.
     }
     return mapping.get(key)
 
@@ -1275,14 +1298,103 @@ def _gds3d_dep_guidance(packages: List[str]) -> str:
     )
 
 
-def _install_gds3d() -> Dict[str, Any]:
-    """Guided source build of GDS3D (the open-source 3D GDS viewer).
+def _rosetta_present() -> Optional[bool]:
+    """Is Rosetta 2 installed on this Apple Silicon Mac? None when unknowable.
 
-    GDS3D has no package-manager release, so 'one-click install' = build the
-    small OpenGL binary from source into ``~/.local/bin``. Best-effort and
-    honest: on Windows it points at the prebuilt binary; if build prerequisites
-    (git/make/C++ compiler) are missing it returns actionable guidance rather
-    than failing cryptically. Streams progress via the same installer events."""
+    The GDS3D repo ships an Intel (x86_64) prebuilt app; on arm64 it runs only
+    under Rosetta 2. ``oahd`` is Rosetta's launch daemon; the runtime file is
+    the fallback probe. Never raises."""
+    try:
+        if Path("/Library/Apple/usr/share/rosetta/rosetta").exists():
+            return True
+        rc = subprocess.run(["/usr/bin/pgrep", "-q", "oahd"],
+                            capture_output=True, timeout=5).returncode
+        return rc == 0
+    except Exception:
+        return None
+
+
+def _gds3d_darwin_script(src: Path, bindir: Path) -> str:
+    """The shell script that installs GDS3D on macOS.
+
+    The repo's ``mac/`` directory has NO Makefile — it holds an Xcode project
+    plus a prebuilt, self-contained ``GDS3D.app`` (x86_64, links only system
+    frameworks). Running ``make`` there fails with "No targets specified and no
+    makefile found", which is exactly the bug this replaces. So on macOS the
+    install is: clone/update the repo, verify the prebuilt binary, and drop a
+    tiny exec wrapper at ``~/.local/bin/gds3d`` that runs the binary IN PLACE
+    (moving it out of the .app would break its bundle resource lookup)."""
+    import shlex
+    q = shlex.quote
+    app_bin = src / "mac" / "GDS3D.app" / "Contents" / "MacOS" / "GDS3D"
+    wrapper = bindir / "gds3d"
+    return (
+        "set -e; "
+        f"mkdir -p {q(str(src.parent))} {q(str(bindir))}; "
+        f"if [ -d {q(str(src))}/.git ]; then cd {q(str(src))}; git pull --ff-only || true; "
+        f"else git clone --depth 1 {q(_GDS3D_REPO)} {q(str(src))}; fi; "
+        f'if [ ! -x {q(str(app_bin))} ]; then '
+        'echo "ERROR: the repo no longer ships the prebuilt macOS app"; exit 1; fi; '
+        # git clones carry no quarantine attr, but clear it anyway (harmless).
+        f"xattr -dr com.apple.quarantine {q(str(app_bin.parent.parent.parent))} 2>/dev/null || true; "
+        f"printf '#!/bin/sh\\nexec %s \"$@\"\\n' {q(str(app_bin))} > {q(str(wrapper))}; "
+        f"chmod +x {q(str(wrapper))}; "
+        f"test -x {q(str(wrapper))}; "
+        f"echo installed to {q(str(wrapper))}"
+    )
+
+
+def _install_gds3d_darwin() -> Dict[str, Any]:
+    """GDS3D on macOS: use the prebuilt app the repo ships (no build).
+
+    Prerequisite is git only — but macOS's ``/usr/bin/git`` is a shim that pops
+    a GUI "install the developer tools?" dialog when the Command Line Tools are
+    absent, so check ``xcode-select -p`` first and give the exact command
+    instead of a mystery non-zero exit."""
+    try:
+        rc = subprocess.run(["xcode-select", "-p"], capture_output=True,
+                            timeout=10).returncode
+    except Exception:
+        rc = 1
+    if rc != 0:
+        g = ("git needs Apple's Command Line Tools. Run `xcode-select --install`, "
+             "finish the dialog, then click Install again.")
+        _emit("installer_error", {"key": "gds3d", "message": g})
+        return {"ok": False, "guidance": g, "reason": g}
+
+    from . import platform_env
+    home = platform_env.home()
+    src = home / "tools" / "GDS3D"
+    bindir = Path.home() / ".local" / "bin"
+    script = _gds3d_darwin_script(src, bindir)
+    res = _run_argv(["bash", "-lc", script], label="gds3d (prebuilt macOS app)", key="gds3d")
+    if _is_cancelled("gds3d"):
+        return _cancelled_result("gds3d")
+    if res.get("rc") == 0 and (bindir / "gds3d").exists():
+        msg = f"GDS3D installed → {bindir / 'gds3d'} (prebuilt app from the GDS3D repo)."
+        if platform_machine() == "arm64" and _rosetta_present() is False:
+            msg += (" NOTE: the binary is Intel-only and this Mac has no Rosetta 2 — run "
+                    "`softwareupdate --install-rosetta --agree-to-license` once, or GDS3D "
+                    "will fail with 'Bad CPU type in executable'.")
+        _emit("installer_info", {"key": "gds3d", "message": msg})
+        return {"ok": True, "method": "prebuilt", "label": "gds3d (prebuilt macOS app)",
+                "path": str(bindir / "gds3d")}
+    g = ("Couldn't install the prebuilt GDS3D app — see the Install logs. Fallbacks: "
+         f"open {_GDS3D_REPO} → mac/GDS3D.xcodeproj in Xcode and build it yourself, "
+         "or use the 2D viewers (KLayout/Magic), which don't need GDS3D.")
+    _emit("installer_error", {"key": "gds3d", "message": g})
+    return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
+
+
+def _install_gds3d() -> Dict[str, Any]:
+    """Guided install of GDS3D (the open-source 3D GDS viewer).
+
+    GDS3D has no package-manager release. Linux: build the small OpenGL binary
+    from source into ``~/.local/bin`` (the repo's ``linux/`` tree has the
+    Makefile). macOS: the repo ships a prebuilt ``GDS3D.app`` — install that
+    (the ``mac/`` tree has an Xcode project, NO Makefile, so a source build is
+    not a one-click path there). Windows: point at the prebuilt binary. Streams
+    progress via the same installer events; honest guidance on failure."""
     import shlex
 
     if sys.platform == "win32":
@@ -1290,6 +1402,9 @@ def _install_gds3d() -> Dict[str, Any]:
              f"{_GDS3D_REPO}/releases, put gds3d.exe on your PATH, then click Recheck.")
         _emit("installer_error", {"key": "gds3d", "message": g})
         return {"ok": False, "guidance": g, "reason": g}
+
+    if sys.platform == "darwin":
+        return _install_gds3d_darwin()
 
     missing = [t for t in ("git", "make") if not shutil.which(t)]
     if not (shutil.which("g++") or shutil.which("clang++") or shutil.which("cc")):
@@ -1352,7 +1467,9 @@ def _install_gds3d() -> Dict[str, Any]:
     home = platform_env.home()
     src = home / "tools" / "GDS3D"
     bindir = Path.home() / ".local" / "bin"
-    subdir = "mac" if sys.platform == "darwin" else "linux"
+    # Only the repo's linux/ tree has a Makefile (mac/ = Xcode project + prebuilt
+    # app, handled above; win32 = prebuilt release, handled above).
+    subdir = "linux"
     q = shlex.quote
     dest = bindir / "gds3d"
     # The Makefile emits the binary as 'GDS3D' (capital). Earlier we cp'd 'gds3d'
@@ -1386,6 +1503,153 @@ def _install_gds3d() -> Dict[str, Any]:
     return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
 
 
+def _brew_conflict_needs_force(output: str) -> bool:
+    """Does this brew failure mean 'leftover files from a previous install'?
+
+    A wiped/reinstalled Docker Desktop leaves its CLI symlinks behind
+    (``/usr/local/bin/docker-credential-desktop`` etc.); the cask then aborts
+    with "It seems there is already a Binary at …" (or "…an App at …").
+    ``--force`` overwrites those leftovers — they're Docker's own files, so the
+    retry is safe."""
+    low = (output or "").lower()
+    return "already a binary at" in low or "already an app at" in low
+
+
+def _brew_no_bottle(output: str) -> bool:
+    """Did brew refuse because no prebuilt bottle exists for this machine?
+
+    Happens on Homebrew "Tier 3" configurations (an old macOS version, or an
+    OS/CPU combo brew no longer builds for): ``Error: <formula>: no bottle
+    available!``. A source build needs the full Go toolchain and is nothing
+    like one-click, so route the user to Docker Desktop instead."""
+    return "no bottle available" in (output or "").lower()
+
+
+def _podman_path() -> Optional[str]:
+    """Absolute path to ``podman`` right after a brew install (PATH-independent)."""
+    from . import platform_env
+    hit = platform_env.usable_which("podman")
+    if hit:
+        return hit
+    for cand in ("/opt/homebrew/bin/podman", "/usr/local/bin/podman"):
+        if os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _setup_podman_machine(key: str = "podman") -> None:
+    """One-time podman VM setup on macOS (best-effort, streamed, never raises).
+
+    On macOS podman is only a client — every container runs in a Linux VM that
+    ``podman machine init`` creates and ``podman machine start`` boots. A brew
+    install without this step looks successful but the engine probe fails with
+    a connection error, which reads like a broken install. Do it for the user."""
+    podman = _podman_path()
+    if not podman:
+        return
+    try:
+        ls = subprocess.run([podman, "machine", "list", "--format", "{{.Name}}"],
+                            capture_output=True, text=True, timeout=20)
+        have_machine = bool((ls.stdout or "").strip())
+    except Exception:
+        have_machine = False
+    if not have_machine:
+        _emit("installer_info", {"key": key, "message":
+              "setting up the podman virtual machine (one-time VM image download)…"})
+        res = _run_argv([podman, "machine", "init"], label="podman machine init", key=key)
+        if _is_cancelled(key) or res.get("rc") != 0:
+            _emit("installer_info", {"key": key, "message":
+                  "podman machine init didn't finish — run `podman machine init && "
+                  "podman machine start` in a terminal, then click ‘Pull image’."})
+            return
+    res = _run_argv([podman, "machine", "start"], label="podman machine start", key=key)
+    out = "\n".join(res.get("output") or [])
+    if res.get("rc") == 0 or "already running" in out.lower():
+        _emit("installer_info", {"key": key, "message":
+              "podman machine is running — click ‘Pull image’ next."})
+    else:
+        _emit("installer_info", {"key": key, "message":
+              "podman is installed but its VM didn't start — run `podman machine start` "
+              "in a terminal, then click ‘Pull image’."})
+
+
+def _install_engine_macos(key: str) -> Dict[str, Any]:
+    """Docker Desktop / podman install on macOS, with the real-world failure
+    modes handled instead of surfaced raw:
+
+    * cask renamed ``docker`` → ``docker-desktop`` (use the current name);
+    * leftover CLI symlinks from a previous Docker install → retry ``--force``;
+    * Docker Desktop needs its app opened once (privileged helper + daemon) —
+      open it and say so, or 'installed' still can't pull;
+    * podman "no bottle available" (Tier-3 brew config) → honest routing to
+      Docker Desktop rather than a doomed source build;
+    * podman on macOS needs ``machine init``/``start`` before it works at all.
+    """
+    brew = _brew_path()
+    if not brew:
+        g = ("Homebrew isn't installed, and it's how LanEx installs engines on "
+             "macOS. Install it from https://brew.sh, or install Docker Desktop "
+             "directly: https://docs.docker.com/desktop/setup/install/mac-install/. "
+             "Then click ‘Pull image’.")
+        _emit("installer_error", {"key": key, "message": g})
+        return {"ok": False, "reason": g, "guidance": g}
+
+    if key == "docker":
+        argv = [brew, "install", "--cask", "docker-desktop"]
+        res = _run_argv(argv, label="brew install --cask docker-desktop", key=key)
+        if _is_cancelled(key):
+            return _cancelled_result(key)
+        out = "\n".join(res.get("output") or [])
+        if res.get("rc") != 0 and _brew_conflict_needs_force(out):
+            _emit("installer_info", {"key": key, "message":
+                  "a previous Docker install left files behind — retrying with "
+                  "--force (only overwrites Docker's own leftover links)…"})
+            res = _run_argv(argv + ["--force"],
+                            label="brew install --cask docker-desktop --force", key=key)
+            if _is_cancelled(key):
+                return _cancelled_result(key)
+        if res.get("rc") == 0 or _verify_install("docker"):
+            # The daemon only exists once Docker.app has run (first launch
+            # installs its privileged helper). Open it so 'installed' means
+            # 'usable', not 'a binary exists'.
+            try:
+                subprocess.Popen(["open", "-a", "Docker"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+            _emit("installer_info", {"key": key, "message":
+                  "Docker Desktop installed. Opening it now — approve its first-run "
+                  "prompts, wait for ‘Docker Desktop is running’, then click ‘Pull image’."})
+            return {"ok": True, "method": "brew", "label": "brew install --cask docker-desktop"}
+        g = ("Docker Desktop didn't install (see the Install logs). Manual path: "
+             "download it from https://docs.docker.com/desktop/setup/install/mac-install/, "
+             "open Docker.app once, then click ‘Pull image’.")
+        _emit("installer_error", {"key": key, "message": g})
+        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
+
+    # podman
+    res = _run_argv([brew, "install", "podman"], label="brew install podman", key=key)
+    if _is_cancelled(key):
+        return _cancelled_result(key)
+    out = "\n".join(res.get("output") or [])
+    if res.get("rc") != 0 and not _verify_install("podman"):
+        if _brew_no_bottle(out):
+            g = ("Homebrew has no prebuilt podman for this Mac (a 'Tier 3' setup — "
+                 "usually an older macOS, or an OS/CPU combo brew stopped building "
+                 "for). Building it from source needs the whole Go toolchain and "
+                 "often fails. Recommended: install Docker Desktop instead (click "
+                 "Install on the Docker card, or "
+                 "https://docs.docker.com/desktop/setup/install/mac-install/). "
+                 "If you really want podman: `brew install --build-from-source podman`.")
+        else:
+            g = ("podman didn't install (see the Install logs). Recommended on "
+                 "macOS: Docker Desktop — click Install on the Docker card.")
+        _emit("installer_error", {"key": key, "message": g})
+        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
+    _setup_podman_machine(key)
+    return {"ok": True, "method": "brew", "label": "brew install podman"}
+
+
 def install_tool(key: str) -> Dict[str, Any]:
     """Try every available strategy to install *key*.
 
@@ -1406,6 +1670,8 @@ def install_tool(key: str) -> Dict[str, Any]:
     try:
         if key == "gds3d":
             return _install_gds3d()
+        if key in ("docker", "podman") and sys.platform == "darwin":
+            return _install_engine_macos(key)
         return _install_tool_impl(key)
     finally:
         _end_job(key)
@@ -1528,9 +1794,10 @@ def _install_guidance(key: str) -> str:
         return (
             "Install a container engine for the recommended run mode. Linux: "
             "`sudo apt install podman` (or Docker via https://get.docker.com). "
-            "macOS: Docker Desktop (https://docs.docker.com/desktop/) or "
-            "`brew install podman`. Windows: Docker Desktop with the WSL2 backend. "
-            "After installing, click ‘Pull image’."
+            "macOS: Docker Desktop (`brew install --cask docker-desktop`, then open "
+            "Docker.app once) or `brew install podman` followed by "
+            "`podman machine init && podman machine start`. Windows: Docker Desktop "
+            "with the WSL2 backend. After installing, click ‘Pull image’."
         )
     if key in _HARD_TOOLS:
         return (

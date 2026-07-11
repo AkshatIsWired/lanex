@@ -102,7 +102,7 @@ async function renderRecommendedTools(info) {
     "git clone https://github.com/trilomix/GDS3D\n" +
     "cd GDS3D/linux &amp;&amp; make\n" +
     "sudo cp GDS3D /usr/local/bin/gds3d</pre>" +
-    "<p class='hint'>Fedora/RHEL: <code>sudo dnf install -y libX11-devel mesa-libGL-devel mesa-libGLU-devel freeglut-devel gcc-c++ make git</code>. Arch: <code>sudo pacman -S --needed libx11 mesa glu freeglut base-devel git</code>. macOS: build via the <code>mac</code> dir (XQuartz/freeglut). Windows: download the prebuilt binary from the GDS3D site, then reopen this tab.</p>" +
+    "<p class='hint'>Fedora/RHEL: <code>sudo dnf install -y libX11-devel mesa-libGL-devel mesa-libGLU-devel freeglut-devel gcc-c++ make git</code>. Arch: <code>sudo pacman -S --needed libx11 mesa glu freeglut base-devel git</code>. macOS: the repo's <code>mac/</code> dir has no Makefile — the one-click install uses the prebuilt <code>mac/GDS3D.app</code> it ships (Intel binary; Apple Silicon needs Rosetta 2: <code>softwareupdate --install-rosetta</code>). Windows: download the prebuilt binary from the GDS3D site, then reopen this tab.</p>" +
     "</details></div>";
 
   root.innerHTML =

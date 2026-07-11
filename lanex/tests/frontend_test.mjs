@@ -142,5 +142,17 @@ check("zoom: stylesheets compensate viewport units via --ll-zoom", () => {
   }
 });
 
+check("layouttools: 'no display' buttons stay clickable (remedy on click)", () => {
+  // A disabled button can never be clicked, so the user never saw the
+  // XQuartz/WSLg remedy carried in display.reason (round-59 macOS bug). The
+  // nodisplay branch must not emit a disabled attribute.
+  const src = readFileSync(resolve(MOD, "layouttools.js"), "utf8");
+  const start = src.indexOf('where = "nodisplay"');
+  assert.ok(start >= 0, "nodisplay branch not found");
+  const branch = src.slice(start, src.indexOf('where = "install"', start));
+  assert.ok(!/disabled\s*=/.test(branch),
+    "the nodisplay branch disables the button again — remedy becomes unreachable");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));

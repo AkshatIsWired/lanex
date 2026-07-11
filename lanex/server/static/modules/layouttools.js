@@ -45,7 +45,9 @@ export async function renderLayoutTools(host, tag) {
     if (contOk) { where = "container"; title = "Open in the version-matched container (recommended)"; }
     else if (hostOk) { where = "host"; title = "Open with your installed " + t.label; }
     else if (container.engine_ready && contKeys.has(t.key) && !(container.display && container.display.ok)) {
-      where = "nodisplay"; title = (container.display && container.display.reason) || "no display reachable"; disabled = " disabled";
+      // NOT disabled: a disabled button can't be clicked, so the user never
+      // saw the remedy (the exact XQuartz/WSLg fix lives in display.reason).
+      where = "nodisplay"; title = (container.display && container.display.reason) || "no display reachable";
     }
     else { where = "install"; title = t.label + " isn't installed — click to set it up in Tools"; }
     const badge = { container: "container", host: "installed", nodisplay: "no display", install: "not installed" }[where];
@@ -68,7 +70,9 @@ async function launch(btn, tag) {
     return;
   }
   if (where === "nodisplay") {
-    toast.show("No display reachable for the container GUI. " + (btn.title || ""), "warn");
+    // Sticky (duration 0): the remedy is a multi-step command the user must
+    // copy — a 4s auto-dismiss made it unreadable.
+    toast.show("No display reachable for the container GUI. " + (btn.title || ""), "warn", 0);
     return;
   }
   btn.disabled = true;

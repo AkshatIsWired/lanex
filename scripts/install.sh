@@ -301,7 +301,10 @@ build_tools_stage() {
         dnf)    $SUDO dnf install -y gcc gcc-c++ make python3-devel || true ;;
         pacman) $SUDO pacman -S --noconfirm --needed base-devel || true ;;
         zypper) $SUDO zypper --non-interactive install gcc gcc-c++ make python3-devel || true ;;
-        brew)   xcode-select --install 2>/dev/null || true ;;
+        brew)   # Opens Apple's GUI installer and returns IMMEDIATELY (async) —
+                # the retry below may still fail; the die message says to re-run.
+                xcode-select --install 2>/dev/null || true
+                warn "If an 'install developer tools?' dialog appeared, finish it, then re-run this script." ;;
         *)      warn "No package manager to install a compiler with." ;;
     esac
 }
@@ -323,6 +326,9 @@ expose_on_path() {
     # A piped installer runs in a child process and cannot change the parent
     # shell's PATH — a symlink in /usr/local/bin (on every shell's default
     # PATH) makes `lanex` work immediately, in THIS terminal and all future ones.
+    # Fresh Apple-Silicon macOS can lack /usr/local/bin entirely; creating it
+    # is safe (it's on every default PATH once it exists).
+    $SUDO mkdir -p /usr/local/bin 2>/dev/null || true
     if $SUDO ln -sf "$LAUNCHER" /usr/local/bin/lanex 2>/dev/null; then
         hash -r 2>/dev/null || true
         note "'lanex' is ready in this terminal now."
@@ -331,9 +337,12 @@ expose_on_path() {
     warn "Could not write /usr/local/bin (no sudo?). Two other ways:"
     note "open a NEW terminal and run:  lanex        (PATH set up for future shells)"
     note "or launch right now with:     $LAUNCHER"
-    # Make future shells work even without the symlink.
+    # Make future shells work even without the symlink. This script always runs
+    # under bash (curl | bash), so pick the rc file by the user's LOGIN shell —
+    # $ZSH_VERSION would never be set here even for zsh users (macOS default).
     case ":${PATH}:" in *":$(dirname "$LAUNCHER"):"*) : ;; *)
-        local rc="$HOME/.bashrc"; [ -n "${ZSH_VERSION:-}" ] && rc="$HOME/.zshrc"
+        local rc="$HOME/.bashrc"
+        case "${SHELL:-}" in */zsh) rc="$HOME/.zshrc" ;; esac
         printf '\nexport PATH="%s:$PATH"\n' "$(dirname "$LAUNCHER")" >> "$rc" 2>/dev/null || true
     esac
 }
@@ -362,6 +371,12 @@ prepull_image() {
             if [ "$WSL" = "1" ] && command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
                 note "Docker is installed but its daemon isn't running. On WSL without systemd:  sudo service docker start"
                 note "(or enable systemd:  add [boot]\\nsystemd=true to /etc/wsl.conf, then from Windows:  wsl --shutdown)"
+            fi
+            if [ "$OS" = "macos" ]; then
+                command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1 \
+                    && note "Docker Desktop must be running:  open -a Docker   then retry:  lanex --pull-image"
+                command -v podman >/dev/null 2>&1 && ! podman info >/dev/null 2>&1 \
+                    && note "podman needs its VM:  podman machine init && podman machine start   then retry:  lanex --pull-image"
             fi
         fi
     else

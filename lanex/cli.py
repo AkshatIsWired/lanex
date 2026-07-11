@@ -42,6 +42,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     Returns the :mod:`httpserver`-threading exit code.
     """
     import argparse  # stdlib
+
+    # macOS: make Homebrew-installed tools (podman, klayout, …) visible even
+    # when this process was launched without `brew shellenv` on its PATH
+    # (pipx entry point, app-window launcher). Appends only; no-op elsewhere.
+    try:
+        from .controller.platform_env import ensure_darwin_path
+        ensure_darwin_path()
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(
         prog="lanex",
         description="Launch LanEx — a cockpit for the LibreLane RTL-to-GDSII flow.",

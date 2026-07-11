@@ -258,13 +258,18 @@ brew install pipx
 pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
 # 2. install LanEx from the repo tarball (PyPI once published)
 pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz
-# 3. launch (Container engine recommended: `brew install --cask docker` or `brew install podman`)
+# 3. launch (Container engine recommended — install one of:)
+#    brew install --cask docker-desktop   # then open Docker.app once
+#    brew install podman && podman machine init && podman machine start
 lanex
 ```
 
 No Homebrew? Install it first: https://brew.sh (one command). LibreLane's heavy
 tools run in the container image, so Docker/Podman is the smooth path on macOS;
-the Tools tab can install one for you.</td></tr>
+the Tools tab can install one for you (it handles the Docker.app first-run and
+the podman VM setup). Desktop layout viewers launched <i>from the container</i>
+(KLayout/Magic/OpenROAD) additionally need XQuartz — see the troubleshooting
+entry below.</td></tr>
 
 <tr><td><b>4 · You already run LibreLane</b><br><sub>in a venv / conda env</sub></td>
 <td>
@@ -293,10 +298,10 @@ silently if you later move or delete the clone).
 <tr><th align="left" width="220">You need</th><th align="left">One click away</th></tr>
 
 <tr><td><b>The EDA toolchain</b></td>
-<td>Tools tab → <b>Install the toolchain (recommended)</b>. One click pulls the version-matched LibreLane container image; keep the <b>Container</b> engine selected and you're done — zero native tool installs.<br><br><b>No Docker or Podman?</b> The same card installs one for you first, then pulls the image, all in one go. It runs the official installer (e.g. <code>curl -fsSL https://get.docker.com | sudo sh</code> on Linux, <code>brew install podman</code> on macOS); you confirm the password prompt in your terminal.</td></tr>
+<td>Tools tab → <b>Install the toolchain (recommended)</b>. One click pulls the version-matched LibreLane container image; keep the <b>Container</b> engine selected and you're done — zero native tool installs.<br><br><b>No Docker or Podman?</b> The same card installs one for you first, then pulls the image, all in one go. It runs the official installer (e.g. <code>curl -fsSL https://get.docker.com | sudo sh</code> on Linux; on macOS it installs Docker Desktop — retrying over leftovers from an old install — or podman <i>including</i> its one-time <code>podman machine</code> VM setup); you confirm the password prompt in your terminal.</td></tr>
 
 <tr><td><b>Recommended extras</b><br><sub>optional niceties</sub></td>
-<td>The Tools tab's <b>Recommended extra tools</b> group one-click-installs <b>Icarus Verilog</b> (RTL simulation in the IDE), <b>Graphviz</b> (synthesis schematics), and <b>GDS3D</b> (3D layout viewer, built from source with all its X11/GL dependencies handled). System packages that need <code>sudo</code> prompt for your password in the launch terminal — LanEx never asks for your password in the browser.</td></tr>
+<td>The Tools tab's <b>Recommended extra tools</b> group one-click-installs <b>Icarus Verilog</b> (RTL simulation in the IDE), <b>Graphviz</b> (synthesis schematics), and <b>GDS3D</b> (3D layout viewer — built from source on Linux with all its X11/GL dependencies handled; on macOS the prebuilt app from the GDS3D repo is installed, which on Apple Silicon runs under Rosetta 2: <code>softwareupdate --install-rosetta</code>). System packages that need <code>sudo</code> prompt for your password in the launch terminal — LanEx never asks for your password in the browser.</td></tr>
 </table>
 
 ### Updating LanEx
@@ -444,6 +449,55 @@ GL rendering overrides (set in your environment before launching):
 `LANEX_HW_GL=1` forces hardware GL everywhere (skips the WSL software-GL
 default, native *and* container launches); `LANEX_SOFTWARE_GL=1` forces
 software GL even outside WSL (broken native GPU stacks, remote X, VNC).
+</details>
+
+<details>
+<summary><b>Container viewers (KLayout / Magic / OpenROAD GUI) say "no display" on macOS</b></summary>
+
+Tools running *inside* the container are Linux X11 apps — on macOS they need
+**XQuartz** as the X server, reached over TCP. Three one-time steps:
+
+1. Install and start it: `brew install --cask xquartz`, log out and back in
+   (or reboot), then `open -a XQuartz`.
+2. Allow network (container) clients — XQuartz ships with this **off**:
+   XQuartz → Settings → Security → enable **"Allow connections from network
+   clients"**, then restart XQuartz. (Terminal equivalent:
+   `defaults write org.xquartz.X11 nolisten_tcp -bool false`.)
+3. `xhost +localhost` in an XQuartz terminal. LanEx also runs this for you at
+   each launch when it can.
+
+LanEx's Layout buttons report exactly which of these steps is missing. The
+built-in layout preview and all flow runs work without XQuartz — this only
+affects the interactive desktop viewers launched from the container.
+</details>
+
+<details>
+<summary><b>Docker/Podman install fails or the engine stays "not usable" (macOS)</b></summary>
+
+* **Docker Desktop installed but "not usable"** — open `Docker.app` once and
+  approve its first-run prompts; the daemon only exists while Docker Desktop is
+  running. Then click **Pull image**.
+* **`Error: It seems there is already a Binary at '/usr/local/bin/docker-credential-…'`** —
+  leftovers from a previous Docker install. LanEx retries with `--force`
+  automatically; manually: `brew install --cask docker-desktop --force`.
+* **`Error: podman: no bottle available!`** — your Homebrew configuration is
+  "Tier 3" (typically an older macOS release): no prebuilt podman exists.
+  Install Docker Desktop instead (recommended), or build from source with
+  `brew install --build-from-source podman` (slow; needs the Go toolchain).
+* **podman installed but "not usable"** — podman on macOS runs containers in a
+  VM that must exist and be running: `podman machine init && podman machine
+  start` (LanEx's one-click podman install does this for you).
+</details>
+
+<details>
+<summary><b>GDS3D on macOS: install fails with <code>make: *** No targets specified</code>, or it won't launch on Apple Silicon</b></summary>
+
+The GDS3D repo's `mac/` directory has no Makefile — older LanEx versions tried
+`make` there and failed exactly like that; current LanEx installs the prebuilt
+`GDS3D.app` the repo ships instead (update LanEx if you still see the make
+error). That binary is Intel-only: on Apple Silicon install Rosetta 2 once —
+`softwareupdate --install-rosetta --agree-to-license` — or the launch fails
+with `Bad CPU type in executable`.
 </details>
 
 <details>
