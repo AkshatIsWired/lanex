@@ -21,19 +21,33 @@ function hide() {
   if (tip) tip.hidden = true;
 }
 
+// The UI-zoom control applies CSS `zoom` to <html>. Chromium's getBoundingClientRect
+// returns coordinates in the ZOOMED space (position × zoom), but style.left/top on a
+// body child are interpreted in UNZOOMED CSS px (then rendered × zoom) — so placing
+// the bubble straight from a rect double-applies the zoom and lands it far off. Divide
+// the measured geometry by the active zoom to work in CSS space; the bubble then paints
+// exactly over its target at any zoom. (No-op at 100% where the factor is 1.)
+function zoomFactor() {
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ll-zoom"));
+  return v > 0 ? v : 1;
+}
+
 function place(target) {
   const txt = target.getAttribute("data-tip");
   if (!txt) return;
   const t = ensure();
   t.textContent = txt;
   t.hidden = false;                       // unhide to measure (same task → no flash)
+  const z = zoomFactor();
   const r = target.getBoundingClientRect();
   const tr = t.getBoundingClientRect();
-  let top = r.top - tr.height - 8;         // prefer above
+  const rl = r.left / z, rt = r.top / z, rb = r.bottom / z, rw = r.width / z;
+  const tw = tr.width / z, th = tr.height / z;
+  let top = rt - th - 8;                   // prefer above (all in CSS space)
   let below = false;
-  if (top < 4) { top = r.bottom + 8; below = true; }   // flip below when clipped
-  let left = r.left + r.width / 2 - tr.width / 2;
-  left = Math.max(6, Math.min(left, window.innerWidth - tr.width - 6));
+  if (top < 4) { top = rb + 8; below = true; }   // flip below when clipped
+  let left = rl + rw / 2 - tw / 2;
+  left = Math.max(6, Math.min(left, window.innerWidth - tw - 6));
   t.style.top = Math.round(top) + "px";
   t.style.left = Math.round(left) + "px";
   t.classList.toggle("tip-below", below);

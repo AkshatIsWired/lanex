@@ -23,8 +23,8 @@ export function clampZoom(v) {
 // zoom factor). Below these the toolbars can't hold their full chrome, so shed
 // it in two stages instead of scrolling. Mirrors the @media breakpoints in
 // styles.css; height thresholds drive the vertical rail compaction.
-const ZC1_W = 1320, ZC1_H = 900;   // stage 1: drop labels / group headers, tighten gaps
-const ZC2_W = 1080, ZC2_H = 680;   // stage 2: icon-only switches + rail, logo mark only
+const ZC1_W = 1600, ZC1_H = 900;   // stage 1: drop labels + palette label, tighten gaps
+const ZC2_W = 1380, ZC2_H = 720;   // stage 2: icon-only + shrink + hide low-value controls
 
 // Pure + testable: which compaction stage (0/1/2) does this zoom + viewport need?
 // Gated to zoom-IN only — at 100%/zoom-out the @media breakpoints in styles.css

@@ -398,7 +398,11 @@ code {
 .logo--light { display: none; }
 body.theme-light .logo--dark { display: none; }
 body.theme-light .logo--light { display: inline-block; }
-.brand-text { display: flex; flex-direction: column; line-height: 1.05; }
+/* min-width:0 + nowrap: without them the wordmark/tagline get squeezed by the
+   grid's centre track and wrap onto 2-3 lines that spill BELOW the fixed-height
+   bar (ugly under zoom). They stay one line and are dropped by the compaction
+   stages before they'd ever overflow the bar horizontally. */
+.brand-text { display: flex; flex-direction: column; line-height: 1.05; min-width: 0; }
 .brand-name {
   font-family: var(--display);
   font-weight: 700;
@@ -406,6 +410,7 @@ body.theme-light .logo--light { display: inline-block; }
   font-size: var(--t-lg);
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 .brand-sub {
   color: var(--text-muted);
@@ -414,6 +419,7 @@ body.theme-light .logo--light { display: inline-block; }
   font-weight: 500;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 /* Instrument-panel micro label — the single microcaps recipe (§3.2). */
@@ -436,61 +442,74 @@ body.theme-light .logo--light { display: inline-block; }
 .switch-label { align-self: center; }
 .engine-seg { margin-left: var(--s-1); }
 
-/* Zoom/narrow-width compression. The bar has a fixed height, so the Mode +
-   Engine segs must COMPRESS when space runs out — wrapping put the Engine seg
-   on a phantom second row rendered over/under the Mode seg (browser-zoom bug).
-   Stage 1: drop the "Mode"/"Engine" labels. Stage 2: icon-only seg buttons
-   (the text lives on in each button's data-tip tooltip + aria-label). */
-@media (max-width: 1180px) {
-  .topbar-center .switch-label { display: none; }
-}
-@media (max-width: 1020px) {
-  .topbar-center { flex-wrap: nowrap; }
-  .mode-seg .seg-btn > span:not(.mode-ico),
-  .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }
-  .mode-seg .seg-btn, .engine-seg .seg-btn { padding-left: var(--s-2); padding-right: var(--s-2); }
-}
+/* ================= Topbar / rail compaction (two stages) =================
+   The topbar carries a lot of controls, so below ~1460px of REAL width — OR when
+   the UI-zoom control shrinks the effective space (zoom.js sets html.zc1/.zc2) —
+   it can't hold full chrome and used to scroll. Two stages shed low-value chrome
+   so BOTH toolbars fit instead. Each stage is written for the @media (a narrow
+   real window, incl. a laptop at 100%) AND the .zcN class (zoomed in) so both
+   paths compact identically. Uniform zoom is preserved — tooltip.js compensates
+   for the zoom factor, so no counter-scaling is needed.
+   Everything hidden here stays reachable via the command palette (⌘K) + hotkeys. */
 
-/* Higher browser-zoom (narrower effective width): progressively shed low-value
-   topbar chrome so the row scrolls LATER and less. These are pure width savers —
-   no-overlap is already guaranteed by the non-collapsing centre track + the
-   .topbar horizontal scroll above; these just keep the common case tidy. */
-@media (max-width: 1120px) {
+/* segs never wrap onto a phantom second row (the old browser-zoom overlap). */
+.mode-seg, .engine-seg, .seg { flex-wrap: nowrap; }
+.mode-seg, .engine-seg { flex-shrink: 0; }
+
+/* --- Stage 1: drop text labels / group headers + the palette label, tighten
+   gaps (keeps every control, just narrower). --- */
+@media (max-width: 1600px) {
+  /* The logo mark already carries the "LanEx" wordmark, so drop the separate
+     text lockup entirely when tight — cleaner than a cramped mark-beside-wordmark. */
+  .topbar-center .switch-label, .brand-text, .rail-label { display: none; }
+  .cmdk-launcher .cmdk-lbl, .cmdk-launcher .cmdk-hintkey { display: none; }
   .topbar { gap: var(--s-2); }
-  .brand-sub { display: none; }              /* keep the wordmark, drop the tagline */
+  .side-tabs { gap: var(--s-2); }
+  .rail-group { gap: 4px; }
 }
-@media (max-width: 980px) {
-  .brand-text { display: none; }             /* logo mark alone */
-}
-@media (max-width: 860px) {
-  #design-pill .text, #pdk-pill .text { display: none; }   /* dot keeps the status colour */
-  #design-pill, #pdk-pill { padding: 5px 8px; max-width: none; }
-}
-
-/* Zoom-aware compaction. CSS `zoom` (the topbar/rail zoom control) scales the
-   layout but does NOT shrink the media-query viewport, so zooming IN never
-   triggered the width/height compaction above — the toolbars just grew past the
-   window and scrolled. zoom.js measures the EFFECTIVE space (viewport ÷ zoom)
-   and sets .zc1/.zc2 on <html>, so the same low-value chrome is shed under zoom
-   and BOTH toolbars fit instead of scrolling. Uniform zoom is preserved (no
-   counter-scaling), so tooltip/menu positioning is unchanged. */
 html.zc1 .topbar-center .switch-label,
-html.zc1 .brand-sub,
-html.zc1 .rail-label { display: none; }          /* topbar: drop labels; rail: drop group headers */
+html.zc1 .brand-text,
+html.zc1 .rail-label { display: none; }
+html.zc1 .cmdk-launcher .cmdk-lbl, html.zc1 .cmdk-launcher .cmdk-hintkey { display: none; }
 html.zc1 .topbar { gap: var(--s-2); }
 html.zc1 .side-tabs { gap: var(--s-2); }
 html.zc1 .rail-group { gap: 4px; }
 
+/* --- Stage 2 (builds on stage 1): icon-only switches + rail, smaller buttons,
+   hide low-value controls so the row genuinely fits at any zoom (no residual
+   scroll). --- */
+@media (max-width: 1380px) {
+  .brand-text { display: none; }                 /* logo mark alone */
+  #design-pill .text, #pdk-pill .text { display: none; }
+  #design-pill, #pdk-pill { padding: 5px 8px; max-width: none; }
+  .mode-seg .seg-btn > span:not(.mode-ico),
+  .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }
+  .mode-seg .seg-btn, .engine-seg .seg-btn { padding-left: var(--s-2); padding-right: var(--s-2); }
+  .side-tab .label { display: none; }
+  .side-tab { justify-content: center; }
+  .iconbtn { width: 28px; height: 28px; }
+  .zoom-pct { height: 28px; min-width: 38px; padding: 0 4px; }
+  .topbar-right { gap: 4px; }
+  #btn-new-project, #btn-learn, #legal-btn, #density-btn, .topbar-divider { display: none; }
+  #btn-run-global > span { display: none; }       /* icon-only Run */
+  .cmdk-launcher .cmdk-lbl, .cmdk-launcher .cmdk-hintkey { display: none; }  /* icon-only palette */
+}
 html.zc2 .brand-text,
 html.zc2 #design-pill .text,
-html.zc2 #pdk-pill .text { display: none; }       /* logo mark + status dots only */
+html.zc2 #pdk-pill .text { display: none; }
 html.zc2 #design-pill, html.zc2 #pdk-pill { padding: 5px 8px; max-width: none; }
 html.zc2 .mode-seg .seg-btn > span:not(.mode-ico),
-html.zc2 .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }   /* icon-only switches */
+html.zc2 .engine-seg .seg-btn > span:not(.mode-ico) { display: none; }
 html.zc2 .mode-seg .seg-btn, html.zc2 .engine-seg .seg-btn { padding-left: var(--s-2); padding-right: var(--s-2); }
-/* icon-only rail reclaims the vertical space so the rail fits without its own scroll */
 html.zc2 .side-tab .label { display: none; }
 html.zc2 .side-tab { justify-content: center; }
+html.zc2 .iconbtn { width: 28px; height: 28px; }
+html.zc2 .zoom-pct { height: 28px; min-width: 38px; padding: 0 4px; }
+html.zc2 .topbar-right { gap: 4px; }
+html.zc2 #btn-new-project, html.zc2 #btn-learn, html.zc2 #legal-btn,
+html.zc2 #density-btn, html.zc2 .topbar-divider { display: none; }
+html.zc2 #btn-run-global > span { display: none; }
+html.zc2 .cmdk-launcher .cmdk-lbl, html.zc2 .cmdk-launcher .cmdk-hintkey { display: none; }
 
 /* Mode / engine switches use the shared .seg component (B16). The active +
    disabled markers keep the class names runmode.js/setup.js already toggle. */
