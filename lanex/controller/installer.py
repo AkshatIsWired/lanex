@@ -597,6 +597,7 @@ def _strategy_apt(env: Dict[str, Any], key: str) -> Optional[List[str]]:
         "verilator": ["sudo", apt, "install", "-y", "verilator"],
         "iverilog": ["sudo", apt, "install", "-y", "iverilog"],
         "graphviz": ["sudo", apt, "install", "-y", "graphviz"],
+        "gtkwave": ["sudo", apt, "install", "-y", "gtkwave"],
         "ciel": ["sh", "-c", f"sudo {apt} install -y python3-pip && pip3 install ciel 2>/dev/null || pipx install ciel 2>/dev/null || pip3 install --break-system-packages ciel"],
         # Container engines: Podman is the rootless, daemonless choice and is the
         # simplest to bring up on Debian/Ubuntu. Docker via apt installs the
@@ -647,6 +648,10 @@ def _strategy_brew(env: Dict[str, Any], key: str) -> Optional[List[str]]:
         "verilator": [brew, "install", "verilator"],
         "iverilog": [brew, "install", "icarus-verilog"],
         "graphviz": [brew, "install", "graphviz"],
+        # Homebrew-core gained a `gtkwave` FORMULA in 2024 (the old CASK was
+        # broken on modern macOS — Perl Switch.pm — and was removed). If brew
+        # says "No available formula", the user's brew predates it: brew update.
+        "gtkwave": [brew, "install", "gtkwave"],
         # docker/podman never reach this generic strategy on macOS —
         # install_tool routes them to _install_engine_macos (cask rename,
         # --force retry, podman machine setup). Kept for completeness.
@@ -701,6 +706,7 @@ def _strategy_nix(env: Dict[str, Any], key: str) -> Optional[List[str]]:
         "magic": "magic-vlsi",
         "netgen": "netgen-lvs",
         "graphviz": "graphviz",
+        "gtkwave": "gtkwave",
     }.get(key)
     if not attr:
         return None
@@ -1180,6 +1186,7 @@ def _verify_install(key: str) -> bool:
         "podman": lambda: _check_cmd("podman"),
         "gds3d": lambda: _check_cmd("gds3d") or (Path.home() / ".local" / "bin" / "gds3d").exists(),
         "graphviz": lambda: _check_cmd("dot"),
+        "gtkwave": lambda: _check_cmd("gtkwave"),
     }
     checker = mapping.get(key)
     if checker is None:
@@ -2865,6 +2872,7 @@ def uninstall_tool(key: str) -> Dict[str, Any]:
             "verilator": ["sudo", apt, "remove", "-y", "verilator"],
             "iverilog": ["sudo", apt, "remove", "-y", "iverilog"],
             "graphviz": ["sudo", apt, "remove", "-y", "graphviz"],
+            "gtkwave": ["sudo", apt, "remove", "-y", "gtkwave"],
             # Let users remove an engine and switch (e.g. drop Docker for Podman).
             # get.docker.com (our own install path) installs docker-ce, distro
             # repos install docker.io — try both, or removal always "fails".
@@ -2899,6 +2907,7 @@ def uninstall_tool(key: str) -> Dict[str, Any]:
         brew_map = {
             "iverilog": ["brew", "uninstall", "icarus-verilog"],
             "graphviz": ["brew", "uninstall", "graphviz"],
+            "gtkwave": ["brew", "uninstall", "gtkwave"],
             "yosys": ["brew", "uninstall", "yosys"],
             "verilator": ["brew", "uninstall", "verilator"],
             "magic": ["brew", "uninstall", "magic"],

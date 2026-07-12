@@ -302,7 +302,7 @@ silently if you later move or delete the clone).
 <td>Tools tab → <b>Install the toolchain (recommended)</b>. One click pulls the version-matched LibreLane container image; keep the <b>Container</b> engine selected and you're done — zero native tool installs.<br><br><b>No Docker or Podman?</b> The same card installs one for you first, then pulls the image, all in one go. It runs the official installer (e.g. <code>curl -fsSL https://get.docker.com | sudo sh</code> on Linux; on macOS it installs Docker Desktop — retrying over leftovers from an old install, and falling back to the official DMG when Homebrew can't — or podman <i>including</i> its one-time <code>podman machine</code> VM setup, falling back to podman's official <code>.pkg</code> where brew has no prebuilt bottle); you confirm the password prompt in your terminal (on macOS, a native password dialog). After installing, LanEx <b>starts</b> the engine and waits for it — an installed-but-not-running engine gets a one-click <b>Start</b> on the runtime card.</td></tr>
 
 <tr><td><b>Recommended extras</b><br><sub>optional niceties</sub></td>
-<td>The Tools tab's <b>Recommended extra tools</b> group one-click-installs <b>Icarus Verilog</b> (RTL simulation in the IDE), <b>Graphviz</b> (synthesis schematics), and <b>GDS3D</b> (3D layout viewer — built from source on Linux with all its X11/GL dependencies handled; on macOS the prebuilt app from the GDS3D repo is installed, which on Apple Silicon runs under Rosetta 2: <code>softwareupdate --install-rosetta</code>). System packages that need <code>sudo</code> prompt for your password in the launch terminal — LanEx never asks for your password in the browser.</td></tr>
+<td>The Tools tab's <b>Recommended extra tools</b> group one-click-installs <b>Icarus Verilog</b> (RTL simulation in the IDE), <b>Graphviz</b> (synthesis schematics), <b>GTKWave</b> (the RTL IDE's "Open in GTKWave" desktop waveform viewer — launched with the simulation's signals already on screen), and <b>GDS3D</b> (3D layout viewer — built from source on Linux with all its X11/GL dependencies handled; on macOS the prebuilt app from the GDS3D repo is installed, which on Apple Silicon runs under Rosetta 2: <code>softwareupdate --install-rosetta</code>). The one-line installer sets up GTKWave and GDS3D for you automatically (skip with <code>LANEX_SKIP_GDS3D=1</code>); a failed extra never blocks the install — retry any time from the Tools tab, or headlessly with <code>lanex --install-tool gds3d</code> / <code>lanex --install-tool gtkwave</code>. System packages that need <code>sudo</code> prompt for your password in the launch terminal — LanEx never asks for your password in the browser.</td></tr>
 </table>
 
 ### Updating LanEx
@@ -430,8 +430,8 @@ docker rmi $(docker images -q ghcr.io/librelane/librelane)     # or: podman rmi 
 
 # EDA tools installed from the Tools tab (only the ones you added)
 brew uninstall --cask docker-desktop klayout      # macOS
-brew uninstall podman yosys verilator icarus-verilog graphviz
-sudo apt remove yosys iverilog verilator graphviz klayout   # Debian/Ubuntu
+brew uninstall podman yosys verilator icarus-verilog graphviz gtkwave
+sudo apt remove yosys iverilog verilator graphviz gtkwave klayout   # Debian/Ubuntu
 
 # PDKs (downloaded by ciel — SHARED with a native LibreLane install; only
 # remove if you don't use LibreLane outside LanEx)
@@ -612,6 +612,29 @@ with `Bad CPU type in executable`.
 </details>
 
 <details>
+<summary><b>"Open in GTKWave" says GTKWave isn't installed, or nothing opens</b></summary>
+
+The RTL IDE's **GTKWave** button launches the desktop GTKWave on the last
+simulation's dump, with the signals preloaded (LanEx writes a `.gtkw` save file
+next to the dump — a bare `gtkwave dump.vcd` would open an empty wave pane).
+Per platform:
+
+* **Linux**: every major distro packages it — `sudo apt install gtkwave`
+  (or `dnf` / `pacman -S` / `zypper install gtkwave`), or one click in the
+  Tools tab. The one-line installer already sets it up.
+* **macOS**: `brew install gtkwave` — this is the Homebrew **formula** added in
+  2024. If brew says "No available formula", run `brew update` first. The old
+  GTKWave **cask** (`gtkwave.app`) is broken on modern macOS and LanEx
+  deliberately ignores it — remove it and install the formula.
+* **WSL**: the window opens through WSLg, like the other desktop viewers.
+  A Windows-side `gtkwave.exe` on the interop PATH is ignored on purpose
+  (it can't be launched reliably from the Linux side) — install the Linux one.
+* **Headless / SSH**: desktop viewers need a graphical session; LanEx says so
+  instead of pretending to launch. The built-in canvas waveform viewer works
+  everywhere.
+</details>
+
+<details>
 <summary><b>PDK or image downloads time out on WSL2 (<code>ciel fetch failed … timed out</code>)</b></summary>
 
 WSL2 sometimes generates a broken `/etc/resolv.conf`, so downloads can't resolve
@@ -756,7 +779,7 @@ lanex --host 0.0.0.0 --allow-remote    # expose on your network (no auth — tak
 |-----|--------------|
 | **Setup** | Pick design, PDK/SCL, flow; auto-generate a config. |
 | **Pipeline** | Live per-step run timeline + logs + step output. |
-| **RTL IDE** | Edit / lint / simulate Verilog; VCD waveform viewer. |
+| **RTL IDE** | Edit / lint / simulate Verilog; VCD waveform viewer + one-click GTKWave. |
 | **Verification** | DRC / LVS / antenna / timing signoff verdict. |
 | **Analytics** | Metric trends, run comparison, cell usage. |
 | **DSE** | Design-space sweeps and result viewer. |

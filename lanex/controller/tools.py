@@ -80,6 +80,7 @@ _APPROX_TOOL_MB: Dict[str, int] = {
     "verilator": 120,
     "iverilog": 30,
     "graphviz": 40,
+    "gtkwave": 30,
     "ciel": 15,
 }
 
@@ -246,6 +247,25 @@ EDA_TOOLS: List[Dict[str, Any]] = [
                 "only needed for the Reports & diagrams view.",
         "category": "eda",
         "optional": True,
+    },
+    {
+        "key": "gtkwave",
+        "label": "GTKWave",
+        "binary": ["gtkwave"],
+        "version_flag": ["--version"],
+        "install": {
+            "linux": "apt:gtkwave",
+            "darwin": "brew:gtkwave",
+            "windows": "WSL2 recommended",
+        },
+        "what": "Waveform viewer for the RTL IDE's simulations — the 'Open in "
+                "GTKWave' button hands it the VCD/FST dump with the signals "
+                "preloaded. Optional; the built-in canvas viewer works without it.",
+        "category": "eda",
+        "optional": True,
+        # Deliberately NOT in_image: the LibreLane container ships the flow
+        # toolchain only (verified: `command -v gtkwave` in librelane:3.0.4 is
+        # empty), so this is a host-side desktop tool like GDS3D.
     },
     {
         "key": "ciel",

@@ -222,6 +222,8 @@ export const api = {
   simStart: (payload) => _fetch("/api/sim/start", { method: "POST", body: JSON.stringify(payload) }),
   simCancel: () => _fetch("/api/sim/cancel", { method: "POST", body: "{}" }),
   waveformUrl: (path) => "/api/waveform?path=" + encodeURIComponent(path),
+  openWave: (path) =>
+    _fetch("/api/ide/open-wave", { method: "POST", body: JSON.stringify({ path }) }),
 
   // ---------- Phase 4: viewers + cells
   // (2D/3D layout = the flow's KLayout PNG + "Open in desktop tool"; the old

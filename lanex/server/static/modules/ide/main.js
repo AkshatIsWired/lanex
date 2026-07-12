@@ -10,7 +10,8 @@ import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
 import { applyZoom, currentZoom } from "../zoom.js";
 
-const state = { designDir: null, files: [], openAbs: null, runMode: "container", wave: null };
+const state = { designDir: null, files: [], openAbs: null, runMode: "container", wave: null,
+                lastWavePath: null, gtkwaveInstallArmed: false };
 let _inited = false;
 
 // Entry point. opts.designDir/runMode override discovery (the embedded tab knows
@@ -70,6 +71,7 @@ export async function initIde(opts = {}) {
   byId("ide-find", (b) => b.addEventListener("click", () => window.ideEditor.openFind()));
   byId("ide-wave-csv", (b) => b.addEventListener("click", exportWaveCsv));
   byId("ide-wave-png", (b) => b.addEventListener("click", exportWavePng));
+  byId("ide-wave-gtkwave", (b) => b.addEventListener("click", openInGtkwave));
   byId("ide-wave-zoomin", (b) => b.addEventListener("click", () => state.wave && state.wave.zoomIn()));
   byId("ide-wave-zoomout", (b) => b.addEventListener("click", () => state.wave && state.wave.zoomOut()));
   byId("ide-wave-fit", (b) => b.addEventListener("click", () => state.wave && state.wave.fit()));
@@ -431,7 +433,42 @@ function onEvent(ev) {
   }
 }
 
+// Open the last simulation's dump in the desktop GTKWave (server pre-generates a
+// .gtkw save file so the signals are on screen — see /api/ide/open-wave). When
+// GTKWave isn't installed, the first click explains and arms the button; the
+// second click starts the install through the normal Tools machinery (progress
+// streams to the Install logs / log drawer).
+async function openInGtkwave() {
+  const path = state.lastWavePath;
+  if (!path) { note("Run a simulation first — no waveform to open.", true); return; }
+  try {
+    const r = await api.openWave(path);
+    if (r && r.ok) {
+      state.gtkwaveInstallArmed = false;
+      note("GTKWave launched on " + path + (r.signals ? " (" + r.signals + " signals preloaded)." : "."));
+      return;
+    }
+    if (r && r.need === "gtkwave") {
+      if (state.gtkwaveInstallArmed) {
+        state.gtkwaveInstallArmed = false;
+        note("Installing GTKWave — watch the install logs, then click GTKWave again.");
+        const ir = await api.installTool("gtkwave");
+        if (ir && ir.in_progress) note("A GTKWave install is already running — watch the install logs.");
+        else if (ir && ir.ok === false) note(ir.guidance || ir.reason || "Couldn't install GTKWave automatically — see the Tools tab.", true);
+      } else {
+        state.gtkwaveInstallArmed = true;
+        note((r.error || "GTKWave isn't installed.") + " Click GTKWave again to install it now.", true);
+      }
+      return;
+    }
+    note((r && r.error) || "Could not open GTKWave.", true);
+  } catch (ex) {
+    note("Could not open GTKWave: " + (ex.message || ex), true);
+  }
+}
+
 async function loadWaveform(vcdRel) {
+  state.lastWavePath = vcdRel;
   note("Loading waveform " + vcdRel + "…");
   try {
     const r = await fetch(api.waveformUrl(vcdRel), { headers: { "X-Requested-With": "XMLHttpRequest" } });

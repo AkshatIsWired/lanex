@@ -2871,6 +2871,56 @@ def h_waveform(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_ide_open_wave(handler: Any) -> None:
+    """Open an IDE simulation dump in GTKWave on the host (POST {path}).
+
+    *path* is design-dir-relative — the exact string ``sim_done`` reported (the
+    same convention /api/waveform streams by), so the file GTKWave shows is the
+    file the built-in viewer shows: one source of truth, no re-derivation. For a
+    VCD we pre-parse its header and write a ``.lanex-wave.gtkw`` save file so
+    GTKWave opens WITH the signals on screen (a bare launch shows an empty wave
+    pane); FST/parse-failure degrades to a plain open. Traversal-guarded; only
+    meaningful when the GUI runs on the user's own machine (like /api/reveal)."""
+    body = getattr(handler, "_body", {})
+    rel = (body.get("path") or "").strip()
+    design_dir = _get_active_design_dir()
+    if not design_dir or not rel:
+        _respond(handler, "missing design dir or path", 400)
+        return
+    base = Path(design_dir).resolve()
+    target = (base / rel).resolve()
+    if not target.is_relative_to(base):
+        _respond(handler, "invalid path", 400)
+        return
+    if not target.is_file():
+        _respond(handler, {"ok": False, "error":
+                           "waveform file not found — run a simulation first "
+                           "(the dump may have been deleted)."}, 200)
+        return
+    if target.suffix.lower() not in (".vcd", ".fst", ".ghw"):
+        _respond(handler, {"ok": False, "error":
+                           f"'{target.name}' is not a waveform dump "
+                           "(.vcd/.fst/.ghw)."}, 200)
+        return
+    save = None
+    n_sigs = 0
+    if target.suffix.lower() == ".vcd":
+        try:
+            from ..controller import waveview
+            sigs = waveview.vcd_signals(target)
+            if sigs:
+                save = waveview.write_gtkw(base / ".lanex-wave.gtkw", target, sigs)
+                n_sigs = len(sigs)
+        except Exception:
+            save = None  # plain open — never block the launch on the nicety
+    from ..controller import desktop
+    res = desktop.open_in_tool("gtkwave", target, use_tech=False, save_file=save)
+    if res.get("ok") and n_sigs:
+        res["signals"] = n_sigs
+        res["hint"] = f"{n_sigs} signal(s) preloaded from the dump."
+    _respond(handler, res, 200)
+
+
 # ---------------------------------------------------------------------------
 # Phase 4 — 2D/3D viewers + cells
 # ---------------------------------------------------------------------------
@@ -3040,6 +3090,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/sim/start", h_sim_start),
     ("/api/sim/cancel", h_sim_cancel),
     ("/api/waveform", h_waveform),
+    ("/api/ide/open-wave", h_ide_open_wave),
     ("/api/cells", h_cells),
     ("/api/custom-cells/save", h_custom_cell_save),
     ("/api/custom-cells/remove", h_custom_cell_remove),

@@ -23,6 +23,7 @@
 #                     cannot be name-squatted). After the PyPI release, pypi.
 #   LANEX_REF=<ref>   GitHub branch/tag for the default source (default: main)
 #   LANEX_SKIP_PULL=1 skip the optional container-image pre-pull
+#   LANEX_SKIP_GDS3D=1  skip the optional GDS3D 3D-viewer build/install
 #   LANEX_NO_PIPX=1   skip pipx entirely (escape hatch for a broken pipx);
 #                     installs into the ~/.lanex/venv fallback instead
 #   LANEX_ASSUME_YES=1  never prompt (CI / unattended)
@@ -128,6 +129,10 @@ apt_stage() {
     # open blank windows. Cosmetic for the cockpit itself → never fatal.
     $A install -y xfonts-base libgl1 libgl1-mesa-dri libegl1 \
         || warn "GL/font packages failed to install — desktop viewers may need them later (Tools tab offers a one-click fix)."
+    # gtkwave: the RTL IDE's "Open in GTKWave" waveform viewer. Optional —
+    # the built-in canvas viewer works without it; the Tools tab can retry.
+    $A install -y gtkwave \
+        || warn "gtkwave failed to install — the RTL IDE's 'Open in GTKWave' needs it (Tools tab can retry)."
 }
 
 dnf_stage() {
@@ -138,6 +143,8 @@ dnf_stage() {
     $SUDO dnf install -y git || warn "git failed to install — the GDS3D build (Tools tab) needs it."
     $SUDO dnf install -y mesa-dri-drivers xorg-x11-fonts-misc \
         || warn "GL/font packages failed — desktop viewers may need them later."
+    $SUDO dnf install -y gtkwave \
+        || warn "gtkwave failed to install — the RTL IDE's 'Open in GTKWave' needs it (Tools tab can retry)."
 }
 
 pacman_stage() {
@@ -148,6 +155,8 @@ pacman_stage() {
     $SUDO pacman -S --noconfirm --needed git || warn "git failed to install — the GDS3D build (Tools tab) needs it."
     $SUDO pacman -S --noconfirm --needed mesa xorg-fonts-misc \
         || warn "GL/font packages failed — desktop viewers may need them later."
+    $SUDO pacman -S --noconfirm --needed gtkwave \
+        || warn "gtkwave failed to install — the RTL IDE's 'Open in GTKWave' needs it (Tools tab can retry)."
 }
 
 zypper_stage() {
@@ -158,6 +167,8 @@ zypper_stage() {
     $SUDO zypper --non-interactive install git-core || warn "git failed to install — the GDS3D build (Tools tab) needs it."
     $SUDO zypper --non-interactive install Mesa-dri xorg-x11-fonts-legacy \
         || warn "GL/font packages failed — desktop viewers may need them later."
+    $SUDO zypper --non-interactive install gtkwave \
+        || warn "gtkwave failed to install — the RTL IDE's 'Open in GTKWave' needs it (Tools tab can retry)."
 }
 
 brew_stage() {
@@ -190,6 +201,10 @@ brew_stage() {
             brew install python@3.12 || brew install python || warn "brew python install failed."
         fi
         command -v pipx >/dev/null 2>&1 || brew install pipx || warn "brew pipx failed — will fall back to pip/venv."
+        # gtkwave: homebrew-core gained the FORMULA in 2024 (the old cask was
+        # broken on modern macOS and removed). An old brew needs `brew update`.
+        command -v gtkwave >/dev/null 2>&1 || brew install gtkwave \
+            || warn "gtkwave failed to install — run 'brew update && brew install gtkwave' later (the RTL IDE's 'Open in GTKWave' needs it)."
     fi
 }
 
@@ -385,6 +400,44 @@ prepull_image() {
     fi
 }
 
+gds3d_stage() {
+    # GDS3D (3D layout viewer) has no package-manager release anywhere — Linux
+    # builds it from source, macOS installs the repo's prebuilt GDS3D.app. We
+    # drive LanEx's own installer (`lanex --install-tool gds3d`), the exact code
+    # path behind the Tools tab's Install button, so every foolproofing it has
+    # (dev-header auto-detect, X11 fonts, CLT check, Rosetta hint) applies here
+    # too. Entirely best-effort: a failure never breaks the LanEx install — the
+    # Tools tab can always retry.
+    if [ "${LANEX_SKIP_GDS3D:-0}" = "1" ]; then
+        note "LANEX_SKIP_GDS3D=1 — skipping the GDS3D 3D viewer."
+        return 0
+    fi
+    say "GDS3D 3D layout viewer (optional, best-effort)"
+    # Build deps first, per package manager. The apt path can self-install these
+    # from inside the app later; dnf/pacman/zypper cannot, so seed them now.
+    case "$PKG" in
+        apt)    $SUDO apt-get -o DPkg::Lock::Timeout=300 install -y \
+                    build-essential libx11-dev libxmu-dev libxi-dev \
+                    libgl1-mesa-dev libglu1-mesa-dev freeglut3-dev \
+                    || warn "GDS3D build deps failed — the Tools tab can retry them later." ;;
+        dnf)    $SUDO dnf install -y gcc-c++ make libX11-devel libXmu-devel libXi-devel \
+                    mesa-libGL-devel mesa-libGLU-devel freeglut-devel \
+                    || warn "GDS3D build deps failed — install them manually, then use the Tools tab." ;;
+        pacman) $SUDO pacman -S --noconfirm --needed base-devel libx11 libxmu libxi mesa glu freeglut \
+                    || warn "GDS3D build deps failed — install them manually, then use the Tools tab." ;;
+        zypper) $SUDO zypper --non-interactive install gcc-c++ make libX11-devel libXmu-devel libXi-devel \
+                    Mesa-libGL-devel glu-devel freeglut-devel \
+                    || warn "GDS3D build deps failed — install them manually, then use the Tools tab." ;;
+        *)      : ;;  # macOS: prebuilt app, no build deps; unknown: let the installer decide
+    esac
+    if "$LAUNCHER" --install-tool gds3d; then
+        note "GDS3D installed."
+    else
+        warn "GDS3D didn't install automatically — everything else still works."
+        note "Install it any time from the cockpit:  Tools tab → GDS3D → Install"
+    fi
+}
+
 wsl_notes() {
     [ "$WSL" = "1" ] || return 0
     if [ "$WSL1" = "1" ]; then
@@ -408,6 +461,7 @@ main() {
     expose_on_path
     verify_install
     prepull_image
+    gds3d_stage
     wsl_notes
     say "Done — launch the cockpit with:  lanex"
     note "Re-running this installer later upgrades LanEx in place."

@@ -50,8 +50,8 @@ async function renderDesktopViewers() {
     "</div></div>";
 }
 
-// Recommended extra tools: the three optional power-ups (iverilog, graphviz,
-// gds3d). Native installs use the shared escalating installer — if a system
+// Recommended extra tools: the optional power-ups (iverilog, graphviz,
+// gtkwave, gds3d). Native installs use the shared escalating installer — if a system
 // package needs sudo, the user is prompted for a password in the launch
 // terminal (handled globally by app.js's installer_info banner).
 async function renderRecommendedTools(info) {
@@ -111,6 +111,7 @@ async function renderRecommendedTools(info) {
     "<div style='display:flex;flex-wrap:wrap;gap:var(--s-4)'>" +
     probeCard(byKey.iverilog) +
     probeCard(byKey.graphviz) +
+    probeCard(byKey.gtkwave) +
     gds3dCard +
     "</div>";
 
@@ -543,7 +544,7 @@ async function removeEngine(key) {
 
 // Tools shown in the dedicated "Recommended extra tools" group, so we skip them
 // in the Advanced local-toolchain grid to avoid duplicate cards.
-const RECOMMENDED_KEYS = new Set(["iverilog", "graphviz"]);
+const RECOMMENDED_KEYS = new Set(["iverilog", "graphviz", "gtkwave"]);
 
 // Tools the container image can open as an interactive window/console with no
 // run context (matches controller/container_tools._CONTAINER_TOOLS).

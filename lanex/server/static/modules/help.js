@@ -118,6 +118,7 @@ const CATALOG = {
       "Upload Sources lands files in the design root; Upload Testbench lands them in verify/ (so the flow won't try to synthesise them).",
       "Check syntax runs Verilator --lint-only on the current sources — no run dir, no PDK — and lists problems in the Problems panel; click a diagnostic to jump to the line.",
       "Simulate picks an engine (Icarus for classic `initial`/`#delay` benches, Verilator for speed, or Auto) and runs the selected testbench; $dumpvars output renders in the waveform viewer (zoom with the wheel, click to lock a cursor, export PNG/CSV).",
+      "GTKWave opens the same dump in the desktop GTKWave with the signals already on screen (LanEx writes a .gtkw save file from the dump's own header). If GTKWave isn't installed, the button walks you through a one-click install.",
     ],
     samples: [
       { key: "Sim engine", sample: "Auto (Icarus → host Verilator → container)" },

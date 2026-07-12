@@ -70,6 +70,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--pull-image", action="store_true",
                         help="pull the version-matched LibreLane container image and exit "
                              "(headless toolchain setup for Container run mode); skips the GUI")
+    parser.add_argument("--install-tool", metavar="TOOL", default=None,
+                        help="install one supporting tool headlessly and exit (e.g. gds3d, "
+                             "gtkwave, iverilog, graphviz) — the same strategies as the "
+                             "Tools tab's Install button; skips the GUI")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -80,6 +84,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.pull_image:
         return _pull_image_cli()
+
+    if args.install_tool:
+        return _install_tool_cli(args.install_tool)
 
     # Defer imports: read controller and server only when launched.
     try:
@@ -195,6 +202,80 @@ def _pull_image_cli() -> int:
     else:
         sys.stderr.write(f"\n{engine} pull exited with code {rc}.\n")
     return rc
+
+
+def _install_tool_cli(key: str) -> int:
+    """Install one supporting tool headlessly, streaming the installer's output.
+
+    The EXACT code path the Tools tab's Install button runs (strategy chain,
+    sudo escalation via terminal/pkexec/askpass, honest guidance on failure) —
+    so ``lanex --install-tool gds3d`` from the install script behaves like the
+    in-app click. Progress events normally ride the SSE bus; here we poll the
+    same bus with a cursor and print them, so a terminal user sees the build.
+    Returns 0 on success, 1 on failure, 2 when the environment can't load.
+    """
+    import threading
+
+    try:
+        from .controller import installer, tools
+        from .controller.events import bus
+    except Exception as ex:  # pragma: no cover - import/env dependent
+        sys.stderr.write(f"cannot load the installer: {ex}\n")
+        return 2
+
+    known = {t["key"] for t in tools.EDA_TOOLS} | {"gds3d", "docker", "podman"}
+    if key not in known:
+        sys.stderr.write(f"unknown tool '{key}'. Installable tools: "
+                         + ", ".join(sorted(known)) + "\n")
+        return 2
+
+    cursor = bus.max_seq
+    result: dict = {}
+
+    def _worker() -> None:
+        try:
+            result.update(installer.install_tool(key) or {})
+        except Exception as ex:  # pragma: no cover - strategy/env dependent
+            result.update({"ok": False, "reason": str(ex)})
+
+    t = threading.Thread(target=_worker, daemon=True)
+    sys.stdout.write(f"Installing {key}…\n")
+    sys.stdout.flush()
+    t.start()
+
+    def _drain() -> None:
+        nonlocal cursor
+        for evt in bus.events_since(cursor):
+            cursor = max(cursor, int(evt.get("seq") or cursor))
+            if not str(evt.get("type") or "").startswith("installer"):
+                continue
+            line = evt.get("line") or evt.get("message") or ""
+            if line:
+                sys.stdout.write(str(line).rstrip() + "\n")
+                sys.stdout.flush()
+
+    try:
+        while t.is_alive():
+            _drain()
+            t.join(0.25)
+        _drain()
+    except KeyboardInterrupt:  # pragma: no cover - interactive only
+        try:
+            installer.cancel_install(key)
+        except Exception:
+            pass
+        sys.stderr.write("\ninstall cancelled\n")
+        return 130
+
+    if result.get("ok"):
+        method = result.get("method") or result.get("label") or "installed"
+        sys.stdout.write(f"\n{key} installed ({method}).\n")
+        return 0
+    reason = result.get("guidance") or result.get("reason") or "no install method succeeded"
+    sys.stderr.write(f"\n{key} install failed: {reason}\n"
+                     f"You can retry any time from the cockpit: Tools tab → "
+                     f"{key} → Install.\n")
+    return 1
 
 
 def _lazy_open(url: str, no_browser: bool, tab: bool = False) -> None:

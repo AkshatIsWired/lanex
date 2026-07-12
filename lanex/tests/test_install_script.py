@@ -78,7 +78,7 @@ def test_sudo_refusal_guard_present() -> None:
 def test_documented_env_knobs_are_wired() -> None:
     body = INSTALL.read_text()
     for knob in ("LANEX_FROM", "LANEX_REF", "LANEX_SKIP_PULL",
-                 "LANEX_NO_PIPX", "LANEX_ASSUME_YES"):
+                 "LANEX_SKIP_GDS3D", "LANEX_NO_PIPX", "LANEX_ASSUME_YES"):
         assert f"${{{knob}" in body, f"{knob} documented but not read"
 
 
@@ -99,6 +99,35 @@ def test_every_pkg_stage_installs_git() -> None:
         start = body.index(f"{stage}()")
         end = body.index("\n}", start)
         assert " git" in body[start:end], f"{stage} no longer installs git"
+
+
+def test_every_pkg_stage_installs_gtkwave() -> None:
+    # GTKWave backs the RTL IDE's "Open in GTKWave" button. Every package
+    # stage (all four Linux managers AND brew) must offer it, degradably —
+    # same contract as git above.
+    body = INSTALL.read_text()
+    for stage in ("apt_stage", "dnf_stage", "pacman_stage", "zypper_stage",
+                  "brew_stage"):
+        start = body.index(f"{stage}()")
+        end = body.index("\n}", start)
+        assert "gtkwave" in body[start:end], f"{stage} no longer installs gtkwave"
+
+
+def test_gds3d_stage_present_and_skippable() -> None:
+    # GDS3D auto-installs through LanEx's OWN installer (`--install-tool gds3d`,
+    # the Tools-tab code path) so all its foolproofing applies; it must be
+    # best-effort (never a die) and skippable via LANEX_SKIP_GDS3D=1.
+    body = INSTALL.read_text()
+    start = body.index("gds3d_stage()")
+    end = body.index("\n}", start)
+    stage = body[start:end]
+    assert "--install-tool gds3d" in stage
+    assert "LANEX_SKIP_GDS3D" in stage
+    assert 'die "' not in stage, "gds3d_stage must degrade, never die"
+    # Wired into main(), after the launcher exists (verify_install sets it up).
+    main_start = body.index("main() {")
+    assert "gds3d_stage" in body[main_start:]
+    assert body.index("verify_install", main_start) < body.index("gds3d_stage", main_start)
 
 
 def test_shim_delegates_to_universal_installer() -> None:

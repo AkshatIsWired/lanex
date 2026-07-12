@@ -40,6 +40,12 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     # silently reports "not installed".
     "gds3d":   {"label": "GDS3D",   "kind": "3D", "bin": "gds3d", "alts": ["GDS3D"]},
     "magic":   {"label": "Magic",   "kind": "2D", "bin": "magic", "alts": []},
+    # GTKWave opens the RTL IDE's simulation dumps (VCD/FST), not layouts. On
+    # macOS ONLY the Homebrew formula binary counts — the legacy cask's
+    # gtkwave.app is broken on modern macOS (Perl Switch.pm) and is deliberately
+    # not resolved here, so a stale cask install reads as "not installed" and
+    # routes the user to the working `brew install gtkwave`.
+    "gtkwave": {"label": "GTKWave", "kind": "wave", "bin": "gtkwave", "alts": []},
     # NOTE: OpenROAD's GUI loads an ODB via a script, not a GDS on argv, so we do
     # NOT offer an "open this GDS in OpenROAD" launch — it would just open an
     # empty GUI. Use KLayout/Magic for layout, GDS3D for the 3D stack.
@@ -306,13 +312,23 @@ def _build_argv(tool: str, binary: str, f: str, tech: Dict[str, Any], use_tech: 
         if proc:
             return [binary, "-p", proc, "-i", f]
         return [binary, "-i", f]   # last resort (will likely fail; caller warns)
+    if tool == "gtkwave":
+        # A bare `gtkwave dump.vcd` opens an EMPTY wave pane (GTKWave never
+        # auto-adds signals). The caller pre-generates a .gtkw save file
+        # (waveview.py) listing the dump's signals; -a loads it so the waveform
+        # is on screen immediately. Without one, plain open (FST/parse-failure).
+        save = tech.get("gtkw_save")
+        if save:
+            return [binary, "-a", str(save), f]
+        return [binary, f]
     return [binary, f]
 
 
 def open_in_tool(tool: str, file_path: str | Path, *,
                  pdk: Optional[str] = None, pdk_root: Optional[str] = None,
                  use_tech: bool = True,
-                 run_dir: Optional[str | Path] = None) -> Dict[str, Any]:
+                 run_dir: Optional[str | Path] = None,
+                 save_file: Optional[str] = None) -> Dict[str, Any]:
     """Launch *tool* on *file_path* (already traversal-validated by the caller).
 
     *pdk*/*pdk_root* (from the run's resolved config) let us pass the PDK tech
@@ -365,6 +381,11 @@ def open_in_tool(tool: str, file_path: str | Path, *,
         except Exception:
             pass
     tech = _pdk_tech_files(pdk, pdk_root)
+    # GTKWave: the pre-generated .gtkw save file (waveview.py) that preloads the
+    # dump's signals. Optional — a missing/failed save file degrades to a plain
+    # open, never blocks the launch.
+    if tool == "gtkwave" and save_file:
+        tech["gtkw_save"] = save_file
     if tool == "gds3d":
         # GDS3D can't render without a process/tech file. Find one for the PDK; if
         # none exists, fail with honest guidance rather than launching a dud that
