@@ -372,7 +372,14 @@ def h_run(handler: Any) -> None:
 
 def h_tools(handler: Any) -> None:
     try:
-        _respond(handler, tools_mod.check_tools())
+        # ?fresh=1 bypasses the 8s status caches — the Recheck button's whole
+        # point is "probe NOW" (e.g. the user just started Docker Desktop by
+        # hand; a cached 'dead' answer within the TTL window reads as broken).
+        if _query_param(handler.path, "fresh") == "1":
+            tools_mod._engine_probe_cache.clear()
+            _respond(handler, tools_mod.check_tools(force=True))
+        else:
+            _respond(handler, tools_mod.check_tools())
     except Exception as ex:
         _log.exception("check_tools failed")
         _respond(handler, str(ex), 500)

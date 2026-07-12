@@ -139,7 +139,7 @@ export const api = {
   manualRun: (command) => _fetch("/api/manual/run", { method: "POST", body: JSON.stringify({ command }) }),
   manualCancel: () => _fetch("/api/manual/cancel", { method: "POST", body: "{}" }),
 
-  tools: () => _fetch("/api/tools"),
+  tools: (fresh) => _fetch("/api/tools" + (fresh ? "?fresh=1" : "")),
   installTool: (key) =>
     _fetch("/api/tools/install/" + encodeURIComponent(key), { method: "POST", body: "{}" }),
   cancelInstall: (key) => _fetch("/api/tools/cancel", { method: "POST", body: JSON.stringify({ key }) }),

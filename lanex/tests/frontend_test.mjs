@@ -182,6 +182,12 @@ check("tools: engine-not-usable card is platform-aware with a Start action", () 
   // The SSE outcome path must treat engine:<name> keys as a start (chain the
   // pull), never as a tool install.
   assert.match(src, /engine:/, "installer_result engine: key handling missing");
+  // Recheck must bypass the server's 8s status caches — a probe cached moments
+  // before the user fixed the engine reads as still-broken.
+  assert.match(api, /\/api\/tools" \+ \(fresh \? "\?fresh=1" : ""\)/,
+    "api.tools lost the fresh bypass");
+  assert.match(src, /renderTools\(true\)/,
+    "the Recheck button no longer forces a fresh probe");
 });
 
 console.log(`\nfrontend_test: ${passed} checks passed` +

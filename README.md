@@ -121,10 +121,11 @@ straight into a toolchain you already run.
 > tool installs are the advanced path; version-mismatch bugs (a system Yosys or
 > Magic too old/new for your LibreLane) simply can't happen with the image.
 
-**Supported platforms** (the same set LibreLane supports): Linux, macOS, and
-Windows **via WSL2**. On Windows, do everything below inside a WSL2 Ubuntu
-terminal — LanEx and LibreLane are Linux programs there; the UI opens as a
-native Windows window automatically.
+**Supported platforms** (the same set LibreLane supports): Linux, macOS
+(**13 Ventura or newer**, Intel and Apple Silicon alike — current Docker
+Desktop and podman's VM both need 13+), and Windows **via WSL2**. On Windows,
+do everything below inside a WSL2 Ubuntu terminal — LanEx and LibreLane are
+Linux programs there; the UI opens as a native Windows window automatically.
 
 > **Prerequisites:** Python ≥ 3.10. Docker or Podman is recommended but
 > **optional** — LanEx can install an engine for you (you confirm the password
@@ -586,6 +587,17 @@ affects the interactive desktop viewers launched from the container.
   Docker via the brew cask or Docker.app's own bundled uninstaller (quit the
   app first if it's running); podman removes its machine VM first, then the
   brew formula or the `/opt/podman` package.
+* **macOS 12 or older** — current Docker Desktop and podman 5's VM both need
+  macOS 13 (Ventura)+. LanEx detects this up front and refuses the doomed
+  multi-GB download, pointing at the real options: an older Docker Desktop
+  release that still lists your macOS
+  ([release-notes archive](https://docs.docker.com/desktop/release-notes/) —
+  install it, open Docker.app once, click **Pull image**; the rest of LanEx
+  works normally), or podman 4.x with QEMU.
+* **Intel vs Apple Silicon** — handled automatically, including the trap of
+  running under an x86_64 (Rosetta) Python on an M-series Mac: LanEx asks the
+  chip itself (`sysctl hw.optional.arm64`) before picking the arm64/amd64
+  Docker or podman download.
 </details>
 
 <details>

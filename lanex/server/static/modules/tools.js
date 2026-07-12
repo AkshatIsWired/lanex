@@ -8,13 +8,15 @@ import { confirmDialog } from "./dialog.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 
-export async function renderTools() {
+export async function renderTools(fresh) {
   const root = document.getElementById("tools-grid");
   if (!root) return;
   wireJump(document.getElementById("sec-tools"));   // static section-jump nav (§6.6)
   renderDesktopViewers();
   try {
-    const info = await api.tools();
+    // fresh=true (the Recheck button) bypasses the server's 8s status caches —
+    // a probe cached moments before the user fixed the engine reads as broken.
+    const info = await api.tools(fresh);
     state.tools = info;
     paint(info);
     const rootInfo = await api.getPdkRoot();
@@ -427,7 +429,7 @@ function paintRuntimeCard(container) {
       "<p class='hint'>Prefer native tools? Switch the top-bar engine to <strong>Local tools</strong> and use <em>Advanced: local toolchain</em> below.</p>" +
       "</div>";
   }
-  document.getElementById("btn-runtime-recheck")?.addEventListener("click", () => renderTools());
+  document.getElementById("btn-runtime-recheck")?.addEventListener("click", () => renderTools(true));
   document.getElementById("btn-enable-docker")?.addEventListener("click", async () => {
     const b = document.getElementById("btn-enable-docker");
     if (b) { b.disabled = true; b.textContent = "enabling…"; }

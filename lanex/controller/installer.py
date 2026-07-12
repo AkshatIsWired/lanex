@@ -1691,8 +1691,82 @@ def _setup_podman_machine(key: str = "podman") -> None:
 
 
 def _mac_arch() -> str:
-    """Docker/podman asset architecture for this Mac: ``arm64`` or ``amd64``."""
+    """Docker/podman asset architecture for this Mac: ``arm64`` or ``amd64``.
+
+    Rosetta-proof: when LanEx runs under an x86_64 Python on an M-series Mac
+    (Intel Homebrew migrated from an old machine — common), ``platform.machine()``
+    lies and says ``x86_64`` — and an amd64 Docker Desktop can't run on that
+    chip. ``sysctl hw.optional.arm64`` reports the real CHIP regardless of
+    process translation (the key doesn't exist on Intel, so any error means
+    trust ``machine()``)."""
+    if sys.platform == "darwin":
+        for sysctl in ("/usr/sbin/sysctl", "sysctl"):
+            try:
+                out = subprocess.run([sysctl, "-n", "hw.optional.arm64"],
+                                     capture_output=True, text=True, timeout=5)
+                if (out.stdout or "").strip() == "1":
+                    return "arm64"
+                if out.returncode == 0:
+                    return "amd64"
+                break   # ran but key missing → Intel; fall through
+            except Exception:
+                continue
     return "arm64" if platform.machine() == "arm64" else "amd64"
+
+
+def _macos_version() -> Tuple[int, ...]:
+    """``(major, minor)`` of the running macOS, or ``()`` when unknown.
+
+    Unknown must FAIL OPEN downstream — blocking a healthy system on a parse
+    hiccup is worse than letting an old one find out at install time."""
+    if sys.platform != "darwin":
+        return ()
+    ver = ""
+    try:
+        ver = platform.mac_ver()[0] or ""
+    except Exception:
+        ver = ""
+    if not ver:
+        try:
+            out = subprocess.run(["/usr/bin/sw_vers", "-productVersion"],
+                                 capture_output=True, text=True, timeout=5)
+            ver = (out.stdout or "").strip()
+        except Exception:
+            ver = ""
+    try:
+        parts = tuple(int(x) for x in ver.split(".")[:2])
+        return parts if parts else ()
+    except Exception:
+        return ()
+
+
+# Current Docker Desktop AND podman 5's machine VM (applehv / vfkit on Apple's
+# Virtualization.framework) both require macOS 13 Ventura. Attempting below
+# that wastes a 1.5 GB download on an app that won't launch.
+_ENGINE_MACOS_FLOOR = (13,)
+
+
+def _macos_engine_blocker(key: str) -> Optional[str]:
+    """Why current container engines can't run on this macOS, or None if fine."""
+    v = _macos_version()
+    if not v or v >= _ENGINE_MACOS_FLOOR:
+        return None
+    ver_s = ".".join(str(x) for x in v)
+    if key == "docker":
+        return (f"This Mac runs macOS {ver_s}, but current Docker Desktop needs "
+                "macOS 13 (Ventura) or newer — installing the latest release here "
+                "would download ~1.5 GB for an app that can't launch. Options: "
+                "install an OLDER Docker Desktop release that still supports your "
+                "macOS (release notes archive: "
+                "https://docs.docker.com/desktop/release-notes/ — pick the last "
+                "version listing your macOS, open Docker.app once, then click "
+                "‘Pull image’), or run LanEx on a machine with macOS 13+.")
+    return (f"This Mac runs macOS {ver_s}, but podman's Linux VM (podman 5, "
+            "applehv) needs macOS 13 (Ventura) or newer. Options: an older "
+            "podman 4.x with QEMU (manual: https://podman.io/docs/installation), "
+            "an older Docker Desktop release for your macOS "
+            "(https://docs.docker.com/desktop/release-notes/), or run LanEx on a "
+            "machine with macOS 13+.")
 
 
 def _podman_pkg_url() -> str:
@@ -1899,6 +1973,10 @@ def _install_podman_pkg_darwin(key: str = "podman") -> Dict[str, Any]:
     prebuilt for arm64 AND amd64 and lands in ``/opt/podman``."""
     from . import platform_env
 
+    blocker = _macos_engine_blocker("podman")
+    if blocker:
+        _emit("installer_error", {"key": key, "message": blocker})
+        return {"ok": False, "reason": blocker, "guidance": blocker}
     url = _podman_pkg_url()
     dest = platform_env.home() / "tools"
     try:
@@ -1955,12 +2033,26 @@ def _install_docker_dmg_darwin(key: str = "docker") -> Dict[str, Any]:
     import getpass
     from . import platform_env
 
+    blocker = _macos_engine_blocker("docker")
+    if blocker:
+        _emit("installer_error", {"key": key, "message": blocker})
+        return {"ok": False, "reason": blocker, "guidance": blocker}
     dest = platform_env.home() / "tools"
     try:
         dest.mkdir(parents=True, exist_ok=True)
     except Exception:
         dest = Path(tempfile.gettempdir())
     dmg = dest / "Docker.dmg"
+    # Headroom warning (never blocks): ~1.5 GB DMG + ~4 GB installed app/VM.
+    try:
+        free_gb = shutil.disk_usage(str(dest)).free / (1024 ** 3)
+        if free_gb < 6:
+            _emit("installer_info", {"key": key, "message": (
+                f"Low disk space: ~{free_gb:.1f} GB free. Docker Desktop needs "
+                "roughly 6 GB (download + installed app) — free some space if "
+                "the install fails.")})
+    except Exception:
+        pass
     _emit("installer_info", {"key": key, "message":
           "downloading Docker Desktop from docker.com (large — roughly 1.5 GB)…"})
     res = _run_argv(["curl", "-fL", "--retry", "3", "-o", str(dmg), _docker_dmg_url()],
@@ -1974,6 +2066,14 @@ def _install_docker_dmg_darwin(key: str = "docker") -> Dict[str, Any]:
         _emit("installer_error", {"key": key, "message": g})
         return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
     mnt = "/Volumes/lanex-docker-install"
+    # A cancelled/crashed earlier attempt can leave the volume mounted — attach
+    # would then fail "mount point is busy". Quiet best-effort detach first.
+    try:
+        subprocess.run(["hdiutil", "detach", mnt, "-force"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=30)
+    except Exception:
+        pass
     res = _run_argv(["hdiutil", "attach", str(dmg), "-nobrowse", "-readonly",
                      "-mountpoint", mnt], label="mount Docker.dmg", key=key)
     if not res.get("ok"):
@@ -2035,6 +2135,15 @@ def _install_engine_macos(key: str) -> Dict[str, Any]:
     * an installed engine still isn't a REACHABLE engine — chain
       :func:`start_engine` so 'installed' means 'usable', not 'a binary exists'.
     """
+    # Version floor FIRST — before brew even tries. The docker-desktop cask
+    # depends_on macOS ≥ 13 anyway (it would fail with a brew-flavored message),
+    # and the DMG/pkg fallbacks would burn a multi-GB download on an app that
+    # can't launch. One honest message with the actual options instead.
+    blocker = _macos_engine_blocker(key)
+    if blocker:
+        _emit("installer_error", {"key": key, "message": blocker})
+        return {"ok": False, "reason": blocker, "guidance": blocker}
+
     brew = _brew_path()
     if not brew:
         # No Homebrew is not a dead end — both engines have official installers.

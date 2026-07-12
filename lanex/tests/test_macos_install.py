@@ -751,3 +751,74 @@ def test_uninstall_docker_fedora_uses_dnf(monkeypatch):
     res = installer.uninstall_tool("docker")
     assert res["ok"] is True
     assert argvs[0][:4] == ["sudo", "dnf", "remove", "-y"]
+
+
+# ==================== round 64: arch truth + macOS version floor =============
+
+
+class _Sysctl:
+    def __init__(self, stdout, rc=0):
+        self.stdout = stdout
+        self.returncode = rc
+
+
+def test_mac_arch_trusts_the_chip_over_a_rosetta_python(monkeypatch):
+    # x86_64 Python on an M-series Mac (Intel Homebrew migrated over): machine()
+    # says x86_64 but the CHIP is arm64 — an amd64 Docker Desktop can't run there.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda argv, **kw: _Sysctl("1\n"))
+    assert installer._mac_arch() == "arm64"
+    assert installer._docker_dmg_url().endswith("/arm64/Docker.dmg")
+
+
+def test_mac_arch_intel_falls_back_to_machine(monkeypatch):
+    # On Intel the sysctl key doesn't exist (non-zero exit) → machine() decides.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda argv, **kw: _Sysctl("", rc=1))
+    assert installer._mac_arch() == "amd64"
+
+
+def test_macos_version_parses_major_minor(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer.platform, "mac_ver",
+                        lambda: ("12.7.4", ("", "", ""), "x86_64"))
+    assert installer._macos_version() == (12, 7)
+
+
+def test_macos_version_unknown_off_darwin():
+    assert installer._macos_version() == ()
+
+
+def test_engine_install_blocked_on_old_macos_before_any_download(monkeypatch):
+    # macOS 12: latest Docker Desktop / podman 5 can't launch — the guard must
+    # fire BEFORE brew/curl (no doomed multi-GB download) with the real options.
+    ran = []
+    monkeypatch.setattr(installer, "_macos_version", lambda: (12, 7))
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda argv, **kw: ran.append(list(argv)) or {"ok": True, "rc": 0})
+    monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
+    for key in ("docker", "podman"):
+        res = installer._install_engine_macos(key)
+        assert res["ok"] is False
+        assert "macOS 13" in res["guidance"]
+        assert "release-notes" in res["guidance"] or "podman.io" in res["guidance"]
+    assert ran == []   # nothing downloaded, nothing installed
+    # The direct fallbacks refuse too (they're reachable on their own).
+    assert installer._install_docker_dmg_darwin("docker")["ok"] is False
+    assert installer._install_podman_pkg_darwin("podman")["ok"] is False
+    assert ran == []
+
+
+def test_engine_install_fails_open_when_version_unknown(monkeypatch):
+    # A version-probe hiccup must NOT block a healthy system.
+    called = []
+    monkeypatch.setattr(installer, "_macos_version", lambda: ())
+    monkeypatch.setattr(installer, "_brew_path", lambda: None)
+    monkeypatch.setattr(installer, "_install_docker_dmg_darwin",
+                        lambda key: called.append(key) or {"ok": True})
+    assert installer._install_engine_macos("docker")["ok"] is True
+    assert called == ["docker"]
