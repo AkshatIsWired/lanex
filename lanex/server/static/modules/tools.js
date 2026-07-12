@@ -371,24 +371,41 @@ function paintRuntimeCard(container) {
       enginesFooterHtml(c) +
       "</div>";
   } else if (c.available) {
-    // A binary is installed but nothing is usable yet — offer convenient,
-    // logout-free fixes.
+    // A binary is installed but nothing is usable yet. The right remedy is
+    // platform-shaped: on macOS the daemon only exists while Docker Desktop
+    // (or the podman machine VM) is RUNNING — a one-click Start, not the old
+    // Linux systemctl/usermod blob. Offer convenient, logout-free fixes.
+    const mac = c.platform === "darwin";
     const canEnable = d.present && d.group_fixable;   // Linux + sg → no relogin
     let actions = "";
-    if (canEnable)
-      actions += "<button class='btn btn-primary' id='btn-enable-docker'>Enable Docker for my user (no logout)</button>";
+    if (mac) {
+      if (d.present || d.app_present)
+        actions += "<button class='btn btn-primary' id='btn-start-docker'>Start Docker Desktop</button>";
+      if (p.present)
+        actions += "<button class='btn btn-primary' id='btn-start-podman'>Start podman machine</button>";
+    } else {
+      if (canEnable)
+        actions += "<button class='btn btn-primary' id='btn-enable-docker'>Enable Docker for my user (no logout)</button>";
+      if (d.present && !d.usable)
+        actions += "<button class='btn btn-primary' id='btn-start-docker'>Start Docker daemon</button>";
+    }
     if (!p.present)
       actions += "<button class='btn btn-primary' id='btn-install-podman'>Install &amp; use Podman</button>";
     actions += "<button class='btn btn-ghost' id='btn-runtime-recheck'>Recheck</button>";
+    let hint;
+    if (mac)
+      hint = "<p class='hint'><strong>Easiest fix:</strong> click <em>Start Docker Desktop</em> — on macOS the docker daemon only runs while the Docker Desktop app is open (on its first launch, approve Docker's own prompts in its window; the very first start can take a minute or two). For podman, <em>Start podman machine</em> boots its Linux VM. LanEx waits and continues automatically.</p>";
+    else if (canEnable)
+      hint = "<p class='hint'><strong>Easiest fix:</strong> click <em>Enable Docker for my user</em> — it adds you to the <code>docker</code> group and the GUI activates it immediately (via <code>sg</code>), so <strong>no logout is needed</strong>. Or switch to rootless Podman.</p>";
+    else
+      hint = "<p class='hint'><strong>Easiest fix:</strong> click <em>Start Docker daemon</em> (runs <code>sudo systemctl enable --now docker</code> — the password prompt appears in the terminal you launched LanEx from), or install rootless <strong>Podman</strong> (works immediately). If the daemon runs but refuses permission: <code>sudo usermod -aG docker $USER</code>, then a new login or re-open the GUI.</p>";
     root.innerHTML =
       "<div class='tool-card installed-missing'>" +
       "<div class='row1'><span class='name'>Container engine installed — not usable yet</span>" +
       "<span class='dot-missing' title='not usable'></span></div>" +
       "<div class='what'>An engine is installed but not reachable yet:</div>" +
       "<pre class='code' style='white-space:pre-wrap'>" + fmt.escape(c.daemon_msg || "engine not reachable") + "</pre>" +
-      (canEnable
-        ? "<p class='hint'><strong>Easiest fix:</strong> click <em>Enable Docker for my user</em> — it adds you to the <code>docker</code> group and the GUI activates it immediately (via <code>sg</code>), so <strong>no logout is needed</strong>. Or switch to rootless Podman.</p>"
-        : "<p class='hint'><strong>Easiest fix:</strong> install rootless <strong>Podman</strong> (works immediately). For Docker: <code>sudo systemctl enable --now docker</code>, and <code>sudo usermod -aG docker $USER</code> (then a new login or re-open the GUI). On macOS: start Docker Desktop, or <code>podman machine init && podman machine start</code>.</p>") +
+      hint +
       "<div class='meta' style='display:flex;gap:var(--s-2);flex-wrap:wrap;align-items:center'>" +
       actions +
       "</div>" +
@@ -455,10 +472,31 @@ function paintRuntimeCard(container) {
   });
   document.getElementById("btn-install-docker")?.addEventListener("click", () => installEngine("docker"));
   document.getElementById("btn-install-podman")?.addEventListener("click", () => installEngine("podman"));
+  document.getElementById("btn-start-docker")?.addEventListener("click", () => startEngineAction("docker"));
+  document.getElementById("btn-start-podman")?.addEventListener("click", () => startEngineAction("podman"));
   root.querySelectorAll(".engine-install").forEach((b) =>
     b.addEventListener("click", () => installEngine(b.dataset.engine)));
   root.querySelectorAll(".engine-remove").forEach((b) =>
     b.addEventListener("click", () => removeEngine(b.dataset.engine)));
+}
+
+// Start an installed-but-unreachable engine (Docker Desktop / podman machine /
+// the Linux docker daemon). Async server-side; the outcome arrives as an SSE
+// `installer_result` with key `engine:<name>` (handled in onInstallerResult,
+// which chains the image pull once the engine is up).
+async function startEngineAction(engine) {
+  const b = document.getElementById("btn-start-" + engine);
+  if (b) { b.disabled = true; b.textContent = "starting…"; }
+  toast.show("Starting " + engine + " — progress in the Install logs.", "info");
+  try {
+    const r = await api.startEngine(engine);
+    if (r.status === "started" || r.in_progress) return;
+    if (r.ok) toast.show(engine + " is running.", "success");
+    else toast.show(r.reason || ("Could not start " + engine), "error");
+  } catch (ex) {
+    toast.show("Start failed: " + ex.message, "error");
+  }
+  renderTools();
 }
 
 async function installEngine(key) {
@@ -859,6 +897,19 @@ function handleInstallOutcome(key, result) {
 // toolchain, then re-probe so the tab reflects the new state.
 export async function onInstallerResult(ev) {
   const key = ev.key || "tool";
+  if (key.indexOf("engine:") === 0) {
+    // Outcome of a Start-engine action — not an install, so word it right.
+    const eng = ev.engine || key.slice(7);
+    if (ev.ok) {
+      toast.show(eng + (ev.already ? " was already running." : " is running."), "success");
+      await chainImagePull();   // engine up → image next, one click total
+      return;
+    }
+    toast.show(ev.reason || ev.guidance || ("Could not start " + eng), "error");
+    renderLogs.append({ payload: { message: "✗ start " + eng + ": " + (ev.reason || "failed"), level: "ERROR" } });
+    renderTools();
+    return;
+  }
   handleInstallOutcome(key, ev);
   if (ev.ok && (key === "docker" || key === "podman")) {
     await chainImagePull();

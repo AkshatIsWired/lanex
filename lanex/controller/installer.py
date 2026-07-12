@@ -32,6 +32,7 @@ Strategy layers (tried in order):
 from __future__ import annotations
 
 import os
+import platform
 import re
 import shutil
 import signal
@@ -234,7 +235,12 @@ def _escalate_argv(argv: List[str]) -> Optional[Tuple[List[str], bool]]:
        ``/dev/tty`` there. This works on WSL/Linux even when no polkit/askpass
        agent is installed (the usual case on a fresh WSL Ubuntu), so it is the
        primary path — it makes the one-click install genuinely install natively.
-    2. **Graphical PolicyKit prompt** (``sudo`` → ``pkexec``) when there is a
+    2. **macOS graphical prompt** (``sudo -A`` + the osascript askpass helper)
+       — macOS has no pkexec, but ``_install_env`` sets ``SUDO_ASKPASS`` to a
+       native password dialog, and ``sudo -A`` uses it. This is what lets a
+       root step (``installer -pkg``, ``rm`` in /usr/local) run when LanEx was
+       launched from the app window / pipx with no terminal at all.
+    3. **Graphical PolicyKit prompt** (``sudo`` → ``pkexec``) when there is a
        display and ``pkexec`` exists — for GUI-only launches with no terminal.
        Only the plain ``sudo <cmd>`` form; ``sh -c "… sudo …"`` can't be
        rewritten, so those fall through to the copy-paste command.
@@ -243,6 +249,9 @@ def _escalate_argv(argv: List[str]) -> Optional[Tuple[List[str], bool]]:
 
     if platform_env.has_controlling_tty():
         return list(argv), True
+    if (argv and argv[0] == "sudo" and sys.platform == "darwin"
+            and _darwin_askpass_path()):
+        return ["sudo", "-A", *argv[1:]], False
     if (argv and argv[0] == "sudo" and _check_cmd("pkexec")
             and platform_env.host_display_available()):
         return ["pkexec", *argv[1:]], False
@@ -1077,6 +1086,10 @@ def _run_argv(argv: List[str], *, label: str, key: str,
                 _emit("installer_info", {"key": key, "label": label, "needs_password": True, "message":
                     "Administrator rights needed. A system password dialog should appear — enter "
                     "your password to continue the install."})
+            elif argv[:2] == ["sudo", "-A"]:
+                _emit("installer_info", {"key": key, "label": label, "needs_password": True, "message":
+                    "Administrator rights needed. macOS will show a password dialog — enter "
+                    "your login password to continue the install."})
     _emit("installer_started", {"key": key, "argv": argv, "label": label})
     if inherit_tty:
         return _run_argv_on_tty(argv, label=label, key=key, env_extra=env_extra)
@@ -1613,6 +1626,15 @@ def _no_creds_docker_env() -> Dict[str, str]:
     try:
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "config.json").write_text(json.dumps(data), encoding="utf-8")
+        # DOCKER_CONFIG relocates the WHOLE config dir, including the context
+        # store. If config.json says `currentContext: desktop-linux` (Docker
+        # Desktop's default) but the new dir has no contexts/ metadata, the CLI
+        # dies "context 'desktop-linux' does not exist" — mirror the store so
+        # the retry actually talks to the same daemon. Contexts hold endpoints
+        # only, never credentials (those live in the credsStore we're dropping).
+        src_ctx = Path(os.path.expanduser("~/.docker/contexts"))
+        if src_ctx.is_dir():
+            shutil.copytree(src_ctx, cfg_dir / "contexts", dirs_exist_ok=True)
     except Exception:
         pass
     return {"DOCKER_CONFIG": str(cfg_dir)}
@@ -1624,7 +1646,9 @@ def _podman_path() -> Optional[str]:
     hit = platform_env.usable_which("podman")
     if hit:
         return hit
-    for cand in ("/opt/homebrew/bin/podman", "/usr/local/bin/podman"):
+    # /opt/podman/bin = the official .pkg installer's prefix (brew-less path).
+    for cand in ("/opt/homebrew/bin/podman", "/usr/local/bin/podman",
+                 "/opt/podman/bin/podman"):
         if os.access(cand, os.X_OK):
             return cand
     return None
@@ -1666,26 +1690,360 @@ def _setup_podman_machine(key: str = "podman") -> None:
               "in a terminal, then click ‘Pull image’."})
 
 
+def _mac_arch() -> str:
+    """Docker/podman asset architecture for this Mac: ``arm64`` or ``amd64``."""
+    return "arm64" if platform.machine() == "arm64" else "amd64"
+
+
+def _podman_pkg_url() -> str:
+    """The official podman macOS installer package for this CPU.
+
+    GitHub's ``releases/latest/download/<asset>`` redirect always points at the
+    newest release, so no API call (or token) is needed. This is the fallback
+    when Homebrew has no bottle (Tier-3 configs, e.g. Intel Macs on a macOS
+    brew stopped building for) — the pkg is prebuilt for both CPUs and installs
+    to ``/opt/podman`` regardless of brew's support tiers."""
+    return ("https://github.com/containers/podman/releases/latest/download/"
+            f"podman-installer-macos-{_mac_arch()}.pkg")
+
+
+def _docker_dmg_url() -> str:
+    """Docker Desktop's official direct-download DMG for this CPU."""
+    return f"https://desktop.docker.com/mac/main/{_mac_arch()}/Docker.dmg"
+
+
+def _docker_app_path() -> Optional[str]:
+    """Path to an installed Docker.app bundle, or None."""
+    for base in ("/Applications", os.path.expanduser("~/Applications")):
+        cand = os.path.join(base, "Docker.app")
+        if os.path.isdir(cand):
+            return cand
+    return None
+
+
+def _fresh_engine_usable(engine: str) -> bool:
+    """Engine usability probe that bypasses the tools-module TTL cache.
+
+    The 8s probe cache is right for status fan-out but wrong for a
+    wait-until-ready loop — it would return the same stale "dead" answer for
+    the whole window."""
+    from . import tools
+    tools._engine_probe_cache.pop(f"{engine}:sg=False", None)
+    return tools._engine_usable(engine)[0]
+
+
+def _wait_engine_ready(engine: str, key: str, *, timeout_s: float = 180.0,
+                       poll_s: float = 3.0) -> bool:
+    """Poll ``<engine> info`` until the daemon answers (or the ceiling hits).
+
+    Docker Desktop legitimately takes 30–120s to boot its Linux VM after
+    ``open -a Docker`` — a single immediate re-probe reads as "broken" when
+    it's really "booting". Streams a heartbeat so the wait is visible."""
+    deadline = time.time() + timeout_s
+    next_note = time.time() + 15.0
+    while time.time() < deadline:
+        if _is_cancelled(key):
+            return False
+        if _fresh_engine_usable(engine):
+            return True
+        if time.time() >= next_note:
+            left = int(deadline - time.time())
+            _emit("installer_line", {"key": key, "label": f"start {engine}",
+                  "line": f"waiting for the {engine} daemon… (up to {left}s more)"})
+            next_note = time.time() + 15.0
+        time.sleep(poll_s)
+    return _fresh_engine_usable(engine)
+
+
+def start_engine(engine: str, *, key: Optional[str] = None,
+                 wait_s: float = 180.0) -> Dict[str, Any]:
+    """Make an *installed* engine actually reachable — the missing lifecycle step.
+
+    The classic macOS trap this closes: Docker Desktop is installed but the
+    daemon only exists while the Docker Desktop app is RUNNING, so every probe
+    dies with ``cannot connect to … docker.sock`` and the old card offered only
+    Linux remedies (systemctl/usermod). Per platform:
+
+    * **macOS docker** — ``open -a Docker.app`` and wait for ``docker info``
+      (first launch additionally needs the user to approve Docker's own
+      first-run prompts, which the messages say).
+    * **macOS podman** — ``podman machine init``/``start`` (reuses
+      :func:`_setup_podman_machine`) and wait.
+    * **Linux docker** — ``sudo systemctl enable --now docker`` (or
+      ``sudo service docker start`` where there's no systemd, e.g. WSL),
+      through the normal escalation machinery. A daemon that runs but refuses
+      permission routes to the Enable-Docker-group fix instead.
+    * **podman on Linux** is daemonless — nothing to start.
+
+    Synchronous (may block for minutes); the route uses :func:`start_engine_async`.
+    """
+    from . import tools as tools_mod
+
+    key = key or f"engine:{engine}"
+    if engine not in ("docker", "podman"):
+        return {"ok": False, "reason": f"unknown engine '{engine}'"}
+    present = shutil.which(engine) or (engine == "podman" and _podman_path()) \
+        or (engine == "docker" and sys.platform == "darwin" and _docker_app_path())
+    if not present:
+        return {"ok": False, "reason": f"{engine} isn't installed — use Install first."}
+    if _fresh_engine_usable(engine):
+        return {"ok": True, "already": True, "engine": engine}
+
+    if sys.platform == "darwin":
+        if engine == "docker":
+            app = _docker_app_path()
+            if not app:
+                g = ("The docker CLI exists but Docker.app doesn't — install Docker "
+                     "Desktop (Install button, or docs.docker.com), open it once, "
+                     "then Recheck.")
+                _emit("installer_error", {"key": key, "message": g})
+                return {"ok": False, "reason": g, "guidance": g}
+            _emit("installer_info", {"key": key, "message":
+                  "Starting Docker Desktop — the docker daemon only runs while the app "
+                  "does. On its FIRST launch, approve Docker's own prompts in the app "
+                  "window; this can take a minute or two."})
+            try:
+                subprocess.Popen(["open", app], stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            except Exception as ex:
+                g = f"couldn't open Docker.app ({ex}) — open it from Applications, then Recheck."
+                _emit("installer_error", {"key": key, "message": g})
+                return {"ok": False, "reason": g, "guidance": g}
+        else:
+            _setup_podman_machine(key)
+    elif sys.platform.startswith("linux"):
+        if engine == "podman":
+            g = ("podman is daemonless — if it's installed but not usable the install "
+                 "itself is broken. Try `podman info` in a terminal for the real error, "
+                 "or reinstall from the engine card.")
+            _emit("installer_error", {"key": key, "message": g})
+            return {"ok": False, "reason": g, "guidance": g}
+        argv = (["sudo", "systemctl", "enable", "--now", "docker"]
+                if _check_cmd("systemctl") else ["sudo", "service", "docker", "start"])
+        res = _run_argv(argv, label="start docker daemon", key=key)
+        if res.get("needs_sudo"):
+            return {"ok": False, "reason": res.get("guidance") or "needs sudo",
+                    "guidance": res.get("guidance"), "needs_sudo": True}
+        wait_s = min(wait_s, 30.0)   # a native daemon start is fast or failed
+    elif sys.platform == "win32":
+        g = "Start Docker Desktop from the Start menu, then Recheck."
+        _emit("installer_error", {"key": key, "message": g})
+        return {"ok": False, "reason": g, "guidance": g}
+
+    if _wait_engine_ready(engine, key, timeout_s=wait_s):
+        # The status caches now hold the dead answer; drop them so the very next
+        # /api/tools shows the engine ready.
+        try:
+            from . import tools as _tools
+            _tools._check_tools_cache.clear()
+            _tools._engine_probe_cache.clear()
+        except Exception:
+            pass
+        _emit("installer_info", {"key": key, "message":
+              f"{engine} is running — click ‘Pull image’ (or it continues automatically)."})
+        return {"ok": True, "engine": engine}
+
+    # Still dead: say exactly why it usually is, per platform.
+    _rc_msg = ""
+    try:
+        _rc_msg = tools_mod._engine_usable(engine)[1]
+    except Exception:
+        pass
+    if sys.platform == "darwin" and engine == "docker":
+        g = ("Docker Desktop didn't become ready. Bring its window to the front and "
+             "finish the first-run prompts (service agreement / privileged helper); "
+             "wait for the whale icon to settle, then Recheck.")
+    elif sys.platform.startswith("linux") and "permission denied" in (_rc_msg or "").lower():
+        g = ("The daemon runs but refuses your user — click ‘Enable Docker for my "
+             "user’ (adds you to the docker group; no logout needed).")
+    else:
+        g = f"{engine} still isn't reachable: {_rc_msg or 'daemon not answering'}"
+    _emit("installer_error", {"key": key, "message": g})
+    return {"ok": False, "reason": g, "guidance": g}
+
+
+def start_engine_async(engine: str) -> Dict[str, Any]:
+    """Non-blocking :func:`start_engine` — the HTTP route's entry point.
+
+    Same contract as :func:`install_tool_async`: returns ``{status:"started"}``
+    immediately, streams progress over SSE, and emits the final outcome as an
+    ``installer_result`` event (key ``engine:<name>``), so the Tools tab can
+    re-probe and chain the image pull."""
+    key = f"engine:{engine}"
+    if not _begin_job(key):
+        return {"ok": True, "in_progress": True, "status": "already-running",
+                "reason": f"{engine} is already being started — watch the logs."}
+
+    def _worker() -> None:
+        try:
+            result = start_engine(engine, key=key)
+        except Exception as ex:
+            result = {"ok": False, "reason": f"{type(ex).__name__}: {ex}"}
+        finally:
+            _end_job(key)
+        payload = {"key": key, "engine": engine}
+        payload.update(result if isinstance(result, dict) else {"ok": bool(result)})
+        _emit("installer_result", payload)
+
+    t = threading.Thread(target=_worker, daemon=True, name=f"installer_engine[{engine}]")
+    t.start()
+    return {"ok": True, "status": "started", "key": key}
+
+
+def _install_podman_pkg_darwin(key: str = "podman") -> Dict[str, Any]:
+    """Install podman from the official macOS ``.pkg`` (no Homebrew involved).
+
+    The fallback when brew has **no bottle** (Tier-3: an OS/CPU combo brew
+    stopped building for — brew's only other offer is a source build needing
+    the whole Go toolchain) or when brew isn't installed at all. The pkg is
+    prebuilt for arm64 AND amd64 and lands in ``/opt/podman``."""
+    from . import platform_env
+
+    url = _podman_pkg_url()
+    dest = platform_env.home() / "tools"
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        dest = Path(tempfile.gettempdir())
+    pkg = dest / f"podman-installer-macos-{_mac_arch()}.pkg"
+    _emit("installer_info", {"key": key, "message":
+          "installing podman from its official installer package "
+          "(prebuilt for this Mac — no Homebrew needed)…"})
+    res = _run_argv(["curl", "-fL", "--retry", "3", "-o", str(pkg), url],
+                    label="download podman installer", key=key, timeout_s=1800)
+    if _is_cancelled(key):
+        return _cancelled_result(key)
+    if not res.get("ok") or not pkg.is_file():
+        g = ("Couldn't download the podman installer package. Check your network, "
+             "or download it yourself from https://podman.io/docs/installation "
+             "and run it, then click ‘Pull image’.")
+        _emit("installer_error", {"key": key, "message": g})
+        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
+    # `installer -pkg` needs root; _run_argv escalates (terminal prompt, or the
+    # macOS askpass dialog when there's no terminal).
+    res = _run_argv(["sudo", "installer", "-pkg", str(pkg), "-target", "/"],
+                    label="installer -pkg podman", key=key)
+    if _is_cancelled(key):
+        return _cancelled_result(key)
+    try:
+        pkg.unlink()
+    except Exception:
+        pass
+    platform_env.ensure_darwin_path()   # /opt/podman/bin is a fixed prefix it adds
+    if res.get("needs_sudo"):
+        return {"ok": False, "needs_sudo": True,
+                "reason": res.get("guidance") or "podman pkg install needs an admin password",
+                "guidance": res.get("guidance")}
+    if not (_verify_install("podman") or os.access("/opt/podman/bin/podman", os.X_OK)):
+        g = ("The podman package didn't install (see the Install logs). Manual "
+             "path: https://podman.io/docs/installation → macOS pkg, then "
+             "`podman machine init && podman machine start`.")
+        _emit("installer_error", {"key": key, "message": g})
+        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
+    _setup_podman_machine(key)
+    return {"ok": True, "method": "pkg", "label": "official podman .pkg installer"}
+
+
+def _install_docker_dmg_darwin(key: str = "docker") -> Dict[str, Any]:
+    """Install Docker Desktop from the official DMG (no Homebrew involved).
+
+    Fallback when brew is absent or the cask install failed. Uses Docker's own
+    documented automated path: mount the DMG and run the bundled
+    ``install --accept-license --user=<login>`` CLI (root via the normal
+    escalation — terminal prompt or the macOS askpass dialog). The
+    ``--user`` pre-provisioning also skips Docker's first-run admin prompt."""
+    import getpass
+    from . import platform_env
+
+    dest = platform_env.home() / "tools"
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        dest = Path(tempfile.gettempdir())
+    dmg = dest / "Docker.dmg"
+    _emit("installer_info", {"key": key, "message":
+          "downloading Docker Desktop from docker.com (large — roughly 1.5 GB)…"})
+    res = _run_argv(["curl", "-fL", "--retry", "3", "-o", str(dmg), _docker_dmg_url()],
+                    label="download Docker.dmg", key=key, timeout_s=2 * 3600)
+    if _is_cancelled(key):
+        return _cancelled_result(key)
+    if not res.get("ok") or not dmg.is_file():
+        g = ("Couldn't download Docker Desktop. Check your network, or download it "
+             "from https://docs.docker.com/desktop/setup/install/mac-install/, open "
+             "Docker.app once, then click ‘Pull image’.")
+        _emit("installer_error", {"key": key, "message": g})
+        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
+    mnt = "/Volumes/lanex-docker-install"
+    res = _run_argv(["hdiutil", "attach", str(dmg), "-nobrowse", "-readonly",
+                     "-mountpoint", mnt], label="mount Docker.dmg", key=key)
+    if not res.get("ok"):
+        g = ("Couldn't mount the downloaded Docker.dmg — open it manually from "
+             f"{dmg} (drag Docker to Applications), open Docker.app once, then "
+             "click ‘Pull image’.")
+        _emit("installer_error", {"key": key, "message": g})
+        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
+    try:
+        user = ""
+        try:
+            user = getpass.getuser()
+        except Exception:
+            user = os.environ.get("USER", "")
+        argv = ["sudo", f"{mnt}/Docker.app/Contents/MacOS/install", "--accept-license"]
+        if user:
+            argv.append(f"--user={user}")
+        res = _run_argv(argv, label="Docker Desktop install", key=key)
+    finally:
+        # Unmount + delete the DMG whatever happened (the copy in /Applications
+        # is what matters); best-effort — a busy volume shouldn't fail the install.
+        try:
+            subprocess.run(["hdiutil", "detach", mnt, "-force"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=60)
+        except Exception:
+            pass
+        try:
+            dmg.unlink()
+        except Exception:
+            pass
+    if _is_cancelled(key):
+        return _cancelled_result(key)
+    if res.get("needs_sudo"):
+        return {"ok": False, "needs_sudo": True,
+                "reason": res.get("guidance") or "Docker Desktop install needs an admin password",
+                "guidance": res.get("guidance")}
+    if not _docker_app_path():
+        g = ("Docker Desktop didn't install (see the Install logs). Manual path: "
+             "https://docs.docker.com/desktop/setup/install/mac-install/, open "
+             "Docker.app once, then click ‘Pull image’.")
+        _emit("installer_error", {"key": key, "message": g})
+        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
+    platform_env.ensure_darwin_path()   # the bundle's Resources/bin carries the CLI
+    start_engine("docker", key=key, wait_s=240.0)
+    return {"ok": True, "method": "dmg", "label": "Docker Desktop DMG install"}
+
+
 def _install_engine_macos(key: str) -> Dict[str, Any]:
     """Docker Desktop / podman install on macOS, with the real-world failure
     modes handled instead of surfaced raw:
 
     * cask renamed ``docker`` → ``docker-desktop`` (use the current name);
     * leftover CLI symlinks from a previous Docker install → retry ``--force``;
-    * Docker Desktop needs its app opened once (privileged helper + daemon) —
-      open it and say so, or 'installed' still can't pull;
-    * podman "no bottle available" (Tier-3 brew config) → honest routing to
-      Docker Desktop rather than a doomed source build;
-    * podman on macOS needs ``machine init``/``start`` before it works at all.
+    * no Homebrew at all, or the cask fails → the official DMG / pkg installers
+      (no dead end that just links to a website);
+    * podman "no bottle available" (Tier-3 brew config) → the official podman
+      ``.pkg`` rather than a doomed source build;
+    * an installed engine still isn't a REACHABLE engine — chain
+      :func:`start_engine` so 'installed' means 'usable', not 'a binary exists'.
     """
     brew = _brew_path()
     if not brew:
-        g = ("Homebrew isn't installed, and it's how LanEx installs engines on "
-             "macOS. Install it from https://brew.sh, or install Docker Desktop "
-             "directly: https://docs.docker.com/desktop/setup/install/mac-install/. "
-             "Then click ‘Pull image’.")
-        _emit("installer_error", {"key": key, "message": g})
-        return {"ok": False, "reason": g, "guidance": g}
+        # No Homebrew is not a dead end — both engines have official installers.
+        _emit("installer_info", {"key": key, "message":
+              "Homebrew isn't installed — using the official "
+              + ("Docker Desktop DMG" if key == "docker" else "podman package")
+              + " instead."})
+        return (_install_docker_dmg_darwin(key) if key == "docker"
+                else _install_podman_pkg_darwin(key))
 
     if key == "docker":
         # The cask links Docker's CLI tools into /usr/local, which needs root.
@@ -1711,22 +2069,20 @@ def _install_engine_macos(key: str) -> Dict[str, Any]:
                 return _cancelled_result(key)
         if res.get("rc") == 0 or _verify_install("docker"):
             # The daemon only exists once Docker.app has run (first launch
-            # installs its privileged helper). Open it so 'installed' means
-            # 'usable', not 'a binary exists'.
-            try:
-                subprocess.Popen(["open", "-a", "Docker"],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+            # installs its privileged helper). Start it and WAIT so 'installed'
+            # means 'usable', not 'a binary exists' — the wait is what lets the
+            # UI chain straight into the image pull.
             _emit("installer_info", {"key": key, "message":
-                  "Docker Desktop installed. Opening it now — approve its first-run "
-                  "prompts, wait for ‘Docker Desktop is running’, then click ‘Pull image’."})
+                  "Docker Desktop installed. Starting it — approve its first-run "
+                  "prompts in the Docker window if they appear…"})
+            start_engine("docker", key=key, wait_s=240.0)
             return {"ok": True, "method": "brew", "label": "brew install --cask docker-desktop"}
-        g = ("Docker Desktop didn't install (see the Install logs). Manual path: "
-             "download it from https://docs.docker.com/desktop/setup/install/mac-install/, "
-             "open Docker.app once, then click ‘Pull image’.")
-        _emit("installer_error", {"key": key, "message": g})
-        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
+        # brew couldn't do it — fall back to Docker's own DMG installer rather
+        # than dead-ending on a docs link.
+        _emit("installer_info", {"key": key, "message":
+              "the Homebrew cask didn't install Docker Desktop — falling back to "
+              "the official DMG installer…"})
+        return _install_docker_dmg_darwin(key)
 
     # podman
     res = _run_argv([brew, "install", "podman"], label="brew install podman", key=key)
@@ -1735,18 +2091,17 @@ def _install_engine_macos(key: str) -> Dict[str, Any]:
     out = "\n".join(res.get("output") or [])
     if res.get("rc") != 0 and not _verify_install("podman"):
         if _brew_no_bottle(out):
-            g = ("Homebrew has no prebuilt podman for this Mac (a 'Tier 3' setup — "
-                 "usually an older macOS, or an OS/CPU combo brew stopped building "
-                 "for). Building it from source needs the whole Go toolchain and "
-                 "often fails. Recommended: install Docker Desktop instead (click "
-                 "Install on the Docker card, or "
-                 "https://docs.docker.com/desktop/setup/install/mac-install/). "
-                 "If you really want podman: `brew install --build-from-source podman`.")
+            # Tier-3 brew config (an OS/CPU combo brew stopped building for) —
+            # brew's only offer is a source build needing the whole Go
+            # toolchain. The official pkg is prebuilt for every Mac instead.
+            _emit("installer_info", {"key": key, "message":
+                  "Homebrew has no prebuilt podman for this Mac (Tier-3 config) — "
+                  "falling back to the official podman installer package…"})
         else:
-            g = ("podman didn't install (see the Install logs). Recommended on "
-                 "macOS: Docker Desktop — click Install on the Docker card.")
-        _emit("installer_error", {"key": key, "message": g})
-        return {"ok": False, "reason": g, "guidance": g, "rc": res.get("rc")}
+            _emit("installer_info", {"key": key, "message":
+                  "brew couldn't install podman — falling back to the official "
+                  "podman installer package…"})
+        return _install_podman_pkg_darwin(key)
     _setup_podman_machine(key)
     return {"ok": True, "method": "brew", "label": "brew install podman"}
 
@@ -2031,23 +2386,35 @@ def pull_image() -> Dict[str, Any]:
         }
     image = image_ref()
 
-    # Pick a usable engine (Docker, Podman, or Docker-via-group-activation). Fail
-    # fast with actionable guidance if none is usable yet — otherwise the pull
-    # errors cryptically (or looks like a hang).
+    # Pick a usable engine (Docker, Podman, or Docker-via-group-activation).
+    # An engine that's INSTALLED but not REACHABLE is a lifecycle problem, not a
+    # missing-install problem — on macOS the worker below starts it itself
+    # (Docker Desktop app / podman machine, both passwordless), so 'Pull image'
+    # is one click even right after a manual Docker.app install. Elsewhere a
+    # start needs sudo, so fail fast with the platform's actual remedy.
     resolved = tools.resolve_engine()
+    engine_to_start: Optional[str] = None
     if not resolved.get("ready"):
-        return {
-            "ok": False,
-            "reason": "No usable container engine yet (installed but not reachable).",
-            "guidance": (
-                "Use the runtime card's one-click fixes: install Podman (rootless, "
-                "works immediately) or enable Docker for your user. Then click ‘Pull image’."
-            ),
-        }
-    engine = resolved["engine"]
-    pull_cmd = [engine, "pull", image]
-    if resolved.get("sg_wrap"):
-        pull_cmd = tools.sg_wrap_argv([engine, "pull", image])
+        if sys.platform == "darwin":
+            if shutil.which("docker") or _docker_app_path():
+                engine_to_start = "docker"
+            elif _podman_path():
+                engine_to_start = "podman"
+        if engine_to_start is None:
+            if sys.platform == "darwin":
+                guidance = ("Start the engine first: open Docker Desktop (the daemon only "
+                            "runs while the app does), or `podman machine start`. "
+                            "Then click ‘Pull image’.")
+            else:
+                guidance = ("Use the runtime card's one-click fixes: Start the Docker "
+                            "daemon, enable Docker for your user, or install Podman "
+                            "(rootless, works immediately). Then click ‘Pull image’.")
+            return {
+                "ok": False,
+                "reason": "No usable container engine yet (installed but not reachable).",
+                "guidance": guidance,
+            }
+    engine = resolved.get("engine") or engine_to_start
 
     key = "container:image"
     if not _begin_job(key):
@@ -2071,9 +2438,29 @@ def pull_image() -> Dict[str, Any]:
 
     def _worker():
         try:
+            local = resolved
+            if engine_to_start is not None:
+                _emit("installer_info", {"key": key, "message":
+                      f"{engine_to_start} is installed but not running — starting it "
+                      "before the pull…"})
+                start_engine(engine_to_start, key=key, wait_s=180.0)
+                if _is_cancelled(key):
+                    _cancelled_result(key)
+                    return
+                local = tools.resolve_engine()
+                if not local.get("ready"):
+                    # start_engine already emitted the exact per-platform remedy.
+                    _emit("installer_error", {"key": key, "message":
+                          "The engine still isn't reachable, so the pull can't start — "
+                          "fix the engine (see above), then click ‘Pull image’ again."})
+                    return
+            eng = local["engine"]
+            pull_cmd = [eng, "pull", image]
+            if local.get("sg_wrap"):
+                pull_cmd = tools.sg_wrap_argv([eng, "pull", image])
             # 4h ceiling instead of the default 1h: a multi-GB pull on a slow
             # connection is healthy long past the generic install watchdog.
-            res = _run_argv(pull_cmd, label=f"{engine} pull", key=key, timeout_s=4 * 3600)
+            res = _run_argv(pull_cmd, label=f"{eng} pull", key=key, timeout_s=4 * 3600)
             if (not res.get("ok")) and _docker_cred_helper_error("\n".join(res.get("output") or [])):
                 # Docker Desktop's credsStore helper isn't on PATH. The LibreLane
                 # image is public, so retry with an isolated config that has no
@@ -2081,10 +2468,10 @@ def pull_image() -> Dict[str, Any]:
                 _emit("installer_info", {"key": key, "message":
                       "Docker's credential helper isn't on PATH — retrying the pull without it "
                       "(the LibreLane image is public, so no login is required)…"})
-                res = _run_argv(pull_cmd, label=f"{engine} pull (no credential helper)",
+                res = _run_argv(pull_cmd, label=f"{eng} pull (no credential helper)",
                                 key=key, timeout_s=4 * 3600, env_extra=_no_creds_docker_env())
             if res.get("ok"):
-                record_image_digest(engine, image, sg_wrap=bool(resolved.get("sg_wrap")))
+                record_image_digest(eng, image, sg_wrap=bool(local.get("sg_wrap")))
             else:
                 from . import platform_env
                 rem = platform_env.network_remediation("\n".join(res.get("output") or []))
@@ -2240,10 +2627,108 @@ def _uninstall_gds3d() -> Dict[str, Any]:
             "reason": "GDS3D binary not found in ~/.local/bin or /usr/local/bin (already removed?)"}
 
 
+def _uninstall_engine_macos(key: str) -> Dict[str, Any]:
+    """Remove docker / podman on macOS — the paths the generic map can't.
+
+    The generic :func:`uninstall_tool` only knew ``apt remove docker.io`` — on
+    macOS "Remove docker" always died with "No uninstall method succeeded".
+    Engines land three different ways here (brew cask, brew formula, official
+    DMG/pkg), so try each in order, quitting/tearing down first:
+
+    * **docker** — quit Docker.app (an open app holds files the uninstall
+      needs), then ``brew uninstall --cask docker-desktop`` when brew manages
+      it, else Docker's own bundled uninstall CLI inside Docker.app.
+    * **podman** — ``podman machine rm -f`` first (reclaims the multi-GB VM
+      disk that a bare binary removal would orphan), then brew, then the
+      ``.pkg`` layout (``rm -rf /opt/podman`` + ``pkgutil --forget``, root via
+      the normal escalation).
+    """
+    tried: List[str] = []
+    brew = _brew_path()
+
+    if key == "docker":
+        # Quit the app first — best-effort, and give it a moment to exit.
+        try:
+            subprocess.run(["osascript", "-e", 'quit app "Docker"'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=20)
+            time.sleep(3)
+        except Exception:
+            pass
+        if brew:
+            probe = subprocess.run([brew, "list", "--cask", "docker-desktop"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if probe.returncode == 0:
+                res = _run_argv([brew, "uninstall", "--cask", "docker-desktop"],
+                                label="brew uninstall --cask docker-desktop", key=key)
+                if not res.get("ok"):
+                    # --force removes the cask even when some artifacts are
+                    # already gone / still held (the mirror of the install retry).
+                    res = _run_argv([brew, "uninstall", "--cask", "docker-desktop",
+                                     "--force"],
+                                    label="brew uninstall --cask docker-desktop --force",
+                                    key=key)
+                if res.get("ok") or not _docker_app_path():
+                    return {"ok": True, "method": "brew uninstall --cask", "key": key}
+                tried.append(f"brew uninstall --cask: exit {res.get('rc', '?')}")
+        app = _docker_app_path()
+        if app:
+            # Docker Desktop ships its own uninstaller inside the bundle (it
+            # removes the app, the privileged helper and the symlinks).
+            unins = os.path.join(app, "Contents", "MacOS", "uninstall")
+            if os.access(unins, os.X_OK):
+                res = _run_argv([unins], label="Docker Desktop uninstall", key=key)
+                if res.get("ok") or not _docker_app_path():
+                    return {"ok": True, "method": "Docker.app bundled uninstaller", "key": key}
+                tried.append(f"bundled uninstaller: exit {res.get('rc', '?')}")
+            else:
+                tried.append("bundled uninstaller: not present")
+        else:
+            if not tried:
+                tried.append("Docker.app not found")
+        return {"ok": False, "tried": tried, "reason":
+                "Couldn't remove Docker Desktop automatically. Manual path: open "
+                "Docker Desktop → Troubleshoot (bug icon) → Uninstall, or drag "
+                "/Applications/Docker.app to the Trash."}
+
+    # podman
+    podman = _podman_path()
+    if podman:
+        # Tear down the VM first — after the binary is gone nothing can.
+        _run_argv([podman, "machine", "rm", "-f"], label="podman machine rm", key=key)
+    if brew:
+        probe = subprocess.run([brew, "list", "podman"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if probe.returncode == 0:
+            res = _run_argv([brew, "uninstall", "podman"],
+                            label="brew uninstall podman", key=key)
+            if res.get("ok"):
+                return {"ok": True, "method": "brew uninstall", "key": key}
+            tried.append(f"brew uninstall: exit {res.get('rc', '?')}")
+    if os.path.isdir("/opt/podman"):
+        # The official .pkg layout. `pkgutil --forget` only clears the receipt —
+        # best-effort; the rm is what actually removes it.
+        res = _run_argv(["sudo", "rm", "-rf", "/opt/podman"],
+                        label="rm -rf /opt/podman", key=key)
+        _run_argv(["sudo", "pkgutil", "--forget", "com.redhat.podman"],
+                  label="pkgutil --forget", key=key)
+        if not os.path.isdir("/opt/podman"):
+            return {"ok": True, "method": "pkg removal (/opt/podman)", "key": key}
+        tried.append(f"rm -rf /opt/podman: exit {res.get('rc', '?')}")
+    if not _podman_path():
+        return {"ok": True, "method": "noop", "key": key,
+                "note": "podman is no longer present"}
+    return {"ok": False, "tried": tried, "reason":
+            "Couldn't remove podman automatically — see the Install logs for "
+            "what was tried."}
+
+
 def uninstall_tool(key: str) -> Dict[str, Any]:
     """Try to uninstall a tool via pip or system package manager."""
     if key == "gds3d":
         return _uninstall_gds3d()
+    if key in ("docker", "podman") and sys.platform == "darwin":
+        return _uninstall_engine_macos(key)
 
     env = detect_environment()
     tried: List[str] = []

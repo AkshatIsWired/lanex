@@ -162,5 +162,27 @@ check("layouttools: 'no display' buttons stay clickable (remedy on click)", () =
     "the nodisplay branch disables the button again — remedy becomes unreachable");
 });
 
+check("tools: engine-not-usable card is platform-aware with a Start action", () => {
+  // Round-63 macOS bug: an installed-but-dead Docker showed ONLY the Linux
+  // systemctl/usermod remedy — on macOS the daemon exists solely while Docker
+  // Desktop runs, so the card must branch on the server-reported platform and
+  // offer one-click Start buttons wired to /api/container/start-engine.
+  const src = readFileSync(resolve(MOD, "tools.js"), "utf8");
+  const card = src.indexOf("Container engine installed — not usable yet");
+  assert.ok(card >= 0, "not-usable card not found");
+  assert.match(src, /c\.platform === "darwin"/,
+    "the card no longer branches on the server-reported platform");
+  for (const id of ["btn-start-docker", "btn-start-podman"]) {
+    assert.ok(src.includes(id), `Start button ${id} missing`);
+  }
+  assert.match(src, /startEngineAction\("docker"\)/);
+  const api = readFileSync(resolve(MOD, "api.js"), "utf8");
+  assert.match(api, /\/api\/container\/start-engine/,
+    "api.startEngine endpoint missing");
+  // The SSE outcome path must treat engine:<name> keys as a start (chain the
+  // pull), never as a tool install.
+  assert.match(src, /engine:/, "installer_result engine: key handling missing");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));

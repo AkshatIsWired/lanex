@@ -714,8 +714,22 @@ def container_engine() -> Dict[str, Any]:
     except Exception:
         pulling = False
 
+    # The right "engine not usable" remedy is platform-shaped (macOS: start
+    # Docker Desktop / podman machine; Linux: systemctl + docker group; WSL:
+    # service start) — tell the card which world it's painting for.
+    from . import platform_env
+    plat = "wsl" if platform_env.is_wsl() else sys.platform
+
+    docker_app = False
+    if sys.platform == "darwin":
+        docker_app = any(
+            os.path.isdir(os.path.join(base, "Docker.app"))
+            for base in ("/Applications", os.path.expanduser("~/Applications"))
+        )
+
     return {
         "available": bool(docker_path or podman_path),
+        "platform": plat,
         "engine": engine,
         "ready": ready,
         "sg_wrap": sg_wrap,
@@ -731,6 +745,7 @@ def container_engine() -> Dict[str, Any]:
         "pulling": pulling,
         "docker": {
             "present": bool(docker_path),
+            "app_present": docker_app,
             "usable": docker_usable,
             "msg": docker_msg,
             "group_in_db": in_db,

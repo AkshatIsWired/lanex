@@ -265,6 +265,9 @@ def ensure_darwin_path() -> None:
         return
     extras = ["/opt/homebrew/bin", "/usr/local/bin",
               os.path.expanduser("~/.local/bin"),
+              # The official podman .pkg installer (LanEx's brew-less fallback)
+              # lands here and adds no PATH entry of its own.
+              "/opt/podman/bin",
               # Docker Desktop keeps `docker` AND its credential helpers
               # (docker-credential-desktop/-osxkeychain) inside the .app bundle;
               # the privileged /usr/local/bin symlinks only appear after Docker's

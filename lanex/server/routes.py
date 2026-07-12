@@ -783,11 +783,22 @@ def h_preflight(handler: Any) -> None:
             )
         elif not engine.get("daemon_ok"):
             eng = engine.get("engine") or "engine"
-            blockers.append(
-                f"{eng} is installed but not usable yet: {engine.get('daemon_msg') or 'daemon not reachable'}. "
-                f"Start the service and ensure your user can run it (e.g. `sudo systemctl enable --now docker` "
-                f"then `sudo usermod -aG docker $USER` and re-login)."
-            )
+            msg = engine.get("daemon_msg") or "daemon not reachable"
+            if engine.get("platform") == "darwin":
+                # macOS has no systemctl/usermod — the daemon only runs while
+                # Docker Desktop (or the podman machine VM) is running.
+                blockers.append(
+                    f"{eng} is installed but not usable yet: {msg}. "
+                    "Use Tools → Start Docker Desktop (or Start podman machine) — "
+                    "the daemon only runs while the app/VM is running."
+                )
+            else:
+                blockers.append(
+                    f"{eng} is installed but not usable yet: {msg}. "
+                    "Use Tools → Start Docker daemon / Enable Docker for my user "
+                    "(or `sudo systemctl enable --now docker` and "
+                    "`sudo usermod -aG docker $USER`, then re-login)."
+                )
         tools_block = {
             "ok": bool(engine.get("ready")),
             "mode": "container",
@@ -1426,6 +1437,22 @@ def h_container_enable_docker(handler: Any) -> None:
         _respond(handler, installer.enable_docker_group())
     except Exception as ex:
         _log.exception("enable_docker_group failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_container_start_engine(handler: Any) -> None:
+    """Start an installed-but-unreachable engine (Docker Desktop / podman
+    machine / the Linux docker daemon). Async — progress streams over SSE and
+    the outcome arrives as an ``installer_result`` event (key ``engine:<name>``)."""
+    body = getattr(handler, "_body", {})
+    engine = (body.get("engine") or "").strip().lower()
+    if engine not in ("docker", "podman"):
+        _respond(handler, "engine must be 'docker' or 'podman'", 400)
+        return
+    try:
+        _respond(handler, installer.start_engine_async(engine))
+    except Exception as ex:
+        _log.exception("start_engine failed")
         _respond(handler, str(ex), 500)
 
 
@@ -3078,6 +3105,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/tools/install-ciel", h_tools_install_ciel),
     ("/api/container/pull", h_container_pull),
     ("/api/container/enable-docker-group", h_container_enable_docker),
+    ("/api/container/start-engine", h_container_start_engine),
     ("/api/tools/cancel", h_tools_cancel),
     ("/api/settings/pdk-root", h_settings_pdk_root),
     ("/api/tools/install/", h_tools_install),

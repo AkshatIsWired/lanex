@@ -109,44 +109,67 @@ def test_docker_install_retries_with_force_on_leftover_conflict(monkeypatch):
              "'/usr/local/bin/docker-credential-desktop'."]},
         {"ok": True, "rc": 0, "output": ["installed"]},
     ])
-    popens = []
+    started = []
     monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
     monkeypatch.setattr(installer, "_run_argv", rec)
     monkeypatch.setattr(installer, "_is_cancelled", lambda key: False)
-    monkeypatch.setattr(installer.subprocess, "Popen",
-                        lambda argv, **kw: popens.append(list(argv)))
+    monkeypatch.setattr(installer, "start_engine",
+                        lambda engine, **kw: started.append(engine) or {"ok": True})
     res = installer._install_engine_macos("docker")
     assert res["ok"] is True
     assert rec.calls[0][-1] == "docker-desktop"
     assert rec.calls[1][-1] == "--force"
-    # Docker Desktop must be opened once or "installed" still can't pull.
-    assert ["open", "-a", "Docker"] in popens
+    # Docker Desktop must be STARTED (and waited for) or "installed" still can't pull.
+    assert started == ["docker"]
 
 
-def test_docker_install_does_not_force_on_unrelated_failure(monkeypatch):
+def test_docker_install_falls_back_to_dmg_on_unrelated_failure(monkeypatch):
+    # brew failed for a non-conflict reason: no blind --force retry, but no dead
+    # end either — the official DMG installer is the fallback.
     rec = _ArgvRecorder([{"ok": False, "rc": 1, "output": ["Error: download failed"]}])
+    fell_back = []
     monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
     monkeypatch.setattr(installer, "_run_argv", rec)
     monkeypatch.setattr(installer, "_is_cancelled", lambda key: False)
     monkeypatch.setattr(installer, "_verify_install", lambda key: False)
+    monkeypatch.setattr(installer, "_install_docker_dmg_darwin",
+                        lambda key: fell_back.append(key) or {"ok": True, "method": "dmg"})
     res = installer._install_engine_macos("docker")
-    assert res["ok"] is False
+    assert res["ok"] is True and res["method"] == "dmg"
     assert len(rec.calls) == 1  # no blind --force retry
-    assert "docs.docker.com" in res["guidance"]
+    assert fell_back == ["docker"]
 
 
-def test_podman_no_bottle_routes_to_docker_desktop(monkeypatch):
+def test_podman_no_bottle_falls_back_to_official_pkg(monkeypatch):
+    # Tier-3 brew (e.g. Intel Mac on a macOS brew stopped prebuilding for) used
+    # to dead-end on "install Docker Desktop instead" — now the official pkg
+    # installer (prebuilt for both CPUs) takes over.
     rec = _ArgvRecorder([{"ok": False, "rc": 1,
                           "output": ["Error: podman: no bottle available!",
                                      "This is a Tier 3 configuration"]}])
+    fell_back = []
     monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
     monkeypatch.setattr(installer, "_run_argv", rec)
     monkeypatch.setattr(installer, "_is_cancelled", lambda key: False)
     monkeypatch.setattr(installer, "_verify_install", lambda key: False)
+    monkeypatch.setattr(installer, "_install_podman_pkg_darwin",
+                        lambda key: fell_back.append(key) or {"ok": True, "method": "pkg"})
     res = installer._install_engine_macos("podman")
-    assert res["ok"] is False
-    assert "Docker Desktop" in res["guidance"]
-    assert "--build-from-source" in res["guidance"]
+    assert res["ok"] is True and res["method"] == "pkg"
+    assert fell_back == ["podman"]
+
+
+def test_engine_install_without_brew_uses_official_installers(monkeypatch):
+    # No Homebrew is NOT a dead end anymore: docker → DMG, podman → pkg.
+    calls = []
+    monkeypatch.setattr(installer, "_brew_path", lambda: None)
+    monkeypatch.setattr(installer, "_install_docker_dmg_darwin",
+                        lambda key: calls.append(("dmg", key)) or {"ok": True})
+    monkeypatch.setattr(installer, "_install_podman_pkg_darwin",
+                        lambda key: calls.append(("pkg", key)) or {"ok": True})
+    assert installer._install_engine_macos("docker")["ok"] is True
+    assert installer._install_engine_macos("podman")["ok"] is True
+    assert calls == [("dmg", "docker"), ("pkg", "podman")]
 
 
 def test_podman_success_sets_up_machine(monkeypatch):
@@ -353,7 +376,7 @@ def test_docker_install_announces_password_dialog(monkeypatch):
     monkeypatch.setattr(installer, "_run_argv",
                         lambda *a, **k: {"ok": True, "rc": 0, "output": []})
     monkeypatch.setattr(installer, "_is_cancelled", lambda key: False)
-    monkeypatch.setattr(installer.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setattr(installer, "start_engine", lambda engine, **kw: {"ok": True})
     installer._install_engine_macos("docker")
     msgs = [p.get("message", "") for _, p in events]
     assert any("password dialog" in m for m in msgs)
@@ -428,3 +451,269 @@ def test_pull_retries_without_credential_helper(monkeypatch):
     assert len(calls) == 2               # first pull failed, retried
     assert calls[0]["env_extra"] is None
     assert calls[1]["env_extra"] == {"DOCKER_CONFIG": "/tmp/nocreds"}
+
+
+# ============================ round 63: engine lifecycle =====================
+# The user's live failures: (1) docker INSTALLED but the daemon dead
+# (`cannot connect to unix:///Users/…/.docker/run/docker.sock`) with only
+# Linux remedies offered; (2) "Remove docker" → "No uninstall method
+# succeeded"; (3) podman "no bottle available" was a dead end; (4) the
+# credential-less pull retry could lose the CLI context store.
+
+
+# ------------------------------------------------ arch-specific asset URLs --
+
+def test_official_installer_urls_track_cpu(monkeypatch):
+    monkeypatch.setattr(installer.platform, "machine", lambda: "arm64")
+    assert installer._mac_arch() == "arm64"
+    assert installer._podman_pkg_url().endswith("podman-installer-macos-arm64.pkg")
+    assert installer._docker_dmg_url() == "https://desktop.docker.com/mac/main/arm64/Docker.dmg"
+    monkeypatch.setattr(installer.platform, "machine", lambda: "x86_64")
+    assert installer._mac_arch() == "amd64"
+    assert installer._podman_pkg_url().endswith("podman-installer-macos-amd64.pkg")
+    assert installer._docker_dmg_url() == "https://desktop.docker.com/mac/main/amd64/Docker.dmg"
+
+
+# ------------------------------------------- sudo -A escalation on macOS ----
+
+def test_escalate_argv_uses_askpass_dialog_on_macos(monkeypatch, tmp_path):
+    # App-window launch: no terminal, no pkexec on macOS — but the askpass
+    # helper exists, so a root step becomes `sudo -A …` (native dialog).
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(platform_env, "has_controlling_tty", lambda: False)
+    monkeypatch.setattr(platform_env, "home", lambda: tmp_path)
+    res = installer._escalate_argv(["sudo", "installer", "-pkg", "/x.pkg", "-target", "/"])
+    assert res is not None
+    argv, inherit_tty = res
+    assert argv[:2] == ["sudo", "-A"]
+    assert argv[2:] == ["installer", "-pkg", "/x.pkg", "-target", "/"]
+    assert inherit_tty is False
+
+
+# --------------------------------------------- start_engine (the real fix) --
+
+def test_start_engine_darwin_opens_docker_app_and_waits(monkeypatch):
+    popens = []
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer, "_docker_app_path", lambda: "/Applications/Docker.app")
+    monkeypatch.setattr(installer.shutil, "which",
+                        lambda n: "/x/docker" if n == "docker" else None)
+    # dead at first probe, alive once the app was opened
+    seq = iter([False, True])
+    monkeypatch.setattr(installer, "_fresh_engine_usable",
+                        lambda engine: next(seq, True))
+    monkeypatch.setattr(installer, "_wait_engine_ready",
+                        lambda engine, key, **kw: True)
+    monkeypatch.setattr(installer.subprocess, "Popen",
+                        lambda argv, **kw: popens.append(list(argv)))
+    res = installer.start_engine("docker")
+    assert res["ok"] is True
+    assert popens == [["open", "/Applications/Docker.app"]]
+
+
+def test_start_engine_darwin_podman_boots_machine(monkeypatch):
+    machine = []
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer.shutil, "which",
+                        lambda n: "/x/podman" if n == "podman" else None)
+    monkeypatch.setattr(installer, "_fresh_engine_usable", lambda engine: False)
+    monkeypatch.setattr(installer, "_setup_podman_machine",
+                        lambda key: machine.append(key))
+    monkeypatch.setattr(installer, "_wait_engine_ready",
+                        lambda engine, key, **kw: True)
+    res = installer.start_engine("podman")
+    assert res["ok"] is True and machine
+
+
+def test_start_engine_noop_when_already_usable(monkeypatch):
+    monkeypatch.setattr(installer.shutil, "which", lambda n: "/x/docker")
+    monkeypatch.setattr(installer, "_fresh_engine_usable", lambda engine: True)
+    res = installer.start_engine("docker")
+    assert res["ok"] is True and res.get("already") is True
+
+
+def test_start_engine_rejects_unknown_and_missing(monkeypatch):
+    assert installer.start_engine("qemu")["ok"] is False
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer.shutil, "which", lambda n: None)
+    monkeypatch.setattr(installer, "_podman_path", lambda: None)
+    monkeypatch.setattr(installer, "_docker_app_path", lambda: None)
+    res = installer.start_engine("docker")
+    assert res["ok"] is False and "Install" in res["reason"]
+
+
+def test_start_engine_linux_uses_systemctl(monkeypatch):
+    calls = []
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(installer.shutil, "which", lambda n: "/x/docker")
+    monkeypatch.setattr(installer, "_fresh_engine_usable", lambda engine: False)
+    monkeypatch.setattr(installer, "_check_cmd", lambda name: name == "systemctl")
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda argv, **kw: calls.append(list(argv)) or {"ok": True, "rc": 0})
+    monkeypatch.setattr(installer, "_wait_engine_ready",
+                        lambda engine, key, **kw: True)
+    res = installer.start_engine("docker")
+    assert res["ok"] is True
+    assert calls == [["sudo", "systemctl", "enable", "--now", "docker"]]
+
+
+# ------------------------------------------ pull auto-starts a dead engine --
+
+def test_pull_image_starts_dead_engine_on_darwin_then_pulls(monkeypatch):
+    calls = []
+    started = []
+
+    class _SyncThread:
+        def __init__(self, target=None, **kw):
+            self._t = target
+
+        def start(self):
+            if self._t:
+                self._t()
+
+    resolutions = iter([
+        {"ready": False, "engine": None, "sg_wrap": False},   # preflight: dead
+        {"ready": True, "engine": "docker", "sg_wrap": False},  # after start
+    ])
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer.shutil, "which",
+                        lambda n: "/x/docker" if n == "docker" else None)
+    monkeypatch.setattr(tools_mod, "resolve_engine", lambda: next(resolutions))
+    monkeypatch.setattr(installer, "start_engine",
+                        lambda engine, **kw: started.append(engine) or {"ok": True})
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda argv, **kw: calls.append(list(argv))
+                        or {"ok": True, "rc": 0, "output": []})
+    monkeypatch.setattr(installer, "_begin_job", lambda key: True)
+    monkeypatch.setattr(installer, "_end_job", lambda key: None)
+    monkeypatch.setattr(installer, "_is_cancelled", lambda key: False)
+    monkeypatch.setattr(installer, "record_image_digest", lambda *a, **k: None)
+    monkeypatch.setattr(installer.threading, "Thread", _SyncThread)
+    res = installer.pull_image()
+    assert res["ok"] is True
+    assert started == ["docker"]
+    assert calls and calls[0][:2] == ["docker", "pull"]
+
+
+def test_pull_image_fails_fast_with_platform_remedy_on_linux(monkeypatch):
+    # Off macOS a start needs sudo — pull must NOT silently escalate; it fails
+    # fast pointing at the runtime card's one-click fixes.
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(installer.shutil, "which",
+                        lambda n: "/x/docker" if n == "docker" else None)
+    monkeypatch.setattr(tools_mod, "resolve_engine",
+                        lambda: {"ready": False, "engine": None})
+    res = installer.pull_image()
+    assert res["ok"] is False
+    assert "Start the Docker daemon" in res["guidance"]
+
+
+# --------------------------------------------- engine removal on macOS ------
+
+def test_uninstall_docker_macos_brew_cask(monkeypatch):
+    argvs = []
+
+    class _Probe:
+        def __init__(self, rc):
+            self.returncode = rc
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
+    # brew list --cask docker-desktop → managed by brew; osascript quit is fine.
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda argv, **kw: _Probe(0))
+    monkeypatch.setattr(installer.time, "sleep", lambda s: None)
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda argv, **kw: argvs.append(list(argv)) or {"ok": True, "rc": 0})
+    res = installer.uninstall_tool("docker")
+    assert res["ok"] is True and "cask" in res["method"]
+    assert ["/usr/local/bin/brew", "uninstall", "--cask", "docker-desktop"] in argvs
+
+
+def test_uninstall_docker_macos_bundled_uninstaller(monkeypatch, tmp_path):
+    # Not brew-managed → Docker.app's own uninstall CLI.
+    app = tmp_path / "Docker.app"
+    unins = app / "Contents" / "MacOS" / "uninstall"
+    unins.parent.mkdir(parents=True)
+    unins.write_text("#!/bin/sh\n")
+    unins.chmod(0o755)
+    argvs = []
+
+    class _Probe:
+        def __init__(self, rc):
+            self.returncode = rc
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda argv, **kw: _Probe(1))   # cask NOT managed by brew
+    monkeypatch.setattr(installer.time, "sleep", lambda s: None)
+    monkeypatch.setattr(installer, "_docker_app_path", lambda: str(app))
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda argv, **kw: argvs.append(list(argv)) or {"ok": True, "rc": 0})
+    res = installer._uninstall_engine_macos("docker")
+    assert res["ok"] is True and "bundled" in res["method"]
+    assert [str(unins)] in argvs
+
+
+def test_uninstall_podman_macos_removes_machine_first(monkeypatch):
+    argvs = []
+
+    class _Probe:
+        def __init__(self, rc):
+            self.returncode = rc
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
+    monkeypatch.setattr(installer, "_podman_path", lambda: "/opt/homebrew/bin/podman")
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda argv, **kw: _Probe(0))   # brew list podman → managed
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda argv, **kw: argvs.append(list(argv)) or {"ok": True, "rc": 0})
+    res = installer._uninstall_engine_macos("podman")
+    assert res["ok"] is True
+    # VM torn down BEFORE the binary goes (after that nothing can).
+    assert argvs[0][-3:] == ["machine", "rm", "-f"]
+    assert ["/usr/local/bin/brew", "uninstall", "podman"] in argvs
+
+
+# ------------------------------ no-creds retry keeps the CLI context store --
+
+def test_no_creds_docker_env_preserves_contexts(monkeypatch, tmp_path):
+    # Docker Desktop's config says `currentContext: desktop-linux`; the context
+    # METADATA lives in ~/.docker/contexts. An isolated DOCKER_CONFIG without
+    # that store would die "context 'desktop-linux' does not exist".
+    home = tmp_path / "lanexhome"
+    dot_docker = tmp_path / "dot-docker"
+    meta = dot_docker / "contexts" / "meta" / "abc123"
+    meta.mkdir(parents=True)
+    (meta / "meta.json").write_text('{"Name":"desktop-linux"}')
+    (dot_docker / "config.json").write_text(json.dumps(
+        {"credsStore": "desktop", "currentContext": "desktop-linux"}))
+    monkeypatch.setattr(platform_env, "home", lambda: home)
+    real_expand = os.path.expanduser
+
+    def fake_expand(p):
+        if p == "~/.docker/config.json":
+            return str(dot_docker / "config.json")
+        if p == "~/.docker/contexts":
+            return str(dot_docker / "contexts")
+        return real_expand(p)
+
+    monkeypatch.setattr(os.path, "expanduser", fake_expand)
+    env = installer._no_creds_docker_env()
+    cfg_dir = Path(env["DOCKER_CONFIG"])
+    data = json.loads((cfg_dir / "config.json").read_text())
+    assert "credsStore" not in data
+    assert data.get("currentContext") == "desktop-linux"
+    assert (cfg_dir / "contexts" / "meta" / "abc123" / "meta.json").is_file()
+
+
+# ----------------------------------------- status payload names the world ---
+
+def test_container_engine_reports_platform():
+    from lanex.controller import tools as t
+
+    info = t.container_engine()
+    assert info.get("platform") in ("linux", "darwin", "win32", "wsl")
+    assert "app_present" in info.get("docker", {})

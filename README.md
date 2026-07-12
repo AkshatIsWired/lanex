@@ -298,7 +298,7 @@ silently if you later move or delete the clone).
 <tr><th align="left" width="220">You need</th><th align="left">One click away</th></tr>
 
 <tr><td><b>The EDA toolchain</b></td>
-<td>Tools tab → <b>Install the toolchain (recommended)</b>. One click pulls the version-matched LibreLane container image; keep the <b>Container</b> engine selected and you're done — zero native tool installs.<br><br><b>No Docker or Podman?</b> The same card installs one for you first, then pulls the image, all in one go. It runs the official installer (e.g. <code>curl -fsSL https://get.docker.com | sudo sh</code> on Linux; on macOS it installs Docker Desktop — retrying over leftovers from an old install — or podman <i>including</i> its one-time <code>podman machine</code> VM setup); you confirm the password prompt in your terminal (on macOS, a native password dialog).</td></tr>
+<td>Tools tab → <b>Install the toolchain (recommended)</b>. One click pulls the version-matched LibreLane container image; keep the <b>Container</b> engine selected and you're done — zero native tool installs.<br><br><b>No Docker or Podman?</b> The same card installs one for you first, then pulls the image, all in one go. It runs the official installer (e.g. <code>curl -fsSL https://get.docker.com | sudo sh</code> on Linux; on macOS it installs Docker Desktop — retrying over leftovers from an old install, and falling back to the official DMG when Homebrew can't — or podman <i>including</i> its one-time <code>podman machine</code> VM setup, falling back to podman's official <code>.pkg</code> where brew has no prebuilt bottle); you confirm the password prompt in your terminal (on macOS, a native password dialog). After installing, LanEx <b>starts</b> the engine and waits for it — an installed-but-not-running engine gets a one-click <b>Start</b> on the runtime card.</td></tr>
 
 <tr><td><b>Recommended extras</b><br><sub>optional niceties</sub></td>
 <td>The Tools tab's <b>Recommended extra tools</b> group one-click-installs <b>Icarus Verilog</b> (RTL simulation in the IDE), <b>Graphviz</b> (synthesis schematics), and <b>GDS3D</b> (3D layout viewer — built from source on Linux with all its X11/GL dependencies handled; on macOS the prebuilt app from the GDS3D repo is installed, which on Apple Silicon runs under Rosetta 2: <code>softwareupdate --install-rosetta</code>). System packages that need <code>sudo</code> prompt for your password in the launch terminal — LanEx never asks for your password in the browser.</td></tr>
@@ -544,9 +544,13 @@ affects the interactive desktop viewers launched from the container.
 <details>
 <summary><b>Docker/Podman install fails or the engine stays "not usable" (macOS)</b></summary>
 
-* **Docker Desktop installed but "not usable"** — open `Docker.app` once and
-  approve its first-run prompts; the daemon only exists while Docker Desktop is
-  running. Then click **Pull image**.
+* **Engine installed but "not usable" / `cannot connect to … docker.sock`** —
+  on macOS the docker daemon only runs **while the Docker Desktop app is
+  running** (same for podman's machine VM). Click **Start Docker Desktop** (or
+  **Start podman machine**) on the Tools runtime card — LanEx opens the app,
+  waits for the daemon, and continues; **Pull image** does the same start
+  automatically. On Docker Desktop's very first launch, approve its own
+  prompts in the Docker window (that first boot can take a minute or two).
 * **`sudo: a terminal is required to read the password`** during
   `brew install --cask docker-desktop` — the cask needs admin rights to link
   Docker's CLI tools into `/usr/local`, and there's no terminal when LanEx runs
@@ -566,12 +570,22 @@ affects the interactive desktop viewers launched from the container.
   leftovers from a previous Docker install. LanEx retries with `--force`
   automatically; manually: `brew install --cask docker-desktop --force`.
 * **`Error: podman: no bottle available!`** — your Homebrew configuration is
-  "Tier 3" (typically an older macOS release): no prebuilt podman exists.
-  Install Docker Desktop instead (recommended), or build from source with
-  `brew install --build-from-source podman` (slow; needs the Go toolchain).
+  "Tier 3" (an OS/CPU combo brew stopped prebuilding for, e.g. an Intel Mac on
+  a recent macOS). LanEx now falls back automatically to podman's **official
+  installer package** (prebuilt for both Intel and Apple Silicon, installs to
+  `/opt/podman`) — no Go toolchain, no source build. Manual equivalent:
+  download the `.pkg` from [podman.io](https://podman.io/docs/installation).
+* **No Homebrew at all** — not a blocker: the Docker card falls back to the
+  official **Docker Desktop DMG** (silent install via Docker's bundled
+  installer CLI) and the podman card to the official `.pkg`.
 * **podman installed but "not usable"** — podman on macOS runs containers in a
   VM that must exist and be running: `podman machine init && podman machine
-  start` (LanEx's one-click podman install does this for you).
+  start` (LanEx's one-click podman install does this for you, and the runtime
+  card's **Start podman machine** re-boots it later).
+* **Remove docker / Remove podman** on the runtime card works on macOS too:
+  Docker via the brew cask or Docker.app's own bundled uninstaller (quit the
+  app first if it's running); podman removes its machine VM first, then the
+  brew formula or the `/opt/podman` package.
 </details>
 
 <details>

@@ -73,6 +73,8 @@ export const api = {
   metricsCatalog: () => _fetch("/api/metrics-catalog"),
   containerPull: () => _fetch("/api/container/pull", { method: "POST", body: "{}" }),
   enableDockerGroup: () => _fetch("/api/container/enable-docker-group", { method: "POST", body: "{}" }),
+  startEngine: (engine) =>
+    _fetch("/api/container/start-engine", { method: "POST", body: JSON.stringify({ engine }) }),
   runs:  (designDir) => _fetch("/api/runs" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : "")),
   knownDesigns: () => _fetch("/api/known-designs"),
   run:   (tag) => _fetch("/api/runs/" + encodeURIComponent(tag)),
