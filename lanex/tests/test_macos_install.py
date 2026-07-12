@@ -717,3 +717,37 @@ def test_container_engine_reports_platform():
     info = t.container_engine()
     assert info.get("platform") in ("linux", "darwin", "win32", "wsl")
     assert "app_present" in info.get("docker", {})
+
+
+# ----------------------- engine removal on Linux (symmetric audit fix) ------
+
+def test_uninstall_docker_linux_tries_docker_ce_then_docker_io(monkeypatch):
+    # Our own Linux install path (get.docker.com) installs docker-ce, distro
+    # repos install docker.io — removal must try both or it always "fails".
+    argvs = []
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(installer, "detect_environment",
+                        lambda: {"apt": True, "pip": False, "pip3": False,
+                                 "brew": False, "conda": False})
+    monkeypatch.setattr(installer, "_check_cmd", lambda name: False)
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda argv, **kw: argvs.append(list(argv))
+                        or {"ok": len(argvs) > 1, "rc": 0 if len(argvs) > 1 else 1})
+    res = installer.uninstall_tool("docker")
+    assert res["ok"] is True
+    assert "docker-ce" in argvs[0]
+    assert "docker.io" in argvs[1]
+
+
+def test_uninstall_docker_fedora_uses_dnf(monkeypatch):
+    argvs = []
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(installer, "detect_environment",
+                        lambda: {"apt": False, "pip": False, "pip3": False,
+                                 "brew": False, "conda": False})
+    monkeypatch.setattr(installer, "_check_cmd", lambda name: name == "dnf")
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda argv, **kw: argvs.append(list(argv)) or {"ok": True, "rc": 0})
+    res = installer.uninstall_tool("docker")
+    assert res["ok"] is True
+    assert argvs[0][:4] == ["sudo", "dnf", "remove", "-y"]

@@ -2757,11 +2757,34 @@ def uninstall_tool(key: str) -> Dict[str, Any]:
             "iverilog": ["sudo", apt, "remove", "-y", "iverilog"],
             "graphviz": ["sudo", apt, "remove", "-y", "graphviz"],
             # Let users remove an engine and switch (e.g. drop Docker for Podman).
-            "docker": ["sudo", apt, "remove", "-y", "docker.io"],
+            # get.docker.com (our own install path) installs docker-ce, distro
+            # repos install docker.io — try both, or removal always "fails".
+            "docker": ["sudo", apt, "remove", "-y", "docker-ce", "docker-ce-cli"],
             "podman": ["sudo", apt, "remove", "-y", "podman"],
         }
         if key in apt_map:
             cmds.append(("apt remove", apt_map[key]))
+            if key == "docker":
+                cmds.append(("apt remove", ["sudo", apt, "remove", "-y", "docker.io"]))
+
+    # Engines on non-apt Linux (Fedora/Arch/openSUSE) — the same "Remove docker"
+    # button used to dead-end on "No uninstall method succeeded" there.
+    if sys.platform.startswith("linux") and key in ("docker", "podman"):
+        pkgs = ["docker-ce", "docker-ce-cli"] if key == "docker" else ["podman"]
+        alt = ["docker"] if key == "docker" else []
+        if _check_cmd("dnf"):
+            cmds.append(("dnf remove", ["sudo", "dnf", "remove", "-y"] + pkgs))
+            if alt:
+                cmds.append(("dnf remove", ["sudo", "dnf", "remove", "-y"] + alt))
+        elif _check_cmd("pacman"):
+            cmds.append(("pacman -R", ["sudo", "pacman", "-R", "--noconfirm",
+                                       "docker" if key == "docker" else "podman"]))
+        elif _check_cmd("zypper"):
+            cmds.append(("zypper remove", ["sudo", "zypper", "--non-interactive",
+                                           "remove"] + pkgs))
+            if alt:
+                cmds.append(("zypper remove", ["sudo", "zypper", "--non-interactive",
+                                               "remove"] + alt))
 
     if env.get("brew"):
         brew_map = {
