@@ -409,3 +409,26 @@ def test_frontend_config_tier_wiring() -> None:
     assert "configChipSpec" in prov_js
     css = (static / "styles.css").read_text()
     assert ".vconfig" in css and ".vconfig-scoped" in css
+
+
+def test_final_settings_wiring_and_server_mirror() -> None:
+    """The final-settings preview must mirror the server's run assembly.
+
+    buildFinalSettingsModel pulls PDK/STD_CELL_LIBRARY out of the overrides
+    exactly like routes._assemble_overrides does — if either side changes the
+    split, the preview would lie about what rides -c. Lock both sides to the
+    same two keys, and lock the dialog's entry points."""
+    static = Path(__file__).resolve().parents[1] / "server" / "static"
+    fsjs = (static / "modules" / "finalsettings.js").read_text()
+    assert "buildFinalSettingsModel" in fsjs
+    assert "delete ov.PDK;" in fsjs and "delete ov.STD_CELL_LIBRARY;" in fsjs
+    # The preview's overrides come from the REAL run payload, not a re-derivation.
+    assert "collectRunPayload" in fsjs
+    routes_py = (Path(__file__).resolve().parents[1] / "server" / "routes.py").read_text()
+    assert 'overrides.pop("PDK", None)' in routes_py
+    assert 'overrides.pop("STD_CELL_LIBRARY", None)' in routes_py
+    cfg = (static / "modules" / "config.js").read_text()
+    assert "ov-final-settings" in cfg and "finalsettings.js" in cfg
+    # setup.js still exports the payload builder the dialog depends on.
+    setup_js = (static / "modules" / "setup.js").read_text()
+    assert "export function collectRunPayload" in setup_js

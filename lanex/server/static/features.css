@@ -134,6 +134,13 @@
 .prov-btn:hover { opacity: 1; }
 .prov-note { margin: 0 0 var(--s-2); }
 .ov-trail-line { overflow-x: auto; margin: 0 0 var(--s-2); }
+/* Final-settings preview: conflict = an override beating a config line (the
+   fact the user must never miss); scoped = conditional on the PDK/SCL. */
+.fs-conflict { color: var(--warn, #b58900); }
+.fs-scoped { color: var(--text-muted); font-style: italic; }
+.fs-note { color: var(--text-muted); margin: var(--s-2) 0 0; }
+.fs-order { margin: 0 0 var(--s-3); padding-left: 1.4em; }
+.fs-order li { margin-bottom: 2px; }
 .prov-view .fv-pre { max-height: calc(56vh / var(--ll-zoom, 1)); }
 .dlg-wide { width: min(980px, calc(96vw / var(--ll-zoom, 1))); }
 .report-row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; padding: var(--s-1) 0; border-bottom: 1px solid var(--border); }

@@ -317,14 +317,23 @@ export function renderOverridesSummary() {
   const ov = activeOverrides();
   const keys = Object.keys(ov).sort();
   // The design's own config file, viewable as-is (input-side transparency:
-  // see exactly what LanEx reads and never edits).
-  const viewCfg = "<button class='btn btn-ghost' id='ov-view-config' " +
+  // see exactly what LanEx reads and never edits) — plus THE answer button:
+  // the merged final-settings preview (config vs overrides vs defaults),
+  // assembled from the same collectRunPayload() the Run button sends.
+  const viewCfg =
+    "<button class='btn btn-ghost' id='ov-final-settings' " +
+    "title='The merged picture: every value this run will send — your changes, your config file&#39;s lines, and what falls to defaults'>Final settings</button> " +
+    "<button class='btn btn-ghost' id='ov-view-config' " +
     "title='Open your design&#39;s own config file, exactly as it is on disk'>View config file</button>";
   const wireViewCfg = () => {
     el.querySelector("#ov-view-config")?.addEventListener("click", async () => {
       const { openProvenance } = await import("./provenance.js");
       openProvenance({ kind: "input", key: "" },
         { title: "Your design's config file (as on disk — LanEx never edits it)" });
+    });
+    el.querySelector("#ov-final-settings")?.addEventListener("click", async () => {
+      const { openFinalSettings } = await import("./finalsettings.js");
+      openFinalSettings();
     });
   };
   if (!keys.length) {

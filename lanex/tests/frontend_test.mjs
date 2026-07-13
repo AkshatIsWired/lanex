@@ -389,6 +389,63 @@ check("provenance.js: config chips state scope + conditionality faithfully", () 
   assert.ok(!plain.title.includes("more entr"), "no phantom extra entries");
 });
 
+// ------------------------------------------------ final-settings preview
+// The merged "what will this run send" model. Must mirror the server's
+// _assemble_overrides exactly: PDK/STD_CELL_LIBRARY split out as flow
+// options, every other override beats the config file, and a config var
+// with no override applies as written. Fed the user's real scenario.
+const fs = await import(resolve(MOD, "finalsettings.js"));
+check("finalsettings: overrides vs config vs defaults classified faithfully", () => {
+  const map = {
+    ok: true, rel: "config.yaml",
+    vars: {
+      FP_CORE_UTIL: { line: 6, text: "  FP_CORE_UTIL: 45", value: "45",
+                      scoped: true, scope: "pdk::sky130*", others: 0 },
+      CLOCK_PERIOD: { line: 3, text: "CLOCK_PERIOD: 10", value: "10",
+                      scoped: false, scope: null, others: 0 },
+    },
+  };
+  const payload = { PDK: "sky130A", STD_CELL_LIBRARY: "sky130_fd_sc_hd",
+                    FP_CORE_UTIL: 50, SYNTH_STRATEGY: "AREA 0" };
+  const m = fs.buildFinalSettingsModel(payload, map);
+
+  // PDK/SCL are flow options, never -c rows (mirror of _assemble_overrides).
+  assert.equal(m.pdk, "sky130A");
+  assert.equal(m.scl, "sky130_fd_sc_hd");
+  assert.ok(!m.sent.some((s) => s.name === "PDK" || s.name === "STD_CELL_LIBRARY"),
+    "PDK/SCL must not appear as override rows");
+
+  // The user's exact conflict: config 45 (pdk-scoped) vs manual 50 → override
+  // wins and the superseded line is named, scope included.
+  const fcu = m.sent.find((s) => s.name === "FP_CORE_UTIL");
+  assert.equal(fcu.value, "50");
+  assert.deepEqual(fcu.conflict,
+    { line: 6, value: "45", scoped: true, scope: "pdk::sky130*" });
+
+  // Manual change NOT in the config: sent, honestly marked as adding.
+  const ss = m.sent.find((s) => s.name === "SYNTH_STRATEGY");
+  assert.equal(ss.conflict, null);
+
+  // Config var the user never touched: applies from the file.
+  assert.deepEqual(m.fromConfig.map((c) => c.name), ["CLOCK_PERIOD"]);
+  assert.equal(m.fromConfig[0].line, 3);
+
+  // An overridden config var must NOT also be listed as applying.
+  assert.ok(!m.fromConfig.some((c) => c.name === "FP_CORE_UTIL"),
+    "superseded config var leaked into the applies-list");
+  assert.equal(m.conflicts, 1);
+});
+
+check("finalsettings: honest when the config map is unavailable", () => {
+  const m = fs.buildFinalSettingsModel({ PDK: "sky130A", FP_CORE_UTIL: 50 },
+                                       { ok: false, reason: "no config file" });
+  assert.equal(m.rel, null);
+  assert.equal(m.fromConfig.length, 0);
+  // The override is still truthfully listed — it IS sent regardless.
+  assert.equal(m.sent.length, 1);
+  assert.equal(m.sent[0].conflict, null, "no map = no conflict claims, ever");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 
