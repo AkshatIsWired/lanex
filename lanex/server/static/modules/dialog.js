@@ -71,6 +71,22 @@ function _esc(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Generic dialog for callers that render their own body (e.g. the provenance
+// file viewer). Same overlay/focus-trap/Esc machinery as every other dialog.
+// `wide` widens the box for file content. Resolves with the clicked button's
+// value (undefined on Esc/backdrop).
+export async function customDialog({ title = "", bodyHtml = "", buttons = null, wide = false, onMount = null } = {}) {
+  return _open({
+    title,
+    bodyHtml,
+    buttons: buttons || [{ label: "Close", value: true, cls: "btn-ghost" }],
+    onMount: (back, close) => {
+      if (wide) back.querySelector(".dlg").classList.add("dlg-wide");
+      if (onMount) onMount(back, close);
+    },
+  });
+}
+
 export async function confirmDialog({ title = "Are you sure?", body = "", confirmText = "Confirm", cancelText = "Cancel", danger = false } = {}) {
   const v = await _open({
     title: _esc(title),

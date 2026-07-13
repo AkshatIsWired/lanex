@@ -323,13 +323,51 @@ export function renderOverridesSummary() {
     return;
   }
   const chips = keys
-    .map((k) => "<span class='ov-chip'><code>" + fmt.escape(k) + "</code>=<b>" +
-      fmt.escape(String(ov[k])) + "</b></span>")
+    .map((k) => "<button class='ov-chip ov-chip-btn' data-ovvar='" + fmt.escape(k) +
+      "' title='Where does this setting go? Click for the exact file/line trail.'><code>" +
+      fmt.escape(k) + "</code>=<b>" + fmt.escape(String(ov[k])) + "</b></button>")
     .join("");
   el.innerHTML =
     "<div class='ov-head'><strong>" + keys.length + " override" + (keys.length === 1 ? "" : "s") +
-    " will be sent</strong> <span class='muted'>(preset values + your edits; unset fields use defaults)</span></div>" +
+    " will be sent</strong> <span class='muted'>(preset values + your edits; unset fields use defaults — click a chip to trace where it goes)</span></div>" +
     "<div class='ov-chips'>" + chips + "</div>";
+  el.querySelectorAll("[data-ovvar]").forEach((b) => {
+    if (b._wired) return;
+    b._wired = true;
+    b.addEventListener("click", () => showOverrideTrail(b.dataset.ovvar, activeOverrides()[b.dataset.ovvar]));
+  });
+}
+
+// Input-side transparency: for one override, show exactly (a) how it reaches
+// the flow (a `-c VAR=VALUE` argument — the design's own config file is never
+// edited), (b) the config-file line it supersedes, and (c) after a run, the
+// resolved.json line proving the value LibreLane ACTUALLY used.
+async function showOverrideTrail(varName, value) {
+  const { customDialog } = await import("./dialog.js");
+  const { openProvenance } = await import("./provenance.js");
+  const runTag = state.selectedRunTag ||
+    (Array.isArray(state.runs) && state.runs[0] && state.runs[0].tag) || null;
+  const choice = await customDialog({
+    title: "Where does " + fmt.escape(varName) + " go?",
+    bodyHtml:
+      "<p>This setting rides the run command as an override argument — your design's " +
+      "config file is <b>never edited</b>:</p>" +
+      "<pre class='code'>-c " + fmt.escape(varName) + "=" + fmt.escape(String(value)) + "</pre>" +
+      "<p class='muted'>Verify it end-to-end: the config line it supersedes (if the file sets one), " +
+      "and — after a run — LibreLane's own <code>resolved.json</code>, the flow's record of every value it actually used.</p>",
+    buttons: [
+      { label: "Config line it supersedes", value: "input", cls: "btn-ghost" },
+      runTag ? { label: "Value the last run used (resolved.json)", value: "var", cls: "btn-ghost" } : null,
+      { label: "Close", value: undefined, cls: "btn-ghost" },
+    ].filter(Boolean),
+  });
+  if (choice === "input") {
+    openProvenance({ kind: "input", key: varName },
+      { title: "Your config's own " + varName + " line (superseded by the override)" });
+  } else if (choice === "var") {
+    openProvenance({ kind: "var", key: varName, tag: runTag },
+      { title: varName + " as run '" + runTag + "' actually used it (resolved.json)" });
+  }
 }
 
 // Reflect the current SYNTH_SHOW override into the quick toggle (e.g. after a

@@ -8,13 +8,16 @@
 
 import { api, fmt } from "./api.js";
 import { icon } from "./icons.js";
+import { provBtnHtml, wireProvBtns } from "./provenance.js";
 
 let _reports = [];
 let _selectedPath = null;
+let _runTag = null;
 
 export async function populateReportsList(designDir, runTag) {
   const root = document.getElementById("violations-list");
   if (!root) return;
+  _runTag = runTag || null;
   if (!designDir || !runTag) {
     _reports = [];
     paintPicker();
@@ -88,12 +91,20 @@ async function onSelectReport(r) {
   } catch (ex) {
     if (out) out.innerHTML = "<p class='pill pill-fail'>Could not parse: " + fmt.escape(ex.message || ex) + "</p>";
   }
+  wireProvBtns(document.getElementById("violations-output"));
 }
 
-function header(r, extra) {
+function header(r, extra, needle) {
+  // "raw" opens the report exactly as the tool wrote it (needle = the verdict
+  // line to highlight, when the parsed view is judging one).
+  const prov = (r.rel && _runTag)
+    ? provBtnHtml({ kind: "report", tag: _runTag, path: r.rel, needle: needle || "" },
+        "Open the raw report as the tool wrote it" +
+        (needle ? " — the line the verdict was read from is highlighted" : ""))
+    : "";
   return "<div class='report-head'><span class='chip rk'>" + fmt.escape(r.kind) + "</span>" +
     "<strong>" + fmt.escape(r.name) + "</strong> <span class='muted'>" + fmt.escape(r.step) + "</span>" +
-    (extra ? " <span class='muted'>· " + fmt.escape(extra) + "</span>" : "") + "</div>";
+    (extra ? " <span class='muted'>· " + fmt.escape(extra) + "</span>" : "") + prov + "</div>";
 }
 
 function renderDrc(r, resp) {
@@ -160,7 +171,9 @@ function renderLvs(r, resp) {
         "<tr><td>" + fmt.escape(k.replace(/_/g, " ")) + "</td><td class='cmp-num'>" +
         fmt.escape(String(counts[k])) + "</td></tr>").join("") + "</tbody></table>"
     : "";
-  out.innerHTML = header(r, resp && resp.raw_chars ? resp.raw_chars + " chars" : "") + head + body;
+  // Netgen's verdict line ("Final result: ...") is what the clean/mismatch
+  // pill was judged on — highlight exactly it in the raw view.
+  out.innerHTML = header(r, resp && resp.raw_chars ? resp.raw_chars + " chars" : "", "Final result") + head + body;
 }
 
 function renderText(r, text) {

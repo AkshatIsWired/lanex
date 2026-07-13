@@ -503,6 +503,63 @@ def h_read_text(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_provenance(handler: Any) -> None:
+    """Where did a displayed value come from? (GET, read-only.)
+
+    ``?kind=metric&key=<metric>&tag=<run>``   -> final/metrics.json line
+    ``?kind=var&key=<VAR>&tag=<run>``         -> resolved.json line (what the
+                                                 flow ACTUALLY used)
+    ``?kind=input&key=<VAR>``                 -> the design's own config line
+                                                 the user's override supersedes
+    ``?kind=report&tag=&path=<rel>&needle=``  -> first line of a run report
+                                                 containing the literal text
+
+    Every located file is a LibreLane/tool/user file — never a LanEx
+    artifact — so the UI can show the raw source with the line highlighted.
+    Returns honest {ok:False, reason} when a value can't be located."""
+    from ..controller import provenance
+    kind = _query_param(handler.path, "kind") or ""
+    key = _query_param(handler.path, "key") or ""
+    tag = _query_param(handler.path, "tag")
+    try:
+        if kind == "input":
+            design_dir = _get_active_design_dir()
+            if not design_dir:
+                _respond(handler, {"ok": False, "reason": "no active design"})
+                return
+            res = provenance.base_config_provenance(Path(design_dir), key)
+            if res.get("rel"):
+                res["abs"] = str(Path(design_dir) / res["rel"])
+            _respond(handler, res)
+            return
+        run_dir = _resolve_run_dir(tag)
+        if run_dir is None:
+            _respond(handler, {"ok": False,
+                               "reason": "unknown run tag for the active design"})
+            return
+        if kind == "metric":
+            res = provenance.metric_provenance(run_dir, key)
+        elif kind == "var":
+            res = provenance.config_provenance(run_dir, key)
+        elif kind == "report":
+            rel = _query_param(handler.path, "path") or ""
+            needle = _query_param(handler.path, "needle") or ""
+            target = (run_dir / rel).resolve()
+            if not rel or not target.is_relative_to(run_dir):
+                _respond(handler, "invalid path", 400)
+                return
+            res = provenance.report_provenance(run_dir, rel, needle)
+        else:
+            _respond(handler, "unknown kind", 400)
+            return
+        if res.get("rel"):
+            res["abs"] = str(run_dir / res["rel"])
+        _respond(handler, res)
+    except Exception as ex:
+        _log.exception("provenance failed")
+        _respond(handler, str(ex), 500)
+
+
 def _config_source_count(design_dir: Path, cfg_name: Optional[str]) -> Optional[int]:
     """How many files the config's ``VERILOG_FILES`` actually resolves to.
 
@@ -3142,6 +3199,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/walk-sources", h_walk_sources),
     ("/api/run-reports", h_run_reports),
     ("/api/read-text", h_read_text),
+    ("/api/provenance", h_provenance),
     ("/api/design-summary", h_design_summary),
     ("/api/suggest-config", h_suggest_config),
     ("/api/write-config", h_write_config),

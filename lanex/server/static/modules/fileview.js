@@ -42,34 +42,83 @@ export function wireFileActions(root) {
   });
 }
 
+// "Copy path" button — hands the user the on-disk location of the file they
+// are looking at (provenance dialogs: "verify this outside LanEx").
+export function copyPathHtml(absPath) {
+  if (!absPath) return "";
+  return "<button class='btn btn-ghost file-act' data-copypath='" + fmt.escape(absPath) +
+    "' title='Copy the full file path to the clipboard'>" + icon('file', { size: 13 }) + " Copy path</button>";
+}
+
+export function wireCopyPath(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-copypath]").forEach((b) => {
+    if (b._wired) return;
+    b._wired = true;
+    b.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const p = b.dataset.copypath;
+      try {
+        await navigator.clipboard.writeText(p);
+        toast.show("Path copied: " + p, "success");
+      } catch {
+        // Clipboard needs a secure context / permission — degrade to showing
+        // the path so the user can copy it by hand, never fail silently.
+        window.prompt("File path (copy it from here):", p);
+      }
+    });
+  });
+}
+
 // Render `text` into `container` with a Find box (highlight + prev/next + count)
 // and, when `opts.tag`/`opts.path` are given, Download + Locate buttons. This is
 // the single widget for any flow-produced text/log/report shown to the user.
+// `opts.line` (1-based) highlights + scrolls to that source line — used by the
+// provenance viewers to point at the exact line a displayed value came from.
+// `opts.abs` adds a Copy-path button for the on-disk location.
 export function renderFileText(container, text, opts = {}) {
   if (!container) return;
   const raw = (text == null || text === "") ? (opts.emptyMsg || "(empty)") : String(text);
+  const lines = raw.split("\n");
+  const hlLine = (Number.isInteger(opts.line) && opts.line >= 1 && opts.line <= lines.length)
+    ? opts.line : null;
   container.innerHTML =
     "<div class='fv-toolbar'>" +
     (opts.title ? "<span class='fv-title'>" + fmt.escape(opts.title) + "</span>" : "") +
+    (hlLine ? "<span class='pill fv-lineno' title='The highlighted line the value came from'>line " + hlLine + "</span>" : "") +
     "<input type='search' class='inp fv-find' placeholder='find in text…'/>" +
     "<span class='muted fv-count'></span>" +
     "<button class='btn btn-ghost fv-prev' title='Previous match'>◀</button>" +
     "<button class='btn btn-ghost fv-next' title='Next match'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M7 4l13 8-13 8z'/></svg></button>" +
     "<span class='fv-spacer'></span>" +
+    copyPathHtml(opts.abs) +
     fileActionsHtml(opts.tag, opts.path) +
     "</div>" +
     "<pre class='fv-pre code'></pre>";
   const pre = container.querySelector(".fv-pre");
-  pre.textContent = raw;
-  if (opts.scrollBottom) pre.scrollTop = pre.scrollHeight;
+  const paintPlain = () => {
+    if (hlLine) {
+      pre.innerHTML = lines.map((l, i) =>
+        (i + 1 === hlLine)
+          ? "<mark class='fv-line'>" + esc(l || " ") + "</mark>"
+          : esc(l)).join("\n");
+      const m = pre.querySelector(".fv-line");
+      if (m) m.scrollIntoView({ block: "center" });
+    } else {
+      pre.textContent = raw;
+    }
+  };
+  paintPlain();
+  if (opts.scrollBottom && !hlLine) pre.scrollTop = pre.scrollHeight;
   wireFileActions(container);
+  wireCopyPath(container);
 
   const input = container.querySelector(".fv-find");
   const count = container.querySelector(".fv-count");
   let cur = 0;
   const apply = () => {
     const q = input.value;
-    if (!q) { pre.textContent = raw; count.textContent = ""; return; }
+    if (!q) { paintPlain(); count.textContent = ""; return; }
     const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
     let n = 0;
     pre.innerHTML = esc(raw).replace(rx, (m) => "<mark class='fv-hit'>" + esc(m) + "</mark>");

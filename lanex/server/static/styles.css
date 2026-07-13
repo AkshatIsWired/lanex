@@ -1156,6 +1156,9 @@ select {
 }
 .overrides-summary .ov-chip code { background: transparent; padding: 0; color: var(--accent-cyan, var(--accent)); }
 .overrides-summary .ov-chip b { color: var(--text-strong); }
+/* Chips are buttons since the provenance trail — same look, plus affordance. */
+.overrides-summary .ov-chip-btn { cursor: pointer; }
+.overrides-summary .ov-chip-btn:hover { border-color: var(--accent); }
 
 /* ---------- config form ---------- */
 .vars-form { display: grid; gap: var(--s-3); }

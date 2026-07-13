@@ -307,6 +307,50 @@ check("charts.js: golden run values reach the chart series unchanged", () => {
   assert.deepEqual(inf.series[0].data, [1, 2], "non-finite plotted instead of dropped");
 });
 
+// ------------------------------------------------ provenance line highlight
+// The provenance dialog's whole promise is "THIS line is where the value came
+// from" — so the highlight must land on exactly the requested line, escaped.
+const { renderFileText } = await import(resolve(MOD, "fileview.js"));
+check("fileview: the provenance highlight lands on exactly the requested line", () => {
+  // Minimal DOM stub: enough for renderFileText's innerHTML writes + queries.
+  const el = () => ({
+    _html: "", listeners: {},
+    set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html; },
+    set textContent(v) { this._html = v.replace(/[&<>]/g, (c) => c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"); },
+    get textContent() { return this._html; },
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    addEventListener(t, f) { this.listeners[t] = f; },
+    scrollIntoView() {}, scrollTop: 0, scrollHeight: 0,
+  });
+  const container = el();
+  const pre = el(), input = el(), count = el(), prev = el(), next = el();
+  container.querySelector = (sel) => ({
+    ".fv-pre": pre, ".fv-find": input, ".fv-count": count,
+    ".fv-prev": prev, ".fv-next": next,
+  })[sel] || null;
+  container.querySelectorAll = () => [];
+  pre.querySelector = (sel) => sel === ".fv-line" ? { scrollIntoView() {} } : null;
+
+  const text = 'alpha\n    "FP_CORE_UTIL": 45,\n<script>evil</script>\nomega';
+  renderFileText(container, text, { line: 2, title: "resolved.json" });
+  const body = pre.innerHTML.split("\n");
+  assert.match(body[1], /^<mark class='fv-line'>.*FP_CORE_UTIL.*<\/mark>$/,
+    "line 2 not wrapped in the highlight mark");
+  assert.doesNotMatch(body[0], /<mark/, "line 1 wrongly highlighted");
+  assert.doesNotMatch(body[3], /<mark/, "line 4 wrongly highlighted");
+  assert.ok(body[2].includes("&lt;script&gt;"), "file content not HTML-escaped");
+  assert.ok(container.innerHTML.includes("line 2"), "toolbar missing the line chip");
+
+  // Out-of-range line = no highlight, never a wrong one.
+  const c2 = el();
+  const pre2 = el();
+  c2.querySelector = (sel) => sel === ".fv-pre" ? pre2 :
+    ({ ".fv-find": el(), ".fv-count": el(), ".fv-prev": el(), ".fv-next": el() })[sel] || null;
+  c2.querySelectorAll = () => [];
+  renderFileText(c2, "one\ntwo", { line: 99 });
+  assert.doesNotMatch(pre2.innerHTML, /<mark/, "out-of-range line must not highlight anything");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

@@ -184,6 +184,12 @@ export const api = {
       "/api/run-reports?design_dir=" + encodeURIComponent(designDir) + "&run_tag=" + encodeURIComponent(runTag),
     ),
   readText: (path) => _fetch("/api/read-text?path=" + encodeURIComponent(path)),
+  provenance: (params) => {
+    const q = Object.entries(params || {})
+      .filter(([, v]) => v != null && v !== "")
+      .map(([k, v]) => k + "=" + encodeURIComponent(v)).join("&");
+    return _fetch("/api/provenance?" + q);
+  },
 
   // ---------- Phase 0: project wizard + export
   templates: () => _fetch("/api/templates"),

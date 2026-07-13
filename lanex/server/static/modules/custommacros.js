@@ -49,6 +49,14 @@ export async function renderCustomMacros() {
     if (Array.isArray(r.orientations) && r.orientations.length) _orientations = r.orientations;
   } catch (_e) {}
 
+  // Input transparency: macros reach the flow through ONE file LanEx writes
+  // in the design dir (.gui-macros.json, passed as a second config file) —
+  // let the user open exactly that file and see what was added.
+  const overlayBtn = macros.length
+    ? "<p class='hint'>These reach the flow through <code>.gui-macros.json</code> in your design folder, " +
+      "passed to LibreLane as a second config file — your own config.json is never edited. " +
+      "<button class='btn btn-ghost' id='mc-view-overlay'>View the overlay file</button></p>"
+    : "";
   const list = macros.length
     ? "<table class='cc-table'><thead><tr><th>Macro module</th><th>Views</th><th>Instances</th><th>Use</th><th></th></tr></thead><tbody>" +
       macros.map((m) =>
@@ -80,7 +88,26 @@ export async function renderCustomMacros() {
     "<div id='mc-form-error' class='ac-error' hidden></div>" +
     "</div></details>";
 
-  root.innerHTML = list + form;
+  root.innerHTML = overlayBtn + list + form;
+
+  root.querySelector("#mc-view-overlay")?.addEventListener("click", async () => {
+    const { customDialog } = await import("./dialog.js");
+    const { renderFileText } = await import("./fileview.js");
+    const abs = state.designDir.replace(/\/+$/, "") + "/.gui-macros.json";
+    let t;
+    try { t = await api.readText(abs); } catch (ex) { toast.show("Could not read the overlay: " + (ex.message || ex), "error"); return; }
+    if (!t || t.ok === false) {
+      toast.show((t && t.error) || "No overlay file yet — it is written when a run starts with macros enabled.", "warn", 6000);
+      return;
+    }
+    await customDialog({
+      title: "The macro overlay LanEx wrote for your runs",
+      wide: true,
+      bodyHtml: "<p class='muted prov-note'>This exact file is handed to LibreLane as a second config file. " +
+        "Your own config.json is never edited.</p><div class='prov-view'></div>",
+      onMount: (back) => renderFileText(back.querySelector(".prov-view"), t.text, { title: ".gui-macros.json", abs }),
+    });
+  });
 
   root.querySelectorAll(".mc-remove").forEach((b) =>
     b.addEventListener("click", async () => {

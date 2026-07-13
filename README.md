@@ -780,8 +780,8 @@ lanex --host 0.0.0.0 --allow-remote    # expose on your network (no auth — tak
 | **Setup** | Pick design, PDK/SCL, flow; auto-generate a config. |
 | **Pipeline** | Live per-step run timeline + logs + step output. |
 | **RTL IDE** | Edit / lint / simulate Verilog; VCD waveform viewer + one-click GTKWave. |
-| **Verification** | DRC / LVS / antenna / timing signoff verdict. |
-| **Analytics** | Metric trends, run comparison, cell usage. |
+| **Verification** | DRC / LVS / antenna / timing signoff verdict — every check carries a source button opening the raw tool report with the verdict line highlighted. |
+| **Analytics** | Metric trends, run comparison, cell usage. Every metric has a source button opening the run's own `metrics.json` at the exact line the number came from. |
 | **DSE** | Design-space sweeps and result viewer. |
 | **Layout** | Open GDS in KLayout / Magic / GDS3D / OpenROAD. |
 | **Cells &amp; Macros** | PDK std cells; insert custom cells + hard macros. |

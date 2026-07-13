@@ -7,6 +7,7 @@ import { renderTimingPaths } from "./timing.js";
 import { gatherRunsScoped, getRunScope, runOptionsHtml, scopeToggleHtml, wireScopeToggle, ensureActiveDesignFor } from "./runscope.js";
 import { jumpBarHtml, wireJump } from "./jumpnav.js";
 import { icon } from "./icons.js";
+import { provBtnHtml, wireProvBtns } from "./provenance.js";
 
 // Mount the jump bar as a direct child of the verify SECTION, just before
 // #verify-body, so `position: sticky` keeps it pinned across the whole tab
@@ -105,10 +106,18 @@ export async function renderVerify(tag) {
   const cards = Object.entries(rep.stages || {}).map(([id, stage]) => {
     const rows = (stage.checks || []).map((c) => {
       const val = Object.values(c.values || {})[0];
+      // Each check is judged on a real LibreLane metric — the source button
+      // opens metrics.json at that metric's line so the verdict can be checked
+      // against the flow's own number.
+      const mkey = Object.keys(c.values || {})[0];
+      const prov = (mkey && rep.tag)
+        ? provBtnHtml({ kind: "metric", key: mkey, tag: rep.tag },
+            "Show '" + mkey + "' in this run's metrics.json — the number this verdict is based on")
+        : "";
       return "<div class='vcheck'>" +
         "<span class='vdot " + (DOT[c.status] || "vdot-absent") + "'></span>" +
         "<span class='vcheck-name'>" + fmt.escape(c.name) + "</span>" +
-        (val !== undefined ? "<span class='vcheck-val'>" + fmt.escape(String(val)) + "</span>" : "") +
+        (val !== undefined ? "<span class='vcheck-val'>" + fmt.escape(String(val)) + "</span>" + prov : "") +
         (c.step_id ? "<button class='btn btn-ghost vcheck-log' data-step='" + fmt.escape(c.step_id) +
           "'>log</button>" : "") +
         (c.step_id ? "<button class='btn btn-ghost vcheck-rerun' data-step='" + fmt.escape(c.step_id) +
@@ -150,6 +159,7 @@ export async function renderVerify(tag) {
     renderVerify(runSel.value);
   });
   wireScopeToggle("verify-run-scope", () => renderVerify());
+  wireProvBtns(root);
   root.querySelectorAll(".vcheck-log").forEach((b) =>
     b.addEventListener("click", async () => {
       const mod = await import("./stepoutput.js");

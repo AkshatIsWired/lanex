@@ -9,6 +9,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { chartTheme, chartPalette } from "./theme-echarts.js";
+import { provBtnHtml, wireProvBtns } from "./provenance.js";
 
 let _kind = "setup";
 let _wired = false;
@@ -123,7 +124,19 @@ export async function renderTimingPaths(tag) {
     _rows = []; drawHist(null); renderTable();
     return;
   }
-  if (srcEl) srcEl.textContent = data.source ? ("from " + data.source) : "";
+  if (srcEl) {
+    // Name the report(s) the table was parsed from AND let the user open each
+    // raw file — one button per corner report (the label is the corner subdir).
+    const btns = (data.sources || []).map((rel) => {
+      const corner = (rel.split("/").length > 2 ? rel.split("/")[1] : rel);
+      return provBtnHtml(
+        { kind: "report", tag: tag, path: rel, needle: "Startpoint:" },
+        "Open the raw STA report " + rel + " (as OpenSTA wrote it)") +
+        "<span class='muted' style='font-size:var(--t-xs)'>" + fmt.escape(corner) + "</span>";
+    }).join(" ");
+    srcEl.innerHTML = (data.source ? "from " + fmt.escape(data.source) + " " : "") + btns;
+    wireProvBtns(srcEl);
+  }
   const worstCls = (data.worst_slack !== null && data.worst_slack < 0) ? "pill-fail" : "pill-pass";
   summary.innerHTML =
     "<span class='pill " + worstCls + "'>worst " + (data.kind) + " slack " +

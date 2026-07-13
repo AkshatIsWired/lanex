@@ -11,6 +11,7 @@ import { toast } from "./toast.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
 import { wireScrollSpy } from "./jumpnav.js";
 import { icon } from "./icons.js";
+import { provBtnHtml, wireProvBtns } from "./provenance.js";
 
 // ---------- shared classification --------------------------------------------
 
@@ -243,14 +244,22 @@ function renderSummary(summary) {
     rows.map((r) => {
       const unit = r.unit ? " <span class='unit'>" + fmt.escape(r.unit) + "</span>" : "";
       const cls = r.status ? " " + r.status : "";
+      // Each summary card derives from one metric key — the source button
+      // opens the run's own metrics.json at that key's line (a derived
+      // display like % vs fraction is explained by the raw line itself).
+      const prov = (r.key && _lastTag)
+        ? provBtnHtml({ kind: "metric", key: r.key, tag: _lastTag },
+            "Show '" + r.key + "' in this run's metrics.json (raw LibreLane value)")
+        : "";
       return (
         "<div class='summary-card" + cls + "'>" +
-        "<div class='summary-val'>" + fmt.escape(fmt.metric(r.value)) + unit + "</div>" +
+        "<div class='summary-val'>" + fmt.escape(fmt.metric(r.value)) + unit + prov + "</div>" +
         "<div class='summary-label'>" + fmt.escape(r.label) + "</div>" +
         "</div>"
       );
     }).join("") +
     "</div>";
+  wireProvBtns(root);
 }
 
 // ---- Grouped full metric list (filterable) ------------------------------------
@@ -299,8 +308,12 @@ function renderSections(values, filter) {
             ? "No register-to-register paths in this design — this slack is unconstrained (genuinely ∞), not a parsing error."
             : "Non-finite value reported by LibreLane (genuine, not a parse error).")
         : "";
+      const prov = _lastTag
+        ? provBtnHtml({ kind: "metric", key: k, tag: _lastTag },
+            "Show this metric's line in the run's metrics.json (raw LibreLane file)")
+        : "";
       card.innerHTML =
-        "<div class='key' title='" + fmt.escape(k) + "'>" + fmt.escape(k) + "</div>" +
+        "<div class='key' title='" + fmt.escape(k) + "'>" + fmt.escape(k) + prov + "</div>" +
         "<div class='val " + cls + "'" + (valTitle ? " title='" + fmt.escape(valTitle) + "'" : "") +
         ">" + formatValue(v) + "</div>";
       grid.appendChild(card);
@@ -309,6 +322,7 @@ function renderSections(values, filter) {
     sec.appendChild(body);
     root.appendChild(sec);
   }
+  wireProvBtns(root);
   const total = Object.keys(values).length;
   if (cnt) {
     cnt.textContent = filter
