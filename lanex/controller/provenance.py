@@ -138,14 +138,19 @@ def base_config_provenance(design_dir: Path, var: str) -> Dict[str, Any]:
         if name.endswith(".json"):
             hit = _find_json_key(lines, var)
         else:
-            # yaml `VAR:` at any indent; tcl `set ::env(VAR)` — first match.
+            # yaml `VAR:` at any indent; tcl `set ::env(VAR)`. Among several
+            # matches the LEAST indented (top-level) wins — the same rule as
+            # the JSON path and config_var_lines, so the "your config" chip
+            # and this open-at-line answer always name the SAME line.
             pats = (re.compile(r"^\s*" + re.escape(var) + r"\s*:"),
                     re.compile(r"::env\(" + re.escape(var) + r"\)"))
             hit = None
+            best_indent = 1 << 30
             for i, line in enumerate(lines, start=1):
                 if any(p.search(line) for p in pats):
-                    hit = (i, line.rstrip("\n"))
-                    break
+                    indent = len(line) - len(line.lstrip())
+                    if indent < best_indent:
+                        hit, best_indent = (i, line.rstrip("\n")), indent
         if hit is None:
             return {"ok": False, "rel": name, "reason":
                     f"'{var}' is not set in {name} — without your override "
@@ -177,3 +182,92 @@ def report_provenance(run_dir: Path, rel: str, needle: str) -> Dict[str, Any]:
                     "text": line.rstrip("\n"), "writer": "tool report"}
     return {"ok": False, "rel": rel, "reason":
             f"'{needle}' not found in {rel}"}
+
+
+# ---------------------------------------------------------------------------
+# Bulk input-side map: every variable the design's config file sets.
+# ---------------------------------------------------------------------------
+
+# A LibreLane variable name as it appears as a config key. Scope sections
+# (pdk::sky130*, scl::sky130_fd_sc_hs) are tracked separately — a scoped value
+# only applies when the run's PDK/SCL matches, and LanEx must NEVER claim it
+# does (that would re-implement LibreLane's config resolution and risk showing
+# a value the flow would not use). Scoped entries are therefore LABELLED, not
+# resolved.
+_VAR_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_JSON_KEY_RE = re.compile(r'^(\s*)"([^"]+)"\s*:(.*)$')
+_YAML_KEY_RE = re.compile(r"^(\s*)([A-Za-z_][\w:*.\-]*)\s*:(.*)$")
+_TCL_SET_RE = re.compile(r"^\s*set\s+::env\((\w+)\)\s+(.*)$")
+
+
+def _frag_display(frag: str) -> str:
+    """The value exactly as written in the file, trimmed for a chip."""
+    s = frag.strip().rstrip(",").strip()
+    if len(s) > 60:
+        s = s[:57] + "…"
+    return s
+
+
+def config_var_lines(design_dir: Path) -> Dict[str, Any]:
+    """Map every variable the design's own config file sets to its line.
+
+    Returns ``{ok, rel, vars: {VAR: {line, text, value, scoped, scope}}}``.
+    ``value`` is the raw fragment AS WRITTEN on that line (never normalized —
+    the file is the truth); ``scoped`` marks entries inside a ``pdk::``/
+    ``scl::`` section, whose applicability depends on the run's PDK — the UI
+    must present those as conditional. When a variable appears both at top
+    level and inside a scope, the top-level line wins (it is unconditionally
+    read by every flow); extra occurrences are counted in ``others``.
+    Line-scan only — same discipline as the rest of this module: report what
+    the file says, never resolve what the flow would compute.
+    """
+    for name in ("config.json", "config.yaml", "config.tcl"):
+        path = Path(design_dir) / name
+        if not path.is_file():
+            continue
+        lines = _read_lines(path)
+        if lines is None:
+            return {"ok": False, "reason": f"could not read {name}"}
+        out: Dict[str, Dict[str, Any]] = {}
+        # innermost-first stack of (indent, scope_key) for pdk::/scl:: blocks
+        scopes: list[Tuple[int, str]] = []
+
+        def _record(var: str, i: int, line: str, frag: str) -> None:
+            entry = {
+                "line": i, "text": line.rstrip("\n"),
+                "value": _frag_display(frag),
+                "scoped": bool(scopes),
+                "scope": scopes[-1][1] if scopes else None,
+            }
+            prev = out.get(var)
+            if prev is None:
+                entry["others"] = 0
+                out[var] = entry
+            elif prev["scoped"] and not entry["scoped"]:
+                # top-level beats scoped: it applies to every run
+                entry["others"] = prev["others"] + 1
+                out[var] = entry
+            else:
+                prev["others"] += 1
+
+        if name == "config.tcl":
+            for i, line in enumerate(lines, start=1):
+                m = _TCL_SET_RE.match(line)
+                if m and _VAR_RE.match(m.group(1)):
+                    _record(m.group(1), i, line, m.group(2))
+        else:
+            key_re = _JSON_KEY_RE if name.endswith(".json") else _YAML_KEY_RE
+            for i, line in enumerate(lines, start=1):
+                m = key_re.match(line)
+                if not m:
+                    continue
+                indent, key, rest = len(m.group(1)), m.group(2), m.group(3)
+                while scopes and scopes[-1][0] >= indent:
+                    scopes.pop()
+                if key.startswith(("pdk::", "scl::")):
+                    scopes.append((indent, key))
+                    continue
+                if _VAR_RE.match(key):
+                    _record(key, i, line, rest)
+        return {"ok": True, "rel": name, "vars": out}
+    return {"ok": False, "reason": "no config file found in the design dir"}

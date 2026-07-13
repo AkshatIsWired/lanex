@@ -511,6 +511,9 @@ def h_provenance(handler: Any) -> None:
                                                  flow ACTUALLY used)
     ``?kind=input&key=<VAR>``                 -> the design's own config line
                                                  the user's override supersedes
+    ``?kind=input-map``                       -> ALL vars the config file sets
+                                                 (one call — feeds the form's
+                                                 per-field "your config" chips)
     ``?kind=report&tag=&path=<rel>&needle=``  -> first line of a run report
                                                  containing the literal text
 
@@ -522,6 +525,16 @@ def h_provenance(handler: Any) -> None:
     key = _query_param(handler.path, "key") or ""
     tag = _query_param(handler.path, "tag")
     try:
+        if kind == "input-map":
+            design_dir = _get_active_design_dir()
+            if not design_dir:
+                _respond(handler, {"ok": False, "reason": "no active design"})
+                return
+            res = provenance.config_var_lines(Path(design_dir))
+            if res.get("rel"):
+                res["abs"] = str(Path(design_dir) / res["rel"])
+            _respond(handler, res)
+            return
         if kind == "input":
             design_dir = _get_active_design_dir()
             if not design_dir:

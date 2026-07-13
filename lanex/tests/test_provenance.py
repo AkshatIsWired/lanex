@@ -284,3 +284,128 @@ def test_frontend_trail_and_view_config_wiring() -> None:
     # the toolbar unreachable on long files — the pane must scroll itself.
     assert ".scrollIntoView(" not in fv  # (comments may explain WHY it is banned)
     assert "centerInPre" in fv
+
+
+# ---------------------------------------------------- input-map (bulk tier) --
+
+SPM_YAML = """\
+DESIGN_NAME: spm
+VERILOG_FILES: dir::src/*.v
+CLOCK_PERIOD: 10
+IO_PIN_ORDER_CFG: dir::pin_order.cfg
+pdk::sky130*:
+  FP_CORE_UTIL: 45
+  CLOCK_PERIOD: 10.0
+  scl::sky130_fd_sc_hs:
+    CLOCK_PERIOD: 8
+pdk::gf180mcu*:
+  FP_CORE_UTIL: 38
+"""
+
+
+def test_config_var_lines_yaml_scoping(tmp_path: Path) -> None:
+    """The spm example's real shape: top-level vars, pdk:: sections, an scl::
+    section nested inside one. The map must report values AS WRITTEN, prefer
+    top-level entries, and label scoped ones with their exact scope — never
+    claiming a scoped value applies (that would re-implement LibreLane's
+    config resolution)."""
+    (tmp_path / "config.yaml").write_text(SPM_YAML)
+    res = provenance.config_var_lines(tmp_path)
+    assert res["ok"] is True and res["rel"] == "config.yaml"
+    v = res["vars"]
+
+    assert v["DESIGN_NAME"] == {"line": 1, "text": "DESIGN_NAME: spm",
+                                "value": "spm", "scoped": False,
+                                "scope": None, "others": 0}
+    # CLOCK_PERIOD: top-level line 3 wins; the pdk- and scl-scoped entries
+    # are counted, not promoted.
+    cp = v["CLOCK_PERIOD"]
+    assert cp["line"] == 3 and cp["value"] == "10" and cp["scoped"] is False
+    assert cp["others"] == 2
+    # FP_CORE_UTIL exists ONLY inside pdk:: sections — the user's actual
+    # question: the chip must say it is scoped to pdk::sky130*, value 45.
+    fcu = v["FP_CORE_UTIL"]
+    assert fcu == {"line": 6, "text": "  FP_CORE_UTIL: 45", "value": "45",
+                   "scoped": True, "scope": "pdk::sky130*", "others": 1}
+    assert "NOT_SET_VAR" not in v
+
+
+def test_config_var_lines_json_scoping(tmp_path: Path) -> None:
+    (tmp_path / "config.json").write_text(
+        '{\n'
+        '    "DESIGN_NAME": "spm",\n'
+        '    "FP_CORE_UTIL": 40,\n'
+        '    "pdk::sky130*": {\n'
+        '        "FP_CORE_UTIL": 45,\n'
+        '        "SYNTH_STRATEGY": "AREA 0"\n'
+        '    }\n'
+        '}\n')
+    res = provenance.config_var_lines(tmp_path)
+    assert res["ok"] is True and res["rel"] == "config.json"
+    v = res["vars"]
+    fcu = v["FP_CORE_UTIL"]
+    assert fcu["line"] == 3 and fcu["value"] == "40" and fcu["scoped"] is False
+    assert fcu["others"] == 1
+    ss = v["SYNTH_STRATEGY"]
+    assert ss["scoped"] is True and ss["scope"] == "pdk::sky130*"
+    assert ss["line"] == 6 and ss["value"] == '"AREA 0"'
+
+
+def test_config_var_lines_tcl_and_long_values(tmp_path: Path) -> None:
+    long_val = "x" * 70
+    (tmp_path / "config.tcl").write_text(
+        "set ::env(PL_TARGET_DENSITY) 0.5\n"
+        f"set ::env(EXTRA_LEFS) {long_val}\n")
+    res = provenance.config_var_lines(tmp_path)
+    v = res["vars"]
+    assert v["PL_TARGET_DENSITY"] == {"line": 1,
+                                      "text": "set ::env(PL_TARGET_DENSITY) 0.5",
+                                      "value": "0.5", "scoped": False,
+                                      "scope": None, "others": 0}
+    assert v["EXTRA_LEFS"]["value"].endswith("…")  # trimmed for the chip
+
+
+def test_config_var_lines_no_config_is_honest(tmp_path: Path) -> None:
+    res = provenance.config_var_lines(tmp_path)
+    assert res["ok"] is False and "no config file" in res["reason"]
+
+
+def test_map_and_per_var_lookup_name_the_same_line(tmp_path: Path) -> None:
+    """The chip (bulk map) and its click-through (per-var lookup) must point
+    at the SAME line, or the dialog would highlight a different line than the
+    chip named. Scoped-first file order is the trap: both must prefer the
+    top-level (least-indented) entry."""
+    (tmp_path / "config.yaml").write_text(
+        "pdk::sky130*:\n"
+        "  CLOCK_PERIOD: 8\n"
+        "CLOCK_PERIOD: 10\n")
+    bulk = provenance.config_var_lines(tmp_path)["vars"]["CLOCK_PERIOD"]
+    single = provenance.base_config_provenance(tmp_path, "CLOCK_PERIOD")
+    assert bulk["line"] == 3 and bulk["scoped"] is False
+    assert single["ok"] is True and single["line"] == 3
+    assert single["text"] == bulk["text"]
+
+
+def test_route_input_map(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_text(SPM_YAML)
+    out = _call_route(monkeypatch, tmp_path, "kind=input-map")
+    p = out["payload"]
+    assert p["ok"] is True and p["rel"] == "config.yaml"
+    assert p["abs"] == str(tmp_path / "config.yaml")
+    assert p["vars"]["FP_CORE_UTIL"]["scope"] == "pdk::sky130*"
+
+
+def test_frontend_config_tier_wiring() -> None:
+    """The form's 'your config' tier exists in the served static files and
+    keeps its honesty properties: bulk fetch, scoped labelling, no chip
+    without a map entry."""
+    static = Path(__file__).resolve().parents[1] / "server" / "static"
+    cfg = (static / "modules" / "config.js").read_text()
+    assert "annotateConfigLines" in cfg
+    assert '"input-map"' in cfg
+    assert "vconfig-scoped" in cfg
+    prov_js = (static / "modules" / "provenance.js").read_text()
+    assert "applies only when the run's PDK/SCL matches" in prov_js
+    assert "configChipSpec" in prov_js
+    css = (static / "styles.css").read_text()
+    assert ".vconfig" in css and ".vconfig-scoped" in css

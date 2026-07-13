@@ -363,6 +363,32 @@ check("fileview: the provenance highlight lands on exactly the requested line", 
   assert.doesNotMatch(pre2.innerHTML, /<mark/, "out-of-range line must not highlight anything");
 });
 
+// ------------------------------------------------ "your config" field chips
+// The Setup form's middle tier: what the design's own config file sets. The
+// spm scenario that motivated it — FP_CORE_UTIL: 45 inside pdk::sky130* while
+// LibreLane's default chip says 50 — must yield a chip that names the scope
+// and declares it conditional, never claiming the scoped value applies.
+const prov = await import(resolve(MOD, "provenance.js"));
+check("provenance.js: config chips state scope + conditionality faithfully", () => {
+  const scoped = prov.configChipSpec(
+    { line: 6, text: "  FP_CORE_UTIL: 45", value: "45",
+      scoped: true, scope: "pdk::sky130*", others: 1 }, "config.yaml");
+  assert.equal(scoped.text, "config (pdk::sky130*): 45");
+  assert.ok(scoped.title.includes("line 6"), "title must name the exact line");
+  assert.ok(scoped.title.includes("applies only when the run's PDK/SCL matches"),
+    "a scoped value must be declared conditional");
+  assert.ok(scoped.title.includes("1 more entry"), "extra entries must be disclosed");
+  assert.equal(scoped.scoped, true);
+
+  const plain = prov.configChipSpec(
+    { line: 3, text: "CLOCK_PERIOD: 10", value: "10",
+      scoped: false, scope: null, others: 0 }, "config.yaml");
+  assert.equal(plain.text, "your config: 10");
+  assert.ok(plain.title.includes("what an untouched field uses"),
+    "an unscoped value is what an untouched field uses");
+  assert.ok(!plain.title.includes("more entr"), "no phantom extra entries");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

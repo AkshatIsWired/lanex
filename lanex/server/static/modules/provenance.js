@@ -23,6 +23,26 @@ export function provBtnHtml(params, title) {
     "'><svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='11' cy='11' r='7'/><path d='M21 21l-4.3-4.3'/></svg></button>";
 }
 
+// Text for a "your config" field chip from one /api/provenance?kind=input-map
+// entry. Pure (node-testable): the form's tier between "LibreLane default" and
+// an override. A scoped (pdk::/scl::) entry is labelled with its scope and
+// declared CONDITIONAL — LanEx never resolves whether a scope applies to the
+// run; resolved.json is the post-run proof.
+export function configChipSpec(entry, rel) {
+  const scoped = !!entry.scoped;
+  const label = scoped ? "config (" + (entry.scope || "scoped") + ")" : "your config";
+  const title =
+    (scoped
+      ? "Set in " + rel + " line " + entry.line + " inside a " + (entry.scope || "scoped") +
+        " section — it applies only when the run's PDK/SCL matches that section."
+      : "Set in " + rel + " line " + entry.line +
+        " — this is what an untouched field uses (an override supersedes it).") +
+    (entry.others ? " The file has " + entry.others + " more entr" +
+      (entry.others === 1 ? "y" : "ies") + " for this variable." : "") +
+    " Click to open the file at that line.";
+  return { label, title, text: label + ": " + entry.value, scoped };
+}
+
 // Wire every [data-prov] button under `root` (idempotent).
 export function wireProvBtns(root) {
   if (!root) return;

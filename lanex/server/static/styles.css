@@ -1200,6 +1200,22 @@ select {
   font-weight: 400;
 }
 .var-row .vname .vdefault-none { font-style: italic; opacity: .8; }
+/* The "your config" tier: what the design's own config file sets for this
+   field (between the LibreLane default and any override). A button — click
+   opens the config file at that exact line. Scoped (pdk::/scl::) entries are
+   dashed: conditional on the run's PDK, never claimed to apply. */
+.var-row .vname .vconfig {
+  color: var(--accent-cyan, var(--accent));
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 400;
+  cursor: pointer;
+}
+.var-row .vname .vconfig:hover { border-color: var(--accent); }
+.var-row .vname .vconfig-scoped { border-style: dashed; color: var(--text-muted); }
 /* B4: an override that differs from the LibreLane default gets an accent edge so
    the form scannably shows what you are changing. */
 .var-row.modified { border-left: 2px solid var(--accent); }

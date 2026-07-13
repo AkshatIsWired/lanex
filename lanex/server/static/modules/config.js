@@ -494,6 +494,41 @@ function paint() {
     for (const v of vs) grid.appendChild(buildRow(v));
     root.appendChild(grid);
   }
+  annotateConfigLines(root);
+}
+
+// ---- the "your config" tier -------------------------------------------
+// Between LibreLane's default and any override sits the design's OWN config
+// file. Annotate each field with what that file sets, as written, so
+// "default: 50" can never be misread when config.json/.yaml sets 45 — the
+// untouched-field value is the config's, not the default. One bulk lookup;
+// chips appear when it lands (the form never waits on it). Scoped
+// (pdk::/scl::) entries are labelled conditional: LanEx never resolves
+// whether a scope applies — that is LibreLane's job, and resolved.json is
+// the post-run proof. No chip = the file does not set that variable.
+let _cfgMapSeq = 0;
+async function annotateConfigLines(root) {
+  const seq = ++_cfgMapSeq;
+  let map = null, prov = null;
+  try {
+    map = await api.provenance({ kind: "input-map" });
+    prov = await import("./provenance.js");
+  } catch { /* no chip = no claim */ }
+  if (seq !== _cfgMapSeq || !map || !prov || map.ok === false || !map.vars) return;
+  root.querySelectorAll(".var-row[data-var]").forEach((row) => {
+    const e = map.vars[row.dataset.var];
+    if (!e || row.querySelector(".vconfig")) return;
+    const spec = prov.configChipSpec(e, map.rel);
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "vconfig" + (spec.scoped ? " vconfig-scoped" : "");
+    chip.title = spec.title;
+    chip.textContent = spec.text;  // textContent: file bytes can't inject HTML
+    chip.addEventListener("click", () =>
+      prov.openProvenance({ kind: "input", key: row.dataset.var },
+        { title: "Your config's own " + row.dataset.var + " line" }));
+    row.querySelector(".vname")?.appendChild(chip);
+  });
 }
 
 function jumpToSection(id, navChip) {
@@ -520,6 +555,7 @@ function openConstraintsAndJump(id) {
 function buildRow(v) {
   const row = document.createElement("div");
   row.className = "var-row";
+  row.dataset.var = v.name;
   const id = "var-" + v.name;
   // B4: show LibreLane's own default for every field so a pre-filled value is
   // never mistaken for something the user typed. Empty default => explicit
