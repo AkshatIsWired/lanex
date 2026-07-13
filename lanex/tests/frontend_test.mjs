@@ -17,7 +17,7 @@
 //   node lanex/tests/frontend_test.mjs      → exit 0 = pass, 1 = fail
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -29,12 +29,15 @@ const { csvCell } = await import(resolve(MOD, "csvutil.js"));
 const { clampZoom, fitChrome } = await import(resolve(MOD, "zoom.js"));
 
 let passed = 0;
+const results = [];
 function check(name, fn) {
   try {
     fn();
     passed += 1;
+    results.push({ name, ok: true, msg: "" });
     console.log(`  ok   ${name}`);
   } catch (e) {
+    results.push({ name, ok: false, msg: String(e.message || e) });
     console.error(`  FAIL ${name}: ${e.message}`);
     process.exitCode = 1;
   }
@@ -306,3 +309,28 @@ check("charts.js: golden run values reach the chart series unchanged", () => {
 
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
+
+// On GitHub Actions, list every check in the Summary tab so the display-layer
+// data-accuracy results are readable without opening the job log. Local runs
+// (no GITHUB_STEP_SUMMARY) skip this; FRONTEND_TEST_SUMMARY=0 opts a matrix
+// leg out so the 4× python matrix doesn't write four identical tables.
+if (process.env.GITHUB_STEP_SUMMARY && process.env.FRONTEND_TEST_SUMMARY !== "0") {
+  const failed = results.filter((r) => !r.ok);
+  const esc = (s) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+  const lines = [
+    "## Frontend behaviour — display-layer data accuracy",
+    "",
+    `**${passed} passed · ${failed.length} failed** — the executed display ` +
+    "functions (metric formatting, escaping, CSV quoting, chart builders, " +
+    "browser VCD parser) held to the golden fixtures.",
+    "",
+    "| Check | Result |",
+    "|---|---|",
+    ...results.map((r) =>
+      `| ${esc(r.name)} | ${r.ok ? "✓ pass" : "✗ FAIL — " + esc(r.msg)} |`),
+    "",
+  ];
+  try {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+  } catch { /* a summary write must never fail the gate */ }
+}

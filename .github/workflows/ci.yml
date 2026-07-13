@@ -62,6 +62,10 @@ jobs:
           done
 
       - name: Frontend behaviour test (executes the display functions)
+        env:
+          # The matrix runs this 4x; only the 3.12 leg writes the per-check
+          # Summary-tab table (the checks themselves run on every leg).
+          FRONTEND_TEST_SUMMARY: ${{ matrix.python-version == '3.12' && '1' || '0' }}
         run: node lanex/tests/frontend_test.mjs
 
       - name: Static hygiene (no emoji pictographs — round-26 rule, locks D10)
