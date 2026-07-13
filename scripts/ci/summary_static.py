@@ -20,8 +20,10 @@ import sys
 
 ROWS = [
     ("Frontend behaviour (`frontend_test.mjs`)",
-     "Executes the display functions (metric formatting, HTML escaping, CSV quoting) — a wrong number or "
-     "unescaped tool string on screen fails here (syntax-checking alone never runs this)."),
+     "Executes the display functions (metric formatting, HTML escaping, CSV quoting) and holds them to the "
+     "golden fixtures: all 300+ metrics of a real run must render faithfully, the chart builders must pass "
+     "values through unchanged, and the browser VCD parser must read the golden dump exactly like the "
+     "server parsers — a wrong number on screen fails here (syntax-checking alone never runs this)."),
     ("JavaScript syntax (`node --check`)",
      "Every frontend module parses — a broken build can't ship a blank cockpit."),
     ("Static hygiene (no emoji pictographs)",

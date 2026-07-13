@@ -59,6 +59,27 @@ IMPLICATIONS: Dict[str, str] = {
     "test_viewers_plugins": "Cell parsing + desktop-tool launch guards behave; plugin surface stays removed.",
     "test_viewer_handoff": "Every layout viewer receives ALL the run data it can render: OpenROAD gets db+liberty+sdc+spef and the marker/DRC inventory (clean-vs-violations said out loud); KLayout gets the DRC/XOR marker databases; Magic/GDS3D flags stay existence-guarded.",
     "test_packaging": "The built wheel ships the frontend assets — no 'installs but blank page'.",
+    "test_gtkwave": "The 'Open in GTKWave' pipeline is wired end-to-end: catalog/installer/whitelist entries, launch argv, VCD-header parsing, .gtkw generation, and the traversal-guarded route.",
+    "test_wave_fidelity": "Every waveform parser (product, in-browser viewer, CI reference) reads the SAME golden Icarus dump and recovers the exact values the simulator wrote — a viewer can never show wrong sim data.",
+    "test_install_script": "The one-line installer keeps its contracts: main-on-last-line, degradable stages, git+gtkwave in every package stage, and a skippable best-effort GDS3D stage.",
+    "test_macos_install": "The macOS install paths (GDS3D app, engines, XQuartz display detection, arch/version guards) stay correct without a Mac in CI.",
+    "test_appwindow": "The standalone app-window launcher picks a real browser per platform and can never leave the user with no UI.",
+    "test_runner": "The flow runner streams librelane's own per-step events and full-detail logs (the __librelane__/SUBPROCESS bridge) — local runs stay first-class.",
+    "test_tools_container_grid": "The Tools grid only advertises container launches the engine+image can actually deliver.",
+    "test_fixes_gf180": "gf180/non-sky130 PDKs keep working: root-owned ciel store recovery and the generalized KLayout .lyp lookup.",
+    "test_fixes_audit": "The audited round-19 fixes stay fixed: security confinement, DSE sweep manifests, SSE robustness.",
+    "test_fixes_round2": "The round-1/2 audit fixes stay fixed (pure controller logic, no tools needed).",
+    "test_fixes_round3": "The round-3 six-issue UX batch stays fixed (run scan, status truthfulness).",
+    "test_fixes_round4": "The round-4 user-reported fixes stay fixed (fixture-driven controller checks).",
+    "test_fixes_round16": "Auto-config, container step-slicing, container-tool argv, custom-cell swap, and the manual-console allow-list keep working.",
+    "test_fixes_round17": "Auto-config never picks a testbench as top; override cleaning keeps 0/False; reproduce metadata stays complete.",
+    "test_fixes_round18": "Platform/WSL batch: DNS remediation surfaces, Windows PATH filtering, GDS3D dev-header auto-install.",
+    "test_fixes_round20": "Runaway sims get killed by the watchdog; file delete confined; bundle resolves real sources.",
+    "test_fixes_round21": "OpenROAD GUI startup tcl loads db+liberty+sdc+spef; compare picks run dirs correctly.",
+    "test_fixes_round22": "Known-designs persistence + OpenROAD STA corners stay correct (cross-design Compare/DSE).",
+    "test_fixes_round25": "WSL native-tool probes ignore Windows /mnt/c binaries; root escalation works without a TTY.",
+    "test_fixes_round26": "Tools installed into ~/.local/bin are detected; password-prompt banner reaches the user.",
+    "test_fixes_round27": "GDS3D opens on WSL: software-GL fallback + legacy X11 fonts auto-install.",
 }
 
 _GENERIC = "Regression lock for a previously-fixed issue — keeps it from coming back."
@@ -76,29 +97,51 @@ def _file_key(testcase: ET.Element) -> str:
     return cls or "other"
 
 
-def _parse(xml_path: Path) -> Tuple[Dict[str, List[int]], int, int, int, float]:
-    """Return (per-file [pass,fail,skip], totals pass/fail/skip, wall seconds)."""
+def _detail_line(el: ET.Element) -> str:
+    """One readable line from a <failure>/<error>/<skipped> element."""
+    msg = (el.get("message") or (el.text or "").strip().splitlines()[0:1] or [""])
+    if isinstance(msg, list):
+        msg = msg[0]
+    msg = " ".join(str(msg).split())
+    if len(msg) > 220:
+        msg = msg[:217] + "…"
+    return msg.replace("|", "\\|")
+
+
+def _parse(xml_path: Path) -> Tuple[Dict[str, List[int]], int, int, int, float,
+                                    List[Tuple[str, str, str]],
+                                    List[Tuple[str, str, str]]]:
+    """Return (per-file [pass,fail,skip], totals pass/fail/skip, wall seconds,
+    failures [(file, test, message)], skips [(file, test, reason)])."""
     root = ET.parse(xml_path).getroot()
     per: Dict[str, List[int]] = defaultdict(lambda: [0, 0, 0])
     tot_p = tot_f = tot_s = 0
     wall = 0.0
+    failures: List[Tuple[str, str, str]] = []
+    skips: List[Tuple[str, str, str]] = []
     for tc in root.iter("testcase"):
         key = _file_key(tc)
+        name = tc.get("name") or "?"
         wall += float(tc.get("time") or 0.0)
-        if tc.find("failure") is not None or tc.find("error") is not None:
+        bad = tc.find("failure")
+        if bad is None:
+            bad = tc.find("error")
+        if bad is not None:
             per[key][1] += 1
             tot_f += 1
-        elif tc.find("skipped") is not None:
+            failures.append((key, name, _detail_line(bad)))
+        elif (sk := tc.find("skipped")) is not None:
             per[key][2] += 1
             tot_s += 1
+            skips.append((key, name, _detail_line(sk)))
         else:
             per[key][0] += 1
             tot_p += 1
-    return per, tot_p, tot_f, tot_s, wall
+    return per, tot_p, tot_f, tot_s, wall, failures, skips
 
 
 def render(xml_path: Path, title: str) -> str:
-    per, tp, tf, ts, wall = _parse(xml_path)
+    per, tp, tf, ts, wall, failures, skips = _parse(xml_path)
     verdict = "✓ all green" if tf == 0 else f"✗ {tf} FAILING"
     lines: List[str] = [
         f"## {title}",
@@ -120,6 +163,22 @@ def render(xml_path: Path, title: str) -> str:
         why = IMPLICATIONS.get(key, _GENERIC)
         lines.append(f"| `{key}` | {res} | {n} | {why} |")
     lines.append("")
+    # A red group in the table says WHERE; this says exactly WHICH test and
+    # WHY it failed, so nobody has to dig the raw log for the first triage.
+    if failures:
+        lines += ["### ✗ Failing tests", "",
+                  "| Test | Failure |", "|---|---|"]
+        for key, name, msg in failures:
+            impl = IMPLICATIONS.get(key)
+            impl_note = f"<br><sub>At stake: {impl}</sub>" if impl else ""
+            lines.append(f"| `{key}::{name}` | {msg or 'see the job log'}{impl_note} |")
+        lines.append("")
+    if skips:
+        lines += ["<details><summary>Skipped tests"
+                  f" ({len(skips)}) — each states its reason</summary>", ""]
+        for key, name, msg in skips:
+            lines.append(f"- `{key}::{name}` — {msg or 'no reason recorded'}")
+        lines += ["", "</details>", ""]
     return "\n".join(lines) + "\n"
 
 

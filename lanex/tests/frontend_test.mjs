@@ -190,5 +190,119 @@ check("tools: engine-not-usable card is platform-aware with a Start action", () 
     "the Recheck button no longer forces a fresh probe");
 });
 
+// ------------------------------------------- waveform viewer data fidelity
+// The SAME golden VCD (a real Icarus dump of the 4-bit counter bench, see
+// goldens/sim_run/) that test_wave_fidelity.py holds the python parsers to.
+// The in-browser canvas viewer parses it here — so the canvas viewer, the
+// GTKWave handoff, and the CI reference parser all read ONE fixture and must
+// agree on both the signal list and the VALUES.
+const { parseVCD } = await import(resolve(MOD, "ide", "vcd.js"));
+const GOLDEN_VCD = readFileSync(
+  resolve(HERE, "goldens", "sim_run", "dump.vcd"), "utf8");
+
+check("vcd.js: golden dump yields the same deduped signal list as waveview.py", () => {
+  const vcd = parseVCD(GOLDEN_VCD);
+  const full = vcd.signals.map((s) => (s.scope.length ? s.scope.join(".") + "." : "") + s.name);
+  assert.deepEqual(full, [
+    "tb_counter.q[3:0]", "tb_counter.clk", "tb_counter.rst", "tb_counter.dut.q[3:0]",
+  ]);
+  assert.deepEqual(vcd.signals.map((s) => s.width), [4, 1, 1, 4]);
+});
+
+check("vcd.js: the counter VALUES on screen equal what the simulator wrote", () => {
+  const vcd = parseVCD(GOLDEN_VCD);
+  const q = vcd.signals.find((s) => s.name === "q[3:0]" && s.scope.includes("dut"));
+  const values = vcd.byId[q.id].changes
+    .map(([, v]) => v)
+    .filter((v) => /^[01]+$/.test(v))
+    .map((v) => parseInt(v, 2));
+  assert.deepEqual(values, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    "the rendered counter sequence diverged from the simulation data");
+  // The clock genuinely toggles (no dropped edges in the parse).
+  const clk = vcd.signals.find((s) => s.name === "clk");
+  const clkVals = vcd.byId[clk.id].changes.map(([, v]) => v).filter((v) => /^[01]$/.test(v));
+  for (let i = 1; i < clkVals.length; i++) assert.notEqual(clkVals[i], clkVals[i - 1]);
+});
+
+// ------------------------------- LibreLane-output → on-screen display fidelity
+// goldens/display_run/metrics.json is a REAL SPM container run's final
+// metrics.json (305 metrics: ints, floats, sub-milli magnitudes, +Infinity,
+// strings). Every value goes through the SAME token bridge the server applies
+// (json_safe stringifies non-finite floats) and then through fmt.metric — the
+// string the user actually reads. Each render must be faithful: parseable back
+// to the original within the format's own precision, tokens humanised,
+// absent-vs-NaN never blurred, strings unmangled.
+check("display fidelity: all 300+ real run metrics render faithfully", () => {
+  const raw = readFileSync(resolve(HERE, "goldens", "display_run", "metrics.json"), "utf8");
+  // Mirror of server-side json_safe: python's json.dump wrote bare Infinity/
+  // NaN literals; the server converts them to quoted tokens before the wire.
+  const tokened = raw.replace(/([:\[,]\s*)(-?Infinity|NaN)(\s*[,}\]])/g, '$1"$2"$3');
+  const metrics = JSON.parse(tokened);
+  const keys = Object.keys(metrics);
+  assert.ok(keys.length >= 300, `golden shrank: only ${keys.length} metrics`);
+  let checked = 0;
+  for (const [key, v] of Object.entries(metrics)) {
+    const r = fmt.metric(v);
+    assert.notEqual(r, "—", `${key}: a PRESENT value rendered as absent`);
+    if (v === "Infinity") { assert.equal(r, "∞", key); checked++; continue; }
+    if (v === "-Infinity") { assert.equal(r, "−∞", key); checked++; continue; }
+    if (v === "NaN") { assert.equal(r, "NaN", key); checked++; continue; }
+    if (typeof v === "string") { assert.equal(r, v, `${key}: string mangled`); checked++; continue; }
+    // Finite number: never rendered as NaN/∞, and parse-back must recover the
+    // value within the branch's own formatting precision.
+    assert.ok(r !== "NaN" && r !== "∞" && r !== "−∞", `${key}: finite value rendered non-finite`);
+    if (v !== 0 && Math.abs(v) < 0.001) {
+      assert.match(r, /e/, `${key}: sub-milli value ${v} lost to "0.000"`);
+      const back = parseFloat(r);
+      assert.ok(Math.abs(back - v) <= Math.abs(v) * 0.01, `${key}: ${r} !≈ ${v}`);
+    } else if (Math.abs(v) < 100) {
+      const back = parseFloat(r);
+      assert.ok(Math.abs(back - v) <= 0.0005001, `${key}: ${r} !≈ ${v}`);
+    } else {
+      const back = parseFloat(r.replace(/[,\s  ]/g, ""));
+      assert.ok(Math.abs(back - v) <= 0.5 + Math.abs(v) * 1e-9, `${key}: ${r} !≈ ${v}`);
+    }
+    checked++;
+  }
+  assert.equal(checked, keys.length);
+});
+
+// The Analytics charts draw from the same metrics object — the option builders
+// are pure (charts.js), so run them on the golden run's real values and require
+// exact passthrough into the series data. A unit conversion or key typo that
+// would plot wrong numbers fails here.
+const charts = await import(resolve(MOD, "charts.js"));
+check("charts.js: golden run values reach the chart series unchanged", () => {
+  const raw = readFileSync(resolve(HERE, "goldens", "display_run", "metrics.json"), "utf8");
+  const tokened = raw.replace(/([:\[,]\s*)(-?Infinity|NaN)(\s*[,}\]])/g, '$1"$2"$3');
+  const m = JSON.parse(tokened);
+
+  const slack = charts.timingSlackOption(m);
+  const wantSlack = ["timing__setup__ws", "timing__setup__tns",
+                     "timing__hold__ws", "timing__hold__tns"]
+    .map((k) => m[k]).filter((v) => typeof v === "number" && isFinite(v));
+  assert.deepEqual(slack.series[0].data.map((d) => d.value), wantSlack,
+    "slack bars diverged from the run's timing metrics");
+
+  const util = charts.utilizationOption(m);
+  const wantPct = Math.round(m["design__instance__utilization"] * 1000) / 10;
+  assert.equal(util.series[0].data[0].value, wantPct);
+
+  const power = charts.powerOption(m);
+  if (power) {
+    for (const d of power.series[0].data) {
+      const key = { Internal: "power__internal__total",
+                    Switching: "power__switching__total",
+                    Leakage: "power__leakage__total" }[d.name];
+      assert.equal(d.value, m[key], `${d.name} power mangled`);
+    }
+  }
+
+  // Non-finite values must be DROPPED from charts (honest), never plotted as 0.
+  const inf = charts.trendOption(
+    [{ tag: "a", value: "Infinity" }, { tag: "b", value: 1 }, { tag: "c", value: 2 }], "k");
+  assert.deepEqual(inf.series[0].data, [1, 2], "non-finite plotted instead of dropped");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));

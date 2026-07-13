@@ -52,7 +52,7 @@ jobs:
         if: ${{ always() && matrix.python-version == '3.12' }}
         run: |
           python scripts/ci/test_summary.py pytest-report.xml \
-            --title "Unit tests — ${{ matrix.python-version }} (497 across 3.10–3.13)"
+            --title "Unit tests — Python ${{ matrix.python-version }} leg (the matrix runs 3.10–3.13)"
           python scripts/ci/summary_static.py
 
       - name: JavaScript syntax check
@@ -107,6 +107,30 @@ jobs:
               print("MISSING from wheel:", missing); sys.exit(1)
           print("wheel OK:", whl)
           PY
+
+  # GTKWave handoff fidelity: a REAL iverilog sim runs through LanEx's own sim
+  # endpoint, then REAL GTKWave (on an Xvfb display) is driven in Tcl batch
+  # mode to report the traces and marker VALUES it displays — cross-checked
+  # against an independent VCD parse. Proves the one-click "Open in GTKWave"
+  # shows exactly the data the simulator wrote (nothing trusts LanEx's own
+  # parser to check itself). ~1 min, so it runs on every trigger.
+  gtkwave-handoff:
+    name: GTKWave handoff fidelity (real sim -> real GTKWave)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install LanEx + simulator + viewer + virtual display
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends iverilog gtkwave xvfb
+      - name: Probe (sim over HTTP -> save file -> real GTKWave under Xvfb)
+        run: xvfb-run -a python scripts/ci/gtkwave_probe.py
 
   # I2 — advance warning when librelane's pre-release/main breaks a private-API
   # touchpoint LanEx depends on. Non-blocking (continue-on-error): it never fails
