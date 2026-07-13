@@ -620,10 +620,86 @@ def case_e11_custom_cell_macro() -> str:
     return "cell in EXTRA_LEFS/EXCLUDED, macro in MACROS w/ instance, overlay hash verified"
 
 
+def case_e12_provenance() -> str:
+    """The provenance endpoint's answers match the bytes on disk, live.
+
+    On the REAL canary run (not a golden): for a metric and a config var,
+    /api/provenance must point at a line whose on-disk text is byte-identical
+    to what it returned, and the value on that line must equal (a) the value
+    the metrics API serves and (b) the canary override the user sent — the
+    display→file→input chain closed end-to-end. Absent keys and traversal
+    stay honest."""
+    s, r = http("GET",
+                "/api/provenance?kind=metric&key=design__instance__count&tag=canary")
+    assert s == 200 and r.get("ok"), f"metric provenance refused: {s} {r}"
+    disk_lines = (CTX.run_dir / r["rel"]).read_text(encoding="utf-8").splitlines()
+    line = disk_lines[r["line"] - 1]
+    assert line == r["text"], "returned text != the on-disk line"
+    assert '"design__instance__count":' in line, "line does not carry the key"
+    on_line = float(line.split(":", 1)[1].strip().rstrip(","))
+    _s, view = http("GET", "/api/runs/canary")
+    served = float(metric_values(view.get("metrics"))["design__instance__count"])
+    assert on_line == served, f"located line {on_line} != served metric {served}"
+
+    s, r = http("GET", "/api/provenance?kind=var&key=FP_CORE_UTIL&tag=canary")
+    assert s == 200 and r.get("ok"), f"var provenance refused: {s} {r}"
+    rline = (CTX.run_dir / "resolved.json").read_text(encoding="utf-8").splitlines()[r["line"] - 1]
+    assert rline == r["text"] and "41" in rline, \
+        f"resolved.json line doesn't show the canary override: {rline!r}"
+
+    s, r = http("GET", "/api/provenance?kind=metric&key=no__such__metric&tag=canary")
+    assert s == 200 and r.get("ok") is False and r.get("reason"), \
+        f"absent metric not honestly absent: {r}"
+    s, _r = http("GET",
+                 "/api/provenance?kind=report&tag=canary&path=../../etc/passwd&needle=root")
+    assert s == 400, f"traversal not refused: {s}"
+    return "metric+var lines byte-identical on disk; canary visible in resolved.json; honest absents"
+
+
+def case_e13_run_identity() -> str:
+    """Fear F (aliasing): with several runs present, each tag serves ITS OWN
+    data — never a neighbour's. Two cheap lint-only runs carry different
+    FP_CORE_UTIL canaries; each tag's resolved.json AND its provenance answer
+    must show its own value."""
+    def _idle() -> bool:
+        _s, st = http("GET", "/api/run/status")
+        return isinstance(st, dict) and st.get("running") is False
+    assert wait_for(_idle, 60, 2, "runner idle before E13"), "runner busy"
+
+    want = {"ident-a": 33, "ident-b": 44}
+    for tag, util in want.items():
+        body = {"tag": tag,
+                "overrides": {"PDK": PDK, "STD_CELL_LIBRARY": SCL,
+                              "FP_CORE_UTIL": util},
+                "sources": [], "extras": [], "mode": "full",
+                "run_mode": "container", "to": "Verilator.Lint"}
+        s, d = http("POST", "/api/run/start", body)
+        assert s == 200, f"{tag} start → {s} {d}"
+        status = poll_flow_done(600)
+        failed = {k: v for k, v in (status.get("step_statuses") or {}).items()
+                  if v == "failed"}
+        assert not failed, f"{tag} failed steps: {failed}"
+
+    for tag, util in want.items():
+        resolved = json.loads(
+            (CTX.canary_design / "runs" / tag / "resolved.json").read_text(encoding="utf-8"))
+        assert float(resolved["FP_CORE_UTIL"]) == float(util), \
+            f"{tag} resolved {resolved['FP_CORE_UTIL']!r}, want {util} — cross-run aliasing"
+        s, r = http("GET", f"/api/provenance?kind=var&key=FP_CORE_UTIL&tag={tag}")
+        assert s == 200 and r.get("ok"), f"{tag} provenance refused: {s} {r}"
+        got = float(r["text"].split(":", 1)[1].strip().rstrip(","))
+        assert got == float(util), \
+            f"{tag} provenance line shows {got}, want {util} — wrong run's file"
+    tags = run_tags()
+    assert "ident-a" in tags and "ident-b" in tags and "canary" in tags, \
+        f"runs list lost a run: {tags}"
+    return "each of 3 coexisting runs serves its own FP_CORE_UTIL (resolved + provenance)"
+
+
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    log("api_e2e driver r6")  # bump when editing: proves which code CI/logs ran
+    log("api_e2e driver r7")  # bump when editing: proves which code CI/logs ran
     WORK.mkdir(parents=True, exist_ok=True)
     pdk_root = PDK_ROOT
     ensure_pdk(pdk_root)
@@ -642,6 +718,8 @@ def main() -> int:
         ("E3 cancel kills the container", case_e3_cancel_kills),
         ("E10 crash-restart honesty", lambda: case_e10_crash_restart(server)),
         ("E11 custom cell + macro fidelity", case_e11_custom_cell_macro),
+        ("E12 provenance fidelity", case_e12_provenance),
+        ("E13 run identity (no aliasing)", case_e13_run_identity),
     ]
     results: List[Tuple[str, bool, str]] = []
     try:
@@ -673,6 +751,8 @@ def main() -> int:
         "E9": "A spaced path is blocked at launch with the real reason, not a cryptic mid-flow error.",
         "E10": "After a kill-9 crash+restart the interrupted run lists honestly and is not 'ready'.",
         "E11": "A custom cell + hard macro saved over HTTP reach resolved.json exactly as configured (Fear B).",
+        "E12": "Every provenance answer is byte-identical to the tool file on disk, and the located value equals both the served metric and the user's own override (Fears A+B, display→file→input chain closed).",
+        "E13": "With several runs on disk each tag serves ITS OWN data — resolved config and provenance can never show a neighbouring run's values (staleness/aliasing fear).",
     }
 
     def _why(name: str) -> str:

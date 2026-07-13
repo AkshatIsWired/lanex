@@ -61,6 +61,8 @@ IMPLICATIONS: Dict[str, str] = {
     "test_packaging": "The built wheel ships the frontend assets — no 'installs but blank page'.",
     "test_gtkwave": "The 'Open in GTKWave' pipeline is wired end-to-end: catalog/installer/whitelist entries, launch argv, VCD-header parsing, .gtkw generation, and the traversal-guarded route.",
     "test_wave_fidelity": "Every waveform parser (product, in-browser viewer, CI reference) reads the SAME golden Icarus dump and recovers the exact values the simulator wrote — a viewer can never show wrong sim data.",
+    "test_provenance": "Every displayed value traces to the tool's own file+line: all 305 golden metrics locate to a line that parses back to the served value; absent keys honestly absent; traversal refused.",
+    "test_display_derivations": "The few DERIVED display values (utilization %, die W×H, power mW) recompute exactly from the raw golden metrics — no silent unit/scale mangling.",
     "test_install_script": "The one-line installer keeps its contracts: main-on-last-line, degradable stages, git+gtkwave in every package stage, and a skippable best-effort GDS3D stage.",
     "test_macos_install": "The macOS install paths (GDS3D app, engines, XQuartz display detection, arch/version guards) stay correct without a Mac in CI.",
     "test_appwindow": "The standalone app-window launcher picks a real browser per platform and can never leave the user with no UI.",
