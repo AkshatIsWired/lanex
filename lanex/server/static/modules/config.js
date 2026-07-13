@@ -316,10 +316,22 @@ export function renderOverridesSummary() {
   if (!el) return;
   const ov = activeOverrides();
   const keys = Object.keys(ov).sort();
+  // The design's own config file, viewable as-is (input-side transparency:
+  // see exactly what LanEx reads and never edits).
+  const viewCfg = "<button class='btn btn-ghost' id='ov-view-config' " +
+    "title='Open your design&#39;s own config file, exactly as it is on disk'>View config file</button>";
+  const wireViewCfg = () => {
+    el.querySelector("#ov-view-config")?.addEventListener("click", async () => {
+      const { openProvenance } = await import("./provenance.js");
+      openProvenance({ kind: "input", key: "" },
+        { title: "Your design's config file (as on disk — LanEx never edits it)" });
+    });
+  };
   if (!keys.length) {
     el.innerHTML =
       "<span class='ov-none'>No overrides set — every variable uses LibreLane's default for this PDK. " +
-      "Pick a preset or edit a field to override.</span>";
+      "Pick a preset or edit a field to override.</span> " + viewCfg;
+    wireViewCfg();
     return;
   }
   const chips = keys
@@ -329,8 +341,10 @@ export function renderOverridesSummary() {
     .join("");
   el.innerHTML =
     "<div class='ov-head'><strong>" + keys.length + " override" + (keys.length === 1 ? "" : "s") +
-    " will be sent</strong> <span class='muted'>(preset values + your edits; unset fields use defaults — click a chip to trace where it goes)</span></div>" +
+    " will be sent</strong> <span class='muted'>(preset values + your edits; unset fields use defaults — click a chip to trace where it goes)</span> " +
+    viewCfg + "</div>" +
     "<div class='ov-chips'>" + chips + "</div>";
+  wireViewCfg();
   el.querySelectorAll("[data-ovvar]").forEach((b) => {
     if (b._wired) return;
     b._wired = true;
@@ -340,24 +354,70 @@ export function renderOverridesSummary() {
 
 // Input-side transparency: for one override, show exactly (a) how it reaches
 // the flow (a `-c VAR=VALUE` argument — the design's own config file is never
-// edited), (b) the config-file line it supersedes, and (c) after a run, the
-// resolved.json line proving the value LibreLane ACTUALLY used.
+// edited), (b) the config file + line it supersedes, quoted, or the honest
+// statement that the file doesn't set it and nothing is inserted anywhere,
+// and (c) after a run, the resolved.json line proving the value LibreLane
+// ACTUALLY used. Both lookups are fetched up front so the dialog STATES the
+// file names, line numbers and exact lines instead of hiding them behind
+// buttons; the buttons then open each file at that highlighted line.
 async function showOverrideTrail(varName, value) {
   const { customDialog } = await import("./dialog.js");
   const { openProvenance } = await import("./provenance.js");
   const runTag = state.selectedRunTag ||
     (Array.isArray(state.runs) && state.runs[0] && state.runs[0].tag) || null;
+
+  const safeLookup = async (params) => {
+    try { return await api.provenance(params); }
+    catch (ex) { return { ok: false, reason: "lookup failed: " + (ex.message || ex) }; }
+  };
+  const [inp, run] = await Promise.all([
+    safeLookup({ kind: "input", key: varName }),
+    runTag ? safeLookup({ kind: "var", key: varName, tag: runTag }) : Promise.resolve(null),
+  ]);
+
+  const lineRow = (r) =>
+    "<pre class='code ov-trail-line'>" + fmt.escape(r.text || "") + "</pre>";
+  let cfgHtml;
+  if (inp && inp.ok) {
+    cfgHtml =
+      "<p><b>" + fmt.escape(inp.rel) + "</b> sets it on <b>line " + inp.line + "</b> — " +
+      "your override supersedes this line for the run (the file is not touched):</p>" +
+      lineRow(inp);
+  } else if (inp && inp.rel) {
+    cfgHtml =
+      "<p><b>" + fmt.escape(inp.rel) + "</b> does <b>not</b> set <code>" + fmt.escape(varName) +
+      "</code> — nothing is inserted into your file at any line. The override simply adds " +
+      "the value for the run; without it the flow would use the PDK/flow default.</p>";
+  } else {
+    cfgHtml = "<p class='muted'>" +
+      fmt.escape((inp && inp.reason) || "no config file found in the design folder") + "</p>";
+  }
+  let runHtml;
+  if (run && run.ok) {
+    runHtml =
+      "<p>Run <b>" + fmt.escape(runTag) + "</b> recorded the value it actually used in " +
+      "<b>resolved.json</b> (LibreLane's own record), <b>line " + run.line + "</b>:</p>" +
+      lineRow(run);
+  } else if (runTag) {
+    runHtml = "<p class='muted'>Run " + fmt.escape(runTag) + ": " +
+      fmt.escape((run && run.reason) || "no resolved.json") + "</p>";
+  } else {
+    runHtml = "<p class='muted'>No runs yet — after a run, LibreLane's <code>resolved.json</code> " +
+      "records the value the flow actually used, and it will be traceable here.</p>";
+  }
+
   const choice = await customDialog({
     title: "Where does " + fmt.escape(varName) + " go?",
     bodyHtml:
       "<p>This setting rides the run command as an override argument — your design's " +
       "config file is <b>never edited</b>:</p>" +
       "<pre class='code'>-c " + fmt.escape(varName) + "=" + fmt.escape(String(value)) + "</pre>" +
-      "<p class='muted'>Verify it end-to-end: the config line it supersedes (if the file sets one), " +
-      "and — after a run — LibreLane's own <code>resolved.json</code>, the flow's record of every value it actually used.</p>",
+      cfgHtml + runHtml,
     buttons: [
-      { label: "Config line it supersedes", value: "input", cls: "btn-ghost" },
-      runTag ? { label: "Value the last run used (resolved.json)", value: "var", cls: "btn-ghost" } : null,
+      (inp && inp.ok) ? { label: "Open " + inp.rel + " at line " + inp.line,
+                          value: "input", cls: "btn-ghost" } : null,
+      (run && run.ok) ? { label: "Open resolved.json at line " + run.line,
+                          value: "var", cls: "btn-ghost" } : null,
       { label: "Close", value: undefined, cls: "btn-ghost" },
     ].filter(Boolean),
   });

@@ -119,14 +119,19 @@ def base_config_provenance(design_dir: Path, var: str) -> Dict[str, Any]:
     This is the USER'S file (or the auto-generated one they accepted), not a
     LanEx artifact — the input-side counterpart: "this is the line your
     override supersedes". Absent var = honest absent (the value would come
-    from a preset/override or the PDK default).
+    from a preset/override or the PDK default). An empty *var* locates the
+    config file itself with no line — the Setup tab's "view your config file"
+    (that is not an error, mirroring report_provenance's empty needle).
     """
-    if not var or "/" in var or "\\" in var:
+    if "/" in var or "\\" in var:
         return {"ok": False, "reason": "invalid variable name"}
     for name in ("config.json", "config.yaml", "config.tcl"):
         path = Path(design_dir) / name
         if not path.is_file():
             continue
+        if not var:
+            return {"ok": True, "rel": name, "line": None, "text": "",
+                    "writer": "your design config"}
         lines = _read_lines(path)
         if lines is None:
             return {"ok": False, "reason": f"could not read {name}"}

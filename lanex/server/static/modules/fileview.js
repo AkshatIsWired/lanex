@@ -96,14 +96,22 @@ export function renderFileText(container, text, opts = {}) {
     "</div>" +
     "<pre class='fv-pre code'></pre>";
   const pre = container.querySelector(".fv-pre");
+  // Center a mark by scrolling ONLY the file pane. scrollIntoView would also
+  // scroll every scrollable ancestor — inside a dialog (overflow: auto) that
+  // pushes the toolbar (file name, Copy path / Download / Locate) and the
+  // dialog head permanently out of reach on long files. offsetTop is relative
+  // to .fv-pre (position: relative in CSS).
+  const centerInPre = (m) => {
+    if (!m) return;
+    pre.scrollTop = Math.max(0, m.offsetTop - (pre.clientHeight - (m.offsetHeight || 0)) / 2);
+  };
   const paintPlain = () => {
     if (hlLine) {
       pre.innerHTML = lines.map((l, i) =>
         (i + 1 === hlLine)
           ? "<mark class='fv-line'>" + esc(l || " ") + "</mark>"
           : esc(l)).join("\n");
-      const m = pre.querySelector(".fv-line");
-      if (m) m.scrollIntoView({ block: "center" });
+      centerInPre(pre.querySelector(".fv-line"));
     } else {
       pre.textContent = raw;
     }
@@ -128,8 +136,7 @@ export function renderFileText(container, text, opts = {}) {
     cur = ((cur % n) + n) % n;
     hits.forEach((h, i) => h.classList.toggle("fv-cur", i === cur));
     count.textContent = (cur + 1) + "/" + n;
-    const c = pre.querySelector(".fv-cur");
-    if (c) c.scrollIntoView({ block: "center", behavior: "smooth" });
+    centerInPre(pre.querySelector(".fv-cur"));
   };
   input.addEventListener("input", () => { cur = 0; apply(); });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); cur += e.shiftKey ? -1 : 1; apply(); } });

@@ -329,7 +329,16 @@ check("fileview: the provenance highlight lands on exactly the requested line", 
     ".fv-prev": prev, ".fv-next": next,
   })[sel] || null;
   container.querySelectorAll = () => [];
-  pre.querySelector = (sel) => sel === ".fv-line" ? { scrollIntoView() {} } : null;
+  // The mark deep in a long file. scrollIntoView must NEVER be used: it also
+  // scrolls the scrollable dialog around the pane, pushing the toolbar (file
+  // name, Copy path/Download/Locate) permanently out of reach — the reported
+  // long-file bug. Centering must move pre.scrollTop alone.
+  const mark = {
+    offsetTop: 1000, offsetHeight: 16,
+    scrollIntoView() { throw new Error("scrollIntoView scrolls the dialog too — banned"); },
+  };
+  pre.clientHeight = 300;
+  pre.querySelector = (sel) => sel === ".fv-line" ? mark : null;
 
   const text = 'alpha\n    "FP_CORE_UTIL": 45,\n<script>evil</script>\nomega';
   renderFileText(container, text, { line: 2, title: "resolved.json" });
@@ -340,6 +349,9 @@ check("fileview: the provenance highlight lands on exactly the requested line", 
   assert.doesNotMatch(body[3], /<mark/, "line 4 wrongly highlighted");
   assert.ok(body[2].includes("&lt;script&gt;"), "file content not HTML-escaped");
   assert.ok(container.innerHTML.includes("line 2"), "toolbar missing the line chip");
+  // Centered on the pane's own scroll: offsetTop - (clientHeight - markHeight)/2.
+  assert.equal(pre.scrollTop, 1000 - (300 - 16) / 2,
+    "highlight must center by scrolling the file pane itself");
 
   // Out-of-range line = no highlight, never a wrong one.
   const c2 = el();

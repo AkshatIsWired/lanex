@@ -83,8 +83,9 @@ export async function openProvenance(params, meta = {}) {
     bodyHtml:
       "<p class='muted prov-note'>Raw file as written by <b>" +
       fmt.escape(r.writer || "the flow") +
-      "</b> — LanEx did not generate or edit it. The highlighted line is where the value above was read from.</p>" +
-      "<div class='prov-view'></div>",
+      "</b> — LanEx did not generate or edit it." +
+      (r.line ? " The highlighted line is where the value above was read from." : "") +
+      "</p><div class='prov-view'></div>",
     onMount: (back) => {
       renderFileText(back.querySelector(".prov-view"), text, {
         title: r.rel,

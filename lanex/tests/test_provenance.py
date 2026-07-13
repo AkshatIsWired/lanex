@@ -234,3 +234,53 @@ def test_route_input_kind(monkeypatch, tmp_path: Path) -> None:
     out = _call_route(monkeypatch, tmp_path, "kind=input&key=PDK")
     p = out["payload"]
     assert p["ok"] and p["rel"] == "config.json" and p["line"] == 2
+
+
+def test_base_config_empty_var_locates_the_file_itself(tmp_path: Path) -> None:
+    """Empty var = 'show me the config file' (the Setup-tab view button):
+    the file is located honestly, with NO line — never a guessed highlight."""
+    (tmp_path / "config.json").write_text('{"DESIGN_NAME": "spm"}\n')
+    res = provenance.base_config_provenance(tmp_path, "")
+    assert res["ok"] is True
+    assert res["rel"] == "config.json"
+    assert res["line"] is None
+    assert res["writer"] == "your design config"
+
+
+def test_base_config_empty_var_prefers_json_over_yaml(tmp_path: Path) -> None:
+    # Same precedence as the var lookup — the file LibreLane reads first.
+    (tmp_path / "config.json").write_text("{}\n")
+    (tmp_path / "config.yaml").write_text("DESIGN_NAME: spm\n")
+    res = provenance.base_config_provenance(tmp_path, "")
+    assert res["ok"] is True and res["rel"] == "config.json"
+
+
+def test_base_config_empty_var_no_config_is_honest(tmp_path: Path) -> None:
+    res = provenance.base_config_provenance(tmp_path, "")
+    assert res["ok"] is False and "no config file" in res["reason"]
+
+
+def test_route_input_kind_empty_key_serves_whole_file(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "config.json").write_text('{\n    "PDK": "sky130A"\n}\n')
+    out = _call_route(monkeypatch, tmp_path, "kind=input&key=")
+    p = out["payload"]
+    assert p["ok"] is True and p["rel"] == "config.json" and p["line"] is None
+    # abs points inside the design dir — what the viewer's Copy-path shows.
+    assert p["abs"] == str(tmp_path / "config.json")
+
+
+def test_frontend_trail_and_view_config_wiring() -> None:
+    """The Setup-tab pieces exist in the served static files: the view-config
+    button, its empty-key provenance call, and the prefetched trail dialog
+    that names files + line numbers instead of hiding them behind buttons."""
+    static = Path(__file__).resolve().parents[1] / "server" / "static"
+    cfg = (static / "modules" / "config.js").read_text()
+    assert "ov-view-config" in cfg
+    assert 'kind: "input", key: ""' in cfg
+    assert "Open resolved.json at line" in cfg  # trail states the exact line
+    assert "nothing is inserted into your file" in cfg  # honest not-set case
+    fv = (static / "modules" / "fileview.js").read_text()
+    # The regression this locks: scrollIntoView scrolls the DIALOG too, making
+    # the toolbar unreachable on long files — the pane must scroll itself.
+    assert ".scrollIntoView(" not in fv  # (comments may explain WHY it is banned)
+    assert "centerInPre" in fv

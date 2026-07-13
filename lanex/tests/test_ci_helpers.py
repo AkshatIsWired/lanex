@@ -352,3 +352,28 @@ def test_viewer_gds_status_end_to_end(tmp_path: Path):
     none = tmp_path / "runs" / "none"
     (none / "final").mkdir(parents=True)
     assert layout_probe.viewer_gds_status(none)["ok"] is False
+
+
+# ------------------------------------------------ Summary-tab completeness --
+
+def test_every_test_file_has_an_explicit_summary_implication():
+    """The Actions Summary tab must explain what EVERY test file protects.
+
+    test_summary.py falls back to a generic line for unknown files — fine as a
+    safety net, but a new test file shipping without a real implication row
+    means the Summary tab can't say what a failure puts at stake. Lock the
+    inventory: every lanex/tests/test_*.py needs its own IMPLICATIONS entry.
+    """
+    sys.path.insert(0, str(_SC))
+    try:
+        import test_summary as ts
+    finally:
+        sys.path.remove(str(_SC))
+    files = sorted(p.stem for p in Path(__file__).parent.glob("test_*.py"))
+    missing = [f for f in files if f not in ts.IMPLICATIONS]
+    assert not missing, (
+        "these test files have no Summary-tab implication row in "
+        f"scripts/ci/test_summary.py IMPLICATIONS: {missing}")
+    # And no stale rows for deleted files (a stale row is a lie in waiting).
+    stale = [k for k in ts.IMPLICATIONS if k.startswith("test_") and k not in files]
+    assert not stale, f"IMPLICATIONS rows for nonexistent test files: {stale}"

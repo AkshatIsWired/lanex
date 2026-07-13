@@ -121,7 +121,9 @@
 .fv-spacer { flex: 1; }
 .file-actions { display: inline-flex; gap: var(--s-1); }
 .file-act { font-size: var(--t-xs); padding: 2px 8px; text-decoration: none; }
-.fv-pre { max-height: 420px; overflow: auto; }
+/* position: relative makes mark.offsetTop pane-relative, so the highlight
+   centering can scroll the pane alone (never the dialog around it). */
+.fv-pre { max-height: 420px; overflow: auto; position: relative; }
 .fv-hit { background: var(--warn-soft); color: var(--text-strong); border-radius: 2px; }
 .fv-cur { background: var(--accent); color: var(--on-accent, #fff); }
 /* Provenance: the exact source line a displayed value was read from. */
@@ -131,6 +133,7 @@
 .prov-btn { padding: 1px 5px; opacity: 0.66; }
 .prov-btn:hover { opacity: 1; }
 .prov-note { margin: 0 0 var(--s-2); }
+.ov-trail-line { overflow-x: auto; margin: 0 0 var(--s-2); }
 .prov-view .fv-pre { max-height: calc(56vh / var(--ll-zoom, 1)); }
 .dlg-wide { width: min(980px, calc(96vw / var(--ll-zoom, 1))); }
 .report-row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; padding: var(--s-1) 0; border-bottom: 1px solid var(--border); }
