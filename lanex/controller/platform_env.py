@@ -126,6 +126,29 @@ def wsl_gl_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     return env
 
 
+def wsl_gui_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Full launch env for a native desktop tool: GL forcing PLUS toolkit
+    transport pinning. Superset of :func:`wsl_gl_env` — use this at launch sites.
+
+    WSLg exports BOTH a Wayland socket and an X11 (XWayland) display. GTK3 apps
+    (GTKWave is the only one LanEx launches) pick Wayland first, and WSLg's
+    Wayland/RAIL presentation is exactly the path that degrades to "copy mode":
+    the surface maps but never presents — a blank window that exists only in the
+    taskbar, its title suffixed ``[WARN: COPY MODE]``, and clicking it does
+    nothing. Every tool that works reliably on WSL (KLayout/Qt, Magic/Tk,
+    GDS3D/GL, OpenROAD/Qt) talks X11/XWayland — so pin GTK (and any future
+    Wayland-default Qt6 build) to that same known-good transport. The trailing
+    fallback entries mean a system with no X11 at all still gets a window rather
+    than an abort. GTK2 ignores ``GDK_BACKEND``; native Linux/macOS are
+    untouched (``is_wsl`` gate); ``LANEX_WAYLAND=1`` opts back into Wayland.
+    """
+    env = wsl_gl_env(base)
+    if is_wsl() and not os.environ.get("LANEX_WAYLAND"):
+        env.setdefault("GDK_BACKEND", "x11,*")
+        env.setdefault("QT_QPA_PLATFORM", "xcb;wayland")
+    return env
+
+
 # Multi-arch DRI driver locations (Debian/Ubuntu multiarch, Fedora/RHEL lib64,
 # plain /usr/lib layouts). Mesa's software rasterizer (swrast/llvmpipe) and the
 # WSLg d3d12 driver both live here when libgl1-mesa-dri (or distro equivalent)

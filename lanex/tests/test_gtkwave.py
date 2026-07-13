@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from lanex.controller import desktop, installer, tools, waveview
+from lanex.controller import desktop, installer, platform_env, tools, waveview
 
 
 # ---------------------------------------------------------------------------
@@ -268,3 +268,77 @@ def test_cli_install_tool_flag_exists():
     src = Path(desktop.__file__).resolve().parents[1] / "cli.py"
     body = src.read_text()
     assert "--install-tool" in body and "_install_tool_cli" in body
+
+
+# ---------------------------------------------------------------------------
+# WSL launch transport — the [WARN: COPY MODE] blank-window class.
+# GTKWave is the only GTK3 tool LanEx launches; GTK3 picks WSLg's Wayland
+# backend first, and that path degrades to a blank taskbar-only window. The
+# launch env must pin it to X11/XWayland — the transport every other tool
+# (Qt/Tk/GL) already uses and the one the software-GL fix was proven on.
+# ---------------------------------------------------------------------------
+
+def _clear_gui_env(monkeypatch):
+    for var in ("LANEX_WAYLAND", "LANEX_HW_GL", "LIBRELANE_GUI_WSL_HW_GL",
+                "LANEX_SOFTWARE_GL", "GDK_BACKEND", "QT_QPA_PLATFORM"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_wsl_gui_env_pins_gtk_and_qt_to_x11(monkeypatch):
+    _clear_gui_env(monkeypatch)
+    monkeypatch.setattr(platform_env, "is_wsl", lambda: True)
+    env = platform_env.wsl_gui_env({"PATH": "/usr/bin"})
+    assert env["GDK_BACKEND"].startswith("x11")
+    assert env["QT_QPA_PLATFORM"].startswith("xcb")
+    # Fallback entries: a no-X11 system still gets a window, never an abort.
+    assert "," in env["GDK_BACKEND"] or "*" in env["GDK_BACKEND"]
+    # Superset of wsl_gl_env — the GL forcing must ride along.
+    assert env["LIBGL_ALWAYS_SOFTWARE"] == "1"
+    assert env["PATH"] == "/usr/bin"
+
+
+def test_wsl_gui_env_noop_off_wsl(monkeypatch):
+    _clear_gui_env(monkeypatch)
+    monkeypatch.setattr(platform_env, "is_wsl", lambda: False)
+    env = platform_env.wsl_gui_env({"PATH": "/usr/bin"})
+    assert "GDK_BACKEND" not in env and "QT_QPA_PLATFORM" not in env
+    assert "LIBGL_ALWAYS_SOFTWARE" not in env
+
+
+def test_wsl_gui_env_wayland_opt_out(monkeypatch):
+    _clear_gui_env(monkeypatch)
+    monkeypatch.setenv("LANEX_WAYLAND", "1")
+    monkeypatch.setattr(platform_env, "is_wsl", lambda: True)
+    env = platform_env.wsl_gui_env({})
+    assert "GDK_BACKEND" not in env and "QT_QPA_PLATFORM" not in env
+    # The opt-out is transport-only — software GL stays (separate escape hatch).
+    assert env["LIBGL_ALWAYS_SOFTWARE"] == "1"
+
+
+def test_wsl_gui_env_respects_caller_value(monkeypatch):
+    _clear_gui_env(monkeypatch)
+    monkeypatch.setattr(platform_env, "is_wsl", lambda: True)
+    env = platform_env.wsl_gui_env({"GDK_BACKEND": "wayland"})
+    assert env["GDK_BACKEND"] == "wayland"  # setdefault, never clobber
+
+
+def test_gtkwave_launch_env_pins_x11_under_wsl(tmp_path, monkeypatch):
+    """End-to-end through open_in_tool: the Popen env for a gtkwave launch on
+    WSL must carry the X11 pin + software GL — the fix for the user-reported
+    blank [WARN: COPY MODE] window on a fresh WSL2 install."""
+    _clear_gui_env(monkeypatch)
+    dump = tmp_path / "dump.vcd"
+    dump.write_text(VCD)
+    captured = {}
+    monkeypatch.setattr(desktop, "_resolve_bin", lambda spec: "gtkwave")
+    monkeypatch.setattr(desktop.subprocess, "Popen",
+                        lambda argv, **k: captured.update(argv=argv, env=k.get("env")))
+    monkeypatch.setattr(platform_env, "host_display_available", lambda: True)
+    monkeypatch.setattr(platform_env, "is_wsl", lambda: True)
+
+    res = desktop.open_in_tool("gtkwave", dump, use_tech=False)
+    assert res["ok"] is True
+    assert captured["env"]["GDK_BACKEND"].startswith("x11")
+    assert captured["env"]["QT_QPA_PLATFORM"].startswith("xcb")
+    assert captured["env"]["LIBGL_ALWAYS_SOFTWARE"] == "1"
+    assert captured["argv"][0] == "gtkwave"

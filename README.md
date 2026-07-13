@@ -493,9 +493,9 @@ install command.
 </details>
 
 <details>
-<summary><b>A desktop viewer (GDS3D / KLayout / OpenROAD GUI) opens a blank window, hangs, or the title says <code>[WARN: COPY MODE]</code> (WSL)</b></summary>
+<summary><b>A desktop tool (GDS3D / KLayout / OpenROAD GUI / GTKWave) opens a blank window, hangs, or the title says <code>[WARN: COPY MODE]</code> (WSL)</b></summary>
 
-Three known causes, all handled or handleable:
+Four known causes, all handled or handleable:
 
 1. **Missing Mesa GL drivers** — fresh minimal WSL/Ubuntu images ship without
    `libgl1-mesa-dri`, leaving GL apps with **no renderer at all** (even software
@@ -515,6 +515,11 @@ Three known causes, all handled or handleable:
    resets. LanEx defaults GL tools to CPU (software) rendering on WSL so this
    rarely matters; the cold-boot fix is `wsl --update` then `wsl --shutdown`
    from a Windows terminal.
+4. **GTK's Wayland backend** — GTK3 apps (GTKWave) pick WSLg's Wayland path
+   first, and that path is the one that degrades to a blank taskbar-only
+   window titled `[WARN: COPY MODE]`. LanEx pins GTK (and Qt) launches to the
+   X11/XWayland transport on WSL — the same route every other tool uses — so
+   this is automatic; `LANEX_WAYLAND=1` opts back into Wayland if you want it.
 
 GL rendering overrides (set in your environment before launching):
 `LANEX_HW_GL=1` forces hardware GL everywhere (skips the WSL software-GL

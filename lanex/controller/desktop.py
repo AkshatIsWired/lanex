@@ -443,13 +443,15 @@ def open_in_tool(tool: str, file_path: str | Path, *,
         launch_env["PDK_ROOT"] = tech_root
         launch_env["PDK"] = pdk
         launch_env["PDKPATH"] = str(Path(tech_root) / pdk)
-    # Under WSL, force Mesa software GL (llvmpipe) so a stale WSLg vGPU ("copy
-    # mode" after the host sleeps) can't deadlock the tool on window mapping —
-    # GDS3D/KLayout/OpenROAD-GUI then render reliably without the GPU passthrough.
-    # No-op off WSL; opt out with LIBRELANE_GUI_WSL_HW_GL=1.
+    # Under WSL: force Mesa software GL (llvmpipe) so a stale WSLg vGPU ("copy
+    # mode" after the host sleeps) can't deadlock the tool on window mapping,
+    # AND pin GTK/Qt to the X11 transport — GTK3 (GTKWave) otherwise picks
+    # WSLg's Wayland path, whose copy-mode degradation shows a blank
+    # taskbar-only window titled [WARN: COPY MODE]. No-op off WSL; opt out with
+    # LIBRELANE_GUI_WSL_HW_GL=1 (GL) / LANEX_WAYLAND=1 (transport).
     try:
         from . import platform_env
-        launch_env = platform_env.wsl_gl_env(launch_env)
+        launch_env = platform_env.wsl_gui_env(launch_env)
     except Exception:
         pass
     try:
