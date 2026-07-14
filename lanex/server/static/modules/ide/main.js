@@ -418,7 +418,7 @@ function onEvent(ev) {
     setSimBusy(false);                 // re-enable Build & run no matter the outcome
     if (ev.cancelled) note("Simulation stopped.", true);
     else if (ev.vcd) {
-      loadWaveform(ev.vcd);
+      loadWaveform(ev.vcd, ev.partial);
       if (ev.timed_out)
         note("Sim hit the time limit (free-running clock / no $finish) — showing the "
              + "partial waveform. Add $finish to the testbench for a full run.", true);
@@ -467,8 +467,17 @@ async function openInGtkwave() {
   }
 }
 
-async function loadWaveform(vcdRel) {
+// Show/hide the durable "partial waveform" badge in the Waveform header. Kept
+// separate from the transient note() so the disclosure survives later toasts and
+// is visible in a screenshot of the pane (N2).
+function setWavePartial(isPartial) {
+  const badge = document.getElementById("ide-wave-partial");
+  if (badge) badge.hidden = !isPartial;
+}
+
+async function loadWaveform(vcdRel, partial) {
   state.lastWavePath = vcdRel;
+  state.wavePartial = !!partial;
   note("Loading waveform " + vcdRel + "…");
   try {
     const r = await fetch(api.waveformUrl(vcdRel), { headers: { "X-Requested-With": "XMLHttpRequest" } });
@@ -479,6 +488,8 @@ async function loadWaveform(vcdRel) {
     canvas.height = Math.max(120, Math.min(600, vcd.signals.length * 26 + 20));
     state.wave = new WaveView(canvas);
     state.wave.load(vcd);
+    // A full (non-partial) load clears any prior badge; a partial load pins it.
+    setWavePartial(!!partial);
     note("Waveform: " + vcd.signals.length + " signals, " + vcd.end + " " + (vcd.timescale || "ticks"));
   } catch (ex) {
     note("Could not load waveform: " + (ex.message || ex), true);

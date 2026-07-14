@@ -1101,35 +1101,45 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
     """
     runs: List[Dict[str, Any]] = []
     metric_union: Dict[str, Dict[str, Any]] = {}
-    config_by_tag: Dict[str, Dict[str, Any]] = {}
+    config_by_col: Dict[str, Dict[str, Any]] = {}
     for rd in run_dirs:
         try:
             view = get_run(rd)
         except Exception:
             continue
-        tag = view.get("tag") or str(rd)
-        cfg = _read_config(Path(view.get("run_dir") or rd))
-        config_by_tag[tag] = cfg if isinstance(cfg, dict) else {}
+        run_dir = str(view.get("run_dir") or rd)
+        tag = view.get("tag") or Path(run_dir).name
+        # Column key MUST be unique per run, not the tag: two different designs
+        # can each hold a run named "baseline" (``<design>/runs/baseline``) — a
+        # tag-keyed table silently collapses them onto one column (Fear F/M). The
+        # resolved run_dir is unique, so key every per-run table by it. ``tag`` +
+        # ``design`` stay on the run row for display/disambiguation only.
+        col = run_dir
+        design = _design_name(run_dir)
+        cfg = _read_config(Path(run_dir))
+        config_by_col[col] = cfg if isinstance(cfg, dict) else {}
         metrics = (view.get("metrics") or {}).get("values") or {}
         for k, v in metrics.items():
-            metric_union.setdefault(k, {})[tag] = v
+            metric_union.setdefault(k, {})[col] = v
         runs.append({
+            "col": col,
             "tag": tag,
-            "run_dir": view.get("run_dir"),
-            "success": _success_from_metrics(metrics, run_dir=Path(view.get("run_dir") or rd)),
+            "design": design,
+            "run_dir": run_dir,
+            "success": _success_from_metrics(metrics, run_dir=Path(run_dir)),
             "summary": view.get("summary") or [],
         })
 
-    tags = [r["tag"] for r in runs]
+    cols = [r["col"] for r in runs]
 
     # Config diff: only keys whose value differs across the runs (or is absent
     # in some). Compared by JSON repr to avoid type/ordering false-negatives.
     all_keys = set()
-    for cfg in config_by_tag.values():
+    for cfg in config_by_col.values():
         all_keys.update(cfg.keys())
     config_diff: Dict[str, Dict[str, Any]] = {}
     for key in sorted(all_keys):
-        vals = {t: config_by_tag.get(t, {}).get(key) for t in tags}
+        vals = {c: config_by_col.get(c, {}).get(key) for c in cols}
         reprs = {json.dumps(_jsonify(v), sort_keys=True) for v in vals.values()}
         if len(reprs) > 1:
             config_diff[key] = vals
@@ -1140,21 +1150,29 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
     # in at least one run's resolved config are emitted.
     key_config: Dict[str, Dict[str, Any]] = {}
     for key in _KEY_CONFIG_VARS:
-        present = {t: config_by_tag.get(t, {}).get(key) for t in tags}
+        present = {c: config_by_col.get(c, {}).get(key) for c in cols}
         if any(v is not None for v in present.values()):
             key_config[key] = present
 
-    # Metric meta + best-per-metric.
+    # Metric meta + best-per-metric. ``best`` is only computed when the metric's
+    # optimisation direction is KNOWN from the registry — guessing a direction
+    # for an unregistered/renamed metric could highlight the worse run as "best"
+    # (a silent Fear-A/J trap), so an unknown metric gets no highlight.
     meta = _metric_meta()
     best: Dict[str, str] = {}
     metric_meta: Dict[str, Dict[str, Any]] = {}
-    for metric, per_tag in metric_union.items():
-        hib = meta.get(metric, {}).get("higher_is_better", True)
+    for metric, per_col in metric_union.items():
+        m = meta.get(metric)
+        known = m is not None
+        hib = bool(m.get("higher_is_better", True)) if known else True
         metric_meta[metric] = {
-            "higher_is_better": bool(hib),
-            "critical": bool(meta.get(metric, {}).get("critical", False)),
+            "higher_is_better": hib,
+            "critical": bool(m.get("critical", False)) if known else False,
+            "direction_known": known,
         }
-        numeric = {t: float(v) for t, v in per_tag.items()
+        if not known:
+            continue
+        numeric = {c: float(v) for c, v in per_col.items()
                    if isinstance(v, (int, float)) and not isinstance(v, bool)
                    and float(v) == float(v) and abs(float(v)) != float("inf")}
         if numeric:
@@ -1168,6 +1186,21 @@ def compare_runs(run_dirs: List[str | Path]) -> Dict[str, Any]:
         "metric_meta": metric_meta,
         "best": best,
     }
+
+
+def _design_name(run_dir: str | Path) -> str:
+    """Design folder name for a run laid out as ``<design_dir>/runs/<tag>``.
+
+    Best-effort label only (used to disambiguate same-named runs from different
+    designs in Compare); returns "" when the layout doesn't match.
+    """
+    try:
+        p = Path(run_dir)
+        if p.parent.name == "runs":
+            return p.parent.parent.name
+    except Exception:
+        pass
+    return ""
 
 
 # Curated, decision-relevant config vars surfaced in run-vs-run compare. All are

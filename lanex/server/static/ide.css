@@ -127,6 +127,18 @@
 .wave-radixes { font-size: var(--t-xs); }
 .ide-wave-host { border: 1px solid var(--border); border-radius: var(--r-sm); overflow: auto; background: var(--surface-2); }
 #ide-wave { display: block; }
+/* Durable "partial waveform" badge (N2): a timed-out sim writes an INCOMPLETE
+   dump; unlike the transient toast, this stays pinned in the Waveform header for
+   as long as the partial dump is on screen, so a screenshot never reads as a
+   completed run. Cleared the moment a full (non-partial) waveform loads. */
+.wave-partial {
+  display: inline-block; margin-left: var(--s-2); padding: 1px 8px;
+  border: 1px solid var(--danger, #d9534f); border-radius: 999px;
+  background: color-mix(in srgb, var(--danger, #d9534f) 14%, transparent);
+  color: var(--danger, #d9534f); font-size: 11px; font-weight: 600;
+  vertical-align: middle; white-space: nowrap;
+}
+.wave-partial[hidden] { display: none; }
 
 /* Embedded IDE (the "RTL IDE" tab inside the main cockpit). Fills the work
    area; its own grid scrolls internally instead of growing the page. */

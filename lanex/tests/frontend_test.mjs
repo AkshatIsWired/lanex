@@ -75,6 +75,23 @@ check("metric: ordinary magnitudes keep 3 decimals; large values group", () => {
   assert.equal(typeof fmt.metric(1234567), "string");
 });
 
+check("metric: large values group with a FIXED comma, never a locale dot (N5)", () => {
+  // en-US separator is pinned so a de-DE browser can't render 1235 as "1.235"
+  // and have it read as a decimal (a silent ×1000 misread of a real number).
+  assert.equal(fmt.metric(1234567), "1,234,567");
+  assert.equal(fmt.metric(1235), "1,235");
+  assert.ok(!/^\d+\.\d{3}$/.test(fmt.metric(1235)),
+    "grouped value must not look like a 3-decimal number");
+});
+
+check("fmt.raw: exact unrounded value for hover disclosure, honest on edges (N5)", () => {
+  assert.equal(fmt.raw(145678.9), "145678.9");   // rounding of metric() is disclosed on hover
+  assert.equal(fmt.raw(null), "");
+  assert.equal(fmt.raw(undefined), "");
+  assert.equal(fmt.raw("Infinity"), "∞");
+  assert.equal(fmt.raw("NaN"), "NaN");
+});
+
 // ----------------------------------------------- fmt.escape (XSS / corruption)
 check("escape: angle brackets become real entities (raw < never survives)", () => {
   const out = fmt.escape("<script>alert(1)</script>");
@@ -496,6 +513,123 @@ check("finalsettings: source labels state the same story in both tables", () => 
     /line 5 \(pdk::sky130\* — applied only if/);
   assert.match(fs.sourceLabel({ source: "pdk" }), /resolved\.json/);
   assert.match(fs.sourceLabel({ source: "default" }), /LibreLane default/);
+});
+
+// ------------------------------------------------ compare column identity
+// N1: Compare is cross-design, and users name runs ("baseline", "opt"). Two
+// designs each with a run named "baseline" must render as TWO distinct columns
+// keyed by the unique run_dir — not collapse onto one column showing only one
+// design's numbers. buildCols is the frontend half of that fix.
+const cmp = await import(resolve(MOD, "compare.js"));
+check("compare: same-named runs from different designs get distinct columns", () => {
+  const runs = [
+    { col: "/w/spm/runs/baseline", tag: "baseline", design: "spm" },
+    { col: "/w/processor/runs/baseline", tag: "baseline", design: "processor" },
+  ];
+  const cols = cmp.buildCols(runs);
+  assert.equal(cols.length, 2);
+  assert.notEqual(cols[0].col, cols[1].col, "colliding tags must keep distinct lookup keys");
+  // A repeated tag → design-prefixed label so the user always sees WHICH run.
+  assert.equal(cols[0].label, "spm · baseline");
+  assert.equal(cols[1].label, "processor · baseline");
+});
+
+check("compare: unique tags in one design stay plain (no needless prefix)", () => {
+  const cols = cmp.buildCols([
+    { col: "/w/spm/runs/baseline", tag: "baseline", design: "spm" },
+    { col: "/w/spm/runs/opt", tag: "opt", design: "spm" },
+  ]);
+  assert.equal(cols[0].label, "baseline");
+  assert.equal(cols[1].label, "opt");
+});
+
+check("compare: distinct tags across designs are design-prefixed for clarity", () => {
+  const cols = cmp.buildCols([
+    { col: "/w/spm/runs/a", tag: "a", design: "spm" },
+    { col: "/w/proc/runs/b", tag: "b", design: "proc" },
+  ]);
+  assert.equal(cols[0].label, "spm · a");
+  assert.equal(cols[1].label, "proc · b");
+});
+
+check("compare + DSE never index the metric/config table by tag (N1 regression)", () => {
+  // Both consumers of /api/compare must look up per-run values by the unique
+  // col (run_dir); a `[…][r.tag]` lookup would re-introduce the collision.
+  for (const f of ["compare.js", "dse.js"]) {
+    const src = readFileSync(resolve(MOD, f), "utf8");
+    assert.doesNotMatch(src, /\]\[r\.tag\]/, `${f} indexes a per-run table by tag`);
+    assert.doesNotMatch(src, /\]\[t\]/, `${f} indexes a per-run table by a bare tag var`);
+  }
+});
+
+// ------------------------------------------------ SSE gap resync (N3)
+// A dropped stream that reconnects past events the server's ring already
+// evicted must re-hydrate the live pipeline from /api/run/status — never sit on
+// stale step states behind a green "connected" chip.
+check("SSE: reconnect past ring eviction re-hydrates from run/status (N3)", () => {
+  const apiSrc = readFileSync(resolve(MOD, "api.js"), "utf8");
+  assert.match(apiSrc, /addEventListener\("gap"/, "no gap-event listener");
+  assert.match(apiSrc, /_wasDisconnected/, "reconnect-after-drop not tracked");
+  assert.match(apiSrc, /run_status_resync/, "resync broadcast missing");
+  assert.match(apiSrc, /runStatus:\s*\(\)\s*=>\s*_fetch\("\/api\/run\/status"\)/,
+    "api.runStatus endpoint missing");
+  const appSrc = readFileSync(resolve(HERE, "..", "server", "static", "app.js"), "utf8");
+  const i = appSrc.indexOf('ev.type === "run_status_resync"');
+  assert.ok(i >= 0, "app.js has no run_status_resync branch");
+  const branch = appSrc.slice(i, i + 1100);
+  assert.match(branch, /step_statuses/, "resync branch ignores step_statuses");
+  assert.match(branch, /renderRuntimeline/, "resync branch does not repaint the timeline");
+});
+
+// ------------------------------------------------ partial-sim badge (N2)
+// A timed-out sim's waveform is INCOMPLETE. The disclosure must be durable (a
+// pinned header badge), not just a transient toast that the next action wipes,
+// and it must clear when a full sim later loads.
+check("sim: a partial (timed-out) waveform gets a durable, clearing badge (N2)", () => {
+  const STATIC = resolve(HERE, "..", "server", "static");
+  for (const f of ["index.html", "ide.html"]) {
+    const html = readFileSync(resolve(STATIC, f), "utf8");
+    assert.match(html, /id="ide-wave-partial"/, `${f} missing the partial badge element`);
+  }
+  const js = readFileSync(resolve(MOD, "ide", "main.js"), "utf8");
+  // The badge is driven by the server's partial flag, threaded through load.
+  assert.match(js, /loadWaveform\(ev\.vcd,\s*ev\.partial\)/,
+    "sim_done handler must pass ev.partial to loadWaveform");
+  assert.match(js, /setWavePartial\(!!partial\)/,
+    "loadWaveform must set/CLEAR the badge from the partial flag (a full load clears it)");
+  assert.match(js, /getElementById\("ide-wave-partial"\)/,
+    "setWavePartial must toggle the badge element");
+});
+
+// ------------------------------------------------ timing unit label (N4)
+// The slack unit must come from the payload (backend's single-sourced constant),
+// never a hardcoded "ns" that would silently mislabel a ps-unit liberty ×1000.
+check("timing: slack unit label is sourced from data, not hardcoded (N4)", () => {
+  const src = readFileSync(resolve(MOD, "timing.js"), "utf8");
+  assert.match(src, /data\.unit/, "timing.js must read the unit from the payload");
+  assert.doesNotMatch(src, /slack \(ns\)/, "hardcoded 'slack (ns)' axis label survived");
+  assert.doesNotMatch(src, /\+ " ns<\/span>"/, "hardcoded ' ns' pill suffix survived");
+});
+
+// ------------------------------------------------ multi-config warning (N6)
+check("preflight/setup surface the multiple-config-files warning (N6)", () => {
+  const pf = readFileSync(resolve(MOD, "preflight.js"), "utf8");
+  assert.match(pf, /d\.config_note/, "preflight ignores the multi-config note");
+  const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+  assert.match(setup, /res\.warning.*toast\.show|toast\.show\(res\.warning/,
+    "setup.js no longer toasts the run-start warning");
+});
+
+// ------------------------------------------------ config TOCTOU (N7)
+check("Final-settings stashes the previewed config hash; Run compares it (N7)", () => {
+  const fs2 = readFileSync(resolve(MOD, "finalsettings.js"), "utf8");
+  assert.match(fs2, /state\.previewedConfigHash\s*=\s*map\.config_hash/,
+    "finalsettings must stash the previewed config hash");
+  const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+  assert.match(setup, /res\.config_hash\s*!==\s*state\.previewedConfigHash/,
+    "the run-start handler must compare the run's config hash to the previewed one");
+  assert.match(setup, /state\.previewedConfigHash\s*=\s*null/,
+    "the stashed hash must be cleared after comparison");
 });
 
 console.log(`\nfrontend_test: ${passed} checks passed` +

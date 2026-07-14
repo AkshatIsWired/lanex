@@ -190,6 +190,22 @@ def find_testbenches(design_dir: str | Path) -> List[str]:
     return found
 
 
+def sim_verdict(rc: int, timed_out: bool, wave: Any, cancelled: bool) -> Dict[str, bool]:
+    """Pure sim outcome → ``{ok, partial}``.
+
+    A timed-out runaway bench (free-running clock / no ``$finish``) that still
+    wrote a waveform is a soft SUCCESS — the button re-enables and the dump
+    loads — but that dump is INCOMPLETE, so ``partial`` is set so the UI can
+    carry a durable badge and no downstream consumer mistakes a truncated dump
+    for a completed simulation (Fear #5 / N2). ``partial`` is never true without
+    a waveform, and a cancelled run is neither ok-by-timeout nor partial.
+    """
+    has_wave = bool(wave)
+    ok = (rc == 0) or (bool(timed_out) and has_wave)
+    partial = bool(timed_out) and has_wave and not bool(cancelled)
+    return {"ok": ok, "partial": partial}
+
+
 class SimJob:
     """Run a built sim command, streaming stdout→``log`` events and emitting
     ``sim_started`` / ``sim_done``. Cancel kills the process (and force-removes
@@ -308,13 +324,14 @@ class SimJob:
         # the expected name, else the newest *.vcd/*.fst created during this run.
         wave = self._find_waveform(Path(design_dir), vcd_name, started_at)
         timed_out = self._timed_out.is_set()
+        cancelled = self._cancel.is_set()
+        verdict = sim_verdict(rc, timed_out, wave, cancelled)
         events.publish("sim_done", {
-            # A timed-out runaway bench still produced a usable (partial) VCD, so
-            # treat "timed out but we have a waveform" as a soft success.
-            "ok": rc == 0 or (timed_out and bool(wave)),
+            "ok": verdict["ok"],
+            "partial": verdict["partial"],
             "returncode": rc,
             "vcd": wave,
-            "cancelled": self._cancel.is_set(),
+            "cancelled": cancelled,
             "timed_out": timed_out,
         })
 

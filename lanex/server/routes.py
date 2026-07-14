@@ -536,6 +536,12 @@ def h_provenance(handler: Any) -> None:
             res = provenance.config_var_lines(Path(design_dir))
             if res.get("rel"):
                 res["abs"] = str(Path(design_dir) / res["rel"])
+            # Hash of the config file as it is RIGHT NOW, so the Final-settings
+            # preview can stash it and later detect the file was edited between
+            # preview and Run (TOCTOU, N7). Same resolver run-start uses.
+            cf = _resolve_config_file(design_dir)
+            if cf is not None:
+                res["config_hash"] = _hash_files([str(cf)])
             _respond(handler, res)
             return
         if kind == "input":
@@ -803,13 +809,14 @@ def h_preflight(handler: Any) -> None:
     # 1) Design folder + config + sources.
     design_ok = bool(design_dir) and Path(design_dir).is_dir()
     config_file = None
+    config_note = None
     source_count = 0
     if design_ok:
-        for ext in ("yaml", "yml", "json", "tcl"):
-            cf = Path(design_dir) / f"config.{ext}"
-            if cf.is_file():
-                config_file = cf.name
-                break
+        # Same resolver run-start uses, so the preflight names the config that
+        # will ACTUALLY run (these once disagreed — N6).
+        _cands = _config_candidates(design_dir)
+        config_file = _cands[0].name if _cands else None
+        config_note = _multi_config_warning(design_dir)
         try:
             srcs = fsbrowser.walk_sources(design_dir)
             source_count = len(srcs.get("sources", [])) if srcs.get("ok") else 0
@@ -826,6 +833,7 @@ def h_preflight(handler: Any) -> None:
         "ok": bool(design_ok and config_file and source_count),
         "dir": design_dir,
         "config_file": config_file,
+        "config_note": config_note,
         "source_count": source_count,
     }
 
@@ -1139,16 +1147,11 @@ def h_run_start(handler: Any) -> None:
     if ws_err:
         _respond(handler, ws_err, 400)
         return
-    config_file = None
-    for ext in ["json", "yaml", "tcl"]:
-        cf = Path(design_dir) / f"config.{ext}"
-        if cf.is_file():
-            config_file = cf
-            break
-    
+    config_file = _resolve_config_file(design_dir)
     if config_file is None:
         _respond(handler, "no config.{json,yaml,tcl} found in design directory", 400)
         return
+    config_warning = _multi_config_warning(design_dir)
     r = get_runner()
     if r.running:
         _respond(handler, "already running", 400)
@@ -1225,6 +1228,11 @@ def h_run_start(handler: Any) -> None:
             "extra_config_files": list(extra_config_files or []),
             "extra_config_hash": _hash_files(extra_config_files),
             "config_file": str(config_file),
+            # Content hash of the MAIN config file as read at run start. Records
+            # exactly which config bytes ran (audit-after proof) and lets the
+            # Final-settings preview detect that the file was edited between
+            # preview and Run (TOCTOU, N7).
+            "config_hash": _hash_files([str(config_file)]),
         }
         try:
             from ..controller import manualcmd
@@ -1260,21 +1268,61 @@ def h_run_start(handler: Any) -> None:
             flow_name=flow_name,
             gui_meta=gui_meta,
         )
-        if _asm.get("macro_warning") and isinstance(result, dict):
+        if isinstance(result, dict):
             result = dict(result)
-            result["warning"] = _asm["macro_warning"]
+            warnings = [w for w in (_asm.get("macro_warning"), config_warning) if w]
+            if warnings:
+                result["warning"] = "  ".join(warnings)
+            # The exact config bytes this run used — the client compares it to the
+            # hash it previewed in Final-settings to catch a mid-flight edit (N7).
+            result["config_hash"] = gui_meta.get("config_hash")
         _respond(handler, result)
     except Exception as ex:
         _log.exception("run start failed")
         _respond(handler, str(ex), 500)
 
 
+# The ONE canonical order LanEx resolves a design's config file in. Preflight and
+# run-start MUST share this (they used to disagree — preflight preferred yaml,
+# run-start preferred json — so the preflight could name a different file than
+# the one that actually ran). ``json`` first preserves the historical run-start
+# precedence; ``yml`` is accepted as a yaml alias.
+_CONFIG_EXTS = ("json", "yaml", "yml", "tcl")
+
+
+def _config_candidates(design_dir: str) -> List[Path]:
+    """Every ``config.<ext>`` present in the design dir, in resolution order.
+
+    More than one means LanEx uses the FIRST and the others are ignored — the
+    caller warns so a user maintaining two configs isn't silently surprised
+    (Fear K / N6)."""
+    out: List[Path] = []
+    try:
+        for ext in _CONFIG_EXTS:
+            cf = Path(design_dir) / f"config.{ext}"
+            if cf.is_file():
+                out.append(cf)
+    except Exception:
+        pass
+    return out
+
+
 def _resolve_config_file(design_dir: str) -> Optional[Path]:
-    for ext in ("json", "yaml", "tcl"):
-        cf = Path(design_dir) / f"config.{ext}"
-        if cf.is_file():
-            return cf
-    return None
+    cands = _config_candidates(design_dir)
+    return cands[0] if cands else None
+
+
+def _multi_config_warning(design_dir: str) -> Optional[str]:
+    """A warning when the design has more than one config file, naming which one
+    LanEx uses and which are ignored. ``None`` when there's 0 or 1."""
+    cands = _config_candidates(design_dir)
+    if len(cands) < 2:
+        return None
+    used = cands[0].name
+    others = ", ".join(c.name for c in cands[1:])
+    return (f"This design has multiple config files ({', '.join(c.name for c in cands)}). "
+            f"LanEx uses {used} and ignores {others}. Delete or rename the extra "
+            f"file(s) if that's not what you intended.")
 
 
 def _recorded_cli_command(design_dir: str, tag: str) -> Optional[Dict[str, Any]]:

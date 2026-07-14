@@ -15,6 +15,7 @@ export const state = {
   extrasFiles: [],           // full paths user added manually
   runs: [],
   selectedRunTag: null,
+  previewedConfigHash: null, // config sha stashed when Final-settings preview opened (N7 TOCTOU)
   pipeline: [],
   stepStatuses: {},
   stepTiming: {},            // id -> {start, end} (ms epoch) for the run timeline

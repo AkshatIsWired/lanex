@@ -41,6 +41,15 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Time unit for slack/arrival numbers. OpenSTA reports are unitless — the value
+# is in the liberty's ``time_unit``, which is **1 ns** for every PDK LanEx
+# supports (sky130, gf180, ihp). We surface this ONE constant (never hardcode
+# "ns" in the frontend) so the label always tracks a single source of truth; if
+# a ps-unit PDK is ever added, change it here (or source it per-run) and every
+# display follows. A ps liberty shown as ns would misstate slack ×1000 (Fear G),
+# so ``test_supported_pdks_use_ns_time_unit`` canaries the assumption.
+TIME_UNIT = "ns"
+
 # A very large magnitude OpenSTA prints for "no path" slacks (e.g. 1e30); treat
 # as "no real path" rather than a meaningful number.
 _SENTINEL = 1e29
@@ -253,6 +262,7 @@ def timing_paths(run_dir: str | Path, *, kind: str = "setup", limit: int = 100) 
         "total": len(real),
         "violating": violating,
         "worst_slack": worst,
+        "unit": TIME_UNIT,
         "paths": real[:max(1, limit)],
         "histogram": _histogram([p["slack"] for p in real]),
     }

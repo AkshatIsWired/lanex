@@ -204,6 +204,9 @@ export async function openFinalSettings(payload = null) {
   }
   let map = null;
   try { map = await api.provenance({ kind: "input-map" }); } catch { /* honest below */ }
+  // Stash the config file's hash AS PREVIEWED so a run started later can detect
+  // the file was edited in between and warn (TOCTOU, N7). Cleared once compared.
+  if (map && map.config_hash) state.previewedConfigHash = map.config_hash;
   let macros = [];
   try {
     const r = await api.customMacros(state.designDir);

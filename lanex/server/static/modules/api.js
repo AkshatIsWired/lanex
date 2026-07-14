@@ -75,6 +75,7 @@ export const api = {
   enableDockerGroup: () => _fetch("/api/container/enable-docker-group", { method: "POST", body: "{}" }),
   startEngine: (engine) =>
     _fetch("/api/container/start-engine", { method: "POST", body: JSON.stringify({ engine }) }),
+  runStatus: () => _fetch("/api/run/status"),
   runs:  (designDir) => _fetch("/api/runs" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : "")),
   knownDesigns: () => _fetch("/api/known-designs"),
   run:   (tag) => _fetch("/api/runs/" + encodeURIComponent(tag)),
@@ -294,11 +295,38 @@ function _wire(es) {
     } catch (_) {}
   };
   es.addEventListener("end", () => { /* server closes the stream after flow_done */ });
+  // The server emits ``gap`` when a reconnect resumed past events already
+  // evicted from its ring — those step-transition events are gone, so the live
+  // timeline could be stale. Re-hydrate from the authoritative status (N3).
+  es.addEventListener("gap", () => { _connIndicator(true); _resyncRunStatus("gap"); });
   // A dropped stream (server died, laptop slept) must be VISIBLE: EventSource
   // retries silently forever, and until it reconnects the UI would just go
   // quietly stale. Show a small fixed chip while disconnected.
-  es.onerror = () => _connIndicator(false);
-  es.onopen = () => _connIndicator(true);
+  es.onerror = () => { _connIndicator(false); _wasDisconnected = true; };
+  es.onopen = () => {
+    _connIndicator(true);
+    // Belt-and-suspenders to the server ``gap`` event: on ANY reconnect that
+    // followed a real drop, re-pull the run status so the pipeline can never
+    // sit on stale step states behind a green "connected" chip — even if the
+    // browser reconnected without a usable Last-Event-ID. The very first
+    // connection (no prior drop) is skipped.
+    if (_wasDisconnected) { _wasDisconnected = false; _resyncRunStatus("reconnect"); }
+  };
+}
+
+// Re-hydrate the live pipeline from /api/run/status after a stream gap. Fetches
+// the authoritative step statuses and broadcasts them as ``run_status_resync``;
+// the app's event handler repaints from it. Guarded so overlapping triggers
+// (gap + reconnect firing together) do at most one fetch.
+let _wasDisconnected = false;
+let _resyncing = false;
+function _resyncRunStatus(reason) {
+  if (_resyncing) return;
+  _resyncing = true;
+  api.runStatus()
+    .then((s) => { _broadcast(Object.assign({ type: "run_status_resync", reason }, s || {})); })
+    .catch(() => { /* transient; the next event or reconnect will retry */ })
+    .finally(() => { _resyncing = false; });
 }
 
 // Fixed "reconnecting" chip — created lazily, removed the moment the stream is
@@ -370,8 +398,23 @@ export const fmt = {
       // (e.g. a +0.0004 worst slack) — show them in exponential instead.
       if (value !== 0 && Math.abs(value) < 0.001) return value.toExponential(2);
       if (Math.abs(value) < 100) return value.toFixed(3);
-      return Math.round(value).toLocaleString();
+      // Group large magnitudes with a FIXED en-US separator (comma). A
+      // locale-dependent toLocaleString() renders 1235 as "1.235" on a de-DE
+      // browser — indistinguishable from a decimal, a silent ×1000 misread of a
+      // real tool number (Fear G/H, N5). en-US pins "," so grouping can never be
+      // mistaken for a decimal point.
+      return Math.round(value).toLocaleString("en-US");
     }
+    return String(value);
+  },
+  // Exact, unrounded value as a plain string — for title/hover disclosure next
+  // to a rounded metric() cell, so the raw number is always one hover away
+  // (the provenance dialog is one click away). Non-finite/absent kept honest.
+  raw(value) {
+    if (value === null || value === undefined) return "";
+    if (value === "Infinity" || value === Infinity) return "∞";
+    if (value === "-Infinity" || value === -Infinity) return "−∞";
+    if (value === "NaN" || (typeof value === "number" && Number.isNaN(value))) return "NaN";
     return String(value);
   },
   shortPath(p) {

@@ -125,6 +125,22 @@ class ISSEHandler:
 
         self._write("hello", {"ts": time.time()}, event="hello")
 
+        # A reconnecting client resumes from the last ``id:`` it saw. If events
+        # were emitted and EVICTED from the bounded ring while it was gone (e.g.
+        # a laptop slept through a verbose flow that pushed past the ring size),
+        # resuming silently loses those step-transition events — the live
+        # timeline would then show stale states behind a green "connected" chip.
+        # Emit an explicit ``gap`` so the client re-hydrates from /api/run/status
+        # rather than trusting its now-incomplete event history (Fear F, N3).
+        min_buffered = bus.min_seq
+        if start_seq >= 0 and min_buffered > 0 and start_seq + 1 < min_buffered:
+            self._write(
+                "gap",
+                {"ts": time.time(), "resync": True,
+                 "from_seq": start_seq, "oldest_seq": min_buffered},
+                event="gap",
+            )
+
         last_heartbeat = time.time()
         # A fresh connection (no Last-Event-ID) starts at the current end of the
         # ring so it doesn't replay the whole session's history; a reconnect

@@ -67,13 +67,53 @@ def test_compare_runs(tmp_path: Path):
                   config={"FP_CORE_UTIL": 55})
     out = history.compare_runs([a, b])
     assert {r["tag"] for r in out["runs"]} == {"A", "B"}
-    # FP_CORE_UTIL differs -> appears in config_diff.
+    # Every per-run table is keyed by the unique ``col`` (run_dir), NOT the tag.
+    col = {r["tag"]: r["col"] for r in out["runs"]}
+    assert col["A"] == str(a.resolve()) and col["B"] == str(b.resolve())
+    # FP_CORE_UTIL differs -> appears in config_diff (inner keys are cols).
     assert "FP_CORE_UTIL" in out["config_diff"]
+    assert set(out["config_diff"]["FP_CORE_UTIL"]) == {col["A"], col["B"]}
     # PDK is identical -> not in diff.
     assert "PDK" not in out["config_diff"]
-    # "best" must agree with the metric's own higher_is_better flag, whatever the
-    # registry reports — A=-0.5/B=0.2 for ws, A=100/B=80 for area.
+    # "best" points at the winning run's COL, following the metric's registry
+    # direction — A=-0.5/B=0.2 for ws, A=100/B=80 for area.
     ws_hib = out["metric_meta"]["timing__setup__ws"]["higher_is_better"]
-    assert out["best"]["timing__setup__ws"] == ("B" if ws_hib else "A")
+    assert out["best"]["timing__setup__ws"] == (col["B"] if ws_hib else col["A"])
     area_hib = out["metric_meta"]["design__instance__area"]["higher_is_better"]
-    assert out["best"]["design__instance__area"] == ("A" if area_hib else "B")
+    assert out["best"]["design__instance__area"] == (col["A"] if area_hib else col["B"])
+
+
+def test_compare_runs_same_tag_two_designs_no_collision(tmp_path: Path):
+    """N1: two designs each with a run named 'baseline' must NOT collapse onto
+    one column. Before the fix the tag-keyed table showed only the second
+    design's numbers under a single 'baseline' column (silent Fear-F/M)."""
+    da = tmp_path / "spm"
+    db = tmp_path / "processor"
+    a = _make_run(da, tag="baseline", metrics={"design__instance__count": 100.0},
+                  config={"FP_CORE_UTIL": 40})
+    b = _make_run(db, tag="baseline", metrics={"design__instance__count": 999.0},
+                  config={"FP_CORE_UTIL": 55})
+    out = history.compare_runs([a, b])
+    # Two distinct columns, both tagged 'baseline' but disambiguated by design.
+    assert len(out["runs"]) == 2
+    assert [r["tag"] for r in out["runs"]] == ["baseline", "baseline"]
+    assert {r["design"] for r in out["runs"]} == {"spm", "processor"}
+    cols = [r["col"] for r in out["runs"]]
+    assert len(set(cols)) == 2  # never merged
+    per = out["metric_table"]["design__instance__count"]
+    # BOTH runs' own values survive, keyed by their own col — not overwritten.
+    assert per[str(a.resolve())] == 100.0
+    assert per[str(b.resolve())] == 999.0
+    # config_diff also keeps both (FP_CORE_UTIL 40 vs 55).
+    assert set(out["config_diff"]["FP_CORE_UTIL"]) == {str(a.resolve()), str(b.resolve())}
+
+
+def test_compare_best_skips_unknown_direction_metric(tmp_path: Path):
+    """N8: a metric NOT in the registry has no known optimisation direction, so
+    ``best`` must not guess (and highlight the worse run). It is simply absent."""
+    a = _make_run(tmp_path, tag="A", metrics={"custom__unregistered__metric": 5.0})
+    b = _make_run(tmp_path, tag="B", metrics={"custom__unregistered__metric": 9.0})
+    out = history.compare_runs([a, b])
+    assert "custom__unregistered__metric" in out["metric_table"]
+    assert out["metric_meta"]["custom__unregistered__metric"]["direction_known"] is False
+    assert "custom__unregistered__metric" not in out["best"]

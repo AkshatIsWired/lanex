@@ -39,6 +39,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_cancel_container": "Cancel actually kills the container — a cancelled run leaves no orphan flow still writing.",
     "test_bundle_artifacts": "Run bundles are byte-faithful and record honestly what was skipped (Fear C).",
     "test_export": "CSV/MD/HTML exports equal the metrics on disk; non-finite tokens agree across every surface.",
+    "test_fixes_round73": "Accuracy fixes N2-N7: partial-sim marked partial, SSE gap re-hydrates the live pipeline, timing unit single-sourced, multi-config warned + preflight/run-start agree, config drift hash (Fears A/F/G/K).",
     "test_history": "Run success + metrics are derived correctly from the on-disk run tree.",
     "test_run_import": "Importing a run reproduces identical metrics (round-trip fidelity, Fear C).",
     "test_installer": "PDK/tool installation logic behaves and self-heals instead of looping on a bad state.",

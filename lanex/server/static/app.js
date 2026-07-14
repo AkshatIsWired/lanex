@@ -339,6 +339,22 @@ function handle(ev) {
     };
     setRunProgress(ev.done || 0, ev.total || 0, ev.current || "");
     R("runtimeline", renderRuntimeline);
+  } else if (ev.type === "run_status_resync") {
+    // The SSE stream dropped and reconnected past events the server's ring had
+    // already evicted (e.g. laptop sleep during a verbose flow) — our step
+    // history is now incomplete. Re-hydrate the live pipeline from the
+    // authoritative /api/run/status so the timeline can't show stale step
+    // states behind a green "connected" chip (N3, Fear F). Disk-derived tabs
+    // already re-read truth; this fixes the live view.
+    state.stepStatuses = state.stepStatuses || {};
+    if (ev.step_statuses && typeof ev.step_statuses === "object") {
+      for (const [id, st] of Object.entries(ev.step_statuses)) {
+        if (st) state.stepStatuses[id] = st;
+      }
+    }
+    if (typeof ev.running === "boolean") state.status.running = ev.running;
+    R("runtimeline", renderRuntimeline);
+    R("runs", renderRuns);
   } else if (
     ev.type === "step_started" ||
     ev.type === "step_done" ||

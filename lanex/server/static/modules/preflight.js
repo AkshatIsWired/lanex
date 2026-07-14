@@ -48,11 +48,17 @@ export async function renderPreflight() {
   const t = pf.tools || {};
 
   let html = "";
+  // A design with >1 config file is usable (LanEx picks one deterministically)
+  // but the user should know which — surface it as an inline advisory, not a
+  // blocker (N6).
+  const cfgNote = d.config_note
+    ? " · <span class='pf-note-warn'>" + fmt.escape(d.config_note) + "</span>"
+    : "";
   html += row(
     d.ok ? "ok" : "bad",
     "Design + config",
     d.ok
-      ? (d.config_file || "config") + " · " + (d.source_count || 0) + " source file(s)"
+      ? (d.config_file || "config") + " · " + (d.source_count || 0) + " source file(s)" + cfgNote
       : (d.dir ? "config / sources missing" : "no folder loaded"),
     d.ok ? "" : "<button class='btn btn-ghost pf-act' data-act='design'>Pick folder</button>",
   );

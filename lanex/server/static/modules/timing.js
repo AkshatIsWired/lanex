@@ -26,7 +26,7 @@ function slackPill(slack, met) {
   return "<span class='pill " + cls + "' title='" + flag + "'>" + txt + "</span>";
 }
 
-function drawHist(hist) {
+function drawHist(hist, unit) {
   const el = document.getElementById("timing-hist");
   if (!el) return;
   let chart = window.echarts && window.echarts.getInstanceByDom(el);
@@ -44,7 +44,7 @@ function drawHist(hist) {
     ...theme,
     tooltip: { trigger: "axis" },
     grid: { left: 48, right: 16, top: 16, bottom: 40 },
-    xAxis: { type: "category", data: hist.bins, name: "slack (ns)", nameLocation: "middle",
+    xAxis: { type: "category", data: hist.bins, name: "slack (" + (unit || "ns") + ")", nameLocation: "middle",
              nameGap: 26, axisLabel: { rotate: 45, fontSize: 10 } },
     yAxis: { type: "value", name: "paths" },
     series: [{
@@ -138,9 +138,10 @@ export async function renderTimingPaths(tag) {
     wireProvBtns(srcEl);
   }
   const worstCls = (data.worst_slack !== null && data.worst_slack < 0) ? "pill-fail" : "pill-pass";
+  const unit = data.unit || "ns";
   summary.innerHTML =
     "<span class='pill " + worstCls + "'>worst " + (data.kind) + " slack " +
-      (data.worst_slack === null ? "—" : fmt.metric(data.worst_slack)) + " ns</span>" +
+      (data.worst_slack === null ? "—" : fmt.metric(data.worst_slack)) + " " + fmt.escape(unit) + "</span>" +
     "<span class='pill pill-info'>" + data.total + " paths</span>" +
     "<span class='pill " + (data.violating ? "pill-fail" : "pill-pass") + "'>" +
       data.violating + " violating</span>" +
@@ -149,7 +150,7 @@ export async function renderTimingPaths(tag) {
   _rows = data.paths || [];
   _baseTag = tag;
   _sortKey = "slack"; _sortAsc = true;
-  drawHist(data.histogram);
+  drawHist(data.histogram, data.unit);
   renderTable();
   populateCompareSelect(tag);
   renderTimingCompare();
@@ -195,6 +196,7 @@ async function renderTimingCompare() {
     joined.push({ endpoint: p.endpoint, a: p.slack, b, d: p.slack - b });
   }
   joined.sort((x, y) => Math.abs(y.d) - Math.abs(x.d));
+  const unit = other.unit || "ns";
   const head = "<h4 style='margin:var(--s-4) 0 var(--s-2)'>Δ vs “" + fmt.escape(_compareTag) + "” (" + fmt.escape(_kind) + ")</h4>";
   if (!joined.length) {
     out.innerHTML = head + "<p class='muted'>No endpoints in common between these two runs for this analysis.</p>";
@@ -210,7 +212,7 @@ async function renderTimingCompare() {
     (top.length < joined.length ? " (top " + top.length + " shown)" : "") +
     ". Positive Δ = this run has more slack than “" + fmt.escape(_compareTag) + "”.</p>" +
     "<table class='cmp-table'><thead><tr><th>Endpoint</th><th>this</th><th>“" +
-    fmt.escape(_compareTag) + "”</th><th>Δ slack (ns)</th></tr></thead><tbody>" + rows + "</tbody></table>";
+    fmt.escape(_compareTag) + "”</th><th>Δ slack (" + fmt.escape(unit) + ")</th></tr></thead><tbody>" + rows + "</tbody></table>";
 }
 
 function wireOnce() {

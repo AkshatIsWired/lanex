@@ -79,6 +79,17 @@ class EventBus:
         with self._cond:
             return self._buf[-1].get("seq", 0) if self._buf else 0
 
+    @property
+    def min_seq(self) -> int:
+        """Sequence of the OLDEST event still buffered (0 when empty).
+
+        A reconnecting client that resumes from a cursor older than this has had
+        the events in between evicted from the ring — its live view is now stale
+        with no way to notice. The SSE layer uses this to emit an explicit
+        ``gap`` so the client can re-hydrate from the authoritative status."""
+        with self._cond:
+            return self._buf[0].get("seq", 0) if self._buf else 0
+
 
 # Singleton
 bus = EventBus()

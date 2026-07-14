@@ -388,6 +388,15 @@ async function onRunClick() {
       return;
     }
     if (res.warning) toast.show(res.warning, "warn");
+    // TOCTOU (N7): if the user opened the Final-settings preview and then the
+    // config file changed before this run, the preview no longer matches what
+    // ran. Compare the previewed config hash to the one the run actually used.
+    if (state.previewedConfigHash && res.config_hash &&
+        res.config_hash !== state.previewedConfigHash) {
+      toast.show("Heads up: the config file changed after you previewed the final " +
+        "settings — this run used the current file, not the preview.", "warn");
+    }
+    state.previewedConfigHash = null;
     paintRunning(true);
     openLogsTab();
   } catch (ex) {

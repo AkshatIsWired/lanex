@@ -64,9 +64,17 @@ async function doCompare(root) {
   const search = root.querySelector("#cmp-search");
   search.hidden = false;
 
+  // Columns are keyed by the backend's per-run ``col`` (the unique run_dir), NOT
+  // the tag: two different designs can each hold a run named "baseline", and a
+  // tag-keyed table would silently collapse them onto one column showing only
+  // one design's numbers (Fear F/M). Each column carries a disambiguated label
+  // (design · tag when a tag repeats or designs differ) so the user always sees
+  // WHICH run each column is.
+  const cols = buildCols(data.runs || []);
+
   // Summary comparison — the same headline metrics shown for a single run
   // (die/core area, utilisation, power, slack, DRC/LVS/antenna), side by side.
-  const summaryHtml = renderSummaryCompare(data.runs || [], tags);
+  const summaryHtml = renderSummaryCompare(data.runs || [], cols);
 
   // Key config: decision-relevant vars for EVERY run (clock, util, synth…),
   // so you can see what recipe produced each result — not just the diffs.
@@ -76,9 +84,9 @@ async function doCompare(root) {
   if (!kcKeys.length) kcHtml += "<p class='muted'>No key config vars recorded for these runs.</p>";
   else {
     kcHtml += "<table class='cmp-table'><thead><tr><th>Variable</th>" +
-      tags.map((t) => "<th>" + fmt.escape(t) + "</th>").join("") + "</tr></thead><tbody>" +
+      colHeaders(cols) + "</tr></thead><tbody>" +
       kcKeys.map((k) => "<tr><td><code>" + fmt.escape(k) + "</code></td>" +
-        tags.map((t) => "<td>" + fmt.escape(fmtCfg(kc[k][t])) + "</td>").join("") +
+        cols.map((c) => "<td>" + fmt.escape(fmtCfg(kc[k][c.col])) + "</td>").join("") +
         "</tr>").join("") + "</tbody></table>";
   }
 
@@ -88,9 +96,9 @@ async function doCompare(root) {
   if (!cfgKeys.length) cfgHtml += "<p class='muted'>Configs are identical.</p>";
   else {
     cfgHtml += "<table class='cmp-table'><thead><tr><th>Variable</th>" +
-      tags.map((t) => "<th>" + fmt.escape(t) + "</th>").join("") + "</tr></thead><tbody>" +
+      colHeaders(cols) + "</tr></thead><tbody>" +
       cfgKeys.map((k) => "<tr><td>" + fmt.escape(k) + "</td>" +
-        tags.map((t) => "<td>" + fmt.escape(fmtCfg(data.config_diff[k][t])) + "</td>").join("") +
+        cols.map((c) => "<td>" + fmt.escape(fmtCfg(data.config_diff[k][c.col])) + "</td>").join("") +
         "</tr>").join("") + "</tbody></table>";
   }
 
@@ -100,15 +108,15 @@ async function doCompare(root) {
     const rows = metrics.filter((m) => !filter || m.includes(filter)).map((m) => {
       const per = data.metric_table[m];
       const best = data.best[m];
-      const cells = tags.map((t) => {
-        const v = per[t];
-        const cls = best ? (t === best ? "cmp-best" : "") : "";
+      const cells = cols.map((c) => {
+        const v = per[c.col];
+        const cls = best ? (c.col === best ? "cmp-best" : "") : "";
         return "<td class='" + cls + "'>" + fmt.escape(v === undefined ? "—" : String(v)) + "</td>";
       }).join("");
       return "<tr><td><code>" + fmt.escape(m) + "</code></td>" + cells + "</tr>";
     }).join("");
     return "<table class='cmp-table'><thead><tr><th>Metric</th>" +
-      tags.map((t) => "<th>" + fmt.escape(t) + "</th>").join("") + "</tr></thead><tbody>" +
+      colHeaders(cols) + "</tr></thead><tbody>" +
       rows + "</tbody></table>";
   };
 
@@ -122,21 +130,42 @@ async function doCompare(root) {
     document.getElementById("cmp-metrics").innerHTML = renderMetrics(search.value.trim());
   };
   const exp = out.querySelector("#cmp-export-csv");
-  if (exp) exp.addEventListener("click", () => exportCompareCsv(data, tags));
-  renderCompareCharts(out.querySelector("#cmp-charts"), data, tags);
+  if (exp) exp.addEventListener("click", () => exportCompareCsv(data, cols));
+  renderCompareCharts(out.querySelector("#cmp-charts"), data, cols);
+}
+
+// Build the column descriptors for a comparison from the backend's run rows.
+// ``col`` is the unique lookup key (run_dir); ``label`` disambiguates same-named
+// runs by prefixing the design whenever a tag repeats or multiple designs are in
+// play, so no two columns are ambiguous.
+export function buildCols(runs) {
+  const tagCount = {};
+  for (const r of runs) tagCount[r.tag] = (tagCount[r.tag] || 0) + 1;
+  const designs = new Set(runs.map((r) => r.design).filter(Boolean));
+  const multiDesign = designs.size > 1;
+  return runs.map((r) => {
+    const dup = (tagCount[r.tag] || 0) > 1;
+    const label = ((multiDesign || dup) && r.design) ? (r.design + " · " + r.tag) : (r.tag || r.col);
+    return { col: r.col, tag: r.tag, design: r.design || "", label };
+  });
+}
+
+function colHeaders(cols) {
+  return cols.map((c) => "<th>" + fmt.escape(c.label) + "</th>").join("");
 }
 
 // Export the whole comparison (key config + config diffs + every metric) as one
-// CSV: column 1 = field, then one column per run.
-function exportCompareCsv(data, tags) {
-  const rows = [["field", ...tags]];
+// CSV: column 1 = field, then one column per run (headers are the disambiguated
+// labels; values are keyed by the unique per-run column, never the tag).
+function exportCompareCsv(data, cols) {
+  const rows = [["field", ...cols.map((c) => c.label)]];
   const kc = data.key_config || {};
-  for (const k of Object.keys(kc)) rows.push(["config: " + k, ...tags.map((t) => fmtCfg(kc[k][t]))]);
+  for (const k of Object.keys(kc)) rows.push(["config: " + k, ...cols.map((c) => fmtCfg(kc[k][c.col]))]);
   const cd = data.config_diff || {};
-  for (const k of Object.keys(cd)) rows.push(["diff: " + k, ...tags.map((t) => fmtCfg(cd[k][t]))]);
+  for (const k of Object.keys(cd)) rows.push(["diff: " + k, ...cols.map((c) => fmtCfg(cd[k][c.col]))]);
   const mt = data.metric_table || {};
-  for (const m of Object.keys(mt).sort()) rows.push([m, ...tags.map((t) => mt[m][t])]);
-  downloadCsv("compare-" + (tags[0] || "runs") + ".csv", toCsv(rows));
+  for (const m of Object.keys(mt).sort()) rows.push([m, ...cols.map((c) => mt[m][c.col])]);
+  downloadCsv("compare-" + (cols[0] ? cols[0].tag : "runs") + ".csv", toCsv(rows));
 }
 
 // Render config values readably (lists → comma list, bool/None → text).
@@ -147,14 +176,15 @@ function fmtCfg(v) {
 }
 
 // Side-by-side headline summary, built from each run's design_summary rows
-// (already returned by /api/compare). Rows are the union of labels seen.
-function renderSummaryCompare(runs, tags) {
-  const byTag = {};
+// (already returned by /api/compare). Rows are the union of labels seen. Keyed
+// by the unique per-run column, so same-named runs never merge.
+function renderSummaryCompare(runs, cols) {
+  const byCol = {};
   const order = [];
   for (const r of runs) {
-    byTag[r.tag] = {};
+    byCol[r.col] = {};
     for (const row of (r.summary || [])) {
-      byTag[r.tag][row.label] = row;
+      byCol[r.col][row.label] = row;
       if (!order.includes(row.label)) order.push(row.label);
     }
   }
@@ -167,9 +197,9 @@ function renderSummaryCompare(runs, tags) {
   };
   return "<h3>Summary <span class='muted'>(headline metrics, side by side)</span></h3>" +
     "<table class='cmp-table'><thead><tr><th>Metric</th>" +
-    tags.map((t) => "<th>" + fmt.escape(t) + "</th>").join("") + "</tr></thead><tbody>" +
+    colHeaders(cols) + "</tr></thead><tbody>" +
     order.map((label) => "<tr><td>" + fmt.escape(label) + "</td>" +
-      tags.map((t) => cell(byTag[t] && byTag[t][label])).join("") + "</tr>").join("") +
+      cols.map((c) => cell(byCol[c.col] && byCol[c.col][label])).join("") + "</tr>").join("") +
     "</tbody></table>";
 }
 
@@ -185,14 +215,15 @@ const _CHART_METRICS = [
   ["route__wirelength__estimated", "Wirelength"],
 ];
 
-async function renderCompareCharts(host, data, tags) {
+async function renderCompareCharts(host, data, cols) {
   if (!host) return;
   if (typeof window.echarts === "undefined") { host.innerHTML = "<p class='muted'>Charts need ECharts.</p>"; return; }
   const { chartTheme } = await import("./theme-echarts.js");
   const table = data.metric_table || {};
   const num = (v) => { const n = Number(v); return isFinite(n) ? n : null; };
+  const labels = cols.map((c) => c.label);
   const present = _CHART_METRICS.filter(([k]) => table[k] &&
-    tags.some((t) => num(table[k][t]) !== null));
+    cols.some((c) => num(table[k][c.col]) !== null));
   if (!present.length) { host.innerHTML = "<p class='muted'>No chartable metrics in common across these runs.</p>"; return; }
   host.innerHTML = present.map(([k]) => "<div class='cmp-chart' data-k='" + fmt.escape(k) + "'></div>").join("");
   for (const [k, label] of present) {
@@ -211,9 +242,9 @@ async function renderCompareCharts(host, data, tags) {
       title: { text: name, subtext: k, left: "center", textStyle: { fontSize: 13, fontWeight: 600 }, subtextStyle: { fontSize: 9 } },
       tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : v) + (unit ? " " + unit : "") },
       grid: { top: 48, bottom: 48, left: 56, right: 12 },
-      xAxis: { type: "category", data: tags, axisLabel: { interval: 0, rotate: tags.length > 2 ? 30 : 0, fontSize: 10 } },
+      xAxis: { type: "category", data: labels, axisLabel: { interval: 0, rotate: labels.length > 2 ? 30 : 0, fontSize: 10 } },
       yAxis: { type: "value", name: unit, nameTextStyle: { fontSize: 10 } },
-      series: [{ type: "bar", name, data: tags.map((t) => num(table[k][t])) }],
+      series: [{ type: "bar", name, data: cols.map((c) => num(table[k][c.col])) }],
     });
   }
   window.addEventListener("resize", () => host.querySelectorAll(".cmp-chart").forEach((el) => {

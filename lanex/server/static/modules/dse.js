@@ -355,16 +355,19 @@ async function renderResults(root, tags) {
   // ---- comparison table (config diff + curated metrics; best cell highlighted)
   const th = "<th>Field</th>" + runs.map((r) =>
     "<th class='" + (r.success ? "ok" : "bad") + "'>" + fmt.escape(r.tag) + "</th>").join("");
+  // Per-run tables are keyed by the backend's unique ``col`` (run_dir), never
+  // the tag — two runs could share a tag (Fear F/N1); the header still shows the
+  // human tag.
   const rowsCfg = Object.entries(data.config_diff || {}).map(([k, vals]) =>
     "<tr><td class='rk'>" + fmt.escape(k) + "</td>" +
-    runs.map((r) => "<td>" + fmt.escape(fmtVal(vals[r.tag])) + "</td>").join("") + "</tr>").join("");
+    runs.map((r) => "<td>" + fmt.escape(fmtVal(vals[r.col])) + "</td>").join("") + "</tr>").join("");
   const rowsMetric = RESULT_METRICS.filter((m) => mt[m.key]).map((m) => {
     const winner = best[m.key];
     return "<tr><td class='rk'>" + fmt.escape(m.label) +
       (m.unit ? " <span class='mu'>" + fmt.escape(m.unit) + "</span>" : "") + "</td>" +
       runs.map((r) => {
-        const v = mt[m.key] ? mt[m.key][r.tag] : undefined;
-        const win = winner && winner === r.tag ? " class='best'" : "";
+        const v = mt[m.key] ? mt[m.key][r.col] : undefined;
+        const win = winner && winner === r.col ? " class='best'" : "";
         return "<td" + win + ">" + fmt.escape(fmt.metric ? fmt.metric(v) : fmtVal(v)) + "</td>";
       }).join("") + "</tr>";
   }).join("");
@@ -378,8 +381,8 @@ async function renderResults(root, tags) {
   // ---- Pareto (cell area vs setup slack)
   const points = runs.map((r) => ({
     tag: r.tag,
-    x: mt["design__instance__area"] ? Number(mt["design__instance__area"][r.tag]) : null,
-    y: mt["timing__setup__ws"] ? Number(mt["timing__setup__ws"][r.tag]) : null,
+    x: mt["design__instance__area"] ? Number(mt["design__instance__area"][r.col]) : null,
+    y: mt["timing__setup__ws"] ? Number(mt["timing__setup__ws"][r.col]) : null,
   }));
   drawChart(root, "#dse-pareto", paretoOption(points, { xName: "cell area (µm²)", yName: "setup WNS (ns)" }),
     "Need cell-area + setup-slack metrics for a Pareto.");
@@ -408,16 +411,18 @@ function csvCell(v) {
 
 function exportResultsCsv(runs, data) {
   const mt = data.metric_table || {};
-  const tags = runs.map((r) => r.tag);
+  // Header = human tag; values are keyed by the unique col (run_dir), so two
+  // same-named runs don't collide into one column (N1).
+  const cols = runs.map((r) => r.col);
   const lines = [];
-  lines.push(["field", ...tags].map(csvCell).join(","));
+  lines.push(["field", ...runs.map((r) => r.tag)].map(csvCell).join(","));
   for (const [k, vals] of Object.entries(data.config_diff || {})) {
-    lines.push([k, ...tags.map((t) => fmtVal(vals[t]))].map(csvCell).join(","));
+    lines.push([k, ...cols.map((c) => fmtVal(vals[c]))].map(csvCell).join(","));
   }
   for (const m of RESULT_METRICS) {
     if (!mt[m.key]) continue;
     lines.push([m.label + (m.unit ? " (" + m.unit + ")" : ""),
-      ...tags.map((t) => mt[m.key][t])].map(csvCell).join(","));
+      ...cols.map((c) => mt[m.key][c])].map(csvCell).join(","));
   }
   const blob = new Blob([lines.join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
@@ -429,9 +434,9 @@ function exportResultsCsv(runs, data) {
 
 function drawBar(root, runs, mt, key) {
   const meta = RESULT_METRICS.find((m) => m.key === key);
-  const tags = runs.map((r) => r.tag);
+  const tags = runs.map((r) => r.tag);              // x-axis labels (display)
   const vals = runs.map((r) => {
-    const v = mt[key] ? Number(mt[key][r.tag]) : null;
+    const v = mt[key] ? Number(mt[key][r.col]) : null;   // lookup by unique col
     return (v === v && Math.abs(v) !== Infinity) ? v : null;   // drop NaN/Inf
   });
   const opt = (!key || vals.every((v) => v === null)) ? null : {
