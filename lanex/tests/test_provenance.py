@@ -432,3 +432,103 @@ def test_final_settings_wiring_and_server_mirror() -> None:
     # setup.js still exports the payload builder the dialog depends on.
     setup_js = (static / "modules" / "setup.js").read_text()
     assert "export function collectRunPayload" in setup_js
+
+
+# ------------------------------------------------ resolved-map (post-run) --
+
+def _mk_resolved_run(tmp_path: Path, with_gui_meta: bool = True) -> Path:
+    run = tmp_path / "runs" / "r1"
+    run.mkdir(parents=True)
+    (run / "resolved.json").write_text(
+        '{\n'
+        '    "PDK": "sky130A",\n'
+        '    "STD_CELL_LIBRARY": "sky130_fd_sc_hd",\n'
+        '    "FP_CORE_UTIL": 50,\n'
+        '    "CLOCK_PERIOD": 10.0,\n'
+        '    "DIODE_PADDING": 2,\n'
+        '    "FALLBACK_SDC_FILE": null,\n'
+        '    "WIRE_LENGTH_THRESHOLD": Infinity,\n'
+        '    "TECH_LEFS": {\n'
+        '        "nom_*": "/pdk/x.tlef"\n'
+        '    }\n'
+        '}\n')
+    if with_gui_meta:
+        (run / "gui-run.json").write_text(json.dumps({
+            "overrides": {"FP_CORE_UTIL": 50},
+            "pdk": "sky130A", "scl": "sky130_fd_sc_hd"}))
+    (tmp_path / "config.yaml").write_text(
+        "CLOCK_PERIOD: 10\n"
+        "pdk::sky130*:\n"
+        "  DIODE_PADDING: 2\n")
+    return run
+
+
+def test_resolved_settings_attributes_every_source(tmp_path: Path) -> None:
+    """The post-run table: values verbatim from resolved.json (nulls and
+    non-finite included), sources attributed by key ORIGIN — override from
+    gui-run.json, picker for PDK/SCL, config with its line (scoped labelled),
+    default for the rest. Never by value comparison."""
+    run = _mk_resolved_run(tmp_path)
+    res = provenance.resolved_settings(run, tmp_path)
+    assert res["ok"] is True and res["gui_meta"] is True
+    assert res["config_rel"] == "config.yaml"
+    by = {r["name"]: r for r in res["rows"]}
+    assert len(by) == 8
+
+    assert by["FP_CORE_UTIL"]["source"] == "override"
+    assert by["FP_CORE_UTIL"]["value"] == "50"
+    assert by["PDK"]["source"] == "picker"
+    assert by["STD_CELL_LIBRARY"]["source"] == "picker"
+    cp = by["CLOCK_PERIOD"]
+    assert cp["source"] == "config" and cp["config_line"] == 1 and "scoped" not in cp
+    dp = by["DIODE_PADDING"]
+    assert dp["source"] == "config" and dp["scoped"] is True and dp["scope"] == "pdk::sky130*"
+    assert by["TECH_LEFS"]["source"] == "default"
+    # Honest values: null stays null, Infinity keeps its token, dicts compact.
+    assert by["FALLBACK_SDC_FILE"]["value"] == "null"
+    # The file literally says `Infinity` — the display keeps that token.
+    assert by["WIRE_LENGTH_THRESHOLD"]["value"] == "Infinity"
+    assert "nom_*" in by["TECH_LEFS"]["value"]
+    # Every row carries its resolved.json line for the one-click raw view.
+    assert all(r["line"] for r in res["rows"])
+    lines = (run / "resolved.json").read_text().splitlines()
+    assert lines[by["FP_CORE_UTIL"]["line"] - 1].lstrip().startswith('"FP_CORE_UTIL"')
+
+
+def test_resolved_settings_without_gui_meta_degrades_honestly(tmp_path: Path) -> None:
+    run = _mk_resolved_run(tmp_path, with_gui_meta=False)
+    res = provenance.resolved_settings(run, tmp_path)
+    assert res["ok"] is True and res["gui_meta"] is False
+    assert "note" in res and "gui-run.json" in res["note"]
+    by = {r["name"]: r for r in res["rows"]}
+    # No override claims possible — but config/default attribution still holds.
+    assert not any(r["source"] in ("override", "picker") for r in res["rows"])
+    assert by["CLOCK_PERIOD"]["source"] == "config"
+    assert by["FP_CORE_UTIL"]["source"] == "default"
+
+
+def test_resolved_settings_missing_file_is_honest(tmp_path: Path) -> None:
+    run = tmp_path / "runs" / "r1"
+    run.mkdir(parents=True)
+    res = provenance.resolved_settings(run, tmp_path)
+    assert res["ok"] is False and "resolved.json" in res["reason"]
+
+
+def test_route_resolved_map(monkeypatch, tmp_path: Path) -> None:
+    _mk_resolved_run(tmp_path)
+    out = _call_route(monkeypatch, tmp_path, "kind=resolved-map&tag=r1")
+    p = out["payload"]
+    assert p["ok"] is True and len(p["rows"]) == 8
+    assert {r["name"]: r for r in p["rows"]}["FP_CORE_UTIL"]["source"] == "override"
+
+
+def test_frontend_final_settings_extras_wiring() -> None:
+    static = Path(__file__).resolve().parents[1] / "server" / "static"
+    fsjs = (static / "modules" / "finalsettings.js").read_text()
+    assert "buildCumulativeModel" in fsjs and "openResolvedSettings" in fsjs
+    assert '"resolved-map"' in fsjs
+    assert "Export CSV" in fsjs  # both big tables are exportable
+    an = (static / "modules" / "analytics.js").read_text()
+    assert "openResolvedSettings" in an
+    html = (static / "index.html").read_text()
+    assert "btn-analytics-settings" in html

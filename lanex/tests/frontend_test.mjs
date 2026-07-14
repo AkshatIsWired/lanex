@@ -446,6 +446,58 @@ check("finalsettings: honest when the config map is unavailable", () => {
   assert.equal(m.sent[0].conflict, null, "no map = no conflict claims, ever");
 });
 
+// ------------------------------------------------ cumulative directory
+// "What about all the OTHER values?" — one row per known variable with the
+// pre-run effective source: override > config > PDK-provided > LibreLane
+// default > unset. Values honest: PDK-flagged vars never claim a number the
+// PDK will decide.
+check("finalsettings: the cumulative directory classifies every variable", () => {
+  const registry = [
+    { name: "FP_CORE_UTIL", default: 50, pdk: false },
+    { name: "CLOCK_PERIOD", default: null, pdk: false },
+    { name: "DIODE_PADDING", default: 2, pdk: false },
+    { name: "TECH_LEFS", default: null, pdk: true },
+    { name: "FALLBACK_SDC_FILE", default: null, pdk: false },
+  ];
+  const map = { ok: true, rel: "config.yaml", vars: {
+    CLOCK_PERIOD: { line: 3, value: "10", scoped: false, scope: null, others: 0 },
+  } };
+  const m = fs.buildCumulativeModel({ PDK: "sky130A", FP_CORE_UTIL: 45 }, map, registry);
+  const by = Object.fromEntries(m.rows.map((r) => [r.name, r]));
+
+  assert.equal(by.FP_CORE_UTIL.source, "override");
+  assert.equal(by.FP_CORE_UTIL.value, "45");
+  assert.equal(by.PDK.source, "picker");
+  assert.equal(by.CLOCK_PERIOD.source, "config");
+  assert.equal(by.CLOCK_PERIOD.value, "10");
+  assert.equal(by.DIODE_PADDING.source, "default");
+  assert.equal(by.DIODE_PADDING.value, "2");
+  // PDK-flagged: source says the PDK provides it; no invented value.
+  assert.equal(by.TECH_LEFS.source, "pdk");
+  assert.equal(by.TECH_LEFS.value, "—");
+  assert.equal(by.FALLBACK_SDC_FILE.source, "unset");
+  assert.deepEqual(m.counts, { override: 2, config: 1, pdk: 1, default: 1, unset: 1 });
+  assert.equal(m.haveRegistry, true);
+
+  // No registry (container-only box): honest flag, but overrides/config rows
+  // still truthfully listed.
+  const m2 = fs.buildCumulativeModel({ FP_CORE_UTIL: 45 }, map, []);
+  assert.equal(m2.haveRegistry, false);
+  assert.equal(m2.rows.length, 2);
+});
+
+check("finalsettings: source labels state the same story in both tables", () => {
+  assert.match(fs.sourceLabel({ source: "override" }), /beats the file/);
+  assert.match(fs.sourceLabel({ source: "config", line: 3 }, "config.yaml"),
+    /config\.yaml line 3/);
+  assert.match(
+    fs.sourceLabel({ source: "config", config_line: 5, scoped: true, scope: "pdk::sky130*" },
+      "config.yaml"),
+    /line 5 \(pdk::sky130\* — applied only if/);
+  assert.match(fs.sourceLabel({ source: "pdk" }), /resolved\.json/);
+  assert.match(fs.sourceLabel({ source: "default" }), /LibreLane default/);
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

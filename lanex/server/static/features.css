@@ -141,8 +141,22 @@
 .fs-note { color: var(--text-muted); margin: var(--s-2) 0 0; }
 .fs-order { margin: 0 0 var(--s-3); padding-left: 1.4em; }
 .fs-order li { margin-bottom: 2px; }
+.fs-tablebar { display: flex; align-items: center; gap: var(--s-2); margin: var(--s-2) 0; }
+.fs-filter { flex: 0 1 260px; }
+/* Its own scroll region so a 400-row table can't swallow the dialog. */
+.fs-tablewrap { max-height: calc(48vh / var(--ll-zoom, 1)); overflow: auto; }
+.fs-all summary { cursor: pointer; color: var(--accent); }
 .prov-view .fv-pre { max-height: calc(56vh / var(--ll-zoom, 1)); }
-.dlg-wide { width: min(980px, calc(96vw / var(--ll-zoom, 1))); }
+/* customDialog's wide variant (provenance viewers, final settings). NOT the
+   folder browser's .dlg-wide below, which pins height and hides body overflow
+   for its own scrolling file list — reusing it clipped these dialogs (the
+   "text cut, can't scroll" bug). Flex column: the BODY scrolls, so the head
+   and the Close button stay reachable however long the content is; height is
+   content-driven up to .dlg's 90vh cap. */
+.dlg-xl { width: min(980px, calc(96vw / var(--ll-zoom, 1)));
+  display: flex; flex-direction: column; }
+.dlg-xl .dlg-body { overflow: auto; flex: 1 1 auto; min-height: 0; }
+.dlg-xl .dlg-head, .dlg-xl .dlg-actions { flex: none; }
 .report-row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; padding: var(--s-1) 0; border-bottom: 1px solid var(--border); }
 .report-row:last-child { border-bottom: 0; }
 .report-row .rk { font-size: var(--t-xs); }

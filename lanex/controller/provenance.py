@@ -271,3 +271,122 @@ def config_var_lines(design_dir: Path) -> Dict[str, Any]:
                     _record(key, i, line, rest)
         return {"ok": True, "rel": name, "vars": out}
     return {"ok": False, "reason": "no config file found in the design dir"}
+
+
+# ---------------------------------------------------------------------------
+# Post-run: every resolved value + where it came from.
+# ---------------------------------------------------------------------------
+
+def _scan_top_level_json_lines(lines: list) -> Dict[str, Tuple[int, str]]:
+    """One pass over a json.dump file: {key: (line, text)} for the LEAST
+    indented occurrence of each key (same top-level rule as _find_json_key)."""
+    out: Dict[str, Tuple[int, str, int]] = {}
+    for i, line in enumerate(lines, start=1):
+        m = _JSON_KEY_RE.match(line)
+        if not m:
+            continue
+        indent, key = len(m.group(1)), m.group(2)
+        prev = out.get(key)
+        if prev is None or indent < prev[2]:
+            out[key] = (i, line.rstrip("\n"), indent)
+    return {k: (v[0], v[1]) for k, v in out.items()}
+
+
+def _display_value(v: Any) -> str:
+    """A resolved value for a table cell — compact, trimmed, never mangled
+    beyond truncation (the full line is one click away via its line number)."""
+    import json as _json
+    try:
+        s = v if isinstance(v, str) else _json.dumps(v)
+    except Exception:
+        s = str(v)
+    s = " ".join(s.split())
+    if len(s) > 100:
+        s = s[:97] + "…"
+    return s
+
+
+def resolved_settings(run_dir: Path, design_dir: Optional[Path]) -> Dict[str, Any]:
+    """Every variable in the run's resolved.json + an honest source label.
+
+    The VALUE column is LibreLane's own record (resolved.json), never an
+    inference. The SOURCE column is attribution by key origin — which input
+    carried the variable into the run:
+      * ``override``  — the key is in gui-run.json's recorded overrides (the
+        exact set this GUI sent for this run);
+      * ``picker``    — PDK / STD_CELL_LIBRARY chosen in Setup (flow options);
+      * ``config``    — the design's config file sets the key (line included;
+        scoped sections labelled — a scoped line only applied if the run's
+        PDK/SCL matched it);
+      * ``default``   — none of the above: LibreLane's or the PDK's own value.
+    Attribution is NEVER by value comparison: LibreLane expands what it reads
+    (``dir::`` globs, expressions, units), so the resolved value routinely
+    differs textually from the config line that set it. Runs without
+    gui-run.json (started outside this GUI) degrade honestly: overrides
+    unknown, stated in ``note``.
+    """
+    import json as _json
+    rpath = Path(run_dir) / "resolved.json"
+    if not rpath.is_file():
+        return {"ok": False, "reason":
+                "no resolved.json in this run — the flow never resolved a "
+                "config (it failed before configuration)."}
+    lines = _read_lines(rpath)
+    if lines is None:
+        return {"ok": False, "reason": "could not read resolved.json"}
+    raw = "\n".join(lines)
+    tokened = re.sub(r'([:\[,]\s*)(-?Infinity|NaN)(\s*[,}\]])', r'\1"\2"\3', raw)
+    try:
+        resolved = _json.loads(tokened)
+    except Exception:
+        return {"ok": False, "reason": "resolved.json is not parseable JSON"}
+    if not isinstance(resolved, dict):
+        return {"ok": False, "reason": "resolved.json is not an object"}
+    linemap = _scan_top_level_json_lines(lines)
+
+    gui_overrides: Optional[Dict[str, Any]] = None
+    gui_pdk = gui_scl = None
+    gpath = Path(run_dir) / "gui-run.json"
+    if gpath.is_file():
+        try:
+            gui = _json.loads(gpath.read_text(encoding="utf-8"))
+            gui_overrides = dict(gui.get("overrides") or {})
+            gui_pdk, gui_scl = gui.get("pdk"), gui.get("scl")
+        except Exception:
+            gui_overrides = None
+
+    cfg = config_var_lines(design_dir) if design_dir else {"ok": False}
+    cfg_vars = cfg.get("vars") or {}
+    cfg_rel = cfg.get("rel")
+
+    rows = []
+    for key in sorted(resolved):
+        lm = linemap.get(key)
+        row: Dict[str, Any] = {
+            "name": key,
+            "value": _display_value(resolved[key]),
+            "line": lm[0] if lm else None,
+        }
+        c = cfg_vars.get(key)
+        if gui_overrides is not None and key in gui_overrides:
+            row["source"] = "override"
+        elif key == "PDK" and gui_pdk:
+            row["source"] = "picker"
+        elif key == "STD_CELL_LIBRARY" and gui_scl:
+            row["source"] = "picker"
+        elif c:
+            row["source"] = "config"
+            row["config_line"] = c["line"]
+            if c["scoped"]:
+                row["scoped"] = True
+                row["scope"] = c["scope"]
+        else:
+            row["source"] = "default"
+        rows.append(row)
+    out: Dict[str, Any] = {"ok": True, "rows": rows, "config_rel": cfg_rel,
+                           "gui_meta": gui_overrides is not None}
+    if gui_overrides is None:
+        out["note"] = ("this run has no gui-run.json (started outside this GUI, "
+                       "or an old run) — override attribution is unavailable; "
+                       "config/default attribution still applies.")
+    return out

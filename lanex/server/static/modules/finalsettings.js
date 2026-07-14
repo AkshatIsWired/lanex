@@ -49,6 +49,72 @@ export function buildFinalSettingsModel(payloadOverrides, map) {
   };
 }
 
+// Pure + node-testable. The cumulative directory: ONE row per known variable
+// (LibreLane's registry) plus any config/override name outside it, each with
+// the value that will take effect pre-run and its source. Sources, strongest
+// first: override > config (conditional if scoped) > PDK-provided (value
+// known only post-run) > LibreLane default > unset. LanEx states what each
+// INPUT carries — it never predicts PDK resolution; resolved.json is the
+// post-run truth.
+export function buildCumulativeModel(payloadOverrides, map, variables) {
+  const all = payloadOverrides || {};
+  const vars = (map && map.ok !== false && map.vars) || {};
+  const names = new Set(Object.keys(all).concat(Object.keys(vars)));
+  const reg = Array.isArray(variables) ? variables : [];
+  for (const v of reg) names.add(v.name);
+  const regByName = new Map(reg.map((v) => [v.name, v]));
+  const rows = [];
+  const counts = { override: 0, config: 0, pdk: 0, default: 0, unset: 0 };
+  for (const name of [...names].sort()) {
+    const r = regByName.get(name);
+    let row;
+    if (name in all) {
+      row = { name, value: String(all[name]),
+              source: (name === "PDK" || name === "STD_CELL_LIBRARY") ? "picker" : "override" };
+      counts.override += 1;
+    } else if (vars[name]) {
+      const c = vars[name];
+      row = { name, value: c.value, source: "config", line: c.line,
+              scoped: !!c.scoped, scope: c.scope || null };
+      counts.config += 1;
+    } else if (r && r.pdk) {
+      // PDK-flagged: the PDK's own files provide the value; a registry default
+      // (when one exists) is only the fallback beneath that.
+      row = { name, value: (r.default === undefined || r.default === null)
+                ? "—" : String(r.default),
+              source: "pdk" };
+      counts.pdk += 1;
+    } else if (r && r.default !== undefined && r.default !== null) {
+      row = { name, value: String(r.default), source: "default" };
+      counts.default += 1;
+    } else {
+      row = { name, value: "—", source: "unset" };
+      counts.unset += 1;
+    }
+    rows.push(row);
+  }
+  return { rows, counts, haveRegistry: reg.length > 0 };
+}
+
+// Human wording for a cumulative/resolved source tag — shared by the pre-run
+// and post-run tables so the two views never describe the same source
+// differently.
+export function sourceLabel(row, configRel) {
+  switch (row.source) {
+    case "override": return "your Setup change (sent as an override — beats the file)";
+    case "picker": return "your Setup picker (flow option)";
+    case "config": {
+      const rel = configRel || "your config";
+      return rel + " line " + (row.config_line || row.line) +
+        (row.scoped ? " (" + (row.scope || "scoped") + " — applied only if the run's PDK/SCL matches)" : "");
+    }
+    case "pdk": return "PDK-provided — the PDK's files set this; resolved.json shows the value a run used";
+    case "default": return "LibreLane default";
+    case "unset": return "not set by anything visible pre-run — required, or resolved by the flow";
+    default: return row.source || "";
+  }
+}
+
 function _sentRows(model) {
   if (!model.sent.length) {
     return "<p class='muted'>None — you changed nothing in Setup, so every value " +
@@ -96,6 +162,38 @@ function _configRows(model) {
     "<th>Where / when it applies</th></tr></thead><tbody>" + rows + "</tbody></table>";
 }
 
+// Filterable variable table with CSV export. `rows` = [{name, value, ...}];
+// `cols` maps a row to its cells (already-escaped HTML). Filtering is plain
+// case-insensitive substring on the variable name + source text.
+function _settingsTable(host, rows, cols, csvName) {
+  const esc = fmt.escape;
+  host.innerHTML =
+    "<div class='fs-tablebar'><input type='search' class='inp fs-filter' " +
+    "placeholder='filter by variable or source…'/> " +
+    "<span class='muted fs-count'></span><span class='fv-spacer'></span>" +
+    "<button class='btn btn-ghost fs-csv'>Export CSV</button></div>" +
+    "<div class='fs-tablewrap'><table class='cc-table'><thead><tr>" +
+    cols.headers.map((h) => "<th>" + esc(h) + "</th>").join("") +
+    "</tr></thead><tbody></tbody></table></div>";
+  const tbody = host.querySelector("tbody");
+  const count = host.querySelector(".fs-count");
+  const paint = (q) => {
+    const needle = (q || "").toLowerCase();
+    const vis = needle
+      ? rows.filter((r) => (r.name + " " + (r._searchText || "")).toLowerCase().includes(needle))
+      : rows;
+    tbody.innerHTML = vis.map((r) => "<tr>" + cols.cells(r) + "</tr>").join("");
+    count.textContent = vis.length + " / " + rows.length;
+    wireProvBtns(tbody);
+  };
+  paint("");
+  host.querySelector(".fs-filter").addEventListener("input", (e) => paint(e.target.value));
+  host.querySelector(".fs-csv").addEventListener("click", async () => {
+    const { toCsv, downloadCsv } = await import("./csvutil.js");
+    downloadCsv(csvName, toCsv([cols.csvHeader].concat(rows.map(cols.csvRow))));
+  });
+}
+
 // The one dialog. `payload` defaults to the REAL run payload so the preview
 // can never drift from what the Run button sends.
 export async function openFinalSettings(payload = null) {
@@ -124,11 +222,15 @@ export async function openFinalSettings(payload = null) {
       "custom standard cells configured in their card are folded in the same way server-side.</p>"
     : "";
   const lastTag = (Array.isArray(state.runs) && state.runs[0] && state.runs[0].tag) || null;
+  const cumulative = buildCumulativeModel(payload.overrides, map, state.variables);
+  const c = cumulative.counts;
   const bodyHtml =
     "<p>A run is assembled in this order — later wins, and your config file is " +
     "<b>never edited</b>:</p>" +
     "<ol class='fs-order'>" +
-    "<li>LibreLane/PDK defaults — anything nothing else sets</li>" +
+    "<li>LibreLane's built-in defaults, then values the chosen PDK provides — " +
+    "so a config that sets only a few variables is normal: <b>every other variable " +
+    "still has a value</b>, from here</li>" +
     "<li>Your config file" + (model.rel ? " (<code>" + fmt.escape(model.rel) + "</code>)" : "") +
     ", including <code>pdk::</code>/<code>scl::</code> sections that match the chosen PDK/SCL</li>" +
     "<li>Your Setup changes, sent as override arguments — these beat the file</li>" +
@@ -144,8 +246,17 @@ export async function openFinalSettings(payload = null) {
     "<h4>Your changes — sent as overrides (" + model.sent.length + ")</h4>" + _sentRows(model) +
     "<h4>Set by your config file — no override, so these apply (" + model.fromConfig.length + ")</h4>" +
     _configRows(model) +
-    "<p class='muted'>Everything not listed uses LibreLane's or the PDK's default " +
-    "(each Constraints field shows its default).</p>" +
+    "<h4>Every variable — the cumulative directory</h4>" +
+    (cumulative.haveRegistry
+      ? "<p class='muted'>" + c.override + " from your changes · " + c.config +
+        " from your config · " + c.pdk + " PDK-provided · " + c.default +
+        " LibreLane defaults · " + c.unset + " unset/flow-resolved.</p>" +
+        "<details class='fs-all'><summary>Show all " + cumulative.rows.length +
+        " variables with value + source</summary><div class='fs-alltable'></div></details>"
+      : "<p class='muted'>The full variable registry isn't available here " +
+        "(LibreLane isn't importable on this machine — container-only setup), so the " +
+        "cumulative pre-run table can't be built. After a run, <code>resolved.json</code> " +
+        "and the Analytics tab's <b>Final settings used</b> give the complete record.</p>") +
     srcNote + macroNote +
     "<p class='fs-note'>This preview is assembled from the run request itself plus your " +
     "config file's bytes. After a run, <code>resolved.json</code> — LibreLane's own record — " +
@@ -164,6 +275,77 @@ export async function openFinalSettings(payload = null) {
         openProvenance({ kind: "report", tag: lastTag, path: "resolved.json", needle: "" },
           { title: "resolved.json of run '" + lastTag + "' — every value the flow actually used" });
       });
+      // The 400+-row cumulative table renders lazily, on first open.
+      const det = back.querySelector(".fs-all");
+      det?.addEventListener("toggle", () => {
+        const host = det.querySelector(".fs-alltable");
+        if (!det.open || !host || host._built) return;
+        host._built = true;
+        const esc = fmt.escape;
+        for (const r of cumulative.rows) r._searchText = sourceLabel(r, model.rel);
+        _settingsTable(host, cumulative.rows, {
+          headers: ["Variable", "Value (pre-run)", "Source"],
+          cells: (r) =>
+            "<td><code>" + esc(r.name) + "</code></td><td>" + esc(r.value) + "</td>" +
+            "<td>" + esc(sourceLabel(r, model.rel)) +
+            (r.source === "config"
+              ? " " + provBtnHtml({ kind: "input", key: r.name },
+                  "Open " + (model.rel || "the config") + " at this line") : "") + "</td>",
+          csvHeader: ["variable", "value_pre_run", "source"],
+          csvRow: (r) => [r.name, r.value, sourceLabel(r, model.rel)],
+        }, "final-settings-preview.csv");
+      });
+    },
+  });
+}
+
+// Post-run counterpart (Analytics: "Final settings used"): EVERY variable the
+// run resolved — value verbatim from resolved.json (LibreLane's own record,
+// nulls included), source attributed by key origin via kind=resolved-map.
+export async function openResolvedSettings(tag) {
+  if (!tag) return;
+  const { customDialog } = await import("./dialog.js");
+  let r;
+  try { r = await api.provenance({ kind: "resolved-map", tag }); }
+  catch (ex) {
+    const { toast } = await import("./toast.js");
+    toast.show("Could not load the run's resolved settings: " + (ex.message || ex), "error");
+    return;
+  }
+  if (!r || r.ok === false) {
+    const { toast } = await import("./toast.js");
+    toast.show((r && r.reason) || "No resolved settings for this run.", "warn", 6000);
+    return;
+  }
+  const note = r.note ? "<p class='fs-note'>" + fmt.escape(r.note) + "</p>" : "";
+  await customDialog({
+    title: "Final settings used by run '" + fmt.escape(tag) + "' (" + r.rows.length + " variables)",
+    wide: true,
+    bodyHtml:
+      "<p>Values are <b>resolved.json verbatim</b> — LibreLane's own record of every " +
+      "variable this run used, including empty ones. The source column says which input " +
+      "carried each variable in (attribution by origin; LibreLane may expand what it " +
+      "reads — <code>dir::</code> globs, expressions — so a value can differ textually " +
+      "from the config line that set it).</p>" + note +
+      "<div class='fs-resolvedtable'></div>",
+    onMount: (back) => {
+      const host = back.querySelector(".fs-resolvedtable");
+      const esc = fmt.escape;
+      for (const row of r.rows) row._searchText = sourceLabel(row, r.config_rel);
+      _settingsTable(host, r.rows, {
+        headers: ["Variable", "Value used", "Source"],
+        cells: (row) =>
+          "<td><code>" + esc(row.name) + "</code></td><td>" + esc(row.value) +
+          (row.line ? " " + provBtnHtml({ kind: "var", key: row.name, tag },
+            "Open resolved.json at this variable's line — the flow's own record") : "") +
+          "</td><td>" + esc(sourceLabel(row, r.config_rel)) +
+          (row.source === "config"
+            ? " " + provBtnHtml({ kind: "input", key: row.name },
+                "Open " + (r.config_rel || "the config") + " at the line that set it") : "") +
+          "</td>",
+        csvHeader: ["variable", "value_used", "source"],
+        csvRow: (row) => [row.name, row.value, sourceLabel(row, r.config_rel)],
+      }, "final-settings-" + tag + ".csv");
     },
   });
 }

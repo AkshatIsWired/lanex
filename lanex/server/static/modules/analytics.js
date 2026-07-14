@@ -196,6 +196,16 @@ export async function renderAnalyticsFull() {
     csvBtn._wired = true;
     csvBtn.addEventListener("click", () => exportMetricsCsv(sel.value));
   }
+  // "Final settings used": the run's resolved.json verbatim (every variable,
+  // empty ones included) + the source each value came from.
+  const setBtn = document.getElementById("btn-analytics-settings");
+  if (setBtn && !setBtn._wired) {
+    setBtn._wired = true;
+    setBtn.addEventListener("click", async () => {
+      const { openResolvedSettings } = await import("./finalsettings.js");
+      openResolvedSettings(sel.value || _lastTag);
+    });
+  }
   const search = document.getElementById("analytics-search");
   if (search && !search._wired) {
     search._wired = true;

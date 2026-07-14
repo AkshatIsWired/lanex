@@ -516,6 +516,9 @@ def h_provenance(handler: Any) -> None:
                                                  per-field "your config" chips)
     ``?kind=report&tag=&path=<rel>&needle=``  -> first line of a run report
                                                  containing the literal text
+    ``?kind=resolved-map&tag=<run>``          -> ALL resolved vars of the run
+                                                 + source attribution (the
+                                                 post-run settings table)
 
     Every located file is a LibreLane/tool/user file — never a LanEx
     artifact — so the UI can show the raw source with the line highlighted.
@@ -554,6 +557,12 @@ def h_provenance(handler: Any) -> None:
             res = provenance.metric_provenance(run_dir, key)
         elif kind == "var":
             res = provenance.config_provenance(run_dir, key)
+        elif kind == "resolved-map":
+            # Every resolved variable of the run + source attribution — the
+            # post-run "final settings used" table. Values = resolved.json
+            # verbatim; sources = key origin (never value comparison).
+            dd = _get_active_design_dir()
+            res = provenance.resolved_settings(run_dir, Path(dd) if dd else None)
         elif kind == "report":
             rel = _query_param(handler.path, "path") or ""
             needle = _query_param(handler.path, "needle") or ""

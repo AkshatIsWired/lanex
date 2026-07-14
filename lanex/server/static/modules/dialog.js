@@ -81,7 +81,10 @@ export async function customDialog({ title = "", bodyHtml = "", buttons = null, 
     bodyHtml,
     buttons: buttons || [{ label: "Close", value: true, cls: "btn-ghost" }],
     onMount: (back, close) => {
-      if (wide) back.querySelector(".dlg").classList.add("dlg-wide");
+      // dlg-xl, NOT the folder browser's dlg-wide: that variant pins a 70vh
+      // height and hides body overflow (its own file list scrolls instead),
+      // which clipped these dialogs' content with no way to scroll to it.
+      if (wide) back.querySelector(".dlg").classList.add("dlg-xl");
       if (onMount) onMount(back, close);
     },
   });
