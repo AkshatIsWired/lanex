@@ -15,7 +15,7 @@ A cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane/librela
 [![License](https://img.shields.io/badge/license-Apache%202.0-2f6fe0.svg?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-2f6fe0?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-stdlib%20only-4da3ff?style=flat-square)](#architecture)
-[![Tests](https://img.shields.io/badge/tests-497%20passing-3fb950?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/tests-684%20passing-3fb950?style=flat-square)](#testing)
 [![Built on LibreLane](https://img.shields.io/badge/built%20on-LibreLane-2f6fe0?style=flat-square)](https://github.com/librelane/librelane)
 
 <a href="#install"><b>Install</b></a> &nbsp;·&nbsp;
@@ -82,6 +82,7 @@ no numbers itself.**
 | **▸ Runs the flow for real** | Not a mock-up. Drives `librelane`, streams true per-step status over SSE, parses the real `metrics.json`. |
 | **▸ RTL IDE** | Edit Verilog with syntax highlighting; lint and simulate (Verilator / Icarus) with a built-in VCD waveform viewer. |
 | **▸ Verification Center** | DRC / LVS / antenna / timing roll-up by signoff stage, with an honest **3-state** verdict — it never flashes green "tape-out ready" for an incomplete run. |
+| **▸ Provenance everywhere** | Every displayed number and setting traces to the tool's own file — one click opens the raw `metrics.json` / `resolved.json` / report with the exact line highlighted. A **Final settings** preview shows what a run will send (your overrides vs your config's lines vs defaults), and Analytics' **Final settings used** lists every variable a run resolved with its source. |
 | **▸ Analytics &amp; DSE** | Metric trends, run comparison, and design-space sweeps. |
 | **▸ Real layout viewers** | Opens the actual GDS in KLayout / Magic / GDS3D / OpenROAD GUI; renders previews inline. |
 | **▸ Tool &amp; PDK management** | Detects what's installed and installs what's missing — one click. |
@@ -782,11 +783,11 @@ lanex --host 0.0.0.0 --allow-remote    # expose on your network (no auth — tak
 
 | Tab | What it does |
 |-----|--------------|
-| **Setup** | Pick design, PDK/SCL, flow; auto-generate a config. |
+| **Setup** | Pick design, PDK/SCL, flow; auto-generate a config. Every constraint field shows LibreLane's default AND what your config file sets (exact line, scoped sections labelled); a **Final settings** dialog previews everything the run will send and why. |
 | **Pipeline** | Live per-step run timeline + logs + step output. |
 | **RTL IDE** | Edit / lint / simulate Verilog; VCD waveform viewer + one-click GTKWave. |
 | **Verification** | DRC / LVS / antenna / timing signoff verdict — every check carries a source button opening the raw tool report with the verdict line highlighted. |
-| **Analytics** | Metric trends, run comparison, cell usage. Every metric has a source button opening the run's own `metrics.json` at the exact line the number came from. |
+| **Analytics** | Metric trends, run comparison, cell usage. Every metric has a source button opening the run's own `metrics.json` at the exact line the number came from. **Final settings used** lists all ~400 variables the run resolved — values verbatim from `resolved.json`, each attributed to your override, your config line, or a default — filterable and CSV-exportable. |
 | **DSE** | Design-space sweeps and result viewer. |
 | **Layout** | Open GDS in KLayout / Magic / GDS3D / OpenROAD. |
 | **Cells &amp; Macros** | PDK std cells; insert custom cells + hard macros. |
@@ -839,7 +840,7 @@ lanex/
 ├─ controller/   pure-Python core (librelane + stdlib only)
 ├─ server/       http.server + SSE; no third-party deps
 │  └─ static/    vanilla ES-module SPA + vendored ECharts
-└─ tests/        497 tests, incl. a golden-run corpus
+└─ tests/        684 tests, incl. golden-run + fidelity corpus
 ```
 
 ---
@@ -848,11 +849,17 @@ lanex/
 
 ```bash
 pip install pytest
-python3 -m pytest lanex/tests -q     # 497 passed, 3 skipped
+python3 -m pytest lanex/tests -q     # 684 passed, 3 skipped
 ```
 
 The suite includes a golden-run corpus (a clean run and a non-finite-metric run)
-that locks LanEx's byte-faithful passthrough against regressions.
+that locks LanEx's byte-faithful passthrough against regressions, plus a
+fidelity layer: all three VCD parsers (product, browser viewer, CI reference)
+must agree on one committed simulator dump; every golden metric must render
+faithfully; provenance answers must be byte-identical to the files on disk; and
+CI drives a real GTKWave under Xvfb to prove the waveform hand-off shows exactly
+what the simulator wrote. GitHub Actions' Summary tab explains every test group
+— and a completeness check fails CI if a test file ships without one.
 
 ---
 

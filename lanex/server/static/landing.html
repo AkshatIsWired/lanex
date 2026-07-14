@@ -324,13 +324,13 @@
               <div class="install-ico">
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 2v20M2 12h20"/></svg>
               </div>
-              <h3>Debian / Ubuntu · WSL2</h3>
+              <h3>Easiest · Any OS</h3>
             </div>
-            <p>Native Linux or Windows via WSL2. One command — dependencies, LanEx, and the toolchain all set up. Re-run to upgrade.</p>
+            <p>One command works on any Linux, WSL2, or macOS. Dependencies, LanEx, and toolchain set up. Re-run to upgrade.</p>
             <div class="cmd">
-              <pre><code>curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install-wsl.sh | bash
+              <pre><code>curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
 lanex</code></pre>
-              <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install-wsl.sh | bash&#10;lanex">Copy</button>
+              <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash&#10;lanex">Copy</button>
             </div>
           </article>
           <!-- macOS -->
@@ -339,14 +339,15 @@ lanex</code></pre>
               <div class="install-ico">
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
               </div>
-              <h3>macOS</h3>
+              <h3>macOS (Manual)</h3>
             </div>
-            <p>Install pipx via Homebrew first. Container engine recommended — the heavy tools run in the Docker/Podman image.</p>
+            <p>Python ≥ 3.10 required. Container engine recommended — the heavy tools run in the Docker/Podman image.</p>
             <div class="cmd">
-              <pre><code>brew install pipx git && pipx ensurepath && exec zsh
-pipx install lanex || { git clone https://github.com/AkshatIsWired/lanex && cd lanex && pipx install .; }
+              <pre><code>brew install pipx
+pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
+pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz
 lanex</code></pre>
-              <button class="copy-btn" data-copy="brew install pipx git && pipx ensurepath && exec zsh&#10;pipx install lanex || { git clone https://github.com/AkshatIsWired/lanex && cd lanex && pipx install .; }&#10;lanex">Copy</button>
+              <button class="copy-btn" data-copy="brew install pipx&#10;pipx ensurepath; export PATH=&quot;$HOME/.local/bin:$PATH&quot;&#10;pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz&#10;lanex">Copy</button>
             </div>
           </article>
           <!-- Fedora -->
@@ -355,15 +356,15 @@ lanex</code></pre>
               <div class="install-ico">
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
               </div>
-              <h3>Fedora / Other Linux</h3>
+              <h3>Fedora / Arch (Manual)</h3>
             </div>
-            <p>pipx + Mesa GL drivers. Works on Fedora, CentOS Stream, RHEL derivatives, and similar.</p>
+            <p>pipx + Mesa GL drivers. Works on Fedora, Arch, CentOS Stream, RHEL derivatives, and similar.</p>
             <div class="cmd">
-              <pre><code>sudo dnf install -y pipx git mesa-dri-drivers
-pipx ensurepath && exec bash
-pipx install lanex || { git clone https://github.com/AkshatIsWired/lanex && cd lanex && pipx install .; }
+              <pre><code>sudo dnf install -y pipx git mesa-dri-drivers xorg-x11-fonts-misc
+pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
+pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz
 lanex</code></pre>
-              <button class="copy-btn" data-copy="sudo dnf install -y pipx git mesa-dri-drivers&#10;pipx ensurepath && exec bash&#10;pipx install lanex || { git clone https://github.com/AkshatIsWired/lanex && cd lanex && pipx install .; }&#10;lanex">Copy</button>
+              <button class="copy-btn" data-copy="sudo dnf install -y pipx git mesa-dri-drivers xorg-x11-fonts-misc&#10;pipx ensurepath; export PATH=&quot;$HOME/.local/bin:$PATH&quot;&#10;pipx install https://github.com/AkshatIsWired/lanex/archive/refs/heads/main.tar.gz&#10;lanex">Copy</button>
             </div>
           </article>
           <!-- Existing LibreLane -->
