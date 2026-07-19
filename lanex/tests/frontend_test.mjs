@@ -632,6 +632,66 @@ check("Final-settings stashes the previewed config hash; Run compares it (N7)", 
     "the stashed hash must be cleared after comparison");
 });
 
+// ------------------------------------------------ rounded cell keeps the raw
+// value (gap #2, Fear A/G). Compare and DSE are the tape-out DECISION surfaces.
+// They round metrics for readability — but a rounded number a user picks a
+// winner on must never hide the exact tool value. fmt.titleAttr is the escape
+// hatch; every rounded decision cell must carry it.
+check("fmt.titleAttr: carries the EXACT tool value, never the rounded display", () => {
+  // 1234.7 renders as the grouped "1,235" but the title must hold 1234.7.
+  const attr = fmt.titleAttr(1234.7);
+  assert.match(attr, /^ title='1234\.7'$/, `title lost the exact value: ${attr}`);
+  assert.notEqual(fmt.metric(1234.7), "1234.7", "precondition: display DOES round");
+  // A non-finite / absent value has nothing exact to show → empty (safe to inject).
+  assert.equal(fmt.titleAttr(null), "");
+  assert.equal(fmt.titleAttr(undefined), "");
+  assert.equal(fmt.titleAttr(""), "");
+  // The raw is HTML-escaped so a stray quote can't break out of the attribute.
+  assert.doesNotMatch(fmt.titleAttr("a'b"), /'a'b'/, "raw value not escaped in title");
+});
+
+check("compare: a summary cell shows the rounded value but titles the raw one", () => {
+  // The exported, pure cell builder (the tape-out side-by-side grid).
+  const cell = cmp.summaryCellHtml({ value: 1234.7, unit: "µm", status: "pass" });
+  assert.match(cell, /title='1234\.7'/, "the exact value is not one hover away");
+  assert.match(cell, />1,235 µm</, "the rounded, grouped display is missing");
+  assert.match(cell, /cmp-num pass/, "pass/fail status class dropped");
+  // An absent row stays the em-dash — never a fabricated 0, never a bare title.
+  assert.equal(cmp.summaryCellHtml(null), "<td>—</td>");
+  assert.equal(cmp.summaryCellHtml(undefined), "<td>—</td>");
+  // A real value present but no status: still titled, still shown.
+  const neutral = cmp.summaryCellHtml({ value: 0.0004 });
+  assert.match(neutral, /title='0\.0004'/, "sub-milli exact value lost from the cell");
+});
+
+check("decision surfaces never render a rounded metric without the raw escape", () => {
+  // Static invariant: the files that round a metric a user makes a tape-out call
+  // on (compare grid, DSE sweep grid, timing-closure advisor) must wire the raw
+  // escape. Losing titleAttr here silently re-opens the precision hole (gap #2).
+  for (const f of ["compare.js", "dse.js", "timingAdvisor.js"]) {
+    const src = readFileSync(resolve(MOD, f), "utf8");
+    assert.match(src, /fmt\.metric\(/, `${f}: precondition — it does round a metric`);
+    assert.match(src, /titleAttr\(/, `${f}: rounds a metric but carries no raw escape`);
+  }
+});
+
+// ------------------------------------------------ one utilization%, two paths
+// Utilization% is derived server-side (history.design_summary: round(u*100,1))
+// AND client-side for the gauge (charts.utilizationOption: round(u*1000)/10).
+// Two formulas for one number: they must agree to the digit on every fraction,
+// else the hero strip and the gauge silently disagree (gap #8, Fear G).
+check("utilization%: the server and chart formulas agree to the digit", () => {
+  const serverPct = (u) => Math.round(u * 100 * 10) / 10; // mirror of round(u*100,1)
+  for (const u of [0, 0.1, 0.455, 0.5001, 0.6789, 0.9999, 1.0]) {
+    const opt = charts.utilizationOption({ "design__instance__utilization": u });
+    const gauge = opt.series[0].data[0].value;
+    assert.equal(gauge, serverPct(u),
+      `gauge ${gauge} disagrees with server ${serverPct(u)} for fraction ${u}`);
+  }
+  // Absent fraction → no gauge invented.
+  assert.equal(charts.utilizationOption({}), null);
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

@@ -189,18 +189,24 @@ function renderSummaryCompare(runs, cols) {
     }
   }
   if (!order.length) return "<h3>Summary</h3><p class='muted'>No summary metrics for these runs.</p>";
-  const cell = (row) => {
-    if (!row) return "<td>—</td>";
-    const unit = row.unit ? " " + fmt.escape(row.unit) : "";
-    const cls = row.status ? " class='" + (row.status === "pass" ? "cmp-num pass" : row.status === "fail" ? "cmp-num fail" : "cmp-num") + "'" : " class='cmp-num'";
-    return "<td" + cls + ">" + fmt.escape(fmt.metric(row.value)) + unit + "</td>";
-  };
   return "<h3>Summary <span class='muted'>(headline metrics, side by side)</span></h3>" +
     "<table class='cmp-table'><thead><tr><th>Metric</th>" +
     colHeaders(cols) + "</tr></thead><tbody>" +
     order.map((label) => "<tr><td>" + fmt.escape(label) + "</td>" +
-      cols.map((c) => cell(byCol[c.col] && byCol[c.col][label])).join("") + "</tr>").join("") +
+      cols.map((c) => summaryCellHtml(byCol[c.col] && byCol[c.col][label])).join("") + "</tr>").join("") +
     "</tbody></table>";
+}
+
+// One side-by-side summary cell. Exported + pure so the "rounded display never
+// hides the real value" invariant is directly testable. fmt.metric() rounds for
+// readability; fmt.titleAttr() carries the EXACT tool value in the cell's title
+// so a tape-out comparison can never rest on a number the user cannot verify
+// (Fear A/G). An absent row stays "—" (never a fabricated 0).
+export function summaryCellHtml(row) {
+  if (!row) return "<td>—</td>";
+  const unit = row.unit ? " " + fmt.escape(row.unit) : "";
+  const cls = row.status ? " class='" + (row.status === "pass" ? "cmp-num pass" : row.status === "fail" ? "cmp-num fail" : "cmp-num") + "'" : " class='cmp-num'";
+  return "<td" + cls + fmt.titleAttr(row.value) + ">" + fmt.escape(fmt.metric(row.value)) + unit + "</td>";
 }
 
 // Curated key metrics to chart across runs (one small bar chart each). Only the

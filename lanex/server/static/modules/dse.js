@@ -368,7 +368,9 @@ async function renderResults(root, tags) {
       runs.map((r) => {
         const v = mt[m.key] ? mt[m.key][r.col] : undefined;
         const win = winner && winner === r.col ? " class='best'" : "";
-        return "<td" + win + ">" + fmt.escape(fmt.metric ? fmt.metric(v) : fmtVal(v)) + "</td>";
+        // Rounded for the sweep grid; exact tool value in the title (Fear A/G),
+        // so picking a DSE winner never rests on an unverifiable number.
+        return "<td" + win + fmt.titleAttr(v) + ">" + fmt.escape(fmt.metric ? fmt.metric(v) : fmtVal(v)) + "</td>";
       }).join("") + "</tr>";
   }).join("");
   tableEl.innerHTML =

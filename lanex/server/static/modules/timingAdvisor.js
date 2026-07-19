@@ -36,10 +36,10 @@ export function renderTimingAdvisor() {
     "<div class='title'>Timing closure</div>" +
     "<div class='what'>" + direction + "</div>" +
     "<div class='why'>" +
-      "WNS(setup)=<b>" + fmt.metric(ws_setup) + "·ns</b> · " +
-      "TNS(setup)=<b>" + fmt.metric(tns_setup) + "·ns</b><br/>" +
-      "WNS(hold)=<b>" + fmt.metric(ws_hold) + "·ns</b> · " +
-      "TNS(hold)=<b>" + fmt.metric(tns_hold) + "·ns</b>" +
+      "WNS(setup)=<b" + fmt.titleAttr(ws_setup) + ">" + fmt.metric(ws_setup) + "·ns</b> · " +
+      "TNS(setup)=<b" + fmt.titleAttr(tns_setup) + ">" + fmt.metric(tns_setup) + "·ns</b><br/>" +
+      "WNS(hold)=<b" + fmt.titleAttr(ws_hold) + ">" + fmt.metric(ws_hold) + "·ns</b> · " +
+      "TNS(hold)=<b" + fmt.titleAttr(tns_hold) + ">" + fmt.metric(tns_hold) + "·ns</b>" +
     "</div>" +
     "<div class='try'>" + fmt.escape(action) + "</div>";
   root.innerHTML = "";

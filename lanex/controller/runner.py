@@ -73,6 +73,37 @@ def _safe_jsonable(value: Any) -> Any:
     return to_json(value)
 
 
+def _toolchain_provenance(run_mode: Optional[str]) -> Dict[str, Any]:
+    """Identity of the toolchain that produced a run, recorded into gui-run.json.
+
+    Answers the one question a metric alone cannot: *would I get the same numbers
+    if I ran this manually?* — which depends entirely on the versions of LanEx,
+    LibreLane, and (in container mode) the exact image the flow executed in.
+    Without this stamp an exported/reproduced run is un-auditable across time or
+    machines. Best-effort: every field degrades to ``"unknown"`` and this never
+    raises (a failure here must not derail persisting the rest of the meta)."""
+    tc: Dict[str, Any] = {"run_mode": run_mode or "local"}
+    try:
+        from . import compat
+        tc["librelane_version"] = compat.get_version()
+    except Exception:
+        tc["librelane_version"] = "unknown"
+    try:
+        from .. import _version as _lanex_version
+        tc["lanex_version"] = _lanex_version.get_version()
+    except Exception:
+        tc["lanex_version"] = "unknown"
+    if (run_mode or "local") == "container":
+        # The image tag is version-pinned to the installed librelane, so it names
+        # the exact tool set the flow ran inside (container_run.image_ref()).
+        try:
+            from . import container_run
+            tc["image"] = container_run.image_ref()
+        except Exception:
+            tc["image"] = "unknown"
+    return tc
+
+
 def _relativize_to(paths: Optional[Sequence[str]], base: Path) -> List[str]:
     """Return each path relative to *base* when it lives under it; otherwise keep
     it unchanged. Used for VERILOG_FILES/EXTRA_FILES so they resolve inside the
@@ -560,6 +591,10 @@ class FlowRunner:
             meta.setdefault("tag", run_dir.name)
             meta["run_dir"] = str(run_dir)
             meta["written_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            # Stamp the toolchain identity (LanEx/LibreLane versions + container
+            # image) so an export or reproduce can prove which tools produced
+            # these numbers — the "would I get the same manually?" contract.
+            meta.setdefault("toolchain", _toolchain_provenance(self._run_mode))
             import json as _json
 
             from . import platform_env

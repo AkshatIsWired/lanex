@@ -417,6 +417,16 @@ export const fmt = {
     if (value === "NaN" || (typeof value === "number" && Number.isNaN(value))) return "NaN";
     return String(value);
   },
+  // The exact value as a ready-to-inject ` title='…'` attribute (leading space),
+  // so any cell that shows the ROUNDED metric() display always carries the
+  // unrounded number one hover away. This is the escape hatch that keeps a
+  // rounded compare/DSE cell from ever hiding the real value a tape-out
+  // decision rests on (Fear A/G). Empty string when there is nothing to show,
+  // so injecting it is always safe.
+  titleAttr(value) {
+    const r = this.raw(value);
+    return r === "" ? "" : " title='" + this.escape(r) + "'";
+  },
   shortPath(p) {
     if (!p) return "";
     const s = String(p);
