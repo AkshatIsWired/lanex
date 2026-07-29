@@ -1,6 +1,11 @@
 @echo off
 REM ===========================================================================
-REM  LanEx - Windows/WSL launcher
+REM  LanEx - Windows/WSL launcher (MANUAL path)
+REM ===========================================================================
+REM  This is for people who run LanEx inside a WSL distro they manage
+REM  themselves. If you just want LanEx on Windows, use LanEx-Setup.exe: it
+REM  installs an isolated environment, adds a Start-menu app, and uninstalls
+REM  cleanly. See docs/windows-manual.md and docs/INSTALL.md#windows.
 REM ===========================================================================
 REM  ONE interactive `wsl` invocation is deliberate. Two things break WSLg (the
 REM  WSL GUI/GPU bridge that KLayout / GDS3D / OpenROAD need) if you get it wrong:
