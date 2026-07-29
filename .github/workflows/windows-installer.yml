@@ -1,0 +1,305 @@
+# Windows installer CI: build LanEx.exe + LanEx-Setup.exe, verify what CAN be
+# verified here, and attach the installer to a tagged release.
+#
+# WHAT THIS WORKFLOW CANNOT DO, STATED PLAINLY: it cannot install LanEx.
+# GitHub-hosted runners have no nested virtualization, so WSL 2 does not run on
+# them — no `wsl --import`, no provisioning, no launch. Real install testing is
+# manual, on VMs, against the matrix in windows/README.md. A green tick here
+# means "the pieces build and their pure logic is correct", nothing more, and
+# pretending otherwise would be worse than having no CI at all.
+#
+# So it verifies exactly the parts that are verifiable off-WSL:
+#   * the launcher compiles for windows/amd64 and its unit tests pass — including
+#     the UTF-16LE decoding of `wsl -l -q`, the classic silent bug that makes a
+#     healthy install look missing;
+#   * lanex.iss compiles (its Pascal is compiled by ISCC, so syntax and every
+#     API name are checked);
+#   * provision.sh passes `bash -n` and shellcheck;
+#   * the pinned Ubuntu rootfs URL still exists and still matches Microsoft's
+#     published WSL image manifest (weekly — see the rootfs-pin job).
+name: Windows installer
+
+on:
+  push:
+    branches: [main, dev]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    # Weekly, for the rootfs pin: releases.ubuntu.com deletes a point release's
+    # files when the next one ships, so a stale pin is a broken installer.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build LanEx.exe + LanEx-Setup.exe
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      # Needed only by the release step at the end (tag pushes).
+      contents: write
+    env:
+      # Signing lights up on its own once the owner adds Azure Trusted Signing
+      # secrets; until then the build is unsigned and the README documents the
+      # SmartScreen "More info -> Run anyway" click. Secrets are unreadable in
+      # `if:` conditions directly, hence this job-level flag.
+      SIGN: ${{ secrets.AZURE_TENANT_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Matches the `go` directive in windows/launcher/go.mod. Pinned rather
+          # than "stable" so a new Go release cannot change the produced binary
+          # without a deliberate commit.
+          go-version: "1.22"
+          cache-dependency-path: windows/launcher/go.sum
+
+      # A tag drives the version everywhere: the exe's VERSIONINFO resource, the
+      # installer's AppVersion, and the uninstall entry in Windows Settings.
+      # Untagged builds get 0.0.0 so nothing can masquerade as a release.
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $ver = $env:GITHUB_REF -replace '^refs/tags/v', ''
+          } else {
+            $ver = '0.0.0'
+          }
+          # VERSIONINFO and Inno both want a plain numeric x.y.z, so strip any
+          # pre-release suffix (v1.2.3-rc1 -> 1.2.3) for those fields.
+          $num = ($ver -split '-')[0]
+          $parts = $num -split '\.'
+          while ($parts.Count -lt 3) { $parts += '0' }
+          "LANEX_VERSION=$ver"            | Out-File -Append $env:GITHUB_ENV
+          "LANEX_VERSION_NUM=$num"        | Out-File -Append $env:GITHUB_ENV
+          "LANEX_VER_MAJOR=$($parts[0])"  | Out-File -Append $env:GITHUB_ENV
+          "LANEX_VER_MINOR=$($parts[1])"  | Out-File -Append $env:GITHUB_ENV
+          "LANEX_VER_PATCH=$($parts[2])"  | Out-File -Append $env:GITHUB_ENV
+          Write-Host "version: $ver (numeric $num)"
+
+      - name: go vet
+        working-directory: windows/launcher
+        run: go vet ./...
+
+      - name: gofmt (formatting is not a matter of taste in CI)
+        working-directory: windows/launcher
+        shell: pwsh
+        run: |
+          $bad = gofmt -l .
+          if ($bad) { Write-Error "gofmt would change: $bad"; exit 1 }
+          Write-Host "gofmt clean"
+
+      # The one piece of launcher logic that can be tested without WSL, and the
+      # one that has historically been wrong in hand-written WSL launchers.
+      - name: Launcher unit tests (UTF-16 distro parsing, health probe)
+        working-directory: windows/launcher
+        run: go test -v ./...
+
+      # Icon + publisher + version + the asInvoker/dpiAware manifest. An exe with
+      # none of these is what SmartScreen and AV heuristics flag, and our target
+      # user is exactly the one who cannot get past a warning wall.
+      - name: Embed icon, version info and manifest
+        working-directory: windows/launcher
+        run: |
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
+          goversioninfo -64 -o resource.syso `
+            -ver-major ${{ env.LANEX_VER_MAJOR }} `
+            -ver-minor ${{ env.LANEX_VER_MINOR }} `
+            -ver-patch ${{ env.LANEX_VER_PATCH }} `
+            -ver-build 0 `
+            -product-version "${{ env.LANEX_VERSION }}" `
+            versioninfo.json
+        shell: pwsh
+
+      # -H windowsgui: no console window flashes when the user clicks the icon.
+      # -s -w: strip symbols/DWARF — this is a 400-line launcher, not something
+      # anyone debugs from a customer's machine.
+      - name: Build LanEx.exe
+        working-directory: windows/launcher
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags "-H windowsgui -s -w" -o LanEx.exe .
+
+      # Signing the launcher BEFORE the installer packages it — otherwise the
+      # signed installer would carry an unsigned payload, which is the half-fix
+      # SmartScreen still punishes.
+      - name: Sign LanEx.exe
+        if: env.SIGN == 'true'
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
+          files-folder: windows/launcher
+          files-folder-filter: exe
+
+      # 6.3+ for ArchitecturesAllowed=x64compatible. ISCC compiles the [Code]
+      # section too, so this step is a real check of the Pascal, not just packaging.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile LanEx-Setup.exe
+        working-directory: windows/installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc /Qp "/DAppVersion=${{ env.LANEX_VERSION_NUM }}" lanex.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem LanEx-Setup.exe
+
+      - name: Sign LanEx-Setup.exe
+        if: env.SIGN == 'true'
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
+          files-folder: windows/installer
+          files-folder-filter: exe
+
+      # The SHA256 belongs in the job summary: it is what a cautious user checks
+      # against the release page before running an installer that asks for admin.
+      - name: Summary
+        if: always()
+        shell: pwsh
+        run: |
+          $exe = "windows/installer/LanEx-Setup.exe"
+          "## Windows installer" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path $exe) {
+            $f = Get-Item $exe
+            $h = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+            "- version: ``${{ env.LANEX_VERSION }}``"                     | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            "- size: $([math]::Round($f.Length/1MB,2)) MB"                | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            "- sha256: ``$h``"                                            | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            "- signed: ${{ env.SIGN == 'true' }}"                         | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          } else {
+            "- **the installer did not build**" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          }
+          ""                                                                    | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "Not verified here (no nested virtualization on GitHub runners, so no" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "WSL 2): the actual install, provisioning, and first launch. Those are" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "tested by hand against the matrix in ``windows/README.md``."           | Out-File -Append $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LanEx-Setup-${{ env.LANEX_VERSION }}
+          path: windows/installer/LanEx-Setup.exe
+          if-no-files-found: error
+
+      # gh is preinstalled on the runner, so no third-party release Action is
+      # needed. --clobber makes a re-run of a tag idempotent.
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" `
+            windows/installer/LanEx-Setup.exe --clobber
+
+  provision-lint:
+    name: provision.sh (bash -n + shellcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # provision.sh is the one component that runs unattended, as root, on a
+      # stranger's machine. shellcheck at style level (not just error level)
+      # because an unquoted expansion there is a broken install, not a nit.
+      - name: Lint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+          bash -n windows/provision/provision.sh
+          shellcheck -S style windows/provision/provision.sh
+          echo "provision.sh OK"
+
+      # Line endings are load-bearing here: a CRLF provision.sh fails inside WSL
+      # on its own shebang with "bad interpreter", which reads like the file is
+      # missing. .gitattributes pins LF; this proves the pin is working.
+      - name: No CRLF in shell scripts
+        run: |
+          if grep -rlU $'\r' --include='*.sh' --exclude-dir=.git . ; then
+            echo "the files above contain CR — fix .gitattributes / re-checkout"; exit 1
+          fi
+          echo "all .sh files are LF — OK"
+
+  rootfs-pin:
+    name: Ubuntu rootfs pin still valid
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Not on ordinary pushes/PRs: upstream shipping a new point release is not a
+    # reason to block somebody's unrelated pull request. It IS a reason to block
+    # a release, so tags are included.
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      # Two independent failures, both of which break the installer for every
+      # new user, silently, and neither of which any other job would notice:
+      #
+      #   1. The pinned URL 404s. releases.ubuntu.com DELETES a point release's
+      #      files when the next one ships, so this is a matter of when, not if.
+      #   2. Microsoft's WSL manifest now points at a newer image. That is the
+      #      early warning for (1) — usually days ahead of the deletion.
+      #
+      # The fix for either is a one-line change to the #define block in
+      # windows/installer/lanex.iss, which is why this job prints the exact new
+      # values instead of just going red.
+      - name: Check the pin against Microsoft's WSL image manifest
+        run: |
+          set -euo pipefail
+          iss=windows/installer/lanex.iss
+          pin_url=$(sed -n 's/^#define RootfsUrl *"\(.*\)".*/\1/p' "$iss")
+          pin_sha=$(sed -n 's/^#define RootfsSha256 *"\(.*\)".*/\1/p' "$iss")
+          echo "pinned: $pin_url"
+          echo "        $pin_sha"
+          test -n "$pin_url" && test -n "$pin_sha"
+
+          echo "::group::pinned URL reachable?"
+          code=$(curl -o /dev/null -sIL -w '%{http_code}' --max-time 60 "$pin_url")
+          echo "HTTP $code"
+          echo "::endgroup::"
+
+          curl -fsSL --max-time 60 -o distros.json \
+            https://raw.githubusercontent.com/microsoft/WSL/master/distributions/DistributionInfo.json
+          up_line=$(python3 -c "import json; d=json.load(open('distros.json')); print(next(e['Amd64Url']['Url'] + ' ' + e['Amd64Url']['Sha256'] for e in d['ModernDistributions']['Ubuntu'] if e['Name'] == 'Ubuntu-24.04'))")
+          up_url=${up_line%% *}
+          up_sha=${up_line##* }
+          echo "upstream: $up_url"
+          echo "          $up_sha"
+
+          fail=0
+          if [ "$code" != "200" ]; then
+            echo "::error::the pinned Ubuntu image is gone (HTTP $code). Update RootfsUrl/RootfsSha256/RootfsFile in $iss to: $up_url ($up_sha)"
+            fail=1
+          fi
+          if [ "$pin_url" != "$up_url" ] || [ "$pin_sha" != "$up_sha" ]; then
+            echo "::error::Ubuntu shipped a newer 24.04 image. Update $iss to: $up_url ($up_sha) — and set RootfsFile to ${up_url##*/}"
+            fail=1
+          fi
+          if [ "$fail" = "0" ]; then
+            echo "pin matches upstream and is reachable — OK"
+          fi
+          {
+            echo "## Ubuntu rootfs pin"
+            echo "- pinned: \`$pin_url\` (HTTP $code)"
+            echo "- upstream: \`$up_url\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$fail"
