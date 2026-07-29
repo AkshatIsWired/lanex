@@ -57,24 +57,51 @@ export DEBIAN_FRONTEND=noninteractive
 
 # ------------------------------------------------------------------- 1. DNS --
 DNS_FIXED=0     # set by dns_guard; read by wsl_conf (generateResolvConf)
-dns_guard() {
-    say "Network check"
-    if [ "${LANEX_PROVISION_DNS:-0}" != "1" ] \
-       && curl -fsI -m 12 https://github.com >/dev/null 2>&1; then
-        note "github.com reachable."
-        return 0
-    fi
-    # The single most common fresh-WSL failure: the auto-generated
-    # /etc/resolv.conf points at a nameserver the host can't route to, so every
-    # download in this script would fail. Same fix install.sh:96-101 documents,
-    # applied for the user instead of printed at them.
-    warn "Cannot reach github.com — applying the known WSL DNS fix."
+
+# The single most common fresh-WSL failure: the auto-generated /etc/resolv.conf
+# points at a nameserver the host can't route to, so every download in this
+# script would fail. Same fix install.sh:96-101 documents, applied for the user
+# instead of printed at them. Factored out because ensure_curl needs it too:
+# when curl is missing, apt is the thing that hits the broken resolver first.
+apply_dns_fix() {
     DNS_FIXED=1
     # Order matters: resolv.conf may be a symlink into /run — remove, don't
     # append, or the write lands in a file nothing reads.
     rm -f /etc/resolv.conf 2>/dev/null || true
     { printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf; } 2>/dev/null \
         || warn "could not write /etc/resolv.conf (read-only?) — continuing; downloads may fail."
+}
+
+# curl is both the network probe below and every download in this script.
+# Ubuntu's WSL image ships it, so the Windows path never enters this function;
+# a plain ubuntu:24.04 base (the Phase 2 rootfs bake) does not, and without this
+# the probe would fail for "curl: not found" and be misdiagnosed as "no
+# network" — the DNS fix would then be applied pointlessly and the script would
+# die on a machine that was online all along.
+ensure_curl() {
+    command -v curl >/dev/null 2>&1 && return 0
+    note "installing curl (minimal base image)."
+    $APT update >/dev/null 2>&1
+    $APT install -y curl ca-certificates >/dev/null 2>&1 && return 0
+    warn "could not install curl — applying the known WSL DNS fix and retrying."
+    apply_dns_fix
+    $APT update >/dev/null 2>&1
+    $APT install -y curl ca-certificates \
+        || die "no internet connection inside the LanEx environment.
+   Check your network (and any VPN or company proxy), then click Retry.
+   Corporate proxy? Set https_proxy in your environment before running Setup."
+}
+
+dns_guard() {
+    say "Network check"
+    ensure_curl
+    if [ "${LANEX_PROVISION_DNS:-0}" != "1" ] \
+       && curl -fsI -m 12 https://github.com >/dev/null 2>&1; then
+        note "github.com reachable."
+        return 0
+    fi
+    warn "Cannot reach github.com — applying the known WSL DNS fix."
+    apply_dns_fix
     if curl -fsI -m 12 https://github.com >/dev/null 2>&1; then
         note "network OK after the DNS fix."
     else
