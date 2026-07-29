@@ -1,0 +1,33 @@
+{
+  "//": "Windows VERSIONINFO + icon resource for LanEx.exe, compiled into a",
+  "//1": "resource.syso by goversioninfo (see .github/workflows/windows-installer.yml).",
+  "//2": "Why it matters: an exe with no publisher/description and no icon is what",
+  "//3": "SmartScreen and antivirus heuristics treat as suspicious, and our target",
+  "//4": "user is exactly the one who cannot get past a blue warning wall.",
+  "//5": "CI overrides the four version numbers from the git tag (-ver-major etc);",
+  "//6": "the values here are the untagged-local-build fallback.",
+  "FixedFileInfo": {
+    "FileVersion": { "Major": 1, "Minor": 0, "Patch": 0, "Build": 0 },
+    "ProductVersion": { "Major": 1, "Minor": 0, "Patch": 0, "Build": 0 },
+    "FileFlagsMask": "3f",
+    "FileFlags ": "00",
+    "FileOS": "040004",
+    "FileType": "01",
+    "FileSubType": "00"
+  },
+  "StringFileInfo": {
+    "CompanyName": "LanEx Contributors",
+    "FileDescription": "LanEx — RTL-to-GDSII cockpit",
+    "FileVersion": "1.0.0.0",
+    "InternalName": "LanEx.exe",
+    "LegalCopyright": "Copyright 2026 LanEx Contributors. Licensed under Apache-2.0.",
+    "OriginalFilename": "LanEx.exe",
+    "ProductName": "LanEx",
+    "ProductVersion": "1.0.0.0"
+  },
+  "VarFileInfo": {
+    "Translation": { "LangID": "0409", "CharsetID": "04B0" }
+  },
+  "IconPath": "assets/lanex.ico",
+  "ManifestPath": "lanex.exe.manifest"
+}
