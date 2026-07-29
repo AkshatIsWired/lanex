@@ -75,7 +75,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "gtkwave, iverilog, graphviz) — the same strategies as the "
                              "Tools tab's Install button; skips the GUI")
     parser.add_argument("--verbose", action="store_true")
+    # Not argparse's `action="version"`: that evaluates its version string while
+    # the parser is being built, and get_version() imports librelane — a cost
+    # every single `lanex` invocation would pay for one rarely used flag.
+    parser.add_argument("--version", action="store_true",
+                        help="print the LanEx version and exit")
     args = parser.parse_args(argv)
+
+    if args.version:
+        from ._version import get_version
+
+        sys.stdout.write(f"lanex {get_version()}\n")
+        return 0
 
     _setup_logging(args.verbose)
 
@@ -127,6 +138,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             sys.stderr.write(f"could not set --design-dir: {ex}\n")
 
     threading.Timer(0.5, _lazy_open, args=(home_url, args.no_browser, args.tab)).start()
+    _write_server_record(url, port)
     try:
         serve_forever(httpd, open_after=False)
     except KeyboardInterrupt:
@@ -136,7 +148,52 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception:
             pass
         return 0
+    finally:
+        _clear_server_record()
     return 0
+
+
+def _server_record_path():
+    """``~/.lanex/server.json`` — where this process advertises its port."""
+    from .controller.platform_env import home
+
+    return home() / "server.json"
+
+
+def _write_server_record(url: str, port: int) -> None:
+    """Record the bound URL/port/pid for out-of-process launchers.
+
+    ``find_free_port`` may settle on 8766+ when something else owns 8765
+    (app.py:436-453), so anything outside this process — the Windows launcher in
+    ``windows/launcher``, a shortcut, a script — otherwise has to probe the whole
+    range to find the cockpit. This file turns that into one read.
+
+    Entirely best-effort, in both directions: a failure to write must never stop
+    the server from serving, and readers must treat the file as a hint (a hard
+    kill leaves it stale), health-check what they read, and keep the port scan as
+    the fallback.
+    """
+    import json
+
+    try:
+        path = _server_record_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {"url": url, "port": port, "pid": os.getpid()}
+        # Write-then-rename: a reader polling every 500 ms must never catch a
+        # half-written file and conclude LanEx isn't running.
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:  # pragma: no cover - best-effort only
+        pass
+
+
+def _clear_server_record() -> None:
+    """Remove the record on a clean shutdown (a stale one only costs a probe)."""
+    try:
+        _server_record_path().unlink()
+    except Exception:  # pragma: no cover - best-effort only
+        pass
 
 
 def _pull_image_cli() -> int:
