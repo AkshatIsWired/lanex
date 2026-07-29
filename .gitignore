@@ -40,3 +40,10 @@ claude-*.txt
 
 # Docker bundle design volume (user projects, not source)
 work/
+
+# Windows installer build output (all produced by
+# .github/workflows/windows-installer.yml; never committed)
+windows/launcher/LanEx.exe
+windows/launcher/resource.syso
+windows/installer/LanEx-Setup*.exe
+windows/installer/Output/
