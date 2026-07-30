@@ -106,11 +106,19 @@ jobs:
         working-directory: windows/launcher
         run: |
           go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
+          # -ver-* sets FixedFileInfo.FileVersion only; without the -product-ver-*
+          # quartet FixedFileInfo.ProductVersion keeps versioninfo.json's local
+          # fallback (1.0.0.0), so a v0.9.0 release would show "Product version
+          # 1.0.0.0" in the exe's Properties -> Details tab.
           goversioninfo -64 -o resource.syso `
             -ver-major ${{ env.LANEX_VER_MAJOR }} `
             -ver-minor ${{ env.LANEX_VER_MINOR }} `
             -ver-patch ${{ env.LANEX_VER_PATCH }} `
             -ver-build 0 `
+            -product-ver-major ${{ env.LANEX_VER_MAJOR }} `
+            -product-ver-minor ${{ env.LANEX_VER_MINOR }} `
+            -product-ver-patch ${{ env.LANEX_VER_PATCH }} `
+            -product-ver-build 0 `
             -product-version "${{ env.LANEX_VERSION }}" `
             versioninfo.json
         shell: pwsh
