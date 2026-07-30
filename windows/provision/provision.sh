@@ -179,13 +179,24 @@ app_user() {
     # is what lets scripts/install.sh do its own `sudo apt-get` /
     # `sudo ln -s /usr/local/bin/lanex` stages unattended — install.sh refuses
     # to be *run* under sudo but calls sudo itself (install.sh:65-84).
-    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$APP_USER" > /etc/sudoers.d/lanex
+    #
+    # mkdir first: /etc/sudoers.d ships with the sudo PACKAGE. base_packages()
+    # runs before this function precisely so sudo is present, but creating the
+    # directory costs nothing and this write failing silently is exactly the bug
+    # that made a minimal-base provision die two minutes later inside apt.
+    mkdir -p /etc/sudoers.d
+    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$APP_USER" > /etc/sudoers.d/lanex \
+        || die "could not grant the LanEx environment permission to install its own packages."
     chmod 440 /etc/sudoers.d/lanex
     # A malformed sudoers file locks sudo out completely; validate and back out.
     if command -v visudo >/dev/null 2>&1 && ! visudo -cqf /etc/sudoers.d/lanex 2>/dev/null; then
         rm -f /etc/sudoers.d/lanex
         die "could not grant the LanEx environment permission to install its own packages."
     fi
+    # Prove it rather than announce it: the failure mode this replaces printed
+    # "granted" over a file that was never created.
+    runuser -l "$APP_USER" -c 'sudo -n true' >/dev/null 2>&1 \
+        || die "the LanEx environment cannot install its own packages (sudo check failed)."
     note "passwordless sudo granted (isolated environment, no interactive login)."
 }
 
@@ -283,8 +294,12 @@ main() {
     note "ref: ${REF}   user: ${APP_USER}"
     dns_guard
     wsl_conf
-    app_user
+    # base_packages BEFORE app_user: the sudo package owns /etc/sudoers.d, and
+    # granting the appliance user passwordless sudo means writing into it.
+    # Ubuntu's WSL image ships sudo so the order was invisible there; a plain
+    # ubuntu:24.04 base (the Phase 2a rootfs bake) does not.
     base_packages
+    app_user
     docker_ce
     install_lanex
     verify
