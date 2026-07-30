@@ -340,7 +340,14 @@ bake() {
 main() {
     require_root
     say "Provisioning the LanEx environment (Ubuntu, isolated)"
-    note "ref: ${REF}   user: ${APP_USER}${BAKE:+   bake: ${BAKE}}"
+    # The bake note only when baking: this line ends up in a log a user may send
+    # us, and "bake: 0" on every ordinary install is noise that invites the
+    # question "what is a bake?".
+    if [ "$BAKE" = "1" ]; then
+        note "ref: ${REF}   user: ${APP_USER}   (baking an image)"
+    else
+        note "ref: ${REF}   user: ${APP_USER}"
+    fi
     dns_guard
     wsl_conf
     # base_packages BEFORE app_user: the sudo package owns /etc/sudoers.d, and
