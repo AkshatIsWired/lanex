@@ -59,8 +59,12 @@ It does exactly five things:
 1. **Turns on WSL** if it isn't already on (`wsl --install --no-distribution`).
    This is the only step that can require a restart — at most one, and Setup
    restarts itself afterwards to finish the job.
-2. **Downloads Ubuntu 24.04 LTS** (~373 MB, Canonical's official WSL image,
-   verified against a pinned SHA256).
+2. **Downloads the Linux environment**, verified against a SHA256 built into
+   Setup. Released versions fetch a ready-made LanEx environment (~1 GB) that is
+   assembled and tested by CI; if that file is ever unreachable, Setup falls
+   back by itself to Canonical's official Ubuntu 24.04 WSL image (~373 MB) and
+   builds the environment on your PC instead. Either way you end up with the
+   same thing — the ready-made one is just faster.
 3. **Imports it as a private distro named `lanex`** with `wsl --import`. This is
    the same appliance approach Docker Desktop and Rancher Desktop use on
    Windows. Because it is an import, there is no Microsoft Store dependency and
@@ -68,7 +72,9 @@ It does exactly five things:
 4. **Provisions it**: creates the `lanex` user, installs Docker, then installs
    LanEx using this repo's own [`scripts/install.sh`](../scripts/install.sh) —
    the identical installer Linux users run, so there is only ever one install
-   path to keep working.
+   path to keep working. On the ready-made image this step finds everything
+   already in place and takes seconds; from the plain Ubuntu image it is the
+   part that takes a few minutes.
 5. **Creates two Start-menu shortcuts**: **LanEx** (the app) and **LanEx Project
    Files** (opens your designs in File Explorer).
 
@@ -89,7 +95,7 @@ It does exactly five things:
 |---|---|
 | The launcher (`LanEx.exe`) | `%ProgramFiles%\LanEx` |
 | The Linux environment's virtual disk | `%LOCALAPPDATA%\LanEx\distro` |
-| The downloaded Ubuntu image (cached, reused on repair) | `%LOCALAPPDATA%\LanEx\cache` |
+| The downloaded environment image (cached, reused on repair) | `%LOCALAPPDATA%\LanEx\cache` |
 | Setup and launcher logs — **ask for these first when something is wrong** | `%LOCALAPPDATA%\LanEx\logs` |
 | **Your designs and run results** | `\\wsl.localhost\lanex\home\lanex` (the *LanEx Project Files* shortcut) |
 | The app window's browser profile | `%LOCALAPPDATA%\lanex\app-profile` |

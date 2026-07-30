@@ -9,6 +9,7 @@ windows/
   launcher/    Go source for LanEx.exe — starts the appliance, sits in the tray
   installer/   lanex.iss — the Inno Setup script (preflight, WSL, import, uninstall)
   provision/   provision.sh — runs inside the imported distro, once, as root
+               selftest.sh  — asserts a provisioned appliance is actually usable
 ```
 
 The design, in one paragraph: LanEx and every tool it drives are Linux programs,
@@ -39,8 +40,23 @@ cd ..\installer
 ```
 
 `.github/workflows/windows-installer.yml` runs exactly these steps, plus
-`shellcheck` on `provision.sh` and a weekly check that the pinned Ubuntu image
-URL still exists.
+`shellcheck` on `provision.sh`, an end-to-end container provision (below), and a
+weekly check that the pinned Ubuntu image URL still exists.
+
+To provision an appliance locally without touching WSL — the fastest way to test
+a `provision.sh` change, and what CI's `provision-e2e` job does:
+
+```bash
+docker run -d --name lanex-e2e -v "$PWD/windows/provision:/lanex-provision:ro" \
+  -e LANEX_REF=$(git branch --show-current) ubuntu:24.04 sleep infinity
+docker exec lanex-e2e bash /lanex-provision/provision.sh   # ~3 min
+docker exec lanex-e2e bash /lanex-provision/selftest.sh
+docker exec lanex-e2e bash /lanex-provision/provision.sh   # the Repair path, ~30 s
+```
+
+Use `ubuntu:24.04`, not the WSL image. The minimal base is the point: it ships
+neither `curl` nor `sudo`, so every "Ubuntu already has this" assumption fails
+here first — which is how both provisioning bugs fixed in 2026-07 were found.
 
 Cross-compiling the launcher from Linux works too, which is handy for a quick
 syntax check: `GOOS=windows GOARCH=amd64 go build ./...` (the tests need a
@@ -50,30 +66,86 @@ The tray icon and every Windows-side icon come from one generated file,
 `launcher/assets/lanex.ico`. Regenerate it from the cockpit's own favicon after a
 brand change: `python3 windows/launcher/assets/make-icon.py`.
 
+## Before tagging a release — do these in order
+
+Skipping step 1 ships an installer that works but installs the *wrong LanEx*, in
+a way nothing goes red about.
+
+1. **Merge first, tag second.** `provision.sh` fetches `scripts/install.sh` from
+   the ref it is given and installs LanEx from that same ref. A tag build bakes
+   the rootfs from the tag's own commit, so the appliance is self-consistent —
+   but only if the tag is on a branch that actually contains this work. Merge
+   `windows-installer-support` → `dev` → `main`, **then** tag.
+   * Until that merge lands, an installer built from any other ref installs
+     LanEx from `main`. Everything still runs (the launcher falls back to
+     port-scanning 8765–8771 when `~/.lanex/server.json` is absent) — it is just
+     not the code you tested.
+   * `docs/INSTALL.md` must be on `main` too: the Case 4 dialog's *Open the
+     instructions* button opens
+     `.../blob/main/docs/INSTALL.md#enable-virtualization`, which is a 404 until
+     the doc merges. Check the link resolves *and* jumps to the anchor.
+2. **Create the GitHub release before or with the tag push.** `bake-rootfs` and
+   `build` both `gh release upload` into it; neither creates it.
+3. **Let `bake-rootfs` finish before judging `build`.** `build` waits on it and
+   compiles the baked URL + SHA256 in. If the bake fails, `build` is skipped; if
+   it produced nothing, `build` compiles the pre-Phase-2a installer instead and
+   says so in the job summary. Read the summary — do not assume.
+4. **Check `rootfs-pin` is green.** It only runs on tags, schedules and manual
+   runs, and a stale pin is a 404 for every new user.
+5. **Walk the acceptance matrix below** on x64 and update its Verified column.
+   Never mark a row verified that you did not watch.
+
 ## Testing — read this before shipping a change
 
 **CI cannot install LanEx.** GitHub-hosted runners have no nested
-virtualization, so WSL 2 does not run on them: no import, no provisioning, no
-launch. CI proves the pieces build and that the pure logic (UTF-16 parsing, port
-probing, shell syntax) is right. Everything else is manual, on VMs.
+virtualization, so WSL 2 does not run on them: no `wsl --import`, no launch. It
+*can* provision — `provision-e2e` runs `provision.sh` against a plain
+`ubuntu:24.04` container end to end, twice (the second run is the installer's
+Repair path), with `selftest.sh` after each. So everything provisioning does is
+covered; what remains manual is WSL itself, the wizard, and the app window.
 
 Acceptance gate — all ten must pass on x64 before a release:
 
-| # | Environment | Expected |
-|---|---|---|
-| 1 | Clean Win 11 23H2+, WSL never installed | One restart at most, Setup resumes itself, full install; first launch opens the app window; Tools tab pulls the image; the SPM example runs to GDS |
-| 2 | Win 11 with an existing `Ubuntu-24.04` and the user's own WSL projects | Their distro and files untouched (compare `wsl -l -v` before/after); both coexist |
-| 3 | Win 10 22H2 x64 | Same as #1 (this is the DISM fallback path in `EnableWsl`) |
-| 4 | Virtualization disabled in BIOS | Friendly preflight dialog with a working help link; nothing partially installed |
-| 5 | Re-run Setup over a healthy install | Repair path; projects preserved; LanEx upgraded in place |
-| 6 | Double-click the icon while LanEx is running | No second server; the app window re-opens (mutex + health-probe path) |
-| 7 | Uninstall | `wsl -l -q` no longer lists `lanex`; `%LOCALAPPDATA%\LanEx` gone; other distros intact |
-| 8 | Standard (non-admin) user | Setup refuses at UAC with a clear message (documented limitation) |
-| 9 | Network dropped mid-provision | Retry re-runs provisioning idempotently and succeeds |
-| 10 | GUI viewers after a run | GTKWave opens from the RTL IDE and the layout viewer opens — proves the single interactive `wsl` invocation survived the launcher |
+| # | Environment | Expected | Verified |
+|---|---|---|---|
+| 1 | Clean Win 11 23H2+, WSL never installed | One restart at most, Setup resumes itself, full install; first launch opens the app window; Tools tab pulls the image; the SPM example runs to GDS | — |
+| 2 | Win 11 with an existing `Ubuntu-24.04` and the user's own WSL projects | Their distro and files untouched (compare `wsl -l -v` before/after); both coexist | — |
+| 3 | Win 10 22H2 x64 | Same as #1 (this is the DISM fallback path in `EnableWsl`) | — |
+| 4 | Virtualization disabled in BIOS | Friendly preflight dialog with a working help link; nothing partially installed | — |
+| 5 | Re-run Setup over a healthy install | Repair path; projects preserved; LanEx upgraded in place | — |
+| 6 | Double-click the icon while LanEx is running | No second server; the app window re-opens (mutex + health-probe path) | — |
+| 7 | Uninstall | `wsl -l -q` no longer lists `lanex`; `%LOCALAPPDATA%\LanEx` gone; other distros intact | — |
+| 8 | Standard (non-admin) user | Setup refuses at UAC with a clear message (documented limitation) | — |
+| 9 | Network dropped mid-provision | Retry re-runs provisioning idempotently and succeeds | — |
+| 10 | GUI viewers after a run | GTKWave opens from the RTL IDE and the layout viewer opens — proves the single interactive `wsl` invocation survived the launcher | — |
 
 Target for #1, excluding the 3 GB toolchain pull: **under 8 minutes on a 50 Mbps
-line**.
+line** — and about a minute of that is provisioning once a tagged build's
+pre-baked rootfs is in play.
+
+One coexistence trap worth knowing before you test case 2 or 6: **WSL 2 puts
+every distro on one shared network namespace.** If LanEx is already running
+anywhere on the machine — the tester's own distro, a native install — it holds
+8765 and the appliance's `find_free_port` lands on 8766, with both answering
+`/api/health` identically. The launcher resolves this through
+`~/.lanex/server.json` rather than by scanning ports (`probe.go`); if you are
+testing on a machine where you also run LanEx yourself, check the port in
+`launcher.log` matches the one in the appliance's `server.json`.
+
+Provisioning itself is measured rather than estimated. On a 2026 laptop, from a
+bare `ubuntu:24.04`:
+
+| | |
+|---|---|
+| First provision (`LANEX_SKIP_GDS3D=1`, no image pull) | ~3 min |
+| Repair — a second run over a working appliance | ~26 s |
+| Provisioned filesystem | ~1.3 GB |
+| Baked image (`LANEX_BAKE=1`, so GDS3D is built in), `gzip -6` | **494 MB** |
+| `wsl --import` of that image, to a booting appliance | ~15 s |
+| Cold boot of a baked appliance to `systemctl is-active docker` | ~3 s |
+
+`wsl --import` reads the gzipped tar directly — measured, not assumed. Both
+numbers above come from importing a locally baked image on a 2026 laptop.
 
 ## Known gaps (deliberate, tracked)
 
@@ -82,11 +154,19 @@ line**.
   secrets — they light up when the keys exist. Until then, `docs/INSTALL.md`
   documents the *More info → Run anyway* click and publishes the SHA256.
 - **x64 only.** ARM64 needs an ARM64 launcher build and the ARM64 Ubuntu image
-  (both available; the pin is in `lanex.iss`).
-- **The ~3 GB toolchain image is pulled on first launch**, not baked in. Pre-baking
-  a rootfs (Docker + LanEx + GDS3D + the image already inside) would cut install
-  time to about a minute and remove the install-time dependency on apt and
-  GitHub. `provision.sh` is deliberately container-runnable so that job is a
-  small addition rather than a rewrite.
+  (both available; the pin is in `lanex.iss`), plus an ARM64 bake. Out of scope
+  until somebody has ARM64 hardware to test it on — shipping an untested ARM64
+  installer would be worse than shipping none.
+- **Not on winget.** A manifest submission needs a stable release URL and a
+  signed installer, so it follows code signing rather than leading it.
+- **The ~3 GB toolchain image is still pulled on first launch**, not baked in.
+  Everything else now is: the `bake-rootfs` job cooks Docker + LanEx + GDS3D into
+  the image Setup downloads on a tagged build, which cuts provisioning to
+  seconds and takes apt, GitHub and download.docker.com off the install-time
+  critical path. The image itself stays out because the Tools tab pulls it with
+  a real progress bar, and a ~4 GB installer download is worse than a 3 GB one
+  the user starts on purpose. The plain-Ubuntu path is kept as an automatic
+  fallback, so a missing release asset slows an install down rather than
+  breaking it.
 - **No auto-update** in the launcher: updating means running the new Setup and
   choosing Repair.
