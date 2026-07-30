@@ -272,6 +272,116 @@ def test_apt_install_retries_once_on_a_stale_index(monkeypatch, tmp_path):
     assert [("update" in c) for c in calls] == [False, True, False]
 
 
+def test_apt_install_sets_a_fetch_timeout(monkeypatch, tmp_path):
+    # apt has no fetch timeout by default: a connection that opens and goes
+    # silent hangs until the install watchdog fires an hour later.
+    lists = tmp_path / "lists"
+    lists.mkdir()
+    (lists / "InRelease").write_bytes(b"x")
+    monkeypatch.setattr(installer, "_APT_LISTS_DIR", lists)
+    calls: list = []
+    monkeypatch.setattr(installer, "_run_argv",
+                        lambda argv, **kw: calls.append(argv) or {"ok": True, "rc": 0})
+    installer._apt_install(["git"], label="x", key="gds3d")
+    argv = calls[0]
+    assert "Acquire::http::Timeout=30" in argv
+    assert "Acquire::Retries=3" in argv
+
+
+# ------------------------------------------- cancel must not kill the server
+class _FakeProc:
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.terminated = False
+        self.killed = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout=None) -> int:
+        return 0
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
+def test_cancel_never_signals_our_own_process_group(monkeypatch):
+    """The bug: cancelling an install killed LanEx itself.
+
+    A child started without ``start_new_session`` — the /dev/tty path, which has
+    to keep the controlling terminal for sudo's prompt — shares this process's
+    group. ``killpg`` on it takes the server down too, which is exactly what
+    happened on the Windows appliance, where the launcher's ``bash -ic`` gives
+    the server a pty so every sudo install took that path.
+    """
+    proc = _FakeProc(pid=4242)
+    monkeypatch.setattr(installer.os, "getpgid", lambda pid: 999)  # child == us
+    killed: list = []
+    monkeypatch.setattr(installer.os, "killpg",
+                        lambda pgid, sig: killed.append((pgid, sig)))
+    installer._kill_proc_tree(proc, grace=0.01)
+    assert killed == [], "killpg was called on our own process group"
+    assert proc.terminated, "the child itself was never terminated"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
+def test_cancel_still_group_kills_an_isolated_child(monkeypatch):
+    # The other half: when the child DOES have its own session, the group kill
+    # is what stops `sudo apt-get`'s grandchildren from downloading on as orphans.
+    proc = _FakeProc(pid=4242)
+    monkeypatch.setattr(installer.os, "getpgid",
+                        lambda pid: 4242 if pid == 4242 else 999)
+    killed: list = []
+    monkeypatch.setattr(installer.os, "killpg",
+                        lambda pgid, sig: killed.append((pgid, sig)))
+    installer._kill_proc_tree(proc, grace=0.01)
+    assert killed and killed[0][0] == 4242
+    assert not proc.terminated, "fell back to a plain terminate despite a safe group"
+
+
+def test_sudo_takes_the_tty_only_when_a_password_is_needed(monkeypatch):
+    """With NOPASSWD, the tty buys nothing and costs streamed output + isolation.
+
+    The appliance grants NOPASSWD:ALL (provision.sh) and its server has an
+    unwatched pty, so the old "always attach when a tty exists" rule sent apt's
+    output into a terminal no human can see AND left the child in the server's
+    process group.
+    """
+    from lanex.controller import platform_env
+
+    monkeypatch.setattr(platform_env, "has_controlling_tty", lambda: True)
+    monkeypatch.setattr(installer, "_can_sudo", lambda: True)
+    on_tty: list = []
+    monkeypatch.setattr(installer, "_run_argv_on_tty",
+                        lambda argv, **kw: on_tty.append(argv) or {"ok": True})
+    piped: list = []
+
+    class _P:
+        returncode = 0
+        stdout = iter(())
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    def fake_popen(argv, **settings):
+        piped.append(settings)
+        return _P()
+
+    monkeypatch.setattr(installer.subprocess, "Popen", fake_popen)
+    installer._run_argv(["sudo", "apt-get", "install", "-y", "git"],
+                        label="x", key="gds3d")
+    assert not on_tty, "took the invisible-tty path despite passwordless sudo"
+    assert piped, "no subprocess was started at all"
+    if os.name == "posix":
+        # Its own session, so cancel's group kill is precise and cannot reach us.
+        assert piped[0].get("start_new_session") is True, \
+            "child shares our process group — cancel would kill the server"
+
+
 def _stub_gds3d_env(monkeypatch, present: set):
     """Pretend to be a Debian host where only *present* commands exist."""
     monkeypatch.setattr(installer.sys, "platform", "linux")

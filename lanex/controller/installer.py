@@ -86,13 +86,64 @@ def _kill_proc_tree(proc: subprocess.Popen, grace: float = 2.0) -> None:
         if os.name != "posix":
             return False
         try:
-            os.killpg(os.getpgid(proc.pid), sig)
+            pgid = os.getpgid(proc.pid)
+            own = os.getpgid(0)
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+        # NEVER signal our own group. A child started WITHOUT
+        # start_new_session=True — the /dev/tty path, which must keep the
+        # controlling terminal for sudo's password prompt — shares THIS process's
+        # group, so killpg would take the LanEx server down with the install it
+        # was asked to cancel. That is not hypothetical: on the Windows appliance
+        # the launcher's `bash -ic` gives the server a pty, so every sudo install
+        # took the tty path, and cancelling one killed the app.
+        if pgid == own:
+            return False
+        try:
+            os.killpg(pgid, sig)
             return True
         except (ProcessLookupError, PermissionError, OSError):
             return False
 
+    def _signal_descendants(sig: int) -> None:
+        """Best-effort walk of /proc when a group kill isn't safe.
+
+        The group kill is the precise tool; this is what's left when the child
+        shares our group. `sudo apt-get` is the shape that matters — terminating
+        only the direct `sudo` would leave apt-get holding the dpkg lock, which
+        wedges every later install.
+        """
+        if os.name != "posix":
+            return
+        children: Dict[int, List[int]] = {}
+        try:
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{entry}/stat", "rb") as fh:
+                        fields = fh.read().rsplit(b")", 1)[1].split()
+                    children.setdefault(int(fields[1]), []).append(int(entry))
+                except (OSError, IndexError, ValueError):
+                    continue
+        except OSError:
+            return
+        # Deepest first, so a parent can't spawn past its own death.
+        order, stack = [], [proc.pid]
+        while stack:
+            pid = stack.pop()
+            kids = children.get(pid, [])
+            order.extend(kids)
+            stack.extend(kids)
+        for pid in reversed(order):
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+
     try:
         if not _signal_group(signal.SIGTERM):
+            _signal_descendants(signal.SIGTERM)
             proc.terminate()
     except Exception:
         pass
@@ -101,6 +152,7 @@ def _kill_proc_tree(proc: subprocess.Popen, grace: float = 2.0) -> None:
     except Exception:
         try:
             if not _signal_group(signal.SIGKILL):
+                _signal_descendants(signal.SIGKILL)
                 proc.kill()
         except Exception:
             pass
@@ -1059,22 +1111,32 @@ def _run_argv(argv: List[str], *, label: str, key: str,
     if _needs_sudo(argv):
         have_tty = platform_env.has_controlling_tty()
         passwordless = _can_sudo()
-        if have_tty:
-            # ALWAYS attach a sudo command to the launching terminal when one
-            # exists — even if `sudo -n true` just succeeded. The non-tty branch
-            # below sets start_new_session=True (so cancel/timeout can kill the
-            # whole tree), which drops the controlling terminal; sudo's default
-            # `tty_tickets` keys the cached credential to that tty, so a detached
-            # sudo re-authenticates with no terminal and dies
-            # "sudo: A terminal is required to authenticate" — exactly the failure
-            # the user hit installing GDS3D deps. Attaching to /dev/tty lets sudo
-            # find its ticket (silent when cached) or prompt (when not).
+        if have_tty and not passwordless:
+            # Attach to the launching terminal ONLY when sudo actually has to ask
+            # for something. The non-tty branch below sets start_new_session=True
+            # (so cancel/timeout can kill the whole tree), which drops the
+            # controlling terminal; sudo's default `tty_tickets` keys a cached
+            # credential to that tty, so a detached sudo would re-authenticate
+            # with no terminal and die "sudo: A terminal is required to
+            # authenticate".
+            #
+            # `and not passwordless` is load-bearing, and used not to be. With
+            # NOPASSWD sudo never consults a ticket, so the tty buys nothing —
+            # and it costs three things, all of which the Windows appliance hit
+            # at once, because the launcher's `bash -ic` gives the server a pty
+            # that NO HUMAN CAN SEE:
+            #   * apt's output went to that pty instead of the event bus, so the
+            #     Install log showed our own status lines and nothing else — an
+            #     install that looks hung while it is downloading 236 MB;
+            #   * _run_argv_on_tty returns no captured output, so every decision
+            #     made from it (the stale-index retry in _apt_install) was blind;
+            #   * no start_new_session means the child shares the SERVER's
+            #     process group, so cancelling the install killed LanEx.
             inherit_tty = True
-            if not passwordless:
-                _emit("installer_info", {"key": key, "label": label, "needs_password": True, "message":
-                    "Administrator rights needed. A password prompt is waiting in the TERMINAL "
-                    "where you launched LanEx — switch to that window and enter your password to "
-                    "continue. (For security, sudo cannot prompt inside the browser.)"})
+            _emit("installer_info", {"key": key, "label": label, "needs_password": True, "message":
+                "Administrator rights needed. A password prompt is waiting in the TERMINAL "
+                "where you launched LanEx — switch to that window and enter your password to "
+                "continue. (For security, sudo cannot prompt inside the browser.)"})
         elif not passwordless:
             # No terminal: fall back to a graphical pkexec dialog, else a
             # copy-paste command.
@@ -1217,8 +1279,19 @@ def _apt_install(packages: List[str], *, label: str, key: str) -> Dict[str, Any]
     #    the sudoers policy question entirely.
     #  * DPkg::Lock::Timeout — unattended-upgrades may hold the dpkg lock when the
     #    user clicks Install. Waiting five minutes beats "Could not get lock".
-    prefix = ([] if root else ["sudo"]) + ["env", "DEBIAN_FRONTEND=noninteractive",
-                                          apt, "-o", "DPkg::Lock::Timeout=300"]
+    #  * Acquire timeouts + retries — apt has NO fetch timeout by default, so a
+    #    connection that opens and then goes silent hangs until the install
+    #    watchdog fires an hour later, behind a label that says it is working.
+    #    Observed on WSL: archive.ubuntu.com resolves to IPv6 only, the appliance's
+    #    IPv6 egress half-works, and apt parked mid-download with 236 MB already
+    #    fetched. A timeout turns that into a retry against the next address.
+    prefix = ([] if root else ["sudo"]) + [
+        "env", "DEBIAN_FRONTEND=noninteractive",
+        apt, "-o", "DPkg::Lock::Timeout=300",
+        "-o", "Acquire::http::Timeout=30",
+        "-o", "Acquire::https::Timeout=30",
+        "-o", "Acquire::Retries=3",
+    ]
     update = prefix + ["update"]
     install = prefix + ["install", "-y"] + list(packages)
     if _apt_index_empty():
