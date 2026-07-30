@@ -114,7 +114,7 @@ Acceptance gate — all ten must pass on x64 before a release:
 | 4 | Virtualization disabled in BIOS | Friendly preflight dialog with a working help link; nothing partially installed | — |
 | 5 | Re-run Setup over a healthy install | Repair path; projects preserved; LanEx upgraded in place | — |
 | 6 | Double-click the icon while LanEx is running | No second server; the app window re-opens (mutex + health-probe path) | — |
-| 7 | Uninstall | `wsl -l -q` no longer lists `lanex`; `%LOCALAPPDATA%\LanEx` gone; other distros intact | — |
+| 7 | Uninstall | `wsl -l -q` no longer lists `lanex`; `%LOCALAPPDATA%\LanEx` gone; other distros intact. Check it by listing names, not with `Test-Path` — Windows is case-insensitive, so `...\LanEx` matches the lowercase `lanex` browser profile and reports success on a machine with nothing installed | — |
 | 8 | Standard (non-admin) user | Setup refuses at UAC with a clear message (documented limitation) | — |
 | 9 | Network dropped mid-provision | Retry re-runs provisioning idempotently and succeeds | — |
 | 10 | GUI viewers after a run | GTKWave opens from the RTL IDE and the layout viewer opens — proves the single interactive `wsl` invocation survived the launcher | — |
