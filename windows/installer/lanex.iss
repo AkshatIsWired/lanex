@@ -77,9 +77,47 @@
 #define RootfsFile     "ubuntu-24.04.4-wsl-amd64.wsl"
 #define RootfsSizeMB   "373"
 
-; Space needed on the %LOCALAPPDATA% volume: the imported distro (~2 GB after
-; provisioning) plus headroom for the ~3 GB LibreLane image the Tools tab pulls
-; on first launch, plus run output.
+; ---------------------------------------------------------------------------
+; Phase 2a — the pre-baked appliance image (optional at compile time).
+;
+; The image above is a bare Ubuntu that provision.sh then spends several minutes
+; turning into the appliance, live, on the user's machine — which also means
+; every install depends on apt, GitHub and Docker's repository all being up at
+; that moment. The `bake-rootfs` CI job runs the SAME provision.sh once, in a
+; container, and publishes the result as a release asset; a tag build passes it
+; in here:
+;
+;   iscc /DBakedRootfsUrl=https://.../lanex-rootfs-amd64.tar.gz ^
+;        /DBakedRootfsSha256=<hash> /DBakedRootfsSizeMB=<n> lanex.iss
+;
+; Undefined — every PR build, every local build, and any tag whose bake job did
+; not produce an asset — the installer compiles EXACTLY as it did before. That
+; is deliberate: a build must never carry a URL that does not exist yet.
+;
+; At runtime the baked path is still only a preference. Setup verifies the hash,
+; and on any failure at all (asset deleted, corrupt download, no route) it logs
+; the reason and falls back to the Ubuntu image, which always works. A dead
+; release asset can slow an install down; it can never brick one.
+#ifdef BakedRootfsUrl
+  #ifndef BakedRootfsSha256
+    #error BakedRootfsUrl requires BakedRootfsSha256 (an unverified rootfs is not shippable)
+  #endif
+  #ifndef BakedRootfsFile
+    #define BakedRootfsFile "lanex-rootfs-amd64.tar.gz"
+  #endif
+  #ifndef BakedRootfsSizeMB
+    #define BakedRootfsSizeMB "900"
+  #endif
+#endif
+
+; Space needed on the %LOCALAPPDATA% volume. The two download paths differ, so
+; this is sized for the larger one:
+;   cached image       ~0.4 GB (Ubuntu) or ~0.9 GB (baked, kept for Repair)
+;   imported distro    ~2 GB provisioned, ~2.5 GB when baked (GDS3D is built in)
+;   LibreLane image    ~3 GB, pulled by the Tools tab on first launch
+;   run output         the rest
+; 10 GB leaves real headroom on both, and refusing an install that would have
+; worked is worse than a tight fit — so this stays a floor, not an estimate.
 #define MinFreeGB      10
 
 [Setup]
@@ -172,6 +210,10 @@ var
   // True when Setup stopped early to reboot for WSL; suppresses the "Launch
   // LanEx" checkbox, because nothing has been provisioned yet.
   WslPending: Boolean;
+  // Which image `wsl --import` will read. Set by EnsureRootfs — the pre-baked
+  // appliance when this build has one and it downloaded cleanly, the pinned
+  // Ubuntu image otherwise.
+  ImportPath: String;
 
 // ---------------------------------------------------------------- locations --
 
@@ -191,6 +233,9 @@ function CacheDir: String;   begin Result := AppDataRoot + '\cache';  end;
 function LogDir: String;     begin Result := AppDataRoot + '\logs';   end;
 function LogFile: String;    begin Result := LogDir + '\install.log'; end;
 function RootfsPath: String; begin Result := CacheDir + '\{#RootfsFile}'; end;
+#ifdef BakedRootfsUrl
+function BakedRootfsPath: String; begin Result := CacheDir + '\{#BakedRootfsFile}'; end;
+#endif
 
 function WslExe: String;
 begin
@@ -563,9 +608,10 @@ begin
   Result := True;
 end;
 
-// EnsureRootfs downloads the Ubuntu image unless a verified copy is cached.
-// Returns '' on success or a message for the user.
-function EnsureRootfs: String;
+// FetchRootfs downloads one image unless a copy that matches Sha256 is already
+// cached. Returns '' on success, or a message that is shown to the user on the
+// Ubuntu path and merely LOGGED on the baked path (see EnsureRootfs).
+function FetchRootfs(const Url, FileName, Sha256, Dest, SizeMB: String): String;
 var
   Downloaded: String;
 begin
@@ -574,27 +620,26 @@ begin
   // A cached file is only trusted after it re-hashes: a half-finished download
   // from a cancelled run is exactly the file that would otherwise import into a
   // broken distro.
-  if FileExists(RootfsPath) then
+  if FileExists(Dest) then
   begin
     SetStatus('Checking the downloaded LanEx environment…');
-    if CompareText(GetSHA256OfFile(RootfsPath), '{#RootfsSha256}') = 0 then
+    if CompareText(GetSHA256OfFile(Dest), Sha256) = 0 then
     begin
-      LogLine('cached rootfs verified: ' + RootfsPath);
+      LogLine('cached rootfs verified: ' + Dest);
       Exit;
     end;
-    LogLine('cached rootfs failed its checksum — downloading again');
-    DeleteFile(RootfsPath);
+    LogLine('cached rootfs failed its checksum — downloading again: ' + Dest);
+    DeleteFile(Dest);
   end;
-  SetStatus('Downloading the LanEx environment (about {#RootfsSizeMB} MB)…');
+  SetStatus('Downloading the LanEx environment (about ' + SizeMB + ' MB)…');
   try
     // Inno verifies the SHA256 itself and raises if it differs, so a corrupted
     // or substituted download can never reach `wsl --import`.
-    DownloadTemporaryFile('{#RootfsUrl}', '{#RootfsFile}', '{#RootfsSha256}',
-                          @OnDownloadProgress);
-    Downloaded := ExpandConstant('{tmp}\{#RootfsFile}');
-    if not FileCopy(Downloaded, RootfsPath, False) then
+    DownloadTemporaryFile(Url, FileName, Sha256, @OnDownloadProgress);
+    Downloaded := ExpandConstant('{tmp}\') + FileName;
+    if not FileCopy(Downloaded, Dest, False) then
     begin
-      Result := 'Could not save the downloaded file to' + #13#10 + RootfsPath;
+      Result := 'Could not save the downloaded file to' + #13#10 + Dest;
       Exit;
     end;
   except
@@ -602,6 +647,33 @@ begin
       + #13#10#13#10 + 'Check your internet connection (and any company proxy or '
       + 'VPN), then run Setup again — it continues from where it stopped.';
   end;
+end;
+
+// EnsureRootfs puts an importable image on disk and sets ImportPath to it.
+// Returns '' on success or a message for the user.
+function EnsureRootfs: String;
+begin
+#ifdef BakedRootfsUrl
+  // Preferred: the appliance CI already cooked for this exact build. One
+  // download, ~1 minute of import, and apt/GitHub/Docker being down stops being
+  // an install-time failure.
+  Result := FetchRootfs('{#BakedRootfsUrl}', '{#BakedRootfsFile}',
+                        '{#BakedRootfsSha256}', BakedRootfsPath, '{#BakedRootfsSizeMB}');
+  if Result = '' then
+  begin
+    ImportPath := BakedRootfsPath;
+    LogLine('using the pre-baked appliance image');
+    Exit;
+  end;
+  // Deleted asset, corrupt file, no route — none of it is worth failing over
+  // when a path that always works is right here. The reason goes in the log so
+  // a broken release is diagnosable from a user's install.log alone.
+  LogLine('pre-baked image unavailable, falling back to the Ubuntu image. Reason: '
+    + Result);
+#endif
+  ImportPath := RootfsPath;
+  Result := FetchRootfs('{#RootfsUrl}', '{#RootfsFile}', '{#RootfsSha256}',
+                        RootfsPath, '{#RootfsSizeMB}');
 end;
 
 // ProvisionDistro runs provision.sh inside the freshly imported distro.
@@ -700,8 +772,10 @@ begin
     ForceDirectories(DistroDir);
     // --version 2 explicitly: Docker and the GUI viewers need WSL 2, and the
     // user's default version is none of our business.
+    // --version 2 explicitly (again): `wsl --import` reads plain tar and .tar.gz
+    // alike, so the baked and the Ubuntu path use one identical command.
     if not (RunLogged(WslExe, '--import {#DistroName} "' + DistroDir + '" "'
-        + RootfsPath + '" --version 2', Code) and (Code = 0)) then
+        + ImportPath + '" --version 2', Code) and (Code = 0)) then
     begin
       Result := 'The LanEx environment could not be created.' + #13#10#13#10
         + 'Last lines of the log:' + #13#10 + LogTail(10) + #13#10
@@ -711,6 +785,11 @@ begin
   end;
 
   // 6. Provision (idempotent — this is also the Repair path).
+  //
+  //    Runs after a BAKED import too, deliberately. It is near-instant when
+  //    everything is already present, it doubles as an integrity check on the
+  //    downloaded image, and it keeps Repair a single code path rather than one
+  //    that has to know how the distro was created.
   Result := ProvisionDistro;
   if Result <> '' then
     Exit;

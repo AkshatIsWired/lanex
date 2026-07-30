@@ -21,6 +21,12 @@
 #     need WSL: `wsl --import` and the first launch;
 #   * the pinned Ubuntu rootfs URL still exists and still matches Microsoft's
 #     published WSL image manifest (weekly — see the rootfs-pin job).
+#
+# On a tag it also BAKES the appliance (bake-rootfs): the same provision.sh,
+# in a container, exported as the image Setup downloads. That is a build
+# artifact, not a test — the baked image is still only verified as far as a
+# container can verify it, and `wsl --import`ing it is a manual step in the
+# matrix like everything else that needs WSL.
 name: Windows installer
 
 on:
@@ -38,10 +44,92 @@ permissions:
   contents: read
 
 jobs:
+  # Phase 2a. Cook the appliance ONCE, here, and let Setup download the result —
+  # instead of every user's machine spending several minutes running apt, pip and
+  # a Docker install that all have to be up at that moment.
+  #
+  # Tag builds and manual runs only. On a PR this would add ~20 minutes to prove
+  # something provision-e2e already proves, and the asset it produces would have
+  # no release to live in — so PR builds compile an installer with no baked
+  # option at all, which is exactly how the installer shipped before this job.
+  bake-rootfs:
+    name: Bake the appliance rootfs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    outputs:
+      # Empty when the bake produced nothing usable — `build` reads these and
+      # simply omits the ISCC defines, so a failed bake degrades to the old
+      # behaviour rather than shipping a URL that 404s.
+      sha256: ${{ steps.bake.outputs.sha256 }}
+      size-mb: ${{ steps.bake.outputs.size-mb }}
+      url: ${{ steps.bake.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bake
+        id: bake
+        env:
+          # The tag's own ref, so the image contains the LanEx the installer
+          # built beside it claims to install. Self-consistency is the point:
+          # see the release checklist in windows/README.md.
+          LANEX_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          docker run -d --name lanex-bake \
+            -v "$PWD/windows/provision:/lanex-provision:ro" \
+            -e "LANEX_REF=$LANEX_REF" -e LANEX_BAKE=1 \
+            ubuntu:24.04 sleep infinity
+          docker exec lanex-bake bash /lanex-provision/provision.sh
+
+          # Before export, never after: a broken appliance must not be able to
+          # become a published release asset.
+          docker exec lanex-bake bash /lanex-provision/selftest.sh
+
+          # `wsl --import` reads gzipped tar directly. -6 rather than -9: the
+          # last few percent cost minutes of CI for seconds of user download.
+          docker export lanex-bake | gzip -6 > lanex-rootfs-amd64.tar.gz
+          sha=$(sha256sum lanex-rootfs-amd64.tar.gz | cut -d' ' -f1)
+          mb=$(( $(stat -c%s lanex-rootfs-amd64.tar.gz) / 1048576 ))
+          {
+            echo "sha256=$sha"
+            echo "size-mb=$mb"
+            echo "url=https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/lanex-rootfs-amd64.tar.gz"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Pre-baked appliance rootfs"
+            echo "- ref: \`$LANEX_REF\`"
+            echo "- size: ${mb} MB compressed"
+            echo "- sha256: \`$sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanex-rootfs-amd64
+          path: lanex-rootfs-amd64.tar.gz
+          if-no-files-found: error
+
+      # Must land BEFORE the installer that points at it — hence this job being
+      # a dependency of `build` rather than running alongside it.
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" lanex-rootfs-amd64.tar.gz --clobber
+
   build:
     name: Build LanEx.exe + LanEx-Setup.exe
     runs-on: windows-latest
     timeout-minutes: 30
+    # bake-rootfs is skipped on every ordinary push and PR. `always()` keeps this
+    # job running when it is skipped; the two result checks still stop a build
+    # from shipping after a bake that actually broke.
+    needs: bake-rootfs
+    if: >
+      always() && needs.bake-rootfs.result != 'failure'
+      && needs.bake-rootfs.result != 'cancelled'
     permissions:
       # Needed only by the release step at the end (tag pushes).
       contents: write
@@ -164,7 +252,21 @@ jobs:
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          & $iscc /Qp "/DAppVersion=${{ env.LANEX_VERSION_NUM }}" lanex.iss
+          $defines = @("/DAppVersion=${{ env.LANEX_VERSION_NUM }}")
+          # Only a bake that ran AND produced a hash gets wired in. Anything else
+          # compiles the installer exactly as it was before Phase 2a: it
+          # downloads the pinned Ubuntu image and provisions on the user's
+          # machine. No phantom URLs in PR builds.
+          $baked = "${{ needs.bake-rootfs.outputs.sha256 }}"
+          if ($baked) {
+            $defines += "/DBakedRootfsUrl=${{ needs.bake-rootfs.outputs.url }}"
+            $defines += "/DBakedRootfsSha256=$baked"
+            $defines += "/DBakedRootfsSizeMB=${{ needs.bake-rootfs.outputs.size-mb }}"
+            Write-Host "building WITH the pre-baked rootfs (${{ needs.bake-rootfs.outputs.size-mb }} MB)"
+          } else {
+            Write-Host "building without a pre-baked rootfs (provision runs on the user's machine)"
+          }
+          & $iscc /Qp @defines lanex.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem LanEx-Setup.exe
 
@@ -196,6 +298,12 @@ jobs:
             "- size: $([math]::Round($f.Length/1MB,2)) MB"                | Out-File -Append $env:GITHUB_STEP_SUMMARY
             "- sha256: ``$h``"                                            | Out-File -Append $env:GITHUB_STEP_SUMMARY
             "- signed: ${{ env.SIGN == 'true' }}"                         | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            $baked = "${{ needs.bake-rootfs.outputs.sha256 }}"
+            if ($baked) {
+              "- pre-baked rootfs: ${{ needs.bake-rootfs.outputs.size-mb }} MB, ``$baked``" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            } else {
+              "- pre-baked rootfs: none (Setup provisions on the user's machine)"          | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            }
           } else {
             "- **the installer did not build**" | Out-File -Append $env:GITHUB_STEP_SUMMARY
           }
