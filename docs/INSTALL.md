@@ -792,6 +792,35 @@ instead of forcing a fresh multi-GB download. You do **not** need to delete
 </details>
 
 <details>
+<summary><b>The GDS3D card still says "installed" after Remove, and clicking Remove again says the binary isn't found</b></summary>
+
+Fixed in current LanEx. Older versions removed GDS3D from `~/.local/bin` and
+`/usr/local/bin` but the "installed" probe **also** accepted the build output
+`make` leaves in the source tree, so the card never went back to **Build &
+install** and the second Remove reported `GDS3D binary not found in
+~/.local/bin or /usr/local/bin (already removed?)` about a binary the same
+page was calling installed. On an affected install, delete the leftover
+yourself and click **Recheck**:
+
+```bash
+rm -f ~/.local/bin/gds3d ~/.lanex/tools/GDS3D/linux/GDS3D
+```
+
+The source tree itself can stay — a re-install re-links it instead of cloning
+again.
+</details>
+
+<details>
+<summary><b>Desktop layout viewers says KLayout / Magic "not found" even though they open fine</b></summary>
+
+Both ship **inside the pulled LibreLane image**, which is where the Layout tab
+launches them from — so nothing is wrong; older versions only probed for a
+*host-installed* copy and reported "not found". Current LanEx shows **in
+container image** instead. A host install is optional (`klayout.de`, or conda
+/Nix for Magic) and only changes which copy the Layout tab prefers.
+</details>
+
+<details>
 <summary><b>GDS3D (3D view) reports "no process/tech file found" for a non-sky130 PDK</b></summary>
 
 GDS3D renders the layer stack from a per-PDK **process/tech file** (`-p`). It
