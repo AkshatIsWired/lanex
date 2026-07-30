@@ -28,6 +28,15 @@ import (
 const (
 	basePort = 8765
 	portSpan = 7
+
+	// How long a launch waits for the appliance to write ~/.lanex/server.json
+	// before it will believe a port it merely found by scanning. See
+	// scanForServer for why the scan is a last resort rather than the default;
+	// without this window it wins the race on every cold start, because writing
+	// the record takes a second or two and a stranger's server is answering the
+	// whole time. Comfortably longer than the write, far short of
+	// startupTimeout.
+	recordGrace = 20 * time.Second
 )
 
 func candidatePorts() []int {
@@ -64,10 +73,31 @@ func healthyAt(url string) bool {
 }
 
 // findRunningServer returns the port of a live LanEx server, if there is one.
+//
+// The appliance's own record answers this whenever it exists — including when
+// it says "nothing is running". Falling through to a scan after a record that
+// did not check out is what would point the window at somebody else's server.
 func findRunningServer() (int, bool) {
-	if port, ok := serverJSONPort(); ok && healthyAt(healthURL(port)) {
-		return port, true
+	if port, ok := serverJSONPort(); ok {
+		return port, healthyAt(healthURL(port))
 	}
+	return scanForServer()
+}
+
+// scanForServer probes 8765..8771 for anything answering like LanEx.
+//
+// A LAST RESORT, not the normal path. It cannot tell our appliance apart from a
+// LanEx the user runs themselves — same endpoint, same {"service": "lanex"}
+// body — and it does not need bad luck to get it wrong: WSL 2 puts every distro
+// on one shared network namespace, so a LanEx already running in the user's own
+// distro holds 8765, the appliance's own server is pushed to 8766 by
+// find_free_port, and scanning upwards finds theirs first. Verified on a machine
+// with both: user's LanEx on 8765, appliance on 8766, both returning 200.
+//
+// It stays because an appliance older than the server.json feature writes no
+// record at all, and there a live wrong-server beats a launcher that gives up.
+// The next Repair upgrades that away.
+func scanForServer() (int, bool) {
 	for _, port := range candidatePorts() {
 		if healthyAt(healthURL(port)) {
 			return port, true
@@ -76,17 +106,23 @@ func findRunningServer() (int, bool) {
 	return 0, false
 }
 
-// serverJSONPort reads the port LanEx recorded in ~/.lanex/server.json inside the
-// appliance, over the \\wsl.localhost share.
-//
-// Purely an optimisation — one hit instead of up to seven probes — and treated
-// as untrusted: an older LanEx in the appliance has no such file, and a stale
-// file (hard kill, no clean shutdown) is filtered out by the health check the
-// caller runs on the value. The port scan stays the source of truth.
-func serverJSONPort() (int, bool) {
-	path := filepath.Join(`\\wsl.localhost\`+distroName, "home", distroName,
+// serverRecordPath is the file LanEx writes on start and removes on a clean
+// exit (lanex/cli.py), read over the \\wsl.localhost share. A variable so the
+// tests can point it at a real temp file.
+var serverRecordPath = func() string {
+	return filepath.Join(`\\wsl.localhost\`+distroName, "home", distroName,
 		".lanex", "server.json")
-	raw, err := os.ReadFile(path)
+}
+
+// serverJSONPort reads the port the appliance recorded for itself.
+//
+// This is the only signal that is actually ABOUT our appliance rather than
+// about whatever answered a loopback port, which is why the callers treat it as
+// authoritative. It is still validated: a truncated or half-written file parses
+// to nothing, and a stale one (hard kill, no clean shutdown) is caught by the
+// health check the caller runs on the value.
+func serverJSONPort() (int, bool) {
+	raw, err := os.ReadFile(serverRecordPath())
 	if err != nil {
 		return 0, false
 	}
@@ -106,9 +142,20 @@ func serverJSONPort() (int, bool) {
 // closes (the server process died — no point probing a corpse).
 func waitForHealth(timeout time.Duration, done <-chan struct{}) (int, bool) {
 	deadline := time.Now().Add(timeout)
+	scanAfter := time.Now().Add(recordGrace)
 	for {
-		if port, ok := findRunningServer(); ok {
+		// The record first and, for the first recordGrace, ONLY the record. We
+		// have just started the server ourselves; it needs a moment to bind a
+		// port and write the file. If the scan were allowed to answer during
+		// that moment it would hand back a LanEx running in the user's own
+		// distro — instantly, on the very first poll, every time.
+		if port, ok := serverJSONPort(); ok && healthyAt(healthURL(port)) {
 			return port, true
+		}
+		if time.Now().After(scanAfter) {
+			if port, ok := scanForServer(); ok {
+				return port, true
+			}
 		}
 		if time.Now().After(deadline) {
 			return 0, false
