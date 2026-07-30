@@ -27,12 +27,28 @@
 #   LANEX_USER=<name>      appliance user (default: lanex; the launcher and the
 #                          Inno script hardcode "lanex" — override for testing)
 #   LANEX_PROVISION_DNS=1  force the WSL DNS fix even if github.com is reachable
+#   LANEX_BAKE=1           CI is cooking a rootfs image, not provisioning a
+#                          user's machine (see bake() below)
 set -u -o pipefail
 
 REPO="AkshatIsWired/lanex"
 REF="${LANEX_REF:-main}"
 APP_USER="${LANEX_USER:-lanex}"
 INSTALL_SH="https://raw.githubusercontent.com/${REPO}/${REF}/scripts/install.sh"
+
+# Baking (.github/workflows/windows-installer.yml, job bake-rootfs) runs this
+# exact script in a container and exports the result as the image Setup
+# downloads. Keeping that a knob rather than a second script is the whole reason
+# provision.sh has no WSL-only assumptions outside wsl_conf(): one file, one code
+# path, and Repair on a baked install re-runs the same stages it was built from.
+BAKE="${LANEX_BAKE:-0}"
+
+# GDS3D compiles from source and takes minutes. On a user's machine that is time
+# spent behind a progress label for an OPTIONAL 3D viewer the Tools tab installs
+# on demand — so it is skipped. In a bake the compile happens once, in CI, and
+# every user gets it for free.
+SKIP_GDS3D=1
+[ "$BAKE" = "1" ] && SKIP_GDS3D=0
 
 say()  { printf '\n== %s\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
@@ -261,8 +277,17 @@ install_lanex() {
     #                       One click in the Tools tab installs it later; Phase 2
     #                       pre-bakes it into the rootfs.
     # A re-run upgrades LanEx in place (install.sh:17) — that is the Repair path.
-    runuser -l "$APP_USER" -c "LANEX_ASSUME_YES=1 LANEX_SKIP_PULL=1 LANEX_SKIP_GDS3D=1 \
-        LANEX_REF='${REF}' curl -fsSL '${INSTALL_SH}' | bash" \
+    #
+    # `export VAR=...; curl | bash`, NOT `VAR=... curl | bash`. A prefix
+    # assignment applies to the ONE command it prefixes — curl — and install.sh
+    # runs in the `bash` on the other side of the pipe, which saw none of these
+    # four. Every knob below was silently inert: Setup installed LanEx from main
+    # whatever ref it was built from, then spent minutes compiling GDS3D and
+    # attempting the ~3 GB image pull it explicitly opted out of, behind a
+    # progress label that says "this takes a few minutes".
+    runuser -l "$APP_USER" -c "export LANEX_ASSUME_YES=1 LANEX_SKIP_PULL=1 \
+        LANEX_SKIP_GDS3D=${SKIP_GDS3D} LANEX_REF='${REF}'; \
+        curl -fsSL '${INSTALL_SH}' | bash" \
         || die "the LanEx installer did not finish.
    The log above ends with its own error message.
    Click Retry — this step is safe to repeat."
@@ -287,11 +312,35 @@ verify() {
         || warn "/etc/wsl.conf lost its default user — LanEx may start as root."
 }
 
+# ------------------------------------------------------------------- 8. bake --
+# Only ever runs under LANEX_BAKE=1, i.e. in CI, on a container that is about to
+# become `lanex-rootfs-amd64.tar.gz`. Everything removed here is a cache that
+# regenerates on demand — nothing a running appliance needs.
+#
+# It lives in this file rather than in the workflow so the bake and the install
+# stay one recipe: a cleanup step that drifts from the script that built the
+# image is how a "just a cache" deletion quietly becomes a broken appliance.
+bake() {
+    [ "$BAKE" = "1" ] || return 0
+    say "Preparing the image for export"
+    $APT clean
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /root/.cache /var/cache/debconf/*-old
+    rm -rf "/home/${APP_USER}/.cache/pip" 2>/dev/null
+    # Truncate rather than delete: some of these are opened by services that
+    # expect the path to exist.
+    find /var/log -type f -exec truncate -s 0 {} + 2>/dev/null
+    # The machine-id must differ per install; an image that ships one gives every
+    # user's appliance the same identity. Empty (not absent) is the documented
+    # way to ask systemd to generate a fresh one on first boot.
+    : > /etc/machine-id
+    note "caches, logs and machine-id cleared."
+}
+
 # -------------------------------------------------------------------- main  --
 main() {
     require_root
     say "Provisioning the LanEx environment (Ubuntu, isolated)"
-    note "ref: ${REF}   user: ${APP_USER}"
+    note "ref: ${REF}   user: ${APP_USER}${BAKE:+   bake: ${BAKE}}"
     dns_guard
     wsl_conf
     # base_packages BEFORE app_user: the sudo package owns /etc/sudoers.d, and
@@ -303,6 +352,9 @@ main() {
     docker_ce
     install_lanex
     verify
+    # After verify(), never before: a broken appliance must fail the checks
+    # while its logs are still there to read.
+    bake
     say "The LanEx environment is ready."
     # The installer restarts the distro next (`wsl --terminate lanex`); saying
     # so keeps the log readable when a user sends it to us.
