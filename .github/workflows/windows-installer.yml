@@ -14,7 +14,11 @@
 #     healthy install look missing;
 #   * lanex.iss compiles (its Pascal is compiled by ISCC, so syntax and every
 #     API name are checked);
-#   * provision.sh passes `bash -n` and shellcheck;
+#   * provision.sh passes `bash -n` and shellcheck, AND actually provisions a
+#     plain ubuntu:24.04 container end to end, twice, with the appliance
+#     self-test passing after each (provision-e2e). That covers the whole of
+#     provisioning and the Repair path — everything except the two things that
+#     need WSL: `wsl --import` and the first launch;
 #   * the pinned Ubuntu rootfs URL still exists and still matches Microsoft's
 #     published WSL image manifest (weekly — see the rootfs-pin job).
 name: Windows installer
@@ -244,6 +248,78 @@ jobs:
             echo "the files above contain CR — fix .gitattributes / re-checkout"; exit 1
           fi
           echo "all .sh files are LF — OK"
+
+  provision-e2e:
+    name: provision.sh end-to-end (container)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # Which ref's scripts/install.sh should the appliance install? The one
+      # being built — otherwise a green tick would only prove that `main` still
+      # works. head_ref is the PR's source branch; ref_name covers pushes and
+      # tags. A fork PR's head_ref does not exist in THIS repo, so the URL is
+      # probed and falls back to the base branch rather than 404-ing four
+      # minutes into the run.
+      - name: Resolve the ref to provision from
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.ref || github.ref_name }}"
+          for ref in "${{ github.head_ref }}" "${{ github.ref_name }}" "$base" main; do
+            [ -n "$ref" ] || continue
+            url="https://raw.githubusercontent.com/${{ github.repository }}/$ref/scripts/install.sh"
+            if curl -fsI --max-time 30 "$url" >/dev/null 2>&1; then
+              echo "provisioning from ref: $ref"
+              echo "LANEX_REF=$ref" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "not fetchable: $ref"
+          done
+          echo "::error::no usable ref for scripts/install.sh"; exit 1
+
+      # A plain ubuntu:24.04 base, not the WSL image: provision.sh is written to
+      # run in both (see its header, rule 4) and the minimal one is the honest
+      # test — every "Ubuntu already ships this" assumption fails here first.
+      # That is not hypothetical: it is how the curl-before-apt and the
+      # sudoers-before-sudo bugs were caught.
+      - name: Provision a container
+        run: |
+          set -euo pipefail
+          docker run -d --name lanex-e2e \
+            -v "$PWD/windows/provision:/lanex-provision:ro" \
+            -e "LANEX_REF=$LANEX_REF" \
+            ubuntu:24.04 sleep infinity
+          start=$(date +%s)
+          docker exec lanex-e2e bash /lanex-provision/provision.sh
+          echo "first run: $(( $(date +%s) - start ))s" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Self-test the provisioned appliance
+        run: docker exec lanex-e2e bash /lanex-provision/selftest.sh
+
+      # The installer's Repair button and a re-run of Setup both re-execute this
+      # script over a working appliance. A second run that is slow is a warning;
+      # a second run that FAILS means Repair is broken for every user who ever
+      # needs it, and nothing else in CI would notice.
+      - name: Idempotency — the Repair path
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          docker exec lanex-e2e bash /lanex-provision/provision.sh | tee repair.log
+          took=$(( $(date +%s) - start ))
+          echo "repair run: ${took}s" >> "$GITHUB_STEP_SUMMARY"
+          grep -q "already exists" repair.log || { echo "::error::repair re-created the user"; exit 1; }
+          grep -q "already installed" repair.log || { echo "::error::repair re-installed Docker"; exit 1; }
+          docker exec lanex-e2e bash /lanex-provision/selftest.sh
+
+      # Sizes the Phase 2a rootfs bake, and a sudden jump is the cheapest
+      # possible signal that a dependency started dragging half of Ubuntu in.
+      - name: Measure the appliance
+        if: always()
+        run: |
+          bytes=$(docker export lanex-e2e | wc -c)
+          echo "- provisioned rootfs: $(( bytes / 1024 / 1024 )) MiB uncompressed" \
+            >> "$GITHUB_STEP_SUMMARY"
 
   rootfs-pin:
     name: Ubuntu rootfs pin still valid
