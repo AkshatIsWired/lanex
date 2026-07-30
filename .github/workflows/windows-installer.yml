@@ -31,7 +31,12 @@ name: Windows installer
 
 on:
   push:
-    branches: [main, dev]
+    # windows-installer-support is the integration branch for this installer;
+    # it carries changes that no other job in the repo covers, and waiting for a
+    # PR to find out whether provisioning still works is too late. Drop it from
+    # this list once it merges — every other branch gets the same coverage from
+    # the pull_request trigger below.
+    branches: [main, dev, windows-installer-support]
     tags: ["v*"]
   pull_request:
   schedule:
