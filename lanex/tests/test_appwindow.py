@@ -95,6 +95,22 @@ def test_build_app_argv_without_profile():
     assert not any(a.startswith("--user-data-dir") for a in argv)
 
 
+def test_app_window_opens_maximized(monkeypatch):
+    """The cockpit must fill the screen, not open in a 1440x900 box."""
+    monkeypatch.delenv("LANEX_NO_MAXIMIZE", raising=False)
+    argv = appwindow.build_app_argv("/usr/bin/chromium", "http://x")
+    assert "--start-maximized" in argv
+    # restored size (and the fallback for builds that ignore --start-maximized)
+    assert "--window-size=1440,900" in argv
+
+
+def test_no_maximize_opt_out(monkeypatch):
+    monkeypatch.setenv("LANEX_NO_MAXIMIZE", "1")
+    argv = appwindow.build_app_argv("/usr/bin/chromium", "http://x")
+    assert "--start-maximized" not in argv
+    assert "--window-size=1440,900" in argv
+
+
 def test_sandboxed_browser_detection():
     assert appwindow._sandboxed_browser("/snap/bin/chromium") is True
     assert appwindow._sandboxed_browser(

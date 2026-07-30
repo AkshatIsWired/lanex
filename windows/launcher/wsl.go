@@ -177,6 +177,12 @@ func openAppWindow(port int) error {
 		// so both routes produce ONE taskbar identity and neither drags LanEx
 		// into the user's browsing session.
 		"--user-data-dir=" + appProfileDir(),
+		// Same geometry as the WSL-side launch (appwindow._window_flags): the
+		// cockpit is a dense multi-pane IDE, so it opens maximized — a re-open
+		// from the tray must not land in a small window when a normal start
+		// would be maximized.
+		"--start-maximized",
+		"--window-size=1440,900",
 	}
 	if exe := chromiumPath(); exe != "" {
 		return hiddenCmd(exe, args...).Start()

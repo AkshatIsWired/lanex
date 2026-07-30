@@ -35,7 +35,8 @@ the app window still opens, it just shares the default profile.
 
 Overrides: ``LANEX_BROWSER`` forces a specific browser (name or absolute
 path); ``LANEX_NO_APP_WINDOW=1`` disables app-window launching entirely
-(same effect as ``lanex --tab``).
+(same effect as ``lanex --tab``); ``LANEX_NO_MAXIMIZE=1`` opens the window at
+its default size instead of maximized.
 
 Stdlib only; never imports ``webbrowser`` (the tab fallback lives in cli.py).
 """
@@ -139,6 +140,25 @@ def _profile_dir_for(browser_path: str) -> Optional[str]:
         return None
 
 
+def _window_flags() -> List[str]:
+    """Startup window geometry flags for the app window.
+
+    The cockpit is a dense multi-pane IDE (flow navigator + log + viewers), so a
+    1440x900 window buries panels behind scrollbars on a normal desktop. Open
+    MAXIMIZED — ``--start-maximized`` fills the work area while keeping the
+    titlebar, taskbar and a resizable/closable window (unlike
+    ``--start-fullscreen``, which hides both and needs F11 to escape).
+
+    ``--window-size`` is kept as the *restored* (un-maximize) size and as the
+    fallback for the rare Chromium build that ignores ``--start-maximized`` in
+    ``--app`` mode. ``LANEX_NO_MAXIMIZE=1`` opts out.
+    """
+    flags = ["--window-size=1440,900"]
+    if os.environ.get("LANEX_NO_MAXIMIZE", "").strip() not in ("", "0", "false", "no"):
+        return flags
+    return ["--start-maximized", *flags]
+
+
 def build_app_argv(browser: str, url: str, *, profile_dir: Optional[str] = None) -> List[str]:
     """The ``--app`` argv for *browser*. List form only — never a shell string."""
     argv = [
@@ -155,7 +175,7 @@ def build_app_argv(browser: str, url: str, *, profile_dir: Optional[str] = None)
         # X11/Wayland window class — lets the DE (and a user .desktop file with
         # StartupWMClass=lanex) group/pin the window as its own app.
         argv.append("--class=lanex")
-    argv.append("--window-size=1440,900")
+    argv.extend(_window_flags())
     return argv
 
 
@@ -273,7 +293,7 @@ def _windows_app_commands(url: str) -> List[Tuple[List[str], Optional[str]]]:
     """Candidate ``(argv, cwd)`` launches for a Windows-side app window."""
     cmds: List[Tuple[List[str], Optional[str]]] = []
     flags = [f"--app={url}", "--no-first-run", "--no-default-browser-check",
-             "--window-size=1440,900"]
+             *_window_flags()]
     lad = _windows_localappdata()
     if lad:
         flags.append(f"--user-data-dir={lad}\\lanex\\app-profile")
