@@ -258,8 +258,20 @@ procedure SetStatus(const S: String);
 begin
   // The one progress surface the user sees during the slow parts. Without it a
   // five-minute provision looks like a hang.
+  //
+  // TWO labels, and PreparingLabel is the one that matters. Everything slow in
+  // this installer — the 373 MB download, the import, the whole provisioning
+  // run — happens inside PrepareToInstall, and PrepareToInstall runs while the
+  // *Preparing* page is on screen. StatusLabel and ProgressGauge belong to the
+  // *Installing* page, which is not reached until all of that is already over.
+  // Setting only StatusLabel meant a real user sat in front of a blank white
+  // page for eight minutes with no text, no bar and no way to tell a working
+  // install from a hung one. StatusLabel is still set for the file-copy step
+  // afterwards; writing to an off-screen control is harmless.
   if WizardForm <> nil then
   begin
+    WizardForm.PreparingLabel.Caption := S;
+    WizardForm.PreparingLabel.Update;
     WizardForm.StatusLabel.Caption := S;
     WizardForm.StatusLabel.Update;
   end;
@@ -313,8 +325,14 @@ function RunLogged(const FileName, Params: String; var ResultCode: Integer): Boo
 begin
   ForceDirectories(LogDir);
   LogLine('$ ' + FileName + ' ' + Params);
+  // `set WSL_UTF8=1&&` first, with no space before the &&, or the space becomes
+  // part of the value. Without it wsl.exe writes UTF-16LE straight into a log
+  // that is otherwise single-byte, and every WSL line comes back as
+  // "T h e   o p e r a t i o n   c o m p l e t e d" — in the one file we ask
+  // users to send us when an install fails.
   Result := Exec(ExpandConstant('{cmd}'),
-    '/C ""' + FileName + '" ' + Params + ' >> "' + LogFile + '" 2>&1"',
+    '/C "set WSL_UTF8=1&& "' + FileName + '" ' + Params
+      + ' >> "' + LogFile + '" 2>&1"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
@@ -557,7 +575,7 @@ begin
   //    post-restart resume pull the kernel with `wsl --update`. This is what
   //    makes Setup work on Windows 10 22H2, where `wsl --install` can be too
   //    old to understand the flags above.
-  SetStatus('Turning on the Windows features LanEx needs…');
+  SetStatus('Turning on the Windows features LanEx needs...');
   RunLogged(ExpandConstant('{sys}\dism.exe'),
     '/online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart', Code);
   RunLogged(ExpandConstant('{sys}\dism.exe'),
@@ -592,18 +610,13 @@ begin
   begin
     // NB: an argument list must not start a line in an .iss file — Inno reads a
     // line beginning with '[' as a section tag and aborts the compile.
-    SetStatus(Format('Downloading the LanEx environment… %d%% of %d MB', [
+    // The percentage has to live in the TEXT. The Preparing page has no
+    // progress bar at all — ProgressGauge is on the Installing page, which this
+    // download runs long before — so a number in the label is the only honest
+    // signal available here, and it is the difference between waiting and
+    // wondering.
+    SetStatus(Format('Downloading the LanEx environment... %d%% of %d MB', [
       Progress * 100 div ProgressMax, ProgressMax div 1048576]));
-    if WizardForm <> nil then
-    begin
-      // Inno runs the "preparing" page with a marquee bar (unknown duration);
-      // a 373 MB download has a known one, and a real percentage is the
-      // difference between waiting and wondering.
-      WizardForm.ProgressGauge.Style := npbstNormal;
-      WizardForm.ProgressGauge.Min := 0;
-      WizardForm.ProgressGauge.Max := 1000;
-      WizardForm.ProgressGauge.Position := Progress * 1000 div ProgressMax;
-    end;
   end;
   Result := True;
 end;
@@ -622,7 +635,7 @@ begin
   // broken distro.
   if FileExists(Dest) then
   begin
-    SetStatus('Checking the downloaded LanEx environment…');
+    SetStatus('Checking the downloaded LanEx environment...');
     if CompareText(GetSHA256OfFile(Dest), Sha256) = 0 then
     begin
       LogLine('cached rootfs verified: ' + Dest);
@@ -631,7 +644,7 @@ begin
     LogLine('cached rootfs failed its checksum — downloading again: ' + Dest);
     DeleteFile(Dest);
   end;
-  SetStatus('Downloading the LanEx environment (about ' + SizeMB + ' MB)…');
+  SetStatus('Downloading the LanEx environment (about ' + SizeMB + ' MB)...');
   try
     // Inno verifies the SHA256 itself and raises if it differs, so a corrupted
     // or substituted download can never reach `wsl --import`.
@@ -694,7 +707,7 @@ begin
   Params := '-d {#DistroName} -u root -- bash -c "tr -d ''\r'' < ''' + LinuxPath
     + ''' > /tmp/lanex-provision.sh; bash /tmp/lanex-provision.sh"';
   repeat
-    SetStatus('Preparing the LanEx environment — this takes a few minutes…');
+    SetStatus('Preparing the LanEx environment - this takes a few minutes...');
     if RunLogged(WslExe, Params, Code) and (Code = 0) then
       Exit;
     Answer := MsgBox('Setting up the LanEx environment did not finish.'
@@ -720,7 +733,7 @@ begin
   // 1. WSL itself.
   if not WslUsable then
   begin
-    SetStatus('Setting up Windows Subsystem for Linux (one-time)…');
+    SetStatus('Setting up Windows Subsystem for Linux (one-time)...');
     if not EnableWsl then
     begin
       Result := 'Windows Subsystem for Linux could not be turned on.' + #13#10#13#10
@@ -748,14 +761,14 @@ begin
   //    refuses --update still imports and runs our distro just fine, and we pass
   //    --version 2 explicitly at import time regardless of the default.
   RunLogged(WslExe, '--set-default-version 2', Code);
-  SetStatus('Updating Windows Subsystem for Linux…');
+  SetStatus('Updating Windows Subsystem for Linux...');
   if not (RunLogged(WslExe, '--update --web-download', Code) and (Code = 0)) then
     RunLogged(WslExe, '--update', Code);
 
   // 3. A previous appliance the user asked us to erase.
   if RemoveExisting then
   begin
-    SetStatus('Removing the previous LanEx environment…');
+    SetStatus('Removing the previous LanEx environment...');
     RunLogged(WslExe, '--terminate {#DistroName}', Code);
     RunLogged(WslExe, '--unregister {#DistroName}', Code);
     DelTree(DistroDir, True, True, True);
@@ -768,7 +781,7 @@ begin
     Result := EnsureRootfs;
     if Result <> '' then
       Exit;
-    SetStatus('Creating the LanEx environment…');
+    SetStatus('Creating the LanEx environment...');
     ForceDirectories(DistroDir);
     // --version 2 explicitly: Docker and the GUI viewers need WSL 2, and the
     // user's default version is none of our business.
@@ -797,7 +810,7 @@ begin
   // 7. Restart the distro so it boots with the systemd + default-user settings
   //    provision.sh just wrote. Without this, the first launch would run as root
   //    with no Docker daemon.
-  SetStatus('Finishing up…');
+  SetStatus('Finishing up...');
   RunLogged(WslExe, '--terminate {#DistroName}', Code);
   LogLine('=== provisioning complete ===');
 end;
