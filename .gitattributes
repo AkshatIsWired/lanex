@@ -8,6 +8,15 @@
 *.sh          text eol=lf
 *.bash        text eol=lf
 
+# Go's formatter emits LF, full stop — there is no CRLF-flavoured gofmt. Without
+# this pin a Windows checkout gets CRLF .go files and `gofmt -l` lists every one
+# of them, so the CI gofmt gate on windows-latest fails 100% of the time and
+# says only "gofmt would change: main.go probe.go ..." — which reads like a
+# formatting problem in code that is perfectly formatted.
+*.go          text eol=lf
+go.mod        text eol=lf
+go.sum        text eol=lf
+
 # Windows-native tooling expects CRLF (and .bat in particular can misbehave
 # without it).
 *.bat         text eol=crlf
