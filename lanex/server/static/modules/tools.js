@@ -99,7 +99,7 @@ async function renderRecommendedTools(info) {
       : "<button class='btn btn-primary' id='btn-install-gds3d'>Build &amp; install GDS3D</button>") +
     "</div>" +
     "<details style='margin-top:var(--s-2);font-size:12px'><summary style='cursor:pointer;color:var(--text-muted)'>Manual build (if the one-click build can't run)</summary>" +
-    "<p class='hint'>GDS3D has no package release; you build the small OpenGL binary once. It needs the X11 + OpenGL/GLUT dev headers (the build fails with <code>X11/keysym.h: No such file or directory</code> without them). On Debian/Ubuntu/WSL:</p>" +
+    "<p class='hint'>GDS3D has no package release; you build the small OpenGL binary once. <strong>Build &amp; install does this for you</strong>, compiler and X11/OpenGL headers included — these steps are only for a machine where it can't (no apt, or no way to gain root).</p>" +
     "<pre class='code'>sudo apt-get install -y git build-essential libx11-dev libxmu-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev freeglut3-dev\n" +
     "git clone https://github.com/trilomix/GDS3D\n" +
     "cd GDS3D/linux &amp;&amp; make\n" +

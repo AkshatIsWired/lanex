@@ -71,6 +71,12 @@ const (
 	// console program; without this flag each one flashes a black window.
 	createNoWindow = 0x08000000
 
+	// CREATE_NEW_CONSOLE — the exact opposite, and used exactly once: the tray's
+	// "Open LanEx shell" is the only child the user asked to SEE (wsl.go's
+	// openShell). A `-H windowsgui` process has no console to inherit, so
+	// without this the shell would start with nowhere to draw.
+	createNewConsole = 0x00000010
+
 	releasesURL = "https://github.com/AkshatIsWired/lanex/releases/latest"
 )
 

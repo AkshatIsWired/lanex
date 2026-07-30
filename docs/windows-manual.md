@@ -45,6 +45,14 @@ titled `[WARN: COPY MODE]`, which looks exactly like a LanEx bug and isn't:
    on WSL, which renders reliably even when the vGPU bridge is degraded; opting
    into hardware GL is what makes a poisoned bridge deadlock.
 
+And one that isn't about WSLg: **`cd` somewhere writable first.** `wsl.exe`
+translates the *calling* Windows program's working directory into the Linux one,
+so a launcher started from, say, `C:\Program Files\…` hands LanEx a cwd it cannot
+write into — which is what everything defaulting to "the current directory"
+resolves against. Start with `cd ~` (`Launch-LanEx.bat` uses `cd ~/lanex`). LanEx
+now moves off an unwritable working directory by itself, but a launcher that
+never hands it one is better.
+
 `Launch-LanEx.bat` follows all three, and so does the installer's `LanEx.exe`
 (see `windows/launcher/wsl.go`) — if you write your own launcher, copy the shape,
 not the idea.

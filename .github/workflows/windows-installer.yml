@@ -262,6 +262,10 @@ jobs:
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           $defines = @("/DAppVersion=${{ env.LANEX_VERSION_NUM }}")
+          # The ref this Setup was built from, so provision.sh installs the LanEx
+          # that belongs with it — and so a Repair cannot silently pull the
+          # appliance back to main. Same reasoning as the bake job's LANEX_REF.
+          $defines += "/DLanexRef=${{ github.head_ref || github.ref_name }}"
           # Only a bake that ran AND produced a hash gets wired in. Anything else
           # compiles the installer exactly as it was before Phase 2a: it
           # downloads the pinned Ubuntu image and provisions on the user's
@@ -325,6 +329,16 @@ jobs:
         with:
           name: LanEx-Setup-${{ env.LANEX_VERSION }}
           path: windows/installer/LanEx-Setup.exe
+          if-no-files-found: error
+
+      # The launcher on its own, not only sealed inside Setup. A launcher-only
+      # change (it is one file in %ProgramFiles%\LanEx) can then be tested by
+      # dropping this over the installed copy — no reinstall, and above all no
+      # `wsl --unregister`, which would take the user's designs with it.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LanEx-launcher-${{ env.LANEX_VERSION }}
+          path: windows/launcher/LanEx.exe
           if-no-files-found: error
 
       # gh is preinstalled on the runner, so no third-party release Action is

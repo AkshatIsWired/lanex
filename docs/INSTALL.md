@@ -101,9 +101,17 @@ It does exactly five things:
 | The app window's browser profile | `%LOCALAPPDATA%\lanex\app-profile` |
 
 **The tray icon** is the launcher's entire interface: **Open LanEx** re-opens the
-window, **Open project files** opens the folder above, **Quit LanEx** stops the
+window, **Open project files** opens the folder above, **Open LanEx shell** gives
+you a terminal *inside* the environment (see below), **Quit LanEx** stops the
 server and shuts the Linux environment down. Closing the LanEx *window* does not
 stop anything — the server keeps running so re-opening is instant.
+
+**About that shell.** You should never need it. LanEx installs its own
+toolchains — including the compiler GDS3D is built with — and every supported
+action is a button in the cockpit; anything that tells you to open a terminal and
+run `sudo apt-get install …` is a bug in LanEx, not a step. The menu item exists
+for the case *past* that: a package LanEx has no button for, a `git clone` of
+your own. It opens in your projects folder, and closing it changes nothing.
 
 **Uninstalling** from Windows Settings → Apps removes the distro
 (`wsl --unregister lanex`), the folders above, and the shortcuts. It warns you

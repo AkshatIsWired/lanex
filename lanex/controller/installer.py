@@ -1164,6 +1164,83 @@ def _run_argv(argv: List[str], *, label: str, key: str,
         }
 
 
+_APT_LISTS_DIR = Path("/var/lib/apt/lists")
+
+# apt's own words for "I have never heard of this package", which is what a
+# missing package INDEX looks like from the outside — indistinguishable from a
+# genuinely nonexistent package name until you refresh and try again.
+_APT_STALE_INDEX_MARKERS = (
+    "unable to locate package",
+    "has no installation candidate",
+    "couldn't find any package",
+)
+
+
+def _apt_index_empty() -> bool:
+    """True when apt holds no package lists at all.
+
+    The Windows appliance ships this way on purpose: the image bake deletes
+    ``/var/lib/apt/lists/*`` (windows/provision/provision.sh) because it is a
+    cache that regenerates on demand — but nothing was regenerating it, so the
+    first ``apt-get install`` inside a fresh appliance died with "Unable to
+    locate package build-essential" and the user was handed a manual command for
+    a terminal the appliance deliberately doesn't give them.
+    """
+    try:
+        return not any(p.is_file() and p.name != "lock"
+                       for p in _APT_LISTS_DIR.iterdir())
+    except Exception:
+        # No apt, or no permission to look: let the install attempt speak.
+        return False
+
+
+def _apt_install(packages: List[str], *, label: str, key: str) -> Dict[str, Any]:
+    """``apt-get install -y`` *packages*, refreshing the index when it needs it.
+
+    Refreshes up front when there is no index at all (a freshly baked appliance),
+    and once more on demand if the install fails the way a STALE index fails —
+    an appliance that has sat unused while the archive moved on hits that, and
+    "Unable to locate package" is not something the user can act on. Escalation,
+    streaming and cancellation are ``_run_argv``'s, unchanged.
+    """
+    apt = "apt-fast" if _check_cmd("apt-fast") else "apt-get"
+    # Already root (a container base, the appliance's own provisioning): don't
+    # demand a sudo binary that a minimal image may not even carry.
+    root = getattr(os, "geteuid", lambda: 1)() == 0
+    # Two things this install has that a hand-typed one doesn't need, both copied
+    # from windows/provision/provision.sh because it learned them the hard way:
+    #
+    #  * DEBIAN_FRONTEND=noninteractive — nothing here is attached to a terminal
+    #    (stdout is a log file), so a debconf prompt from a package pulled in as a
+    #    dependency would be a wedged install nobody can answer. Via `env` rather
+    #    than `sudo VAR=…`: sudo's env_reset would drop it, and `env` sidesteps
+    #    the sudoers policy question entirely.
+    #  * DPkg::Lock::Timeout — unattended-upgrades may hold the dpkg lock when the
+    #    user clicks Install. Waiting five minutes beats "Could not get lock".
+    prefix = ([] if root else ["sudo"]) + ["env", "DEBIAN_FRONTEND=noninteractive",
+                                          apt, "-o", "DPkg::Lock::Timeout=300"]
+    update = prefix + ["update"]
+    install = prefix + ["install", "-y"] + list(packages)
+    if _apt_index_empty():
+        _emit("installer_info", {"key": key, "label": label,
+              "message": "refreshing the package lists (first install in this environment)…"})
+        _run_argv(update, label=label + " — apt update", key=key)
+        if _is_cancelled(key):
+            return _cancelled_result(key)
+    res = _run_argv(install, label=label, key=key)
+    if res.get("ok") or _is_cancelled(key):
+        return res
+    blob = "\n".join(res.get("output") or []).lower()
+    if not any(m in blob for m in _APT_STALE_INDEX_MARKERS):
+        return res
+    _emit("installer_info", {"key": key, "label": label,
+          "message": "the package lists look out of date — refreshing and retrying…"})
+    _run_argv(update, label=label + " — apt update", key=key)
+    if _is_cancelled(key):
+        return res
+    return _run_argv(install, label=label, key=key)
+
+
 def _verify_install(key: str) -> bool:
     """Check if a tool/PDK is now installed after a strategy attempt."""
     mapping = {
@@ -1207,6 +1284,8 @@ _GDS3D_APT_PACKAGES = [
     "git", "build-essential", "libx11-dev", "libxmu-dev", "libxi-dev",
     "libgl1-mesa-dev", "libglu1-mesa-dev", "freeglut3-dev",
 ]
+# The whole set as one copy-pasteable command — for the manual fallback only.
+# The install path no longer prints it: it installs the packages itself.
 _GDS3D_APT_DEPS_CMD = "sudo apt-get install -y " + " ".join(_GDS3D_APT_PACKAGES)
 
 # RUNTIME (not build) dependency: the legacy X11 ``-misc-fixed-`` bitmap fonts.
@@ -1239,8 +1318,8 @@ def ensure_x11_fixed_fonts() -> Dict[str, Any]:
         return {"ok": False, "need": "x11-fonts", "manual": _GDS3D_FONT_CMD,
                 "error": "Legacy X11 fonts (xfonts-base) are missing and this isn't a "
                          "Debian/apt system. Install the equivalent fonts package, then retry."}
-    res = _run_argv(["sudo", "apt-get", "install", "-y"] + _GDS3D_FONT_PACKAGES,
-                    label="xfonts-base (GDS3D fonts)", key="xfonts-base")
+    res = _apt_install(_GDS3D_FONT_PACKAGES,
+                       label="xfonts-base (GDS3D fonts)", key="xfonts-base")
     installed = bool(res.get("ok")) and platform_env.x11_fixed_fonts_present() is not False
     out: Dict[str, Any] = dict(res)
     out["ok"] = installed
@@ -1290,8 +1369,8 @@ def ensure_gl_runtime() -> Dict[str, Any]:
     if not shutil.which("apt-get"):
         return {"ok": False, "need": "gl-runtime", "manual": _GL_RUNTIME_CMD,
                 "error": gl_runtime_guidance()}
-    res = _run_argv(["sudo", "apt-get", "install", "-y"] + _GL_RUNTIME_PACKAGES,
-                    label="Mesa GL drivers (libgl1-mesa-dri)", key="gl-runtime")
+    res = _apt_install(_GL_RUNTIME_PACKAGES,
+                       label="Mesa GL drivers (libgl1-mesa-dri)", key="gl-runtime")
     installed = bool(res.get("ok")) and platform_env.mesa_dri_present() is not False
     out: Dict[str, Any] = dict(res)
     out["ok"] = installed
@@ -1340,6 +1419,34 @@ def _missing_gds3d_dev_packages() -> List[str]:
         if not _header_present(header) and pkg not in missing:
             missing.append(pkg)
     return missing
+
+
+def _missing_gds3d_build_tools() -> List[str]:
+    """Human names of the build tools GDS3D needs and this host doesn't have.
+
+    Names, not packages, because this list is also what a failure message shows
+    the user (``_gds3d_toolchain_packages`` turns it into apt packages). Any
+    C++ driver counts — g++, clang++ or a cc that fronts one.
+    """
+    missing = [t for t in ("git", "make") if not shutil.which(t)]
+    if not (shutil.which("g++") or shutil.which("clang++") or shutil.which("cc")):
+        missing.append("a C++ compiler")
+    return missing
+
+
+def _gds3d_toolchain_packages(missing_tools: List[str]) -> List[str]:
+    """Debian packages that supply the missing entries of *missing_tools*.
+
+    ``build-essential`` is the one that carries both make and g++, so a host
+    missing either gets the same package — installing it twice over is what apt
+    is for.
+    """
+    pkgs: List[str] = []
+    if "git" in missing_tools:
+        pkgs.append("git")
+    if "make" in missing_tools or "a C++ compiler" in missing_tools:
+        pkgs.append("build-essential")
+    return pkgs
 
 
 def _x11_fixed_fonts_missing() -> bool:
@@ -1475,23 +1582,17 @@ def _install_gds3d() -> Dict[str, Any]:
     if sys.platform == "darwin":
         return _install_gds3d_darwin()
 
-    missing = [t for t in ("git", "make") if not shutil.which(t)]
-    if not (shutil.which("g++") or shutil.which("clang++") or shutil.which("cc")):
-        missing.append("a C++ compiler")
-    if missing:
-        # Only the apt path can auto-install the toolchain. Inside the bundled
-        # LibreLane image (Nix base, no apt) GDS3D simply can't be built, so don't
-        # show Debian instructions that will never apply — be honest about it.
-        if detect_environment().get("apt"):
-            g = ("GDS3D builds from source and needs: " + ", ".join(missing) +
-                 ". On Debian/Ubuntu: " + _GDS3D_APT_DEPS_CMD + ". "
-                 "Then click Build again, or use the manual steps in Tools.")
-        else:
-            g = ("GDS3D is a desktop OpenGL viewer and is not bundled in this image — "
-                 "it needs a build toolchain (git, make, a C++ compiler) plus an X11 "
-                 "display, which the headless container doesn't have. The web cockpit "
-                 "doesn't need it; run LanEx on a host with those tools to use GDS3D. "
-                 "Missing here: " + ", ".join(missing) + ".")
+    env = detect_environment()
+    missing = _missing_gds3d_build_tools()
+    if missing and not env.get("apt"):
+        # No apt = nothing to auto-install with. Inside the bundled LibreLane
+        # image (Nix base, no apt) GDS3D simply can't be built, so don't show
+        # Debian instructions that will never apply — be honest about it.
+        g = ("GDS3D is a desktop OpenGL viewer and is not bundled in this image — "
+             "it needs a build toolchain (git, make, a C++ compiler) plus an X11 "
+             "display, which the headless container doesn't have. The web cockpit "
+             "doesn't need it; run LanEx on a host with those tools to use GDS3D. "
+             "Missing here: " + ", ".join(missing) + ".")
         _emit("installer_error", {"key": "gds3d", "message": g})
         return {"ok": False, "guidance": g, "reason": g}
 
@@ -1504,31 +1605,42 @@ def _install_gds3d() -> Dict[str, Any]:
     # both compiles and doesn't segfault on first launch. `_run_argv` now
     # escalates on its own (terminal prompt / pkexec), so we no longer require
     # passwordless sudo here — only that apt exists.
-    env = detect_environment()
-    header_pkgs = _missing_gds3d_dev_packages()
+    #
+    # The compiler/git/make packages ride in that same call. They used to be a
+    # dead end instead: a "install these yourself, then click Build again"
+    # message, which on the Windows appliance is a hand-off to a terminal the
+    # installer promises the user will never see — while the very next apt call
+    # in this function proved the machinery to install them was right here.
+    build_pkgs = _gds3d_toolchain_packages(missing) + _missing_gds3d_dev_packages()
     font_pkgs = _GDS3D_FONT_PACKAGES if _x11_fixed_fonts_missing() else []
     # GDS3D is a GL app: without Mesa's DRI drivers (fresh minimal WSL/Ubuntu
     # ships none) it opens a blank window or hangs — even software rendering
     # needs them (llvmpipe IS one of those drivers). Install them alongside.
     from . import platform_env as _penv
     gl_pkgs = _GL_RUNTIME_PACKAGES if _penv.mesa_dri_present() is False else []
-    apt_pkgs = header_pkgs + font_pkgs + gl_pkgs
+    apt_pkgs = build_pkgs + font_pkgs + gl_pkgs
     if apt_pkgs:
         if env.get("apt"):
-            apt = "apt-fast" if _check_cmd("apt-fast") else "apt-get"
             _emit("installer_info", {"key": "gds3d",
                   "message": "installing GDS3D dependencies: " + " ".join(apt_pkgs)})
-            dep_res = _run_argv(["sudo", apt, "install", "-y"] + apt_pkgs,
-                                label="gds3d dependencies (apt)", key="gds3d")
+            dep_res = _apt_install(apt_pkgs, label="gds3d dependencies (apt)", key="gds3d")
             if _is_cancelled("gds3d"):
                 return _cancelled_result("gds3d")
-            still = _missing_gds3d_dev_packages()
-            if still:
-                g = _gds3d_dep_guidance(still)
+            # Re-probe rather than trust apt's exit code: a partially satisfied
+            # install must not be followed by a build that fails on a header.
+            still_tools = _missing_gds3d_build_tools()
+            still_headers = _missing_gds3d_dev_packages()
+            if still_tools or still_headers:
+                g = _gds3d_dep_guidance(
+                    still_headers or _gds3d_toolchain_packages(still_tools))
+                if still_tools:
+                    g = ("GDS3D's build toolchain could not be installed "
+                         "automatically — still missing: " + ", ".join(still_tools) +
+                         ". The Install log above has apt's own error.\n" + g)
                 _emit("installer_error", {"key": "gds3d", "message": g})
                 return {"ok": False, "guidance": g, "reason": g, "rc": dep_res.get("rc")}
-        elif header_pkgs:
-            g = _gds3d_dep_guidance(header_pkgs)
+        elif build_pkgs:
+            g = _gds3d_dep_guidance(build_pkgs)
             _emit("installer_error", {"key": "gds3d", "message": g})
             return {"ok": False, "guidance": g, "reason": g}
 

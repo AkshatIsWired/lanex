@@ -54,6 +54,19 @@
 #endif
 #define IconFile       "..\launcher\assets\lanex.ico"
 
+; The git ref this Setup was built from, handed to provision.sh so the appliance
+; installs the LanEx that belongs WITH this installer.
+;
+; It used to be unset, and provision.sh defaults to `main`: so a Setup built from
+; a tag or a branch installed main's LanEx anyway, and — worse — every *Repair*
+; silently replaced a branch build with main, undoing whatever the user
+; reinstalled to get. The bake job already stamps its own ref for exactly this
+; reason (windows-installer.yml, "Bake"); this closes the same hole on the
+; user's machine.
+#ifndef LanexRef
+  #define LanexRef     "main"
+#endif
+
 ; The appliance's identity. Same three strings in windows/provision/provision.sh
 ; and windows/launcher/main.go — change one, change all three.
 #define DistroName     "lanex"
@@ -704,7 +717,11 @@ begin
   // shebang with "bad interpreter: No such file or directory" — a bewildering
   // error for a script that is obviously present. .gitattributes pins LF too;
   // this is the belt to that braces.
-  Params := '-d {#DistroName} -u root -- bash -c "tr -d ''\r'' < ''' + LinuxPath
+  // `export`, not a `VAR=... bash script` prefix: provision.sh's own header
+  // records why (a prefix applies to the one command it prefixes, so every knob
+  // passed that way was silently inert).
+  Params := '-d {#DistroName} -u root -- bash -c "export LANEX_REF=''{#LanexRef}''; '
+    + 'tr -d ''\r'' < ''' + LinuxPath
     + ''' > /tmp/lanex-provision.sh; bash /tmp/lanex-provision.sh"';
   repeat
     SetStatus('Preparing the LanEx environment - this takes a few minutes...');

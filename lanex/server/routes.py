@@ -441,7 +441,16 @@ def h_fs_roots(handler: Any) -> None:
     if system in ("Linux", "Darwin"):
         roots.append({"label": "/ (root)", "path": "/"})
         roots.append({"label": "Home", "path": str(Path.home())})
-        roots.append({"label": "Current dir", "path": str(Path.cwd())})
+        # "Current dir" only when it is somewhere the user could actually put a
+        # design. On the Windows appliance the server's cwd is inherited from the
+        # launcher's install directory (``/mnt/c/Program Files/LanEx``), so this
+        # shortcut used to offer a folder every write into which is denied.
+        try:
+            cwd = Path.cwd()
+        except Exception:
+            cwd = None
+        if cwd is not None and cwd != Path.home() and _writable_dir(cwd):
+            roots.append({"label": "Current dir", "path": str(cwd)})
     elif system == "Windows":
         for drive in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
             p = Path(f"{drive}:\\")
@@ -1611,6 +1620,34 @@ def h_tools_install_ciel(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def _writable_dir(p: Path) -> bool:
+    """True when *p* is a directory we can create entries in."""
+    try:
+        return p.is_dir() and os.access(str(p), os.W_OK | os.X_OK)
+    except Exception:
+        return False
+
+
+def _default_write_base() -> Path:
+    """Where to put a new folder when the user named no design dir.
+
+    The current directory, unless we can't write into it — which is exactly the
+    Windows-appliance case (the server inherits the launcher's
+    ``/mnt/c/Program Files/LanEx``; see cli._leave_unwritable_cwd). Falling back
+    to the home directory keeps the "Load the SPM example" button working with
+    one click instead of failing with a raw ``[Errno 13] Permission denied`` on a
+    path the user never chose and cannot see. Home is also where the Start menu's
+    "LanEx Project Files" shortcut points, so the folder lands where they look.
+    """
+    try:
+        cwd = Path.cwd()
+    except Exception:
+        cwd = None
+    if cwd is not None and _writable_dir(cwd):
+        return cwd
+    return Path.home()
+
+
 def _dir_empty_or_absent(p: Path) -> bool:
     """True when *p* doesn't exist yet or contains no entries (safe to fill)."""
     if not p.exists():
@@ -1625,7 +1662,12 @@ def h_copy_spm(handler: Any) -> None:
     body = getattr(handler, "_body", {})
     base_str = body.get("design_dir") or ""
     try:
-        spm_src = Path(__file__).resolve().parent.parent.parent.parent / "spm"
+        # parents[2] is the repo root in a source checkout (lanex/server/routes.py
+        # → …/lanex/server → …/lanex → repo). It was one level too high, so the
+        # bundled spm/ was never found and even a checkout fell through to
+        # librelane's copy — harmless where librelane is installed, a flat
+        # "SPM example not found" where it isn't.
+        spm_src = Path(__file__).resolve().parents[2] / "spm"
         if not spm_src.is_dir():
             try:
                 import librelane
@@ -1642,7 +1684,7 @@ def h_copy_spm(handler: Any) -> None:
         # which the user's own designs fail with "top-module 'spm' not found".
         # So: copy into the base only when it's already SPM or empty; otherwise
         # nest a fresh ``spm_example`` subdir so the user's files are untouched.
-        base = Path(base_str).resolve() if base_str else Path.cwd()
+        base = Path(base_str).resolve() if base_str else _default_write_base()
         if base.name == "spm_example" or (base / "src" / "spm.v").is_file():
             target = base                      # already an SPM example — reuse it
         elif _dir_empty_or_absent(base):
@@ -1653,6 +1695,13 @@ def h_copy_spm(handler: Any) -> None:
         shutil.copytree(str(spm_src), str(target), dirs_exist_ok=True)
         _set_active_design_dir(str(target))
         _respond(handler, {"design_dir": str(target)})
+    except PermissionError as ex:
+        # Say what to DO. The bare "[Errno 13] Permission denied: <path>" this
+        # replaces named a directory the user never picked and could not fix.
+        where = base_str or str(_default_write_base())
+        _log.warning("copy_spm: no write access under %s (%s)", where, ex)
+        _respond(handler, f"No permission to create a folder in {where}. Choose a "
+                         "folder inside your home directory (Browse…) and try again.", 500)
     except Exception as ex:
         _log.exception("copy_spm failed")
         _respond(handler, str(ex), 500)

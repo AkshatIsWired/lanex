@@ -53,6 +53,13 @@ func (t *tray) onReady() {
 	open.Disable() // no port yet; enabling early would open a dead URL
 	files := systray.AddMenuItem("Open project files",
 		"See your designs in File Explorer")
+	// The escape hatch, and the reason it is a menu item rather than a console
+	// kept open behind the app: nothing supported needs it (LanEx installs its
+	// own toolchains, GDS3D included), but a user who wants to run something
+	// LanEx has no button for should not be told their only option is to
+	// reinstall Ubuntu. Zero cost until clicked.
+	shell := systray.AddMenuItem("Open LanEx shell",
+		"A terminal inside LanEx's environment, in your projects folder")
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit LanEx", "Stop LanEx and shut its environment down")
 
@@ -71,6 +78,10 @@ func (t *tray) onReady() {
 				}
 			case <-files.ClickedCh:
 				openProjectFiles()
+			case <-shell.ClickedCh:
+				if err := openShell(); err != nil {
+					showError(fmt.Sprintf("Could not open a LanEx shell.\n\n%v", err))
+				}
 			case <-quit.ClickedCh:
 				// Set BEFORE Quit so watchServer and waitReady know the exit is
 				// intentional and stay quiet.

@@ -90,6 +90,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     _setup_logging(args.verbose)
 
+    # Resolve the path arguments against the cwd the user typed them in BEFORE
+    # _leave_unwritable_cwd() possibly moves us: `lanex --design-dir ./cpu` must
+    # keep meaning ./cpu.
+    if args.pdk_root:
+        args.pdk_root = os.path.abspath(os.path.expanduser(args.pdk_root))
+    if args.design_dir:
+        args.design_dir = os.path.abspath(os.path.expanduser(args.design_dir))
+    _leave_unwritable_cwd()
+
     if args.pdk_root:
         os.environ["PDK_ROOT"] = args.pdk_root
 
@@ -124,11 +133,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Register the initial design directory directly with the server so the
         # GUI opens already pointed at it.
         try:
-            import os.path
-
             from .server import routes as _routes
 
-            p = os.path.abspath(os.path.expanduser(args.design_dir))
+            # Already absolute — resolved above, against the cwd the user typed
+            # it in rather than whichever one we ended up with.
+            p = args.design_dir
             if os.path.isdir(p):
                 _routes._set_active_design_dir(p)
                 sys.stdout.write(f"loaded design: {p}\n")
@@ -151,6 +160,53 @@ def main(argv: Optional[List[str]] = None) -> int:
     finally:
         _clear_server_record()
     return 0
+
+
+def _leave_unwritable_cwd() -> None:
+    """Move off a working directory we cannot write into.
+
+    A long-running server's cwd is invisible to the user but not harmless: it is
+    what everything defaulting to "the current directory" resolves to, and what
+    every child process inherits. On the Windows appliance the launcher
+    (``windows/launcher``) lives in ``C:\\Program Files\\LanEx`` and ``wsl.exe``
+    translates its Windows cwd into the Linux one, so the server started life in
+    ``/mnt/c/Program Files/LanEx`` — read-only for the appliance user. The visible
+    symptom was "Could not copy the SPM example: [Errno 13] Permission denied:
+    '/mnt/c/Program Files/LanEx/spm_example'"; the file picker's "Current dir"
+    root pointed at the same dead end.
+
+    ``wsl.go``'s ``cd ~`` fixes it at the source, but that lives in ``LanEx.exe``
+    and only reaches users who reinstall — whereas this file ships in the pip
+    layer, so an existing install gets the fix on a server update alone. It also
+    covers the native case: LanEx started from a read-only directory anywhere.
+
+    Only ever moves when the cwd is genuinely unwritable — a deliberate
+    ``cd my-design && lanex`` must keep its cwd, because relative paths the user
+    types into the GUI resolve against it.
+    """
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        # cwd deleted under us. Nothing to preserve; anywhere writable is better.
+        cwd = None
+    if cwd is not None and os.access(cwd, os.W_OK | os.X_OK):
+        return
+    import tempfile
+
+    for candidate in (os.path.expanduser("~"), tempfile.gettempdir()):
+        if not candidate or not os.access(candidate, os.W_OK | os.X_OK):
+            continue
+        try:
+            os.chdir(candidate)
+        except OSError:
+            continue
+        _log.info("working directory %s is not writable — using %s instead",
+                  cwd, candidate)
+        return
+    # Nowhere to go: leave it be. Every write path reports its own error, and a
+    # server that refuses to start is strictly worse than one with a bad cwd.
+    _log.warning("working directory %s is not writable and no alternative was "
+                 "usable", cwd)
 
 
 def _server_record_path():

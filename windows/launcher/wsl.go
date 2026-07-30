@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode/utf16"
 
 	"golang.org/x/sys/windows/registry"
@@ -122,11 +123,20 @@ func decodeUTF16LE(b []byte) string {
 //  3. No LANEX_HW_GL / LIBRELANE_GUI_WSL_HW_GL. LanEx already selects safe
 //     software GL on WSL; forcing hardware GL deadlocks a degraded vGPU bridge.
 //
+// `cd ~` first, and it is not cosmetic either. wsl.exe translates the CALLING
+// process's Windows working directory into the Linux one, and this launcher is
+// started from its own install dir — so without the cd the server runs with
+// cwd = /mnt/c/Program Files/LanEx: a directory the appliance user cannot write
+// and a slow 9p mount. Everything that defaults to the current directory then
+// lands there ("Could not copy the SPM example: [Errno 13] Permission denied:
+// '/mnt/c/Program Files/LanEx/spm_example'", the file picker's "Current dir").
+// `;` not `&&`: a cd that somehow fails must not stop LanEx from starting.
+//
 // `exec lanex` replaces the shell, so the process tree stays wsl.exe -> lanex
 // and killing the child is unambiguous. No --tab/--no-browser: LanEx opening its
 // own app window is the point (see the package comment in main.go).
 func startServer() (*exec.Cmd, error) {
-	cmd := hiddenCmd(wslExe, "-d", distroName, "--", "bash", "-ic", "exec lanex")
+	cmd := hiddenCmd(wslExe, "-d", distroName, "--", "bash", "-ic", "cd ~ 2>/dev/null; exec lanex")
 	// The appliance's stdout/stderr is the only diagnostic that exists when a
 	// launch fails, and the failure dialogs point the user at this file.
 	if f, err := openLogFile(); err == nil {
@@ -239,6 +249,33 @@ func appPathsLookup(exe string) string {
 		}
 	}
 	return ""
+}
+
+// openShell opens an interactive shell inside the appliance, in a VISIBLE console.
+//
+// The one place the appliance's isolation works against the user: a tool that
+// genuinely needs a shell (a hand-rolled apt package, a git clone LanEx has no
+// button for) is unreachable, because the whole installer's promise is that no
+// terminal ever appears. So: on demand, never on startup. A console kept open in
+// the background would be a window users close and then believe the app died,
+// and it would inherit this process's Windows cwd (`C:\Program Files\LanEx`)
+// anyway — hence the `cd ~`, which lands the user next to their own designs.
+//
+// Deliberately NOT hiddenCmd: this is the one child that must show its window.
+// `wsl.exe` is a console program, so CREATE_NEW_CONSOLE gives it one of its own.
+//
+// `bash -lic 'cd ~; exec bash -i'` rather than the tidier `wsl --cd ~`: --cd
+// needs WSL 0.51+, and an unsupported flag would greet the user with
+// "Invalid command line option" instead of a shell. This form works on every
+// WSL2 build. It IS a second wsl.exe invocation, which startServer's rule 2
+// forbids — that rule is about the cold-boot race, where a second invocation
+// can stall the first and half-initialise WSLg. This one only ever runs on a
+// menu click, long after the server answered /api/health.
+func openShell() error {
+	cmd := exec.Command(wslExe, "-d", distroName, "--",
+		"bash", "-lic", "cd ~ 2>/dev/null; exec bash -i")
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewConsole}
+	return cmd.Start()
 }
 
 // openProjectFiles shows the user's designs in File Explorer.

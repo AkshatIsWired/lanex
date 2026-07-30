@@ -44,6 +44,13 @@ check "wsl.conf: default = $APP_USER"  "grep -Eq '^default *= *$APP_USER' /etc/w
 check "wsl.conf: interop enabled"      "grep -Eq '^enabled *= *true' /etc/wsl.conf"
 check "docker is installed"            "command -v docker"
 check "$APP_USER is in the docker group" "id -nG '$APP_USER' | grep -qw docker"
+# Both preconditions the appliance's "you never need a terminal" promise rests
+# on. The home dir is where the launcher's `cd ~` puts the server and where new
+# designs land; apt-get is what the Tools tab installs a build toolchain with
+# (GDS3D). Without either, the cockpit hands the user a shell command instead.
+check "$APP_USER can write in its home" \
+    "runuser -l '$APP_USER' -c 'touch ~/.lanex-selftest && rm -f ~/.lanex-selftest'"
+check "apt-get is available for tool installs" "command -v apt-get"
 check "lanex --help"                   "runuser -l '$APP_USER' -c 'lanex --help'"
 check "lanex --version"                "runuser -l '$APP_USER' -c 'lanex --version'"
 # The distro's own first-run screen must never appear: `wsl --import` normally
