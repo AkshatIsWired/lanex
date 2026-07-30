@@ -12,7 +12,6 @@ export async function renderTools(fresh) {
   const root = document.getElementById("tools-grid");
   if (!root) return;
   wireJump(document.getElementById("sec-tools"));   // static section-jump nav (§6.6)
-  renderDesktopViewers();
   try {
     // fresh=true (the Recheck button) bypasses the server's 8s status caches —
     // a probe cached moments before the user fixed the engine reads as broken.
@@ -24,6 +23,7 @@ export async function renderTools(fresh) {
       document.getElementById("pdk-root-input").value = rootInfo.pdk_root;
     }
   } catch (ex) {
+    renderDesktopViewers(null);
     root.innerHTML =
       "<div class='empty'><span class='ico'>" + icon('alert',{size:40}) + "</span><h3>Tool probe failed</h3><p>" + fmt.escape(ex.message) + "</p></div>";
   }
@@ -32,20 +32,35 @@ export async function renderTools(fresh) {
 // Desktop layout viewers (KLayout / Magic): status only. Both ship in the
 // LibreLane container image; the Layout tab launches whichever are installed on
 // the run's GDS. The 3D viewer GDS3D lives in the Recommended extra tools group.
-async function renderDesktopViewers() {
+//
+// The badge must report BOTH ways a viewer can be usable. `api.desktopTools()`
+// only probes HOST binaries, so a container-only KLayout/Magic — the normal
+// appliance setup, where the Layout tab happily launches them from the image —
+// read "not found" while plainly working. So fall back to the same
+// `in_container` + image-pulled facts the tool grid uses (`info` from
+// `api.tools()`; null when that probe failed, host-only then).
+async function renderDesktopViewers(info) {
   const root = document.getElementById("desktop-viewers");
   if (!root) return;
   let tools = [];
   try { tools = (await api.desktopTools()).tools || []; } catch (_e) {}
   const byKey = Object.fromEntries(tools.map((t) => [t.key, t]));
-  const badge = (t) => t && t.available
-    ? "<span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span>"
-    : "<span class='pill pill-warn'><span class='d'></span><span class='text'>not found</span></span>";
+  const cont = (info && info.container) || {};
+  const contReady = !!(cont.ready && cont.image_present);
+  const byToolKey = Object.fromEntries(((info && info.tools) || []).map((t) => [t.key, t]));
+  const badge = (key) => {
+    if (byKey[key] && byKey[key].available)
+      return "<span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span>";
+    const t = byToolKey[key];
+    if (t && t.in_container && contReady)
+      return "<span class='pill pill-pass' title='Ships in the pulled LibreLane image — the Layout tab launches it from there'><span class='d'></span><span class='text'>in container image</span></span>";
+    return "<span class='pill pill-warn'><span class='d'></span><span class='text'>not found</span></span>";
+  };
   root.innerHTML =
     "<div class='card'><div class='card-body'>" +
-    "<div class='tool-row'><strong>KLayout</strong> " + badge(byKey.klayout) +
+    "<div class='tool-row'><strong>KLayout</strong> " + badge("klayout") +
     " <span class='hint'>2D layout — bundled in the container image; or install from klayout.de.</span></div>" +
-    "<div class='tool-row'><strong>Magic</strong> " + badge(byKey.magic) +
+    "<div class='tool-row'><strong>Magic</strong> " + badge("magic") +
     " <span class='hint'>2D layout/DRC — bundled in the container image. The GUI launches it with the PDK's <code>.magicrc</code> so layers render.</span></div>" +
     "</div></div>";
 }
@@ -146,16 +161,22 @@ async function renderRecommendedTools(info) {
       body: "Remove the GDS3D binary? You can rebuild it any time from this tab." }))) return;
     try {
       const r = await api.uninstallTool("gds3d");
-      if (r && r.ok) {
+      if (r && r.ok && r.already_absent) {
+        toast.show("GDS3D was already removed", "info");
+      } else if (r && r.ok) {
         toast.show("GDS3D removed", "info");
         renderLogs.append({ payload: { message: "✓ GDS3D removed (" + (r.removed || []).join(", ") + ")" } });
       } else {
         toast.show("GDS3D remove failed: " + ((r && r.reason) || "unknown"), "error");
+        renderLogs.append({ payload: { message: "✗ GDS3D remove: " + ((r && r.reason) || "unknown"), level: "ERROR" } });
       }
     } catch (ex) {
       toast.show("GDS3D remove error: " + (ex.message || ex), "error");
     }
-    renderRecommendedTools(info);
+    // Re-probe the whole tab (fresh=true bypasses the server status caches) —
+    // re-rendering from the stale `info` this closure captured is how a removed
+    // GDS3D kept showing "installed + Remove" and no way back to Install.
+    renderTools(true);
   });
 }
 
@@ -552,6 +573,7 @@ const CONTAINER_LAUNCHABLE = new Set(["magic", "klayout", "openroad", "netgen"])
 
 function paint(info) {
   paintRuntimeCard(info.container);
+  renderDesktopViewers(info);
   renderRecommendedTools(info);
   const root = document.getElementById("tools-grid");
   root.innerHTML = "";

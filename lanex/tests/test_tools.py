@@ -136,16 +136,29 @@ def test_install_accepts_present_binary_despite_nonzero_exit(monkeypatch):
     assert res["rc"] == 100  # surfaced honestly, but treated as installed
 
 
+def _isolate_gds3d_home(monkeypatch, home):
+    # Removal now searches every dir the *probe* searches (platform_env
+    # .user_bin_dirs), which reads $HOME and $LANEX_HOME — redirect those too, or
+    # a test could delete the developer's own ~/.local/bin/gds3d.
+    from lanex.controller import installer
+
+    home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(installer.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("LANEX_HOME", str(home / ".lanex"))
+
+
 def test_uninstall_gds3d_removes_user_binary(monkeypatch, tmp_path):
     # GDS3D has no package manager; uninstall = delete the source-built binary.
     # The user-local copy (~/.local/bin/gds3d) needs no privileges.
     from lanex.controller import installer
 
     home = tmp_path / "home"
+    _isolate_gds3d_home(monkeypatch, home)
     (home / ".local" / "bin").mkdir(parents=True)
     binary = home / ".local" / "bin" / "gds3d"
     binary.write_text("#!/bin/sh\n")
-    monkeypatch.setattr(installer.Path, "home", classmethod(lambda cls: home))
 
     res = installer.uninstall_tool("gds3d")
     assert res["ok"] is True
@@ -154,14 +167,16 @@ def test_uninstall_gds3d_removes_user_binary(monkeypatch, tmp_path):
 
 
 def test_uninstall_gds3d_absent_is_honest(monkeypatch, tmp_path):
-    # Nothing to remove -> not a crash, an honest "not found".
+    # Nothing to remove -> idempotent success flagged `already_absent`, so the
+    # card flips back to "Build & install" instead of dead-ending on an error
+    # (round 76). Not a crash, and not a failure either.
     from lanex.controller import installer
 
-    monkeypatch.setattr(installer.Path, "home", classmethod(lambda cls: tmp_path))
+    _isolate_gds3d_home(monkeypatch, tmp_path / "home")
     # Pretend no /usr/local/bin/gds3d either.
     res = installer.uninstall_tool("gds3d")
-    if not res["ok"]:
-        assert "not found" in res["reason"]
+    assert res["ok"] is True
+    assert res["already_absent"] is True
 
 
 def test_pull_image_fails_fast_without_engine_or_daemon():

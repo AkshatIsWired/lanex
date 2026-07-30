@@ -2893,29 +2893,68 @@ def _uninstall_gds3d() -> Dict[str, Any]:
     """Remove the source-built GDS3D binary.
 
     GDS3D has no package-manager release (``_install_gds3d`` builds it from
-    source), so removal = delete the binary from the two locations we install
-    it to: ``~/.local/bin/gds3d`` (user-writable, no privileges) and
-    ``/usr/local/bin/gds3d`` (needs root, via the same escalation installs use).
-    Idempotent: removing one that isn't there still succeeds if the other went.
+    source), so removal = delete the binary from every location the *probe*
+    looks in. That set is deliberately taken from
+    :func:`platform_env.user_bin_dirs` — the same list
+    :func:`platform_env.resolve_user_bin` uses to decide "installed" — plus
+    ``/usr/local/bin`` (needs root, via the same escalation installs use).
+
+    Removal used to delete only ``~/.local/bin/gds3d`` while the probe also
+    accepted the BUILD TREE output (``$LANEX_HOME/tools/GDS3D/linux/GDS3D``,
+    left behind by ``make``). One Remove click then deleted the installed copy,
+    the probe still found the build output, so the card stayed "installed" with
+    only a Remove button — and the next click reported "not found (already
+    removed?)" with no way back to Install. Detection and removal must search
+    the same places.
+
+    Both spellings are tried: the Makefile emits ``GDS3D``, the install copies
+    it as ``gds3d``. Idempotent — nothing left to remove is a success (``ok``
+    with ``already_absent``), never an error the UI can get stuck on.
     """
+    from . import platform_env
+
     removed: List[str] = []
     failed: List[str] = []
+    names = ("gds3d", "GDS3D")
 
-    user_bin = Path.home() / ".local" / "bin" / "gds3d"
-    if user_bin.exists():
-        try:
-            user_bin.unlink()
-            removed.append(str(user_bin))
-        except OSError as ex:
-            failed.append(f"{user_bin}: {ex}")
+    # User-writable copies: the installed binary AND the build-tree output the
+    # probe would otherwise keep reporting as installed.
+    dirs: List[Path] = [Path.home() / ".local" / "bin"]
+    for d in platform_env.user_bin_dirs():
+        p = Path(d)
+        if p not in dirs:
+            dirs.append(p)
+    for d in dirs:
+        for name in names:
+            target = d / name
+            if not target.is_file():
+                continue
+            try:
+                target.unlink()
+                removed.append(str(target))
+            except OSError as ex:
+                failed.append(f"{target}: {ex}")
 
-    sys_bin = Path("/usr/local/bin/gds3d")
-    if sys_bin.exists():
-        res = _run_argv(["sudo", "rm", "-f", str(sys_bin)], label="rm gds3d", key="gds3d")
-        if not sys_bin.exists():
-            removed.append(str(sys_bin))
-        else:
-            failed.append(f"{sys_bin}: exit {res.get('rc', '?')}")
+    # Privileged system copies (one escalated rm for whatever is present).
+    sys_bins = [Path("/usr/local/bin") / name for name in names]
+    present = [p for p in sys_bins if p.exists()]
+    if present:
+        res = _run_argv(["sudo", "rm", "-f", *[str(p) for p in present]],
+                        label="rm gds3d", key="gds3d")
+        for p in present:
+            if not p.exists():
+                removed.append(str(p))
+            else:
+                failed.append(f"{p}: exit {res.get('rc', '?')}")
+
+    # Verify with the resolver the UI's badge uses — if it still resolves, the
+    # card would say "installed" and we must say so instead of claiming success.
+    leftover = platform_env.resolve_user_bin("gds3d", list(names))
+    if leftover and leftover not in removed:
+        return {"ok": False, "removed": removed, "tried": failed,
+                "reason": f"GDS3D is still on this machine at {leftover} — "
+                          "it wasn't installed by LanEx, so remove it yourself "
+                          "(or take it off $PATH), then click Recheck."}
 
     if removed and not failed:
         return {"ok": True, "method": "rm", "key": "gds3d", "removed": removed}
@@ -2924,8 +2963,11 @@ def _uninstall_gds3d() -> Dict[str, Any]:
                 "warning": "some copies could not be removed: " + "; ".join(failed)}
     if failed:
         return {"ok": False, "tried": failed, "reason": "Could not remove the GDS3D binary"}
-    return {"ok": False, "tried": [],
-            "reason": "GDS3D binary not found in ~/.local/bin or /usr/local/bin (already removed?)"}
+    # Nothing anywhere: already gone. Report success so the card flips back to
+    # "Build & install" instead of dead-ending on an error toast.
+    return {"ok": True, "method": "rm", "key": "gds3d", "removed": [],
+            "already_absent": True,
+            "reason": "GDS3D was already removed — nothing left to delete."}
 
 
 def _uninstall_engine_macos(key: str) -> Dict[str, Any]:
