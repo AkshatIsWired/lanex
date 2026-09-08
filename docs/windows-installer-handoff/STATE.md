@@ -1,14 +1,15 @@
 # LanEx installer checkpoint
 
 Date: 2026-09-08
-Stage: M0-M1 complete; M2 is next.
+Stage: M0-M2 complete; M3 is next.
 Canonical pack: `C:\Users\itsva\lanex\docs\windows-installer-handoff`.
 Repo: `C:\Users\itsva\lanex`
 Branch: `windows-installer-support`
 M0 commits: `1d60f2a`, `ff82cfc`
 M1 implementation commit: `f75c1568254c4b8ce5581be49f66d8653b17709c`
-Git status before this checkpoint commit: only `STATE.md` modified; generated
-wheel/manifest/pins/EXEs are ignored.
+M2 implementation commit: `39dd4c439d319ce9a37c9f5aaa0262b6f2567ab2`
+Git status before this checkpoint commit: only M2 evidence/checkpoint docs
+modified; generated wheel/manifest/pins/EXEs are ignored.
 
 ## Decisions
 
@@ -24,6 +25,10 @@ wheel/manifest/pins/EXEs are ignored.
   Current uninstall removes Windows launcher/shortcuts and preserves all data.
 - Main stays untouched until Akshat tests the finished candidate and merge is
   explicitly authorized. No release/publication/contact is authorized yet.
+- Setup is original-user/per-user. Only the hash-bound, allowlisted two-feature
+  worker elevates. Resume is owner HKCU + manual shortcut, two attempts total
+  and once per boot. Existing capable WSL is reused without a global default
+  change or global shutdown.
 
 ## Completed M0
 
@@ -36,58 +41,56 @@ wheel/manifest/pins/EXEs are ignored.
 
 ## Completed M1
 
-- Universal Git source supports repository + branch/tag/SHA via ref-aware
-  codeload; local and pip sources remain supported.
-- Setup bundles exact checkout wheel, universal installer, provision/selftest,
-  constraints, manifest, and state worker. Failed fetch is checked before bash;
-  provisioning has no installer curl-to-bash path.
-- CI checks out actual fork head, builds/mounts its local wheel, and never falls
-  back to base/main. Immutable manifest hashes every executable payload.
-- Manifest records source, rootfs, target/Python floors, locked dependencies,
-  image digest, PDK catalog/family pins, GDS3D commit, and sizes.
-- Atomic schema-1 owner state preserves choices, source/build/installer hashes,
-  boot/restart counters, phases, and component fingerprints. Malformed,
-  wrong-owner, unmigratable-old, and newer records are rejected.
-- Foreign `lanex` chooses `lanex-<install-id-prefix>`; post-import state binds
-  exact registry GUID/path and provision writes the Linux marker. Launcher reads
-  a validated data-only appliance config (no command text).
-- Matching Repair checks registration + Linux marker + selftest without apt/pip;
-  changed manifests invalidate changed components only and require Update.
-- Destructive name-only reinstall/uninstall paths removed. Legacy Program Files
-  migration plan and boundaries: `M1-IDENTITY.md`.
+- Exact branch/tag/SHA/local wheel is bundled with shared install/provision/
+  selftest payloads; CI uses the actual checkout and immutable manifest pins.
+- Atomic owner state binds SID/install UUID to exact HKCU WSL GUID/path and Linux
+  marker. Foreign `lanex` gets a distinct name; malformed/newer/wrong-owner state
+  and name-only mutation are rejected. Repair is same-build/readiness-only.
+- Full design, legacy migration boundary and hashes: `M1-IDENTITY.md`.
 
 ## Verified M1 evidence
 
-Evidence: `C:\Users\itsva\Documents\Codex\2026-09-08\implement-the-lanex-windows-installer-handoff-2\work\m1-evidence-20260908`
+- **26 Windows + 62 isolated Linux tests**, Go/vet/format/build, shell syntax,
+  shellcheck, YAML and Inno compile passed. Evidence path is in `M1-IDENTITY.md`.
 
-- Windows hermetic identity/source tests: **26 passed**: branch/tag/SHA, local
-  wheel, atomic interruption, owner/schema rejection, foreign collision, exact
-  binding, manifest invalidation, and repair source lock.
-- Isolated Linux relevant regressions: **62 passed** (`test_installer`,
-  `test_install_foolproof`, `test_pdk_resolve`, `test_packaging`).
-- Native Windows Go 1.22.12 test/vet/format/build pass.
-- Git Bash syntax, Ubuntu shellcheck `-S style`, workflow YAML parse, and Inno
-  Setup 6 compile pass.
-- Clean-commit artifact: source `f75c156`; wheel SHA256
-  `0a6f00fe92a16695d2c5efbd9c5f28a9214e237287a062b41182e27a6e38b684`;
-  manifest `3f4431fb6244157cea1e2c94db9ad46355d30519b5f941f4abadbc82b7f5f356`;
-  Setup `3edbf33cbf3ed88dbebd981f8810613b3e5ba3c3bf567d80d7b945ace383a2f1`
-  (5,096,198 bytes). M1 compile artifact, not the Akshat candidate.
+## Completed M2
+
+- Structured preflight distinguishes architecture/OS, firmware, hypervisor,
+  feature, pending-reboot, old-WSL/query-failure and ready states. Unknown is
+  not firmware-disabled; active hypervisor overrides false firmware signals.
+- Original user owns launcher/state/appliance/shortcuts after feature-only UAC.
+  Each feature result is independently checked and its original output retained.
+- Exact staged Setup and choices survive UAC/restart. Verified owner HKCU resume
+  plus manual Continue fallback is boot-bound and loop-limited. Successful setup
+  clears only owned continuation entries.
+- Existing modern WSL is not unconditionally updated; no default-version or
+  all-distro shutdown mutation remains. User docs reflect x64/19044 technical
+  floor, per-user paths, policy behavior, resume and data-preserving uninstall.
+
+## Verified M2 evidence
+
+Detail: `M2-PREFLIGHT.md`. Evidence: `C:\Users\itsva\Documents\Codex\2026-09-08\implement-the-lanex-windows-installer-handoff-3\work\m2-evidence-20260908`.
+
+- Hermetic Windows setup/preflight/resume: **29 passed**; PowerShell parse,
+  workflow YAML and Inno 6.3.3 compile pass; `git diff --check` pass.
+- Wider Windows regression: **76 passed, 3 skipped**; four LibreLane/Ciel tests
+  unavailable in this host interpreter, same recorded M1 environment limitation.
+- Clean-source Setup: SHA256 `ee3287a480083a1ba31b005ff4d71f54328007acb701fbe44af48422fa0fd6df`,
+  5,101,316 bytes. M2 proof artifact only, not the Akshat candidate.
 
 ## Current / next action
 
-Start M2: structured Windows preflight; split limited feature elevation from
-original-user appliance ownership; owner-bound bounded restart/resume with
-manual continuation. Read M2, A05-A09/A22, U01/U05 and applicable Windows cases.
+Start M3: shared base/finalize provisioning and selected-component readiness.
+Read M3, A01-A03/A15-A16, U02-U03/U06-U09 and W11-W15/W18-W19.
 
 ## Outstanding acceptance / protected resources
 
-- M2-M8 pending. No new Setup installed; no real WSL import/provision, Docker
+- M3-M8 pending. No new Setup installed; no real WSL import/provision, Docker
   daemon, PDK download, WSLg/GUI, restart, UAC-account, offline,
   uninstall/data-removal, or RTL-to-GDS case ran for this candidate.
 - Real EXE legs require disposable Windows VM/Akshat machine. Reboot,
   firmware/security changes, publication, and merge remain explicit boundaries.
-  The M1 EXE must not be sent as the finished build.
+  The M2 EXE must not be sent as the finished build.
 - Existing `Ubuntu`, `lanex`, `Ubuntu-22.04`, defaults/data, and
   `%LOCALAPPDATA%\LanEx`/legacy profile remain protected and unchanged.
 - Ubuntu was used only for isolated venv tests/pin export and may be running; do
