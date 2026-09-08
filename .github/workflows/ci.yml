@@ -10,7 +10,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, windows-installer-support]
   pull_request:
   schedule:
     - cron: "0 6 * * *" # daily, 06:00 UTC

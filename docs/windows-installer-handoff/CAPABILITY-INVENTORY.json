@@ -1,0 +1,440 @@
+{
+  "environment": {
+    "ciel": "2.6.1",
+    "lanex": "1.0.0",
+    "librelane": "3.0.4"
+  },
+  "pdk_catalog": {
+    "gf180mcuA": {
+      "approx_gb": 1.8,
+      "default_libraries": [
+        "gf180mcu_fd_io",
+        "gf180mcu_fd_pr",
+        "gf180mcu_fd_sc_mcu7t5v0",
+        "gf180mcu_fd_sc_mcu9t5v0",
+        "gf180mcu_fd_ip_sram"
+      ],
+      "description": "GlobalFoundries 180 nm MCU open PDK. Variants A\u2013D differ in the available standard-cell / option set; D is ciel's default.",
+      "family": "gf180mcu",
+      "foundry": "GlobalFoundries",
+      "label": "gf180mcuA",
+      "libraries": [
+        "gf180mcu_fd_io",
+        "gf180mcu_fd_pr",
+        "gf180mcu_fd_sc_mcu7t5v0",
+        "gf180mcu_fd_sc_mcu9t5v0",
+        "gf180mcu_fd_ip_sram",
+        "gf180mcu_osu_sc_gp12t3v3",
+        "gf180mcu_osu_sc_gp9t3v3",
+        "gf180mcu_as_sc_mcu7t3v3",
+        "gf180mcu_re_efuse",
+        "gf180mcu_ocd_io",
+        "gf180mcu_ocd_ip_sram",
+        "gf180mcu_ocd_alpha_small",
+        "gf180mcu_ocd_alpha_large",
+        "gf180mcu_ocd_alpha_misc"
+      ],
+      "node": "180 nm",
+      "recommended": false
+    },
+    "gf180mcuB": {
+      "approx_gb": 1.8,
+      "default_libraries": [
+        "gf180mcu_fd_io",
+        "gf180mcu_fd_pr",
+        "gf180mcu_fd_sc_mcu7t5v0",
+        "gf180mcu_fd_sc_mcu9t5v0",
+        "gf180mcu_fd_ip_sram"
+      ],
+      "description": "GlobalFoundries 180 nm MCU open PDK. Variants A\u2013D differ in the available standard-cell / option set; D is ciel's default.",
+      "family": "gf180mcu",
+      "foundry": "GlobalFoundries",
+      "label": "gf180mcuB",
+      "libraries": [
+        "gf180mcu_fd_io",
+        "gf180mcu_fd_pr",
+        "gf180mcu_fd_sc_mcu7t5v0",
+        "gf180mcu_fd_sc_mcu9t5v0",
+        "gf180mcu_fd_ip_sram",
+        "gf180mcu_osu_sc_gp12t3v3",
+        "gf180mcu_osu_sc_gp9t3v3",
+        "gf180mcu_as_sc_mcu7t3v3",
+        "gf180mcu_re_efuse",
+        "gf180mcu_ocd_io",
+        "gf180mcu_ocd_ip_sram",
+        "gf180mcu_ocd_alpha_small",
+        "gf180mcu_ocd_alpha_large",
+        "gf180mcu_ocd_alpha_misc"
+      ],
+      "node": "180 nm",
+      "recommended": false
+    },
+    "gf180mcuC": {
+      "approx_gb": 1.8,
+      "default_libraries": [
+        "gf180mcu_fd_io",
+        "gf180mcu_fd_pr",
+        "gf180mcu_fd_sc_mcu7t5v0",
+        "gf180mcu_fd_sc_mcu9t5v0",
+        "gf180mcu_fd_ip_sram"
+      ],
+      "description": "GlobalFoundries 180 nm MCU open PDK. Variants A\u2013D differ in the available standard-cell / option set; D is ciel's default.",
+      "family": "gf180mcu",
+      "foundry": "GlobalFoundries",
+      "label": "gf180mcuC",
+      "libraries": [
+        "gf180mcu_fd_io",
+        "gf180mcu_fd_pr",
+        "gf180mcu_fd_sc_mcu7t5v0",
+        "gf180mcu_fd_sc_mcu9t5v0",
+        "gf180mcu_fd_ip_sram",
+        "gf180mcu_osu_sc_gp12t3v3",
+        "gf180mcu_osu_sc_gp9t3v3",
+        "gf180mcu_as_sc_mcu7t3v3",
+        "gf180mcu_re_efuse",
+        "gf180mcu_ocd_io",
+        "gf180mcu_ocd_ip_sram",
+        "gf180mcu_ocd_alpha_small",
+        "gf180mcu_ocd_alpha_large",
+        "gf180mcu_ocd_alpha_misc"
+      ],
+      "node": "180 nm",
+      "recommended": false
+    },
+    "gf180mcuD": {
+      "approx_gb": 1.8,
+      "default_libraries": [
+        "gf180mcu_fd_io",
+        "gf180mcu_fd_pr",
+        "gf180mcu_fd_sc_mcu7t5v0",
+        "gf180mcu_fd_sc_mcu9t5v0",
+        "gf180mcu_fd_ip_sram"
+      ],
+      "description": "GlobalFoundries 180 nm MCU open PDK. Variants A\u2013D differ in the available standard-cell / option set; D is ciel's default.",
+      "family": "gf180mcu",
+      "foundry": "GlobalFoundries",
+      "label": "gf180mcuD",
+      "libraries": [
+        "gf180mcu_fd_io",
+        "gf180mcu_fd_pr",
+        "gf180mcu_fd_sc_mcu7t5v0",
+        "gf180mcu_fd_sc_mcu9t5v0",
+        "gf180mcu_fd_ip_sram",
+        "gf180mcu_osu_sc_gp12t3v3",
+        "gf180mcu_osu_sc_gp9t3v3",
+        "gf180mcu_as_sc_mcu7t3v3",
+        "gf180mcu_re_efuse",
+        "gf180mcu_ocd_io",
+        "gf180mcu_ocd_ip_sram",
+        "gf180mcu_ocd_alpha_small",
+        "gf180mcu_ocd_alpha_large",
+        "gf180mcu_ocd_alpha_misc"
+      ],
+      "node": "180 nm",
+      "recommended": true
+    },
+    "ihp-sg13g2": {
+      "approx_gb": 1.9,
+      "default_libraries": [
+        "sg13g2_io",
+        "sg13g2_pr",
+        "sg13g2_sram",
+        "sg13g2_stdcell"
+      ],
+      "description": "IHP SG13G2 \u2014 130 nm SiGe BiCMOS open PDK with high-frequency bipolar devices, suited to RF and analog/mixed-signal designs.",
+      "family": "ihp-sg13g2",
+      "foundry": "IHP",
+      "label": "ihp-sg13g2",
+      "libraries": [
+        "sg13g2_io",
+        "sg13g2_pr",
+        "sg13g2_sram",
+        "sg13g2_stdcell"
+      ],
+      "node": "130 nm SiGe BiCMOS",
+      "recommended": true
+    },
+    "sky130A": {
+      "approx_gb": 2.5,
+      "default_libraries": [
+        "sky130_fd_io",
+        "sky130_fd_pr",
+        "sky130_fd_sc_hd",
+        "sky130_fd_sc_hvl",
+        "sky130_ml_xx_hd",
+        "sky130_sram_macros"
+      ],
+      "description": "SkyWater 130 nm open PDK \u2014 the most widely used process for open-source tapeouts. Variant A is the default; variant B adds ReRAM/SONOS device models.",
+      "family": "sky130",
+      "foundry": "SkyWater Technology",
+      "label": "sky130A",
+      "libraries": [
+        "sky130_fd_io",
+        "sky130_fd_pr",
+        "sky130_ml_xx_hd",
+        "sky130_fd_sc_hd",
+        "sky130_fd_sc_hdll",
+        "sky130_fd_sc_lp",
+        "sky130_fd_sc_hvl",
+        "sky130_fd_sc_ls",
+        "sky130_fd_sc_ms",
+        "sky130_fd_sc_hs",
+        "sky130_sram_macros",
+        "sky130_fd_pr_reram"
+      ],
+      "node": "130 nm",
+      "recommended": true
+    },
+    "sky130B": {
+      "approx_gb": 2.5,
+      "default_libraries": [
+        "sky130_fd_io",
+        "sky130_fd_pr",
+        "sky130_fd_sc_hd",
+        "sky130_fd_sc_hvl",
+        "sky130_ml_xx_hd",
+        "sky130_sram_macros"
+      ],
+      "description": "SkyWater 130 nm open PDK \u2014 the most widely used process for open-source tapeouts. Variant A is the default; variant B adds ReRAM/SONOS device models.",
+      "family": "sky130",
+      "foundry": "SkyWater Technology",
+      "label": "sky130B",
+      "libraries": [
+        "sky130_fd_io",
+        "sky130_fd_pr",
+        "sky130_ml_xx_hd",
+        "sky130_fd_sc_hd",
+        "sky130_fd_sc_hdll",
+        "sky130_fd_sc_lp",
+        "sky130_fd_sc_hvl",
+        "sky130_fd_sc_ls",
+        "sky130_fd_sc_ms",
+        "sky130_fd_sc_hs",
+        "sky130_sram_macros",
+        "sky130_fd_pr_reram"
+      ],
+      "node": "130 nm",
+      "recommended": false
+    }
+  },
+  "tools": [
+    {
+      "binary": [
+        "<candidate-interpreter>"
+      ],
+      "category": "core",
+      "container_only": false,
+      "in_image": false,
+      "install": null,
+      "key": "python",
+      "label": "Python",
+      "optional": false
+    },
+    {
+      "binary": [
+        "pip",
+        "pip3"
+      ],
+      "category": "core",
+      "container_only": false,
+      "in_image": false,
+      "install": [
+        "python3",
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "pip"
+      ],
+      "key": "pip",
+      "label": "pip",
+      "optional": false
+    },
+    {
+      "binary": [
+        "librelane"
+      ],
+      "category": "core",
+      "container_only": false,
+      "in_image": true,
+      "install": [
+        "python3",
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "librelane"
+      ],
+      "key": "librelane",
+      "label": "LibreLane",
+      "optional": false
+    },
+    {
+      "binary": [
+        "yosys",
+        "/opt/yosys/bin/yosys",
+        "yowasp-yosys"
+      ],
+      "category": "eda",
+      "container_only": false,
+      "in_image": true,
+      "install": {
+        "darwin": "brew:yosys",
+        "linux": "apt:yosys",
+        "windows": "pip install yowasp-yosys"
+      },
+      "key": "yosys",
+      "label": "Yosys",
+      "optional": false
+    },
+    {
+      "binary": [
+        "openroad",
+        "OpenROAD"
+      ],
+      "category": "eda",
+      "container_only": true,
+      "in_image": true,
+      "install": {
+        "darwin": "conda install -c litex-hub openroad  (or Nix, or `librelane --dockerized`)",
+        "linux": "conda install -c litex-hub openroad  (or Nix, or `librelane --dockerized`)",
+        "windows": "Use WSL2, then conda/Nix; or run `librelane --dockerized`."
+      },
+      "key": "openroad",
+      "label": "OpenROAD",
+      "optional": false
+    },
+    {
+      "binary": [
+        "klayout",
+        "KLayout"
+      ],
+      "category": "eda",
+      "container_only": false,
+      "in_image": true,
+      "install": {
+        "darwin": "brew:klayout",
+        "linux": "https://www.klayout.de/build.html",
+        "windows": "https://www.klayout.de/build.html"
+      },
+      "key": "klayout",
+      "label": "KLayout",
+      "optional": false
+    },
+    {
+      "binary": [
+        "magic"
+      ],
+      "category": "eda",
+      "container_only": true,
+      "in_image": true,
+      "install": {
+        "darwin": "conda install -c litex-hub magic  (or Nix `magic-vlsi`, or `librelane --dockerized`)",
+        "linux": "conda install -c litex-hub magic  (or Nix `magic-vlsi`, or `librelane --dockerized`)",
+        "windows": "Use WSL2, then conda/Nix; or run `librelane --dockerized`."
+      },
+      "key": "magic",
+      "label": "Magic",
+      "optional": false
+    },
+    {
+      "binary": [
+        "netgen"
+      ],
+      "category": "eda",
+      "container_only": true,
+      "in_image": true,
+      "install": {
+        "darwin": "conda install -c litex-hub netgen  (or Nix `netgen-lvs`, or `librelane --dockerized`)",
+        "linux": "conda install -c litex-hub netgen  (or Nix `netgen-lvs`, or `librelane --dockerized`)",
+        "windows": "Use WSL2, then conda/Nix; or run `librelane --dockerized`."
+      },
+      "key": "netgen",
+      "label": "Netgen",
+      "optional": false
+    },
+    {
+      "binary": [
+        "verilator"
+      ],
+      "category": "eda",
+      "container_only": false,
+      "in_image": true,
+      "install": {
+        "darwin": "brew:verilator",
+        "linux": "apt:verilator",
+        "windows": "WSL2 recommended"
+      },
+      "key": "verilator",
+      "label": "Verilator",
+      "optional": false
+    },
+    {
+      "binary": [
+        "iverilog"
+      ],
+      "category": "eda",
+      "container_only": false,
+      "in_image": true,
+      "install": {
+        "darwin": "brew:icarus-verilog",
+        "linux": "apt:iverilog",
+        "windows": "WSL2 recommended"
+      },
+      "key": "iverilog",
+      "label": "Icarus Verilog",
+      "optional": true
+    },
+    {
+      "binary": [
+        "dot"
+      ],
+      "category": "eda",
+      "container_only": false,
+      "in_image": false,
+      "install": {
+        "darwin": "brew:graphviz",
+        "linux": "apt:graphviz",
+        "windows": "choco install graphviz"
+      },
+      "key": "graphviz",
+      "label": "Graphviz",
+      "optional": true
+    },
+    {
+      "binary": [
+        "gtkwave"
+      ],
+      "category": "eda",
+      "container_only": false,
+      "in_image": false,
+      "install": {
+        "darwin": "brew:gtkwave",
+        "linux": "apt:gtkwave",
+        "windows": "WSL2 recommended"
+      },
+      "key": "gtkwave",
+      "label": "GTKWave",
+      "optional": true
+    },
+    {
+      "binary": [
+        "ciel"
+      ],
+      "category": "pdk",
+      "container_only": false,
+      "in_image": false,
+      "install": [
+        "python3",
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "ciel"
+      ],
+      "key": "ciel",
+      "label": "Ciel (PDK store)",
+      "optional": false
+    }
+  ]
+}

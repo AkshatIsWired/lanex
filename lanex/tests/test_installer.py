@@ -82,43 +82,81 @@ def test_escalate_does_not_rewrite_shell_wrapped_sudo(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# _run_argv() — a sudo command with a controlling terminal MUST attach to the
-# terminal, even when `sudo -n true` succeeds. Detaching (start_new_session) drops
-# the controlling tty and sudo's tty_tickets cache goes with it → "sudo: A
-# terminal is required to authenticate" (the GDS3D-deps failure the user hit).
-# --------------------------------------------------------------------------- #
-def _capture_tty(monkeypatch):
-    seen = {}
-
-    def fake_tty(argv, *, label, key, env_extra=None):
-        seen["argv"] = list(argv)
-        seen["label"] = label
-        return {"ok": True, "rc": 0, "label": label}
-
-    monkeypatch.setattr(installer, "_run_argv_on_tty", fake_tty)
-    monkeypatch.setattr(installer, "_emit", lambda *a, **k: None)
-    return seen
-
-
-def test_run_argv_sudo_with_tty_uses_terminal_even_if_passwordless(monkeypatch) -> None:
+# _run_argv() — passwordless sudo must use the streamed, isolated subprocess
+# path.  Sudo that actually needs a password must retain the controlling tty.
+# Every process/probe is mocked: these regression tests must never invoke host
+# sudo, apt, or another system-changing command.
+def test_run_argv_passwordless_sudo_streams_even_with_tty(monkeypatch) -> None:
     monkeypatch.setattr(platform_env, "has_controlling_tty", lambda: True)
     monkeypatch.setattr(installer, "_can_sudo", lambda: True)  # `sudo -n true` OK
-    seen = _capture_tty(monkeypatch)
+    monkeypatch.setattr(installer, "_install_env", lambda: {})
+    monkeypatch.setattr(
+        installer,
+        "_run_argv_on_tty",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected tty execution")),
+    )
+    events = []
+    monkeypatch.setattr(installer, "_emit", lambda name, payload: events.append((name, payload)))
+    started = []
+
+    class FakeProcess:
+        returncode = 0
+        stdout = iter(["apt output\n"])
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+
+    def fake_popen(argv, **settings):
+        started.append((list(argv), settings))
+        return FakeProcess()
+
+    class FakeTimer:
+        daemon = False
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(installer.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(installer.threading, "Timer", FakeTimer)
     argv = ["sudo", "apt-get", "install", "-y", "libgl1-mesa-dev"]
     res = installer._run_argv(argv, label="gds3d deps", key="gds3d")
     assert res.get("ok") is True
-    assert seen.get("argv") == argv  # ran on the tty, not detached
+    assert started and started[0][0] == argv
+    assert started[0][1]["stdout"] is installer.subprocess.PIPE
+    assert any(name == "installer_line" and payload["line"] == "apt output"
+               for name, payload in events)
+    if installer.os.name == "posix":
+        assert started[0][1].get("start_new_session") is True
 
 
 def test_run_argv_sudo_with_tty_no_ticket_prompts_on_terminal(monkeypatch) -> None:
     monkeypatch.setattr(platform_env, "has_controlling_tty", lambda: True)
     monkeypatch.setattr(installer, "_can_sudo", lambda: False)  # needs a password
     events = []
+    seen = []
 
     def fake_tty(argv, *, label, key, env_extra=None):
+        seen.append(list(argv))
         return {"ok": True, "rc": 0, "label": label}
 
     monkeypatch.setattr(installer, "_run_argv_on_tty", fake_tty)
+    monkeypatch.setattr(
+        installer.subprocess,
+        "Popen",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected detached execution")),
+    )
     monkeypatch.setattr(installer, "_emit", lambda name, payload: events.append((name, payload)))
-    installer._run_argv(["sudo", "apt-get", "install", "-y", "x"], label="l", key="k")
+    argv = ["sudo", "apt-get", "install", "-y", "x"]
+    installer._run_argv(argv, label="l", key="k")
+    assert seen == [argv]
     assert any(n == "installer_info" and p.get("needs_password") for n, p in events)
