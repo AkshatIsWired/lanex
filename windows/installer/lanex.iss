@@ -48,6 +48,7 @@
 #endif
 #define AppPublisher   "LanEx Contributors"
 #define AppURL         "https://github.com/AkshatIsWired/lanex"
+#define VirtualizationHelpURL "https://support.microsoft.com/en-US/Windows/Experience/enable-virtualization-on-windows"
 #define RepoRoot       "..\..\"
 #ifndef LauncherExe
   #define LauncherExe  "..\launcher\LanEx.exe"
@@ -74,6 +75,9 @@
 #endif
 #ifndef LanexWheel
   #error LanexWheel is required: build the checkout wheel before compiling Setup
+#endif
+#ifndef SetupWorkerSha256
+  #error SetupWorkerSha256 is required: elevated helper must be bound to the bundled worker
 #endif
 
 ; The appliance's identity. Same three strings in windows/provision/provision.sh
@@ -154,7 +158,7 @@ AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/issues
 AppUpdatesURL={#AppURL}/releases
 VersionInfoVersion={#AppVersion}
-DefaultDirName={autopf}\{#AppName}
+DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 LicenseFile={#RepoRoot}LICENSE
 OutputBaseFilename=LanEx-Setup
@@ -164,22 +168,22 @@ UninstallDisplayName={#AppName}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-; Admin: turning the WSL feature on is a machine-wide change. This is also why
-; a standard user cannot install LanEx (documented in docs/INSTALL.md) — and why
-; the person who runs Setup must be the person who will USE LanEx: WSL registers
-; distros per user, so {localappdata} below has to be their profile.
-PrivilegesRequired=admin
+; The launcher, appliance registration, state and shortcuts belong to the user
+; who started Setup. Only the two optional-feature operations use a small,
+; explicit runas helper. Credential elevation under another administrator must
+; never move HKCU or {localappdata} work into that administrator's profile.
+PrivilegesRequired=lowest
 ; WSL 2 is 64-bit only. x64compatible also covers ARM64 running x64 code, but
 ; the launcher is x64 (see windows/launcher/wsl.go) so the appliance is too.
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; WSL 2 needs Windows 10 2004 (build 19041). Enforced here so the friendly
 ; message below is the first thing an unsupported machine sees.
-MinVersion=10.0.19041
+MinVersion=10.0.19044
 ; Refuse to install over a running LanEx — the mutex the launcher holds
 ; (windows/launcher/main.go). Inno asks the user to close it first, which is far
 ; better than importing over a distro that is mid-run.
-AppMutex=Global\LanExLauncher
+AppMutex=LanExLauncher
 SetupMutex=LanExSetupMutex
 ; The wizard is Welcome -> License -> Tasks -> progress -> Finish. Everything
 ; else is hidden on purpose: an appliance has no install directory worth
@@ -198,9 +202,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Messages]
 ; Inno's stock text for an unsupported Windows version is generic; ours names
 ; the version and the reason.
-WindowsVersionNotSupported=LanEx needs Windows 10 version 2004 (build 19041) or newer, because it runs on WSL 2. Windows 11 is recommended.
+WindowsVersionNotSupported=LanEx needs Windows 10 version 21H2 (build 19044) or newer for WSLg desktop tools. Windows 11 x64 is recommended.
 ; The wizard's own words, in the language of the person we are installing for.
-WelcomeLabel2=This will install [name/ver] on your computer.%n%nLanEx sets up its own private, self-contained environment — it will not change or touch any other software on your PC. Removing the Windows app preserves your projects and environment by default.%n%nSetup needs to download about {#RootfsSizeMB} MB and takes a few minutes.
+WelcomeLabel2=This will install [name/ver] on your computer.%n%nLanEx sets up its own private, self-contained environment. It preserves your existing WSL distributions and their data. If required, Windows asks separately before Setup enables WSL features or updates WSL.%n%nRemoving the Windows app preserves your projects and environment by default.%n%nSetup first downloads about {#RootfsSizeMB} MB; the selected toolchain and PDKs need additional space and downloads.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -220,12 +224,12 @@ Source: "..\setup\build-manifest.json"; Flags: dontcopy
 Source: "{#LanexWheel}"; DestName: "lanex-candidate.whl"; Flags: dontcopy
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\LanEx.exe"; IconFilename: "{app}\lanex.ico"
+Name: "{userprograms}\{#AppName}\{#AppName}"; Filename: "{app}\LanEx.exe"; IconFilename: "{app}\lanex.ico"
 ; A shortcut straight into the appliance's home directory. Small feature, large
 ; payoff: it proves to the user that their designs are ordinary files on their
 ; own PC, not something sealed inside a black box.
-Name: "{group}\{#AppName} Project Files"; Filename: "{code:DistroProjectPath}"; IconFilename: "{app}\lanex.ico"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\LanEx.exe"; IconFilename: "{app}\lanex.ico"; Tasks: desktopicon
+Name: "{userprograms}\{#AppName}\{#AppName} Project Files"; Filename: "{code:DistroProjectPath}"; IconFilename: "{app}\lanex.ico"
+Name: "{userdesktop}\{#AppName}"; Filename: "{app}\LanEx.exe"; IconFilename: "{app}\lanex.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\LanEx.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent; Check: InstallCompleted
@@ -244,6 +248,10 @@ var
   DistroNameValue: String;
   InstallIdValue: String;
   ManifestHashValue: String;
+  PreflightDecision: String;
+  BootIdentityValue: String;
+  ComputerDisplayValue: String;
+  FirmwareNoticeValue: Boolean;
 
 // ---------------------------------------------------------------- locations --
 
@@ -463,31 +471,54 @@ end;
 
 // ------------------------------------------------------------------ preflight --
 
-// VirtualizationBlocked detects the #1 real-world WSL failure: CPU
-// virtualization switched off in BIOS/UEFI.
-//
-// The logic is deliberately asymmetric. No hypervisor running is NORMAL on a PC
-// that has never had WSL — Windows only starts one once the platform feature is
-// enabled. It is a problem only when the feature IS enabled and Windows still
-// has no hypervisor: that combination means Windows tried and the CPU said no.
-// Anything we cannot determine is treated as fine — a false block would stop an
-// install that would have worked.
-function VirtualizationBlocked: Boolean;
+function TakeLine(var Text: String): String;
 var
-  Hypervisor, Feature: String;
+  P: Integer;
 begin
-  Result := False;
-  if not PowerShellCapture('(Get-CimInstance Win32_ComputerSystem).HypervisorPresent',
-                           Hypervisor) then
+  P := Pos(#10, Text);
+  if P = 0 then
+  begin
+    Result := Trim(Text);
+    Text := '';
+  end
+  else
+  begin
+    Result := Trim(Copy(Text, 1, P - 1));
+    Text := Copy(Text, P + 1, Length(Text) - P);
+  end;
+end;
+
+// RunPreflight asks the versioned worker for one structured snapshot. Inno uses
+// three stable fields to drive UI; the complete JSON goes to install.log so a
+// query failure never gets collapsed into a misleading BIOS message.
+function RunPreflight(var Failure: String): Boolean;
+var
+  Worker, Output, Snippet, JsonLine: String;
+begin
+  Failure := '';
+  ExtractTemporaryFile('setup.ps1');
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  Snippet := '$p = (& ' + PSQuote(Worker)
+    + ' -Action Preflight | ConvertFrom-Json); '
+    + '$p.decision.code; $p.bootIdentity; '
+    + '(($p.computer.manufacturer + '' '' + $p.computer.model) -replace ''[\r\n\t]'','' '').Trim(); '
+    + '$p.decision.firmwareNotice; '
+    + '($p | ConvertTo-Json -Depth 20 -Compress)';
+  Result := PowerShellCapture(Snippet, Output);
+  if not Result then
+  begin
+    Failure := Output;
     Exit;
-  if Pos('true', Lowercase(Hypervisor)) > 0 then
-    Exit;
-  if not PowerShellCapture(
-      '(Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform).State',
-      Feature) then
-    Exit;
-  // 'Disabled' does not contain 'enabled', so this substring test is safe.
-  Result := Pos('enabled', Lowercase(Feature)) > 0;
+  end;
+  PreflightDecision := TakeLine(Output);
+  BootIdentityValue := TakeLine(Output);
+  ComputerDisplayValue := TakeLine(Output);
+  FirmwareNoticeValue := CompareText(TakeLine(Output), 'true') = 0;
+  JsonLine := TakeLine(Output);
+  LogLine('preflight: ' + JsonLine);
+  Result := (PreflightDecision <> '') and (BootIdentityValue <> '');
+  if not Result then
+    Failure := 'The structured preflight result was incomplete.';
 end;
 
 function EnoughDiskSpace(var FreeGB: Integer): Boolean;
@@ -507,21 +538,27 @@ end;
 
 function IsResumeRun: Boolean;
 begin
-  // Set by the RunOnce entry we write before the one possible restart.
+  // Set only by the owner-bound automatic trigger after a recorded restart.
   Result := ExpandConstant('{param:RESUME|0}') = '1';
+end;
+
+function IsContinuationRun: Boolean;
+begin
+  Result := IsResumeRun or (ExpandConstant('{param:CONTINUE|0}') = '1');
 end;
 
 procedure OpenHelp(const Anchor: String);
 var
   Code: Integer;
 begin
-  ShellExec('open', '{#AppURL}/blob/main/docs/INSTALL.md' + Anchor, '', '',
+  ShellExec('open', '{#VirtualizationHelpURL}', '', '',
             SW_SHOWNORMAL, ewNoWait, Code);
 end;
 
 function InitializeSetup(): Boolean;
 var
   FreeGB: Integer;
+  Failure, Detail: String;
 begin
   Result := True;
   RepairExisting := False;
@@ -529,16 +566,58 @@ begin
   DistroNameValue := '{#PreferredDistroName}';
   InstallIdValue := '';
   ManifestHashValue := '';
+  PreflightDecision := '';
+  BootIdentityValue := '';
+  ComputerDisplayValue := '';
+  FirmwareNoticeValue := False;
 
-  // 1. Virtualization off in BIOS. Checked first because it is unfixable from
-  //    inside Windows and there is no point downloading 373 MB before it.
-  if VirtualizationBlocked then
+  if not RunPreflight(Failure) then
   begin
+    MsgBox('LanEx could not inspect this PC''s Windows and WSL prerequisites.'
+      + #13#10#13#10 + Failure + #13#10#13#10
+      + 'No Windows feature, WSL distribution, or user data was changed.',
+      mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+
+  if PreflightDecision = 'unsupported-architecture' then
+  begin
+    MsgBox('This LanEx installer contains an amd64 Linux appliance and requires '
+      + 'an x64 Windows PC. ARM64 and other native architectures are not '
+      + 'supported by this build.', mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+  if PreflightDecision = 'unsupported-windows' then
+  begin
+    MsgBox('LanEx needs Windows build 19044 or newer so its WSLg desktop tools '
+      + 'can open correctly. Windows 11 x64 is recommended.', mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+  if PreflightDecision = 'preflight-query-failed' then
+  begin
+    MsgBox('Windows did not allow Setup to determine the required WSL feature '
+      + 'states. On a managed PC, ask an administrator to enable Windows '
+      + 'Subsystem for Linux and Virtual Machine Platform, then run Setup again.'
+      + #13#10#13#10 + 'No feature or distribution was changed.', mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+
+  // Firmware disabled is the only early BIOS/UEFI block. A running hypervisor
+  // overrides misleading firmware=false signals; unknown produces a notice.
+  if PreflightDecision = 'firmware-disabled' then
+  begin
+    Detail := '';
+    if ComputerDisplayValue <> '' then
+      Detail := #13#10#13#10 + 'PC: ' + ComputerDisplayValue;
     if MsgBox('LanEx cannot run because your computer''s virtualization feature '
       + 'is switched off.' + #13#10#13#10
       + 'It is a one-time setting in your PC''s BIOS/UEFI screen, not something '
-      + 'Windows can change. The LanEx install guide has step-by-step '
-      + 'instructions, including the key to press for common PC brands.'
+      + 'Windows can change. Microsoft''s instructions include manufacturer links.'
+      + Detail
       + #13#10#13#10 + 'Open the instructions now?',
       mbError, MB_YESNO) = IDYES then
       OpenHelp('#enable-virtualization');
@@ -564,7 +643,7 @@ end;
 
 function InitializeDurableState: String;
 var
-  Worker, Manifest, OperationName, Output, Snippet: String;
+  Worker, Manifest, OperationName, Output, Snippet, SetupCopy: String;
   HadState: Boolean;
 begin
   Result := '';
@@ -588,6 +667,8 @@ begin
     + ' -Operation ' + OperationName
     + ' -ChoicesJson ''{"pdks":["sky130A"],"libraries":"all","engine":"docker"}'''
     + ' -InstallerPath ' + PSQuote(ExpandConstant('{srcexe}'));
+  if IsResumeRun then
+    Snippet := Snippet + ' -ResumeMode 1 -BootIdentity ' + PSQuote(BootIdentityValue);
   if not PowerShellCapture(Snippet, Output) then
   begin
     Result := 'LanEx could not validate its saved setup state.' + #13#10#13#10
@@ -595,6 +676,13 @@ begin
       + 'No WSL distribution or user data was changed.';
     Exit;
   end;
+
+  if (PreflightDecision = 'features-required') and FirmwareNoticeValue then
+    MsgBox('Windows could not confirm the firmware virtualization setting. '
+      + 'Setup will enable the two Windows features it needs and check again '
+      + 'after restart. If the PC then reports virtualization is disabled, '
+      + 'Setup will stop with Microsoft''s manufacturer-specific guidance.',
+      mbInformation, MB_OK);
 
   Snippet := '& ' + PSQuote(Worker) + ' -Action ResolveAppliance -StatePath '
     + PSQuote(StateFile) + ' -PreferredDistroName {#PreferredDistroName}'
@@ -621,6 +709,28 @@ begin
     Exit;
   end;
   ManifestHashValue := Lowercase(GetSHA256OfFile(Manifest));
+
+  // Keep an immutable candidate copy and a manual continuation shortcut before
+  // UAC. If elevation is cancelled or policy blocks it, the originating user
+  // still has a recoverable setup entry independent of Downloads.
+  ForceDirectories(CacheDir);
+  SetupCopy := CacheDir + '\LanEx-Setup.exe';
+  if CompareText(ExpandConstant('{srcexe}'), SetupCopy) <> 0 then
+    if not FileCopy(ExpandConstant('{srcexe}'), SetupCopy, False) then
+    begin
+      Result := 'LanEx could not stage a durable copy of this exact installer.'
+        + #13#10#13#10 + 'No Windows feature or WSL distribution was changed.';
+      Exit;
+    end;
+  Snippet := '& ' + PSQuote(Worker) + ' -Action StageInstaller -StatePath '
+    + PSQuote(StateFile) + ' -ResumeInstallerPath ' + PSQuote(SetupCopy);
+  if not PowerShellCapture(Snippet, Output) then
+  begin
+    Result := 'LanEx could not verify its cached installer or manual Continue '
+      + 'shortcut.' + #13#10#13#10 + Output
+      + #13#10#13#10 + 'No Windows feature or WSL distribution was changed.';
+    Exit;
+  end;
   RepairExisting := HadState and DistroExists;
   LogLine('owned setup identity: ' + InstallIdValue + ' distro=' + DistroNameValue
     + ' manifest=' + ManifestHashValue);
@@ -628,57 +738,56 @@ end;
 
 // --------------------------------------------------------------- install work --
 
-// EnableWsl turns the Windows feature on. Three strategies, weakest last.
+// EnableWsl is the only elevated operation in Setup. The helper can enable
+// exactly two named optional features; appliance import/state/shortcuts remain
+// in this original unelevated user's HKCU and profile even when UAC credentials
+// belong to a different administrator.
 function EnableWsl: Boolean;
 var
   Code: Integer;
+  Worker, OutputFile, Params: String;
+  Raw: AnsiString;
 begin
-  // 1. The modern one-shot. --no-distribution because we import our own;
-  //    --web-download because the Store is blocked or absent on many managed
-  //    and LTSC machines.
-  if RunLogged(WslExe, '--install --no-distribution --web-download', Code) and (Code = 0) then
-  begin
-    Result := True;
-    Exit;
-  end;
-  // 2. Same thing without --web-download: some builds of wsl.exe do not know
-  //    the flag and reject the whole command line because of it.
-  if RunLogged(WslExe, '--install --no-distribution', Code) and (Code = 0) then
-  begin
-    Result := True;
-    Exit;
-  end;
-  // 3. Windows 10's inbox path: enable both features with DISM, then let the
-  //    post-restart resume pull the kernel with `wsl --update`. This is what
-  //    makes Setup work on Windows 10 22H2, where `wsl --install` can be too
-  //    old to understand the flags above.
   SetStatus('Turning on the Windows features LanEx needs...');
-  RunLogged(ExpandConstant('{sys}\dism.exe'),
-    '/online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart', Code);
-  RunLogged(ExpandConstant('{sys}\dism.exe'),
-    '/online /enable-feature /featurename:VirtualMachinePlatform /all /norestart', Code);
-  // DISM's 3010 means "done, restart required" — success as far as we care.
-  Result := (Code = 0) or (Code = 3010);
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  OutputFile := ExpandConstant('{tmp}\feature-results.json');
+  DeleteFile(OutputFile);
+  if CompareText(GetSHA256OfFile(Worker), '{#SetupWorkerSha256}') <> 0 then
+  begin
+    LogLine('elevated worker hash does not match the compile-time payload hash');
+    Result := False;
+    Exit;
+  end;
+  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'
+    + Worker + '" -Action EnableFeatures -ExpectedSelfSha256 {#SetupWorkerSha256}'
+    + ' -OutputPath "' + OutputFile + '"';
+  LogLine('$ elevated feature helper: Windows Subsystem for Linux + Virtual Machine Platform');
+  Result := ShellExec('runas',
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '',
+    SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+  if FileExists(OutputFile) and LoadStringFromFile(OutputFile, Raw) then
+    LogLine('feature helper result: ' + Trim(String(Raw)))
+  else
+    Result := False;
+  if not Result then
+    LogLine('feature helper failed or UAC was cancelled; exit=' + IntToStr(Code));
 end;
 
 // ScheduleResume arranges for Setup to continue by itself after the restart.
-procedure ScheduleResume;
+function ScheduleResume: Boolean;
 var
-  SetupCopy: String;
+  Worker, Output, Snippet: String;
 begin
-  // Run the copy in our own cache, not {srcexe}: people delete the installer
-  // from Downloads, and a resume that cannot find its own exe is a half-installed
-  // machine. The copy goes away with everything else at uninstall.
-  ForceDirectories(CacheDir);
-  SetupCopy := CacheDir + '\LanEx-Setup.exe';
-  if not FileCopy(ExpandConstant('{srcexe}'), SetupCopy, False) then
-    SetupCopy := ExpandConstant('{srcexe}');
-  // RunOnce (not Run): it fires exactly once and deletes itself, so a failed
-  // resume can never turn into a boot loop. /RESUME=1 makes the second run skip
-  // straight to the progress page.
-  RegWriteStringValue(HKEY_LOCAL_MACHINE,
-    'SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce', 'LanExSetupResume',
-    '"' + SetupCopy + '" /RESUME=1 /SP-');
+  // The worker writes and verifies HKEY_CURRENT_USER RunOnce for this owner.
+  // Durable state bounds two attempts total and one per boot. The independently
+  // verified Start-menu shortcut remains the manual fallback if RunOnce is
+  // blocked, consumed, or cancelled.
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  Snippet := '& ' + PSQuote(Worker) + ' -Action RegisterResume -StatePath '
+    + PSQuote(StateFile) + ' -BootIdentity ' + PSQuote(BootIdentityValue);
+  Result := PowerShellCapture(Snippet, Output);
+  if not Result then
+    LogLine('resume registration failed: ' + Output);
 end;
 
 function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
@@ -872,42 +981,135 @@ begin
   if Result <> '' then
     Exit;
 
-  // 1. WSL itself.
-  if not WslUsable then
+  // Revalidate immediately before every machine-level or large operation. The
+  // wizard may have been open for a while, and resume never trusts stale facts.
+  if not RunPreflight(Output) then
   begin
-    SetStatus('Setting up Windows Subsystem for Linux (one-time)...');
+    Result := 'LanEx could not recheck Windows/WSL prerequisites.'
+      + #13#10#13#10 + Output + #13#10#13#10
+      + 'Use Continue LanEx Setup from the Start menu after resolving the issue.';
+    Exit;
+  end;
+
+  if PreflightDecision = 'firmware-disabled' then
+  begin
+    Result := 'Firmware virtualization is disabled. No feature, distribution, '
+      + 'or user data was changed. Use Microsoft''s virtualization instructions '
+      + 'and then choose Continue LanEx Setup from the Start menu.';
+    Exit;
+  end;
+  if (PreflightDecision = 'unsupported-architecture') or
+     (PreflightDecision = 'unsupported-windows') or
+     (PreflightDecision = 'preflight-query-failed') then
+  begin
+    Result := 'This PC did not pass the structured Windows/WSL preflight: '
+      + PreflightDecision + '.' + #13#10#13#10
+      + 'No Windows feature or WSL distribution was changed.';
+    Exit;
+  end;
+
+  // Only the feature operation crosses UAC. A different administrator may
+  // authorize it, but execution returns here before any user-owned work.
+  if PreflightDecision = 'features-required' then
+  begin
+    SetStatus('Requesting permission for two Windows features...');
     if not EnableWsl then
     begin
       Result := 'Windows Subsystem for Linux could not be turned on.' + #13#10#13#10
-        + 'On a company-managed PC this is usually blocked by policy. '
-        + 'docs/INSTALL.md has a manual path that works in that case.'
+        + 'The administrator prompt may have been cancelled, or company policy '
+        + 'may block Windows Subsystem for Linux / Virtual Machine Platform. '
+        + 'An administrator must enable those features; Setup cannot bypass policy.'
+        + #13#10#13#10 + 'Your choices and exact installer are saved. Use '
+        + 'Continue LanEx Setup from the Start menu when ready.'
         + #13#10#13#10 + 'Last lines of the log:' + #13#10 + LogTail(10);
       Exit;
     end;
-    if not WslUsable then
+    if not ScheduleResume then
     begin
-      // The one restart this installer can ever require. It resumes itself.
-      ScheduleResume;
+      Result := 'The Windows features were enabled, but Setup could not verify '
+        + 'the owner-only continuation trigger. Restart was not requested. '
+        + 'Use Continue LanEx Setup from the Start menu after restarting Windows.';
+      Exit;
+    end;
+    WslPending := True;
+    NeedsRestart := True;
+    MsgBox('Windows needs to restart to finish switching on the Linux subsystem.'
+      + #13#10#13#10 + 'Setup registered one owner-only automatic continuation. '
+      + 'If Windows blocks it, use Continue LanEx Setup in your Start menu. '
+      + 'Your component and PDK choices are already saved.', mbInformation, MB_OK);
+    Exit;
+  end;
+
+  if PreflightDecision = 'restart-required' then
+  begin
+    if not ScheduleResume then
+    begin
+      Result := 'Windows reports a pending WSL feature restart, but Setup could '
+        + 'not verify the owner-only continuation trigger. Use Continue LanEx '
+        + 'Setup from the Start menu after restarting Windows.';
+      Exit;
+    end;
+    WslPending := True;
+    NeedsRestart := True;
+    Exit;
+  end;
+
+  if PreflightDecision = 'wsl-update-required' then
+  begin
+    if MsgBox('LanEx needs a newer WSL runtime for systemd and desktop tools.'
+      + #13#10#13#10 + 'Updating WSL is machine-wide and can briefly affect '
+      + 'other WSL work. Save active WSL work before continuing. Setup will '
+      + 'not shut down or convert any distribution.' + #13#10#13#10
+      + 'Update WSL now?', mbConfirmation, MB_YESNO) <> IDYES then
+    begin
+      Result := 'WSL update deferred. Your choices and exact installer are saved; '
+        + 'choose Continue LanEx Setup from the Start menu when ready.';
+      Exit;
+    end;
+    SetStatus('Updating Windows Subsystem for Linux...');
+    if not (RunLogged(WslExe, '--update --web-download', Code) and (Code = 0)) and
+       not (RunLogged(WslExe, '--update', Code) and (Code = 0)) then
+    begin
+      Result := 'Windows could not update WSL. This may be a managed-policy or '
+        + 'network restriction; the existing distributions were not stopped or '
+        + 'changed.' + #13#10#13#10 + LogTail(12);
+      Exit;
+    end;
+    if not RunPreflight(Output) then
+    begin
+      Result := 'WSL updated, but Setup could not verify its capabilities.'
+        + #13#10#13#10 + Output;
+      Exit;
+    end;
+    if PreflightDecision = 'restart-required' then
+    begin
+      if not ScheduleResume then
+      begin
+        Result := 'WSL updated but its restart continuation could not be verified. '
+          + 'Use Continue LanEx Setup after restarting Windows.';
+        Exit;
+      end;
       WslPending := True;
       NeedsRestart := True;
-      MsgBox('Windows needs to restart once to finish switching on the Linux '
-        + 'subsystem LanEx runs on.' + #13#10#13#10
-        + 'Setup will continue by itself after the restart — approve the '
-        + '"LanEx Setup" prompt when it appears, and leave it to finish.',
-        mbInformation, MB_OK);
+      Exit;
+    end;
+    if PreflightDecision <> 'ready' then
+    begin
+      Result := 'The WSL runtime still does not provide the required capabilities: '
+        + PreflightDecision + '.' + #13#10#13#10 + LogTail(12);
       Exit;
     end;
   end;
 
-  // 2. Belt-and-braces settings. Both are best-effort: an old inbox WSL that
-  //    refuses --update still imports and runs our distro just fine, and we pass
-  //    --version 2 explicitly at import time regardless of the default.
-  RunLogged(WslExe, '--set-default-version 2', Code);
-  SetStatus('Updating Windows Subsystem for Linux...');
-  if not (RunLogged(WslExe, '--update --web-download', Code) and (Code = 0)) then
-    RunLogged(WslExe, '--update', Code);
+  if (PreflightDecision <> 'ready') or (not WslUsable) then
+  begin
+    Result := 'WSL could not start the private appliance kernel. Setup will not '
+      + 'download or import an environment until this prerequisite is healthy.'
+      + #13#10#13#10 + 'No existing distribution was stopped or changed.';
+    Exit;
+  end;
 
-  // 3./4. Download and import — skipped entirely when repairing, where the
+  // Download and import — skipped entirely when repairing, where the
   //       distro already exists and only provisioning needs to re-run.
   if not (RepairExisting and DistroExists) then
   begin
@@ -973,6 +1175,10 @@ begin
   //    with no Docker daemon.
   SetStatus('Finishing up...');
   RunLogged(WslExe, '--terminate "' + DistroNameValue + '"', Code);
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  if not PowerShellCapture('& ' + PSQuote(Worker) + ' -Action ClearResume -StatePath '
+      + PSQuote(StateFile), Output) then
+    LogLine('WARNING: could not clear owned continuation shortcut: ' + Output);
   LogLine('=== provisioning complete ===');
 end;
 
@@ -988,7 +1194,7 @@ function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   // The self-resuming run after the restart goes straight to the progress page:
   // the user already accepted the licence and chose their options.
-  Result := IsResumeRun and
+  Result := IsContinuationRun and
             ((PageID = wpWelcome) or (PageID = wpLicense) or (PageID = wpSelectTasks));
 end;
 

@@ -27,11 +27,15 @@ long version.
 ## Windows — the installer
 
 Download **[LanEx-Setup.exe](https://github.com/AkshatIsWired/lanex/releases/latest)**,
-run it, click through the wizard. You need to be able to enter an administrator
-password once (Windows asks); after that there is nothing to configure.
+run it, click through the wizard. Setup stays in your Windows account. If WSL's
+two Windows features are off, Windows asks once for administrator approval;
+those feature commands are the only part that runs elevated.
 
-**Requirements:** Windows 10 version 2004 (build 19041) or newer, 64-bit —
-Windows 11 recommended. About 10 GB free disk space. Windows Home is fine.
+**Requirements:** Windows 11 x64, about 10 GB free disk space. Windows Home is
+fine. Windows 10 build 19044 is the technical floor but is not advertised as a
+supported installer target until its separate real-machine acceptance leg
+passes. This amd64 appliance is rejected on ARM64 even when Windows can emulate
+x64 apps.
 
 **What you get:** a Start-menu app called **LanEx**. Clicking it opens the
 cockpit in its own desktop window, usually within about 15 seconds. On first
@@ -56,9 +60,13 @@ that up so thoroughly that you never have to know it is there.
 
 It does exactly five things:
 
-1. **Turns on WSL** if it isn't already on (`wsl --install --no-distribution`).
-   This is the only step that can require a restart — at most one, and Setup
-   restarts itself afterwards to finish the job.
+1. **Checks and turns on WSL** if needed. Setup distinguishes unsupported
+   hardware/Windows, firmware virtualization, disabled features, a pending
+   restart, and an old WSL runtime. Enabling Windows Subsystem for Linux and
+   Virtual Machine Platform is the only elevated operation. Setup saves the
+   exact installer and your choices before UAC or restart, registers an
+   owner-only continuation, and also creates **Continue LanEx Setup** in your
+   Start menu as a manual fallback. Automatic restart attempts are bounded.
 2. **Downloads the Linux environment**, verified against a SHA256 built into
    Setup. Released versions fetch a ready-made LanEx environment (~1 GB) that is
    assembled and tested by CI; if that file is ever unreachable, Setup falls
@@ -84,7 +92,7 @@ It does exactly five things:
 |---|---|
 | ✅ Enables the Windows Subsystem for Linux feature | if it was off |
 | ✅ Creates one new WSL distro called `lanex` | entirely its own |
-| ✅ Writes to `%LOCALAPPDATA%\LanEx` and `%ProgramFiles%\LanEx` | nothing else |
+| ✅ Writes to `%LOCALAPPDATA%\LanEx` and `%LOCALAPPDATA%\Programs\LanEx` | user-owned installer, appliance, cache, logs and launcher |
 | ❌ Your existing WSL distros | never read, listed for anything but our own name, modified, or upgraded |
 | ❌ Your Python, your PATH, your registry beyond the standard uninstall entry | untouched |
 | ❌ Docker Desktop | not needed and not installed; Docker lives *inside* the LanEx distro |
@@ -93,9 +101,9 @@ It does exactly five things:
 
 | What | Where |
 |---|---|
-| The launcher (`LanEx.exe`) | `%ProgramFiles%\LanEx` |
-| The Linux environment's virtual disk | `%LOCALAPPDATA%\LanEx\distro` |
-| The downloaded environment image (cached, reused on repair) | `%LOCALAPPDATA%\LanEx\cache` |
+| The launcher (`LanEx.exe`) | `%LOCALAPPDATA%\Programs\LanEx` |
+| The Linux environment's virtual disk | `%LOCALAPPDATA%\LanEx\appliance\distro` |
+| The exact resume installer and downloaded image cache | `%LOCALAPPDATA%\LanEx\installer-cache` |
 | Setup and launcher logs — **ask for these first when something is wrong** | `%LOCALAPPDATA%\LanEx\logs` |
 | **Your designs and run results** | `\\wsl.localhost\lanex\home\lanex` (the *LanEx Project Files* shortcut) |
 | The app window's browser profile | `%LOCALAPPDATA%\lanex\app-profile` |
@@ -113,19 +121,19 @@ run `sudo apt-get install …` is a bug in LanEx, not a step. The menu item exis
 for the case *past* that: a package LanEx has no button for, a `git clone` of
 your own. It opens in your projects folder, and closing it changes nothing.
 
-**Uninstalling** from Windows Settings → Apps removes the distro
-(`wsl --unregister lanex`), the folders above, and the shortcuts. It warns you
-first, because **your designs live inside the environment** and go with it —
-copy anything you want to keep out of `\\wsl.localhost\lanex\home\lanex` before
-uninstalling. The one thing uninstalling does *not* undo is the Windows
-Subsystem for Linux feature itself: it is a machine-wide setting other software
-may now depend on, and turning it back off would need another restart. It is
-inert if nothing uses it.
+**Uninstalling** from Windows Settings → Apps currently removes only the Windows
+launcher and shortcuts. It preserves the verified appliance, projects, PDKs,
+run results, installer state and caches for a later reinstall. It never
+unregisters a distro or disables WSL. A later installer milestone will add an
+explicit identity-checked export/erase choice; until then, preservation is the
+only supported uninstall mode.
 
-**No administrator rights?** The installer cannot work — turning the WSL feature
-on is a machine-wide change that Windows only allows an administrator to make.
-Use the [manual path](#windows-manual) with a distro your IT department has
-already given you, or ask them to run the installer.
+**Using a standard Windows account?** You can run Setup yourself. If the WSL
+features are off, an administrator can enter different credentials at the UAC
+prompt; Setup then returns to your account for the private distro, state,
+shortcuts and first launch. If company policy denies WSL, an administrator must
+enable it—Setup does not claim it can bypass policy. You can also use the
+[manual path](#windows-manual) with a distro IT already provided.
 
 <a id="enable-virtualization"></a>
 

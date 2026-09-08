@@ -77,6 +77,29 @@ def _initialize(tmp_path: Path, *, operation: str = "install", manifest: Path | 
     return state, manifest, installer, value
 
 
+def _preflight(tmp_path: Path, facts: dict):
+    fixture = tmp_path / "preflight.json"
+    fixture.write_text(json.dumps(facts), encoding="utf-8")
+    return _run_setup("-Action", "Preflight", "-PreflightFixturePath", fixture)
+
+
+def _base_preflight(**overrides: object) -> dict:
+    facts = {
+        "nativeArchitecture": "AMD64",
+        "windowsBuild": 22631,
+        "computer": {"manufacturer": "Fixture Corp", "model": "Model 1"},
+        "hypervisorPresent": True,
+        "firmwareVirtualization": "enabled",
+        "features": {"wsl": "enabled", "virtualMachinePlatform": "enabled"},
+        "pendingReboot": False,
+        "bootIdentity": "boot-a",
+        "wsl": {"present": True, "statusUsable": True, "version": "2.3.26.0",
+                "systemdCapable": True},
+    }
+    facts.update(overrides)
+    return facts
+
+
 @pytest.mark.parametrize("ref", ["feature/windows", "v1.2.3", "a" * 40])
 def test_universal_source_resolves_branch_tag_and_sha(ref: str) -> None:
     if not BASH:
@@ -181,6 +204,167 @@ def test_wrong_owner_and_newer_schema_are_rejected(tmp_path: Path) -> None:
     assert "newer than this Setup supports" in newer.stderr
 
 
+def test_corrupt_state_is_rejected_without_replacement(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    _manifest(manifest)
+    installer = tmp_path / "LanEx-Setup.exe"
+    installer.write_bytes(b"exact candidate")
+    state = tmp_path / "state.json"
+    state.write_text('{not-json', encoding="utf-8")
+    before = state.read_bytes()
+    failed = _run_setup("-Action", "InitializeState", "-StatePath", state,
+                        "-ManifestPath", manifest, "-InstallerPath", installer,
+                        "-TestOwnerSid", OWNER, ok=False)
+    assert "malformed JSON" in failed.stderr
+    assert state.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("changes", "decision"),
+    [
+        ({}, "ready"),
+        ({"nativeArchitecture": "ARM64"}, "unsupported-architecture"),
+        ({"windowsBuild": 19043}, "unsupported-windows"),
+        ({"hypervisorPresent": False, "firmwareVirtualization": "disabled",
+          "features": {"wsl": "disabled", "virtualMachinePlatform": "disabled"},
+          "wsl": {"present": False, "statusUsable": False, "version": "",
+                  "systemdCapable": False}}, "firmware-disabled"),
+        ({"hypervisorPresent": False, "firmwareVirtualization": "enabled",
+          "features": {"wsl": "disabled", "virtualMachinePlatform": "disabled"},
+          "wsl": {"present": False, "statusUsable": False, "version": "",
+                  "systemdCapable": False}}, "features-required"),
+        ({"features": {"wsl": "enable-pending", "virtualMachinePlatform": "enabled"},
+          "pendingReboot": True, "wsl": {"present": True, "statusUsable": False,
+                                           "version": "2.3.26.0", "systemdCapable": True}},
+         "restart-required"),
+        ({"wsl": {"present": True, "statusUsable": False, "version": "0.66.2.0",
+                  "systemdCapable": False}}, "wsl-update-required"),
+        ({"features": {"wsl": "unknown", "virtualMachinePlatform": "unknown"}},
+         "preflight-query-failed"),
+    ],
+)
+def test_preflight_truth_table(tmp_path: Path, changes: dict, decision: str) -> None:
+    result = _preflight(tmp_path, _base_preflight(**changes))
+    assert result["schema"] == 1
+    assert result["decision"]["code"] == decision
+
+
+def test_hypervisor_presence_overrides_misleading_firmware_false(tmp_path: Path) -> None:
+    result = _preflight(tmp_path, _base_preflight(
+        hypervisorPresent=True, firmwareVirtualization="disabled"))
+    assert result["decision"]["code"] == "ready"
+
+
+def test_unknown_firmware_is_warning_not_disabled_claim(tmp_path: Path) -> None:
+    result = _preflight(tmp_path, _base_preflight(
+        hypervisorPresent=False, firmwareVirtualization="unknown",
+        features={"wsl": "disabled", "virtualMachinePlatform": "disabled"},
+        wsl={"present": False, "statusUsable": False, "version": "",
+             "systemdCapable": False}))
+    assert result["decision"]["code"] == "features-required"
+    assert result["decision"]["firmwareNotice"] is True
+
+
+def test_feature_helper_checks_both_results_and_preserves_errors(tmp_path: Path) -> None:
+    fixture = tmp_path / "feature-results.json"
+    fixture.write_text(json.dumps({
+        "wsl": {"exitCode": 0, "output": "enabled"},
+        "virtualMachinePlatform": {"exitCode": 5, "output": "blocked by policy"},
+    }), encoding="utf-8")
+    output = tmp_path / "feature-output.json"
+    failed = _run_setup("-Action", "EnableFeatures", "-FeatureFixturePath", fixture,
+                        "-OutputPath", output, ok=False)
+    assert "VirtualMachinePlatform" in failed.stderr
+    result = json.loads(output.read_text())
+    assert result["wsl"]["success"] is True
+    assert result["virtualMachinePlatform"]["success"] is False
+    assert "blocked by policy" in result["virtualMachinePlatform"]["output"]
+
+
+def test_elevated_worker_is_bound_to_compile_time_hash(tmp_path: Path) -> None:
+    fixture = tmp_path / "feature-results.json"
+    fixture.write_text(json.dumps({
+        "wsl": {"exitCode": 0, "output": "ok"},
+        "virtualMachinePlatform": {"exitCode": 0, "output": "ok"},
+    }), encoding="utf-8")
+    rejected = _run_setup("-Action", "EnableFeatures", "-FeatureFixturePath", fixture,
+                          "-ExpectedSelfSha256", "0" * 64, ok=False)
+    assert "integrity check failed" in rejected.stderr
+    accepted = _run_setup(
+        "-Action", "EnableFeatures", "-FeatureFixturePath", fixture,
+        "-ExpectedSelfSha256", hashlib.sha256(SETUP.read_bytes()).hexdigest(),
+    )
+    assert accepted["wsl"]["success"] is True
+
+
+def test_owner_bound_resume_is_verified_and_bounded(tmp_path: Path) -> None:
+    state, _, installer, before = _initialize(tmp_path)
+    resume_root = tmp_path / "resume"
+    staged = tmp_path / "cache" / "LanEx-Setup.exe"
+    staged.parent.mkdir()
+    shutil.copy2(installer, staged)
+    staged_state = _run_setup(
+        "-Action", "StageInstaller", "-StatePath", state,
+        "-ResumeInstallerPath", staged, "-TestResumeRoot", resume_root,
+        "-TestOwnerSid", OWNER,
+    )
+    assert staged_state["resume"]["installerSha256"] == before["currentInstallerSha256"]
+    registered = _run_setup(
+        "-Action", "RegisterResume", "-StatePath", state,
+        "-BootIdentity", "boot-a", "-TestResumeRoot", resume_root,
+        "-TestOwnerSid", OWNER,
+    )
+    assert registered["boot"]["restartAttempts"] == 1
+    assert (resume_root / "runonce.txt").exists()
+    assert (resume_root / "Continue LanEx Setup.lnk.json").exists()
+
+    same_boot = _run_setup(
+        "-Action", "InitializeState", "-StatePath", state,
+        "-ManifestPath", tmp_path / "manifest.json", "-Operation", "repair",
+        "-InstallerPath", staged, "-ResumeMode", "1", "-BootIdentity", "boot-a",
+        "-TestOwnerSid", OWNER, ok=False,
+    )
+    assert "restart has not been observed" in same_boot.stderr
+
+    resumed = _run_setup(
+        "-Action", "InitializeState", "-StatePath", state,
+        "-ManifestPath", tmp_path / "manifest.json", "-Operation", "repair",
+        "-InstallerPath", staged, "-ResumeMode", "1", "-BootIdentity", "boot-b",
+        "-TestOwnerSid", OWNER,
+    )
+    assert resumed["choices"] == {"pdks": ["sky130A"]}
+    _run_setup("-Action", "RegisterResume", "-StatePath", state,
+               "-BootIdentity", "boot-b", "-TestResumeRoot", resume_root,
+               "-TestOwnerSid", OWNER)
+    exhausted = _run_setup("-Action", "RegisterResume", "-StatePath", state,
+                           "-BootIdentity", "boot-c", "-TestResumeRoot", resume_root,
+                           "-TestOwnerSid", OWNER, ok=False)
+    assert "restart limit" in exhausted.stderr
+
+
+def test_resume_rejects_tampered_installer_and_trigger_failure(tmp_path: Path) -> None:
+    state, _, installer, _ = _initialize(tmp_path)
+    resume_root = tmp_path / "resume"
+    staged = tmp_path / "cache" / "LanEx-Setup.exe"
+    staged.parent.mkdir()
+    shutil.copy2(installer, staged)
+    staged.write_bytes(b"tampered")
+    bad = _run_setup("-Action", "StageInstaller", "-StatePath", state,
+                     "-ResumeInstallerPath", staged, "-TestResumeRoot", resume_root,
+                     "-TestOwnerSid", OWNER, ok=False)
+    assert "does not match" in bad.stderr
+
+    shutil.copy2(installer, staged)
+    _run_setup("-Action", "StageInstaller", "-StatePath", state,
+               "-ResumeInstallerPath", staged, "-TestResumeRoot", resume_root,
+               "-TestOwnerSid", OWNER)
+    failed = _run_setup("-Action", "RegisterResume", "-StatePath", state,
+                        "-BootIdentity", "boot-a", "-TestResumeRoot", resume_root,
+                        "-TestOwnerSid", OWNER,
+                        env={"LANEX_SETUP_TEST_TRIGGER_FAIL": "1"}, ok=False)
+    assert "Could not verify" in failed.stderr
+
+
 def test_manifest_generator_hashes_exact_checkout_payloads(tmp_path: Path) -> None:
     wheel = tmp_path / "lanex.whl"; wheel.write_bytes(b"wheel from checkout")
     install = tmp_path / "install.sh"; install.write_bytes(b"installer")
@@ -221,6 +405,7 @@ def test_ci_builds_and_mounts_exact_pr_checkout() -> None:
     assert "LANEX_INSTALL_SCRIPT=/checkout/scripts/install.sh" in body
     assert 'LANEX_FROM=/checkout/dist/$LANEX_WHEEL_NAME' in body
     assert "NewManifest" in body and "LANEX_SOURCE_SHA=$(git rev-parse HEAD)" in body
+    assert "SetupWorkerSha256" in body and "Get-FileHash ..\\setup\\setup.ps1" in body
     assert "no usable ref for scripts/install.sh" not in body
 
 
@@ -232,3 +417,17 @@ def test_inno_requires_exact_payload_and_never_deletes_distro_by_name() -> None:
     uninstall = body[body.index("procedure CurUninstallStepChanged") :]
     assert "--unregister" not in uninstall
     assert "DelTree(AppDataRoot" not in uninstall
+
+
+def test_inno_keeps_user_work_unelevated_and_limits_uac_to_features() -> None:
+    body = INNO.read_text()
+    assert "PrivilegesRequired=lowest" in body
+    assert "DefaultDirName={localappdata}\\Programs\\{#AppName}" in body
+    assert "ShellExec('runas'" in body and "-Action EnableFeatures" in body
+    assert "ExpectedSelfSha256" in body and "SetupWorkerSha256 is required" in body
+    assert "-Action RegisterResume" in body
+    assert "HKEY_CURRENT_USER" in body
+    assert "HKEY_LOCAL_MACHINE" not in body[body.index("function ScheduleResume"):
+                                               body.index("function OnDownloadProgress")]
+    assert "--set-default-version" not in body
+    assert "support.microsoft.com/en-US/Windows/Experience/enable-virtualization-on-windows" in body

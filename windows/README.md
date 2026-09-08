@@ -22,6 +22,15 @@ preserving the appliance and projects; the later identity-checked removal flow
 will make permanent data deletion an explicit choice. Each file's header comment explains its own decisions; start with
 `installer/lanex.iss`.
 
+Setup itself runs unelevated in the originating account. Its PowerShell worker
+returns a schema-1 preflight record (native architecture, Windows build,
+firmware/hypervisor evidence, feature/reboot state and WSL capabilities). Only
+the two DISM feature commands run through `runas`; the private distro, durable
+state, cached candidate, Start-menu entries and launch remain with the original
+user even when another administrator supplies UAC credentials. Restart uses a
+verified HKCU RunOnce entry plus a manual **Continue LanEx Setup** shortcut and
+is bounded by install-state boot identity/counters.
+
 ## Building locally
 
 You need Go 1.21+, [Inno Setup 6.3+](https://jrsoftware.org/isdl.php), and (for
@@ -114,14 +123,14 @@ Acceptance gate — all ten must pass on x64 before a release:
 
 | # | Environment | Expected | Verified |
 |---|---|---|---|
-| 1 | Clean Win 11 23H2+, WSL never installed | One restart at most, Setup resumes itself, full install; first launch opens the app window; Tools tab pulls the image; the SPM example runs to GDS | — |
+| 1 | Clean Win 11 23H2+, WSL never installed | Feature-only UAC, normally one restart, same-owner automatic/manual resume, full install; first launch opens the app window; Tools tab pulls the image; the SPM example runs to GDS | — |
 | 2 | Win 11 with an existing `Ubuntu-24.04` and the user's own WSL projects | Their distro and files untouched (compare `wsl -l -v` before/after); both coexist | — |
 | 3 | Win 10 22H2 x64 | Same as #1 (this is the DISM fallback path in `EnableWsl`) | — |
 | 4 | Virtualization disabled in BIOS | Friendly preflight dialog with a working help link; nothing partially installed | — |
 | 5 | Re-run matching Setup over a healthy install | Identity + self-test pass; projects preserved; no dependency upgrade | — |
 | 6 | Double-click the icon while LanEx is running | No second server; the app window re-opens (mutex + health-probe path) | — |
 | 7 | Uninstall (current safe foundation) | Windows launcher/shortcuts removed; appliance, projects, PDKs, profile, and other distros preserved | — |
-| 8 | Standard (non-admin) user | Setup refuses at UAC with a clear message (documented limitation) | — |
+| 8 | Standard user; different administrator supplies UAC credentials | Only feature helper runs as admin; originating user owns state, appliance, shortcuts and launch | — |
 | 9 | Network dropped mid-provision | Retry re-runs provisioning idempotently and succeeds | — |
 | 10 | GUI viewers after a run | GTKWave opens from the RTL IDE and the layout viewer opens — proves the single interactive `wsl` invocation survived the launcher | — |
 

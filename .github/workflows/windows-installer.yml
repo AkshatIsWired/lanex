@@ -350,6 +350,8 @@ jobs:
           $defines += "/DLanexSourceSha=$env:LANEX_SOURCE_SHA"
           $defines += "/DLanexSourceRepo=$env:LANEX_SOURCE_REPO"
           $defines += "/DLanexWheel=$env:LANEX_WHEEL"
+          $workerHash = (Get-FileHash ..\setup\setup.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
+          $defines += "/DSetupWorkerSha256=$workerHash"
           # Only a bake that ran AND produced a hash gets wired in. Anything else
           # compiles the installer exactly as it was before Phase 2a: it
           # downloads the pinned Ubuntu image and provisions on the user's
