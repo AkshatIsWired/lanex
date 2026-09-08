@@ -31,6 +31,8 @@
 #   LANEX_SOURCE_SHA=<sha>  immutable source identity recorded in the appliance
 #   LANEX_INSTALL_ID=<uuid> owner identity recorded in the appliance marker
 #   LANEX_MANIFEST_HASH=<sha256> build-manifest identity for the marker
+#   LANEX_BUILD_MANIFEST=<path> immutable component catalog/pins for finalization
+#   LANEX_SETUP_CHOICES=<path> owner state or choices JSON for finalization
 #   LANEX_USER=<name>      appliance user (default: lanex; override for testing)
 #   LANEX_PROVISION_DNS=1  force the WSL DNS fix even if github.com is reachable
 #   LANEX_BAKE=1           CI is cooking a rootfs image, not provisioning a
@@ -49,12 +51,10 @@ INSTALL_SH="${LANEX_INSTALL_SCRIPT:-}"
 # path, and Repair on a baked install re-runs the same stages it was built from.
 BAKE="${LANEX_BAKE:-0}"
 
-# GDS3D compiles from source and takes minutes. On a user's machine that is time
-# spent behind a progress label for an OPTIONAL 3D viewer the Tools tab installs
-# on demand — so it is skipped. In a bake the compile happens once, in CI, and
-# every user gets it for free.
+# GDS3D and the LibreLane image are selected components.  They are deliberately
+# deferred until the imported appliance has rebooted with systemd and its Docker
+# daemon is usable.  Bare and baked images therefore execute the same finalizer.
 SKIP_GDS3D=1
-[ "$BAKE" = "1" ] && SKIP_GDS3D=0
 
 say()  { printf '\n== %s\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
@@ -276,12 +276,10 @@ install_lanex() {
     # /usr/local/bin/lanex symlink, GL drivers, X11 fonts, gtkwave — is already
     # debugged across distros; duplicating any of it here would mean two
     # installers to keep in sync. Deliberately skipped:
-    #   LANEX_SKIP_PULL   — the ~3 GB LibreLane image. Downloading it here would
-    #                       triple the install time for a file the Tools tab
-    #                       pulls on first launch WITH a progress bar.
-    #   LANEX_SKIP_GDS3D  — the optional 3D viewer compiles from source (minutes).
-    #                       One click in the Tools tab installs it later; Phase 2
-    #                       pre-bakes it into the rootfs.
+    #   LANEX_SKIP_PULL / LANEX_SKIP_GDS3D — explicitly deferred to finalize(),
+    #                       after systemd/Docker are live. The finalizer invokes
+    #                       the same LanEx backends and treats selected failures
+    #                       as fatal instead of ordinary install warnings.
     # Windows passes the installer script and candidate wheel from the Setup
     # payload. CI uses the same local-source route. A direct universal run may
     # omit both, in which case we download the requested ref to a file, check
@@ -374,6 +372,40 @@ verify() {
         || warn "/etc/wsl.conf lost its default user — LanEx may start as root."
 }
 
+# --------------------------------------------------------------- finalization --
+finalize() {
+    say "Finalizing selected components"
+    local manifest="${LANEX_BUILD_MANIFEST:-}"
+    local choices="${LANEX_SETUP_CHOICES:-}"
+    [ -f "$manifest" ] || die "the selected-component manifest is missing. Run the same Setup again."
+    [ -f "$choices" ] || die "the saved component choices are missing. Run the same Setup again."
+    local attempt
+    for attempt in $(seq 1 60); do
+        if [ "$(cat /proc/1/comm 2>/dev/null)" = "systemd" ] &&
+           runuser -u "$APP_USER" -- docker info >/dev/null 2>&1; then
+            note "systemd and the Docker socket are ready."
+            break
+        fi
+        if [ "$attempt" -eq 60 ]; then
+            die "Docker did not become ready within two minutes after the appliance restart.
+   Click Retry; Setup will recheck the same owned environment."
+        fi
+        if [ $((attempt % 5)) -eq 0 ]; then
+            note "waiting for systemd and Docker ($((attempt * 2))s)..."
+        fi
+        sleep 2
+    done
+    # The appliance user owns its home, Ciel store, image lock and GDS3D build.
+    # Running the strict CLI as root would recreate the historical root-owned
+    # PDK store failure and would violate the per-user appliance contract.
+    runuser -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
+        LOGNAME="$APP_USER" PATH="/usr/local/bin:/usr/bin:/bin:/home/${APP_USER}/.local/bin" \
+        lanex --provision-finalize "$manifest" --setup-choices "$choices" \
+        || die "one or more selected components did not become ready.
+   The readiness report above names every missing requirement. Click Retry."
+    say "The LanEx environment is ready."
+}
+
 # ------------------------------------------------------------------- 8. bake --
 # Only ever runs under LANEX_BAKE=1, i.e. in CI, on a container that is about to
 # become `lanex-rootfs-amd64.tar.gz`. Everything removed here is a cache that
@@ -401,6 +433,15 @@ bake() {
 # -------------------------------------------------------------------- main  --
 main() {
     require_root
+    local mode="${1:-base}"
+    case "$mode" in
+        base|finalize) ;;
+        *) die "unknown provisioning mode '$mode'." ;;
+    esac
+    if [ "$mode" = "finalize" ]; then
+        finalize
+        return
+    fi
     say "Provisioning the LanEx environment (Ubuntu, isolated)"
     # The bake note only when baking: this line ends up in a log a user may send
     # us, and "bake: 0" on every ordinary install is noise that invites the
@@ -422,13 +463,12 @@ main() {
     install_lanex
     write_identity_marker
     verify
+    note "DEFERRED(selected-components): image, native support tools, GDS3D and PDKs run after the systemd boot."
     # After verify(), never before: a broken appliance must fail the checks
     # while its logs are still there to read.
     bake
-    say "The LanEx environment is ready."
-    # The installer restarts the distro next (`wsl --terminate lanex`); saying
-    # so keeps the log readable when a user sends it to us.
-    note "Setup will now restart the environment so it boots with systemd."
+    say "LanEx base provisioning is complete."
+    note "Setup will now restart only this environment, wait for systemd/Docker, and finalize selections."
 }
 
 main "$@"

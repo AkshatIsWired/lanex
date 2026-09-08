@@ -46,6 +46,8 @@ IMPLICATIONS: Dict[str, str] = {
     "test_history": "Run success + metrics are derived correctly from the on-disk run tree.",
     "test_run_import": "Importing a run reproduces identical metrics (round-trip fidelity, Fear C).",
     "test_installer": "PDK/tool installation logic behaves and self-heals instead of looping on a bad state.",
+    "test_windows_setup": "Windows Setup state, ownership, payload identity, preflight and resume remain owner-bound and recoverable.",
+    "test_windows_provisioning": "Windows appliance finalization waits for exact image/PDK/native-tool readiness; failures cannot become a successful Setup.",
     "test_install_foolproof": "The one-click install path stays foolproof across the platform edge cases it has hit.",
     "test_pdk": "PDK detection/enable is correct so the flow runs against the PDK the user picked (Fear B).",
     "test_pdk_resolve": "The resolved PDK_ROOT points at the files the selected run mode actually needs.",

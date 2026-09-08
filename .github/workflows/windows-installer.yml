@@ -16,9 +16,9 @@
 #     API name are checked);
 #   * provision.sh passes `bash -n` and shellcheck, AND actually provisions a
 #     plain ubuntu:24.04 container end to end, twice, with the appliance
-#     self-test passing after each (provision-e2e). That covers the whole of
-#     provisioning and the Repair path — everything except the two things that
-#     need WSL: `wsl --import` and the first launch;
+#     base self-test passing after each (provision-e2e). Hermetic Python tests
+#     cover finalizer selection/retry/readiness contracts. The real finalizer
+#     still needs WSL systemd + Docker, as do `wsl --import` and GUI launch;
 #   * the pinned Ubuntu rootfs URL still exists and still matches Microsoft's
 #     published WSL image manifest (weekly — see the rootfs-pin job).
 #

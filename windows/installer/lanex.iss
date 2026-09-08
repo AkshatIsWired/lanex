@@ -139,8 +139,8 @@
 ; Space needed on the %LOCALAPPDATA% volume. The two download paths differ, so
 ; this is sized for the larger one:
 ;   cached image       ~0.4 GB (Ubuntu) or ~0.9 GB (baked, kept for Repair)
-;   imported distro    ~2 GB provisioned, ~2.5 GB when baked (GDS3D is built in)
-;   LibreLane image    ~3 GB, pulled by the Tools tab on first launch
+;   imported distro    ~2 GB before selected native tools/PDKs
+;   LibreLane image    ~3 GB, pulled and verified by Setup after systemd boot
 ;   run output         the rest
 ; 10 GB leaves real headroom on both, and refusing an install that would have
 ; worked is worse than a tight fit — so this stays a floor, not an estimate.
@@ -631,7 +631,7 @@ begin
     MsgBox('LanEx needs at least {#MinFreeGB} GB free on your Windows drive, and '
       + 'there is only ' + IntToStr(FreeGB) + ' GB.' + #13#10#13#10
       + 'That covers LanEx''s environment plus the chip-design toolchain it '
-      + 'downloads on first launch. Please free some space and run Setup again.',
+      + 'downloads before Setup finishes. Please free some space and run Setup again.',
       mbError, MB_OK);
     Result := False;
     Exit;
@@ -906,7 +906,7 @@ begin
     + 'LANEX_MANIFEST_HASH="' + ManifestHashValue + '" '
     + 'LANEX_INSTALL_SCRIPT="' + LinuxInstall + '" LANEX_FROM="' + LinuxWheel + '" '
     + 'LANEX_PIP_CONSTRAINT="' + LinuxConstraint + '" '
-    + 'bash "' + LinuxPath + '"';
+    + 'bash "' + LinuxPath + '" base';
   repeat
     SetStatus('Preparing the LanEx environment - this takes a few minutes...');
     if RunLogged(WslExe, Params, Code) and (Code = 0) then
@@ -939,14 +939,50 @@ end;
 
 function HealthyRepairNeedsNoChanges: Boolean;
 var
-  SelfTestPath, LinuxSelfTest: String;
+  SelfTestPath, ManifestPath, LinuxSelfTest, LinuxManifest, LinuxChoices: String;
   Code: Integer;
 begin
   ExtractTemporaryFile('selftest.sh');
+  ExtractTemporaryFile('build-manifest.json');
   SelfTestPath := ExpandConstant('{tmp}\selftest.sh');
+  ManifestPath := ExpandConstant('{tmp}\build-manifest.json');
   LinuxSelfTest := WindowsToWslPath(SelfTestPath);
+  LinuxManifest := WindowsToWslPath(ManifestPath);
+  LinuxChoices := WindowsToWslPath(StateFile);
   Result := RunLogged(WslExe, '-d "' + DistroNameValue
-    + '" -u root -- bash "' + LinuxSelfTest + '"', Code) and (Code = 0);
+    + '" -u root -- env LANEX_BUILD_MANIFEST="' + LinuxManifest
+    + '" LANEX_SETUP_CHOICES="' + LinuxChoices + '" bash "'
+    + LinuxSelfTest + '"', Code) and (Code = 0);
+end;
+
+function FinalizeDistro: String;
+var
+  ScriptPath, ManifestPath, LinuxScript, LinuxManifest, LinuxChoices, Params: String;
+  Code, Answer: Integer;
+begin
+  Result := '';
+  ExtractTemporaryFile('provision.sh');
+  ExtractTemporaryFile('build-manifest.json');
+  ScriptPath := ExpandConstant('{tmp}\provision.sh');
+  ManifestPath := ExpandConstant('{tmp}\build-manifest.json');
+  LinuxScript := WindowsToWslPath(ScriptPath);
+  LinuxManifest := WindowsToWslPath(ManifestPath);
+  LinuxChoices := WindowsToWslPath(StateFile);
+  Params := '-d "' + DistroNameValue + '" -u root -- env '
+    + 'LANEX_USER="lanex" LANEX_BUILD_MANIFEST="' + LinuxManifest + '" '
+    + 'LANEX_SETUP_CHOICES="' + LinuxChoices + '" bash "' + LinuxScript + '" finalize';
+  repeat
+    SetStatus('Installing and verifying the selected tools, image, and PDKs...');
+    if RunLogged(WslExe, Params, Code) and (Code = 0) then
+      Exit;
+    Answer := MsgBox('The selected LanEx components did not all become ready.'
+      + #13#10#13#10 + 'Retrying preserves completed tools, image layers, PDKs, and projects.'
+      + #13#10#13#10 + 'Last lines of the log:' + #13#10 + LogTail(16),
+      mbError, MB_RETRYCANCEL);
+  until Answer <> IDRETRY;
+  Result := 'LanEx base setup is intact, but selected-component readiness failed.'
+    + #13#10#13#10 + 'No existing distribution or project was deleted.'
+    + #13#10#13#10 + 'Full log: ' + LogFile;
 end;
 
 procedure MarkAppComplete;
@@ -961,6 +997,24 @@ begin
     + ' -Component app -ComponentStatus complete -InputFingerprint $f -Phase base-provisioned';
   if not PowerShellCapture(Snippet, Output) then
     LogLine('WARNING: could not checkpoint app component: ' + Output);
+end;
+
+function MarkSelectionsComplete: Boolean;
+var
+  Output, Worker, Manifest, Snippet: String;
+begin
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  Manifest := ExpandConstant('{tmp}\build-manifest.json');
+  Snippet := '$ErrorActionPreference=''Stop''; $m=Get-Content -LiteralPath ' + PSQuote(Manifest)
+    + ' -Raw|ConvertFrom-Json; & ' + PSQuote(Worker) + ' -Action SetComponent -StatePath '
+    + PSQuote(StateFile) + ' -Component image -ComponentStatus complete '
+    + '-InputFingerprint $m.componentFingerprints.image -Phase finalizing; & '
+    + PSQuote(Worker) + ' -Action SetComponent -StatePath ' + PSQuote(StateFile)
+    + ' -Component pdks -ComponentStatus complete '
+    + '-InputFingerprint $m.componentFingerprints.pdks -Phase ready';
+  Result := PowerShellCapture(Snippet, Output);
+  if not Result then
+    LogLine('could not checkpoint selected components: ' + Output);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -1170,11 +1224,27 @@ begin
   end;
   MarkAppComplete;
 
-  // 7. Restart the distro so it boots with the systemd + default-user settings
-  //    provision.sh just wrote. Without this, the first launch would run as root
-  //    with no Docker daemon.
-  SetStatus('Finishing up...');
-  RunLogged(WslExe, '--terminate "' + DistroNameValue + '"', Code);
+  // 7. Restart ONLY the owner-bound appliance, then run the shared strict
+  //    finalizer after systemd and Docker are reachable. The finalizer executes
+  //    as the appliance user and exits nonzero until every saved selection is
+  //    operational; image/PDK caches and completed work survive Retry.
+  SetStatus('Restarting the private LanEx environment...');
+  if not (RunLogged(WslExe, '--terminate "' + DistroNameValue + '"', Code) and (Code = 0)) then
+  begin
+    Result := 'Windows could not restart the owner-bound LanEx environment.'
+      + #13#10#13#10 + 'No other WSL distribution was stopped.' + #13#10#13#10
+      + LogTail(10);
+    Exit;
+  end;
+  Result := FinalizeDistro;
+  if Result <> '' then
+    Exit;
+  if not MarkSelectionsComplete then
+  begin
+    Result := 'The selected components are ready, but Setup could not save their '
+      + 'owner-bound completion checkpoint. The appliance and all data were preserved.';
+    Exit;
+  end;
   Worker := ExpandConstant('{tmp}\setup.ps1');
   if not PowerShellCapture('& ' + PSQuote(Worker) + ' -Action ClearResume -StatePath '
       + PSQuote(StateFile), Output) then
@@ -1201,13 +1271,11 @@ end;
 procedure CurPageChanged(CurPageID: Integer);
 begin
   if (CurPageID = wpFinished) and not WslPending then
-    // Set expectations for the one thing that still has to happen: LanEx's own
-    // Tools tab pulls the ~3 GB toolchain image on first launch (with a progress
-    // bar). Setup deliberately does not — see provision.sh's LANEX_SKIP_PULL.
+    // Setup now closes selected readiness before presenting Finish; the Tools
+    // page remains available for later additions/removal and diagnostics.
     WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10
-      + 'First launch: open the Tools tab and click "Install the toolchain". '
-      + 'That is a one-time download of about 3 GB, with a progress bar. '
-      + 'After it finishes, LanEx is fully offline-capable.';
+      + 'Your selected tools, container image, and PDK libraries were installed '
+      + 'and passed LanEx''s setup readiness checks.';
 end;
 
 // ------------------------------------------------------------------ uninstall --

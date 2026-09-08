@@ -68,6 +68,18 @@ if locked_versions >/dev/null 2>&1; then
 else
     bad "locked librelane 3.0.4 + ciel 2.6.1"
 fi
+if [ -n "${LANEX_BUILD_MANIFEST:-}" ] || [ -n "${LANEX_SETUP_CHOICES:-}" ]; then
+    if [ -f "${LANEX_BUILD_MANIFEST:-}" ] && [ -f "${LANEX_SETUP_CHOICES:-}" ] &&
+       runuser -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
+         LOGNAME="$APP_USER" PATH="/usr/local/bin:/usr/bin:/bin:/home/${APP_USER}/.local/bin" \
+         lanex --setup-check "$LANEX_BUILD_MANIFEST" --setup-choices "$LANEX_SETUP_CHOICES"; then
+        ok "all selected components pass strict readiness"
+    else
+        bad "all selected components pass strict readiness"
+    fi
+else
+    printf 'SKIP  selected components (base-image test; finalization requires systemd/Docker)\n'
+fi
 # The distro's own first-run screen must never appear: `wsl --import` normally
 # skips OOBE, but the appliance promise is "no prompt, ever".
 if [ -f /etc/wsl-distribution.conf ]; then

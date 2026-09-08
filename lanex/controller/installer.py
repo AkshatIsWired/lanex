@@ -168,6 +168,7 @@ def _kill_proc_tree(proc: subprocess.Popen, grace: float = 2.0) -> None:
 # cache, apt/pip/conda caches, ciel's tarball store); we never wipe those.
 _in_progress: set = set()
 _in_progress_lock = threading.Lock()
+_pdk_families_in_progress: set = set()
 
 
 def _begin_job(key: str) -> bool:
@@ -196,6 +197,19 @@ def _end_job(key: str) -> None:
 def is_in_progress(key: str) -> bool:
     with _in_progress_lock:
         return key in _in_progress
+
+
+def _begin_pdk_family(family: str) -> bool:
+    with _in_progress_lock:
+        if family in _pdk_families_in_progress:
+            return False
+        _pdk_families_in_progress.add(family)
+        return True
+
+
+def _end_pdk_family(family: str) -> None:
+    with _in_progress_lock:
+        _pdk_families_in_progress.discard(family)
 
 # ---------------------------------------------------------------------------
 # Event helpers — push progress to SSE via shared bus
@@ -1498,11 +1512,15 @@ def _missing_gds3d_build_tools() -> List[str]:
     """Human names of the build tools GDS3D needs and this host doesn't have.
 
     Names, not packages, because this list is also what a failure message shows
-    the user (``_gds3d_toolchain_packages`` turns it into apt packages). Any
-    C++ driver counts — g++, clang++ or a cc that fronts one.
+    the user (``_gds3d_toolchain_packages`` turns it into apt packages). A real
+    C++ driver is required; a C-only ``cc`` is not sufficient evidence.
     """
-    missing = [t for t in ("git", "make") if not shutil.which(t)]
-    if not (shutil.which("g++") or shutil.which("clang++") or shutil.which("cc")):
+    from . import platform_env
+
+    missing = [t for t in ("git", "make") if not platform_env.usable_which(t)]
+    # A C compiler driver (cc/gcc) is not proof that this C++ source can link,
+    # and WSL must not accept a similarly named Windows executable on PATH.
+    if not (platform_env.usable_which("g++") or platform_env.usable_which("clang++")):
         missing.append("a C++ compiler")
     return missing
 
@@ -1726,6 +1744,21 @@ def _install_gds3d() -> Dict[str, Any]:
     subdir = "linux"
     q = shlex.quote
     dest = bindir / "gds3d"
+    pinned_commit = os.environ.get("LANEX_GDS3D_COMMIT", "")
+    if pinned_commit and not re.fullmatch(r"[0-9a-fA-F]{40}", pinned_commit):
+        return {"ok": False, "reason": "LANEX_GDS3D_COMMIT is not a full commit SHA"}
+    if pinned_commit:
+        source_step = (
+            f"if [ ! -d {q(str(src))}/.git ]; then git clone --no-checkout {q(_GDS3D_REPO)} {q(str(src))}; fi; "
+            f"cd {q(str(src))}; git fetch --depth 1 origin {q(pinned_commit)}; "
+            f"git checkout --detach {q(pinned_commit)}; "
+            f"test \"$(git rev-parse HEAD)\" = {q(pinned_commit)}; "
+        )
+    else:
+        source_step = (
+            f"if [ -d {q(str(src))}/.git ]; then cd {q(str(src))}; git pull --ff-only || true; "
+            f"else git clone --depth 1 {q(_GDS3D_REPO)} {q(str(src))}; fi; "
+        )
     # The Makefile emits the binary as 'GDS3D' (capital). Earlier we cp'd 'gds3d'
     # (lowercase) inside an `&&` list, where `set -e` is suppressed for non-final
     # commands — so the cp failed silently and the build "succeeded" with no
@@ -1734,8 +1767,7 @@ def _install_gds3d() -> Dict[str, Any]:
     script = (
         "set -e; "
         f"mkdir -p {q(str(src.parent))} {q(str(bindir))}; "
-        f"if [ -d {q(str(src))}/.git ]; then cd {q(str(src))}; git pull --ff-only || true; "
-        f"else git clone --depth 1 {q(_GDS3D_REPO)} {q(str(src))}; fi; "
+        f"{source_step}"
         f"cd {q(str(src))}/{subdir}; make; "
         'bin=""; for c in GDS3D gds3d; do [ -f "$c" ] && bin="$c" && break; done; '
         'if [ -z "$bin" ]; then echo "ERROR: build produced no GDS3D binary"; exit 1; fi; '
@@ -2570,94 +2602,129 @@ def _install_guidance(key: str) -> str:
     )
 
 
-def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Try every available strategy to install a PDK in the background.
+_PDK_PERMANENT_FAILURES = (
+    "permission denied", "operation not permitted", "not supported",
+    "incompatible", "unknown library", "invalid choice", "no space left",
+)
 
-    Same multi-layer fallback as :func:`install_tool`, but non-blocking. A second
-    request for a PDK that is already downloading is refused (no double download);
-    ciel resumes from its tarball cache on a fresh attempt after an interruption.
+
+def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
+                     required_version: Optional[str] = None,
+                     strict: bool = False) -> Dict[str, Any]:
+    """Fetch, enable and verify one PDK before returning.
+
+    This is the single completion contract used by Windows finalization and the
+    asynchronous Tools-page wrapper.  Arguments are an argv list (never shell
+    text), valid installed versions and download caches are never deleted, and
+    exhausted retries are an explicit failure.
     """
     key = f"pdk:{pdk}"
+    family = _pdk_family(pdk)
+    if not _begin_pdk_family(family):
+        return {"ok": False, "in_progress": True, "status": "family-already-running",
+                "reason": f"another {family} variant is already being installed"}
     if not _begin_job(key):
-        return {"ok": True, "in_progress": True, "status": "already-running",
+        _end_pdk_family(family)
+        return {"ok": False, "in_progress": True, "status": "already-running",
                 "reason": f"{pdk} is already downloading — no second download started."}
-
-    def _worker():
-      try:
+    try:
         from . import platform_env
+        from . import pdk as pdk_state
 
-        _emit("installer_info", {"key": f"pdk:{pdk}", "message": f"starting {pdk} PDK install…"})
-        # Proactive DNS check — a PDK download (ciel fetch / volare) needs to
-        # resolve github.com. On WSL2 a broken auto-generated /etc/resolv.conf is
-        # a common, fixable cause of repeated timeouts; warn up front (don't block
-        # — the user may have a cache/mirror) with the exact remediation.
+        _emit("installer_info", {"key": key, "message": f"starting {pdk} PDK install…"})
         if platform_env.dns_ok() is False:
             rem = platform_env.network_remediation()
             if rem:
-                _emit("installer_error", {"key": f"pdk:{pdk}", "message": rem})
-        # A ciel store left root-owned by an earlier sudo run can't be written or
-        # self-healed (our chmod/rm are owner-scoped) — every strategy would just
-        # loop on the same 'Permission denied'. Detect it up front and surface the
-        # one-click fix + exact chown command instead of burning retries.
+                _emit("installer_info", {"key": key, "message": rem})
         perm = ciel_permission_status()
         if perm.get("needs_root"):
-            _emit("installer_info", {
-                "key": f"pdk:{pdk}", "needs_root": True, "message": perm["message"],
-                "fix": {"endpoint": "/api/pdk/fix-permissions", "label": "Fix permissions"},
-            })
-            _emit("installer_error", {
-                "key": f"pdk:{pdk}",
-                "message": ("PDK store has root-owned files — install can't write to it. "
-                            "Use 'Fix permissions', or run:  " + perm["chown_cmd"]),
-            })
-            return
-        env = detect_environment()
-        tried: List[str] = []
-        all_output: List[str] = []
-        for strategy in _pdk_strategies_for(env):
-            # Cancel stops the whole job — never fall through to the next
-            # strategy's fresh multi-GB download after the user said stop.
+            reason = ("PDK store has root-owned files. Use Fix permissions, or run: "
+                      + perm["chown_cmd"])
+            _emit("installer_error", {"key": key, "message": reason})
+            return {"ok": False, "permanent": True, "reason": reason}
+
+        pinned = _pinned_pdk_version(family)
+        version = required_version or pinned
+        if strict and (not version or not pinned or version != pinned):
+            reason = f"the locked LibreLane environment has no matching {family} PDK pin"
+            _emit("installer_error", {"key": key, "message": reason})
+            return {"ok": False, "permanent": True, "reason": reason}
+        version = version or _get_pdk_version(family)
+        if not version:
+            return {"ok": False, "reason": f"could not resolve a pinned {family} version"}
+        ciel = _ciel_argv()
+        if not ciel:
+            return {"ok": False, "reason": "Ciel is not available in LanEx's Python environment"}
+        root = os.environ.get("PDK_ROOT") or ciel_home()
+        lib_args: List[str] = []
+        for library in libraries or []:
+            if not isinstance(library, str) or not library or library.startswith("-"):
+                return {"ok": False, "permanent": True,
+                        "reason": f"invalid PDK library name: {library!r}"}
+            lib_args.extend(["-l", library])
+        base = ["--pdk-root", root, "--pdk-family", family, version, *lib_args]
+        last: Dict[str, Any] = {"ok": False, "output": []}
+        max_attempts = 5
+        for attempt in range(1, max_attempts + 1):
             if _is_cancelled(key):
-                _cancelled_result(key)
-                return
-            prepare = strategy["prepare"]
-            try:
-                argv = prepare(env, pdk, libraries)
-            except Exception as ex:
-                tried.append(f"{strategy['label']}: prepare failed ({ex})")
-                continue
-            if argv is None:
-                tried.append(f"{strategy['label']}: no recipe")
-                continue
-            result = _run_argv(argv, label=strategy["label"], key=f"pdk:{pdk}")
-            all_output.extend(result.get("output") or [])
-            if _is_cancelled(key) or result.get("rc") in (-15, -9):
-                _cancelled_result(key)
-                return
-            if result.get("ok"):
-                _emit("installer_info", {
-                    "key": f"pdk:{pdk}",
-                    "message": f"{pdk} installed via {strategy['label']}",
-                })
-                # Re-emit done to signal success specifically to frontend installer component
-                _emit("installer_done", {
-                    "key": f"pdk:{pdk}",
-                    "rc": 0,
-                    "label": strategy["label"],
-                    "method": strategy["methods"][0]
-                })
-                return
-            tried.append(f"{strategy['label']}: exit {result.get('rc', '?')}")
-        _emit("installer_error", {
-            "key": f"pdk:{pdk}",
-            "message": f"all install strategies failed for {pdk}",
-        })
-        # If the failures look network-related, surface the (often WSL2 DNS) fix.
-        rem = platform_env.network_remediation("\n".join(all_output))
-        if rem:
-            _emit("installer_error", {"key": f"pdk:{pdk}", "message": rem})
-      finally:
+                return _cancelled_result(key)
+            last = _run_argv(ciel + ["fetch", *base],
+                             label=f"ciel fetch {family} ({attempt}/{max_attempts})", key=key)
+            if _is_cancelled(key) or last.get("rc") in (-15, -9):
+                return _cancelled_result(key)
+            if last.get("ok"):
+                break
+            blob = "\n".join(last.get("output") or []).lower()
+            permanent = any(marker in blob for marker in _PDK_PERMANENT_FAILURES)
+            if permanent or attempt == max_attempts:
+                reason = (f"ciel fetch failed permanently for {family}" if permanent else
+                          f"ciel fetch failed after {max_attempts} attempts for {family}")
+                _emit("installer_error", {"key": key, "message": reason})
+                return {"ok": False, "permanent": permanent, "attempts": attempt,
+                        "reason": reason, "output": last.get("output", [])}
+            delay = min(2 ** (attempt - 1), 8)
+            _emit("installer_info", {"key": key,
+                  "message": f"transient PDK fetch failure; retrying in {delay}s (cache retained)…"})
+            time.sleep(delay)
+
+        enabled = _run_argv(ciel + ["enable", *base], label=f"ciel enable {family}", key=key)
+        if not enabled.get("ok"):
+            return {"ok": False, "reason": f"ciel enable failed for {family}",
+                    "output": enabled.get("output", [])}
+        failed_libraries: List[str] = []
+        for library in libraries or []:
+            ready = pdk_state.check_pdk_library_ready(
+                pdk, library, required_version=version)
+            if not (ready.get("ready") and ready.get("required_version") == version):
+                failed_libraries.append(library)
+        if failed_libraries:
+            reason = "PDK installed but readiness failed for: " + ", ".join(failed_libraries)
+            _emit("installer_error", {"key": key, "message": reason})
+            return {"ok": False, "reason": reason, "missingLibraries": failed_libraries}
+        _emit("installer_done", {"key": key, "rc": 0, "label": "ciel fetch+enable",
+                                  "method": "ciel", "version": version})
+        return {"ok": True, "method": "ciel", "version": version,
+                "libraries": list(libraries or []), "attempts": attempt}
+    finally:
         _end_job(key)
+        _end_pdk_family(family)
+
+
+def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Asynchronous Tools-page wrapper around :func:`install_pdk_sync`."""
+    key = f"pdk:{pdk}"
+    if is_in_progress(key):
+        return {"ok": True, "in_progress": True, "status": "already-running",
+                "reason": f"{pdk} is already downloading — no second download started."}
+
+    def _worker() -> None:
+        try:
+            result = install_pdk_sync(pdk, libraries)
+        except Exception as ex:
+            result = {"ok": False, "reason": f"{type(ex).__name__}: {ex}"}
+        payload = {"key": key}
+        payload.update(result)
+        _emit("installer_result", payload)
 
     t = threading.Thread(target=_worker, daemon=True, name=f"installer_pdk[{pdk}]")
     t.start()
@@ -2666,6 +2733,34 @@ def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, An
         "pid": "thread",
         "status": "started"
     }
+
+
+def pull_image_sync(reference: str, expected_digest: str, *,
+                    expected_engine: Optional[str] = None) -> Dict[str, Any]:
+    """Synchronously pull the immutable image selected by a build manifest."""
+    from . import tools
+
+    if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", expected_digest or ""):
+        return {"ok": False, "reason": "the build manifest image digest is invalid"}
+    resolved = tools.resolve_engine()
+    if not resolved.get("ready"):
+        return {"ok": False, "reason": "the selected container engine is not reachable",
+                "resolved": resolved}
+    engine = resolved["engine"]
+    if expected_engine and engine != expected_engine:
+        return {"ok": False,
+                "reason": f"selected engine is {expected_engine}, but {engine} is the resolved engine",
+                "resolved": resolved}
+    target = f"{reference.split('@', 1)[0]}@{expected_digest.lower()}"
+    argv = [engine, "pull", target]
+    if resolved.get("sg_wrap"):
+        argv = tools.sg_wrap_argv(argv)
+    result = _run_argv(argv, label=f"{engine} pull {expected_digest[:19]}…",
+                       key="container:image", timeout_s=4 * 3600)
+    if result.get("ok"):
+        record_image_digest(engine, target, sg_wrap=bool(resolved.get("sg_wrap")))
+    result.update({"engine": engine, "image": target})
+    return result
 
 
 def pull_image() -> Dict[str, Any]:

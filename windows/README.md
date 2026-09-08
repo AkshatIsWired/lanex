@@ -115,15 +115,16 @@ brand change: `python3 windows/launcher/assets/make-icon.py`.
 **CI cannot install LanEx.** GitHub-hosted runners have no nested
 virtualization, so WSL 2 does not run on them: no `wsl --import`, no launch. It
 *can* provision — `provision-e2e` runs `provision.sh` against a plain
-`ubuntu:24.04` container end to end, twice (the second run is the installer's
-Repair path), with `selftest.sh` after each. So everything provisioning does is
-covered; what remains manual is WSL itself, the wizard, and the app window.
+`ubuntu:24.04` container through base provisioning twice (the second run is the
+base Repair path), with `selftest.sh` after each. Hermetic tests cover the strict
+finalizer's contracts. Its real daemon/image/PDK/GUI outcomes still require the
+disposable WSL acceptance leg along with the wizard and app window.
 
 Acceptance gate — all ten must pass on x64 before a release:
 
 | # | Environment | Expected | Verified |
 |---|---|---|---|
-| 1 | Clean Win 11 23H2+, WSL never installed | Feature-only UAC, normally one restart, same-owner automatic/manual resume, full install; first launch opens the app window; Tools tab pulls the image; the SPM example runs to GDS | — |
+| 1 | Clean Win 11 23H2+, WSL never installed | Feature-only UAC, normally one restart, same-owner automatic/manual resume, selected tools/image/sky130 finish before Setup succeeds; first launch opens the app window; the SPM example runs to GDS | — |
 | 2 | Win 11 with an existing `Ubuntu-24.04` and the user's own WSL projects | Their distro and files untouched (compare `wsl -l -v` before/after); both coexist | — |
 | 3 | Win 10 22H2 x64 | Same as #1 (this is the DISM fallback path in `EnableWsl`) | — |
 | 4 | Virtualization disabled in BIOS | Friendly preflight dialog with a working help link; nothing partially installed | — |
@@ -134,9 +135,9 @@ Acceptance gate — all ten must pass on x64 before a release:
 | 9 | Network dropped mid-provision | Retry re-runs provisioning idempotently and succeeds | — |
 | 10 | GUI viewers after a run | GTKWave opens from the RTL IDE and the layout viewer opens — proves the single interactive `wsl` invocation survived the launcher | — |
 
-Target for #1, excluding the 3 GB toolchain pull: **under 8 minutes on a 50 Mbps
-line** — and about a minute of that is provisioning once a tagged build's
-pre-baked rootfs is in play.
+The selected image and PDK downloads are now part of Setup completion. Record
+their timings separately from base import/provision; no current end-to-end target
+is claimed until the disposable Windows acceptance leg measures the full path.
 
 One coexistence trap worth knowing before you test case 2 or 6: **WSL 2 puts
 every distro on one shared network namespace.** If LanEx is already running
@@ -155,7 +156,7 @@ bare `ubuntu:24.04`:
 | First provision (`LANEX_SKIP_GDS3D=1`, no image pull) | ~3 min |
 | Repair — a second run over a working appliance | ~26 s |
 | Provisioned filesystem | ~1.3 GB |
-| Baked image (`LANEX_BAKE=1`, so GDS3D is built in), `gzip -6` | **494 MB** |
+| Historical baked image (`LANEX_BAKE=1`, before M3 finalization), `gzip -6` | **494 MB** |
 | `wsl --import` of that image, to a booting appliance | ~15 s |
 | Cold boot of a baked appliance to `systemctl is-active docker` | ~3 s |
 
@@ -174,14 +175,10 @@ numbers above come from importing a locally baked image on a 2026 laptop.
   installer would be worse than shipping none.
 - **Not on winget.** A manifest submission needs a stable release URL and a
   signed installer, so it follows code signing rather than leading it.
-- **The ~3 GB toolchain image is still pulled on first launch**, not baked in.
-  Everything else now is: the `bake-rootfs` job cooks Docker + LanEx + GDS3D into
-  the image Setup downloads on a tagged build, which cuts provisioning to
-  seconds and takes apt, GitHub and download.docker.com off the install-time
-  critical path. The image itself stays out because the Tools tab pulls it with
-  a real progress bar, and a ~4 GB installer download is worse than a 3 GB one
-  the user starts on purpose. The plain-Ubuntu path is kept as an automatic
-  fallback, so a missing release asset slows an install down rather than
-  breaking it.
+- **The ~3 GB toolchain image is not embedded in Setup.** After the private
+  appliance boots with systemd, Setup pulls the manifest-pinned digest, installs
+  native support/GDS3D and selected PDK libraries, and refuses to finish until
+  the strict readiness report passes. The plain-Ubuntu path remains the verified
+  fallback; bare and baked imports converge through the same finalizer.
 - **No auto-update** in the launcher: updating means running the new Setup and
   choosing Repair.

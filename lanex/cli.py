@@ -14,6 +14,7 @@ plus the EDA tools it orchestrates; it does not modify or depend on internals of
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import socket
@@ -74,6 +75,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="install one supporting tool headlessly and exit (e.g. gds3d, "
                              "gtkwave, iverilog, graphviz) — the same strategies as the "
                              "Tools tab's Install button; skips the GUI")
+    parser.add_argument("--provision-finalize", metavar="MANIFEST", default=None,
+                        help="install and strictly verify saved Windows-appliance selections")
+    parser.add_argument("--setup-check", metavar="MANIFEST", default=None,
+                        help="read-only machine-readable Windows-appliance readiness check")
+    parser.add_argument("--setup-choices", metavar="JSON", default=None,
+                        help="owner-state or choices JSON used with appliance setup commands")
     parser.add_argument("--verbose", action="store_true")
     # Not argparse's `action="version"`: that evaluates its version string while
     # the parser is being built, and get_version() imports librelane — a cost
@@ -107,6 +114,24 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.install_tool:
         return _install_tool_cli(args.install_tool)
+
+    if args.provision_finalize or args.setup_check:
+        try:
+            from .controller import provisioning
+            plan = provisioning.load_plan(
+                args.provision_finalize or args.setup_check,
+                choices_path=args.setup_choices,
+            )
+            report = (
+                provisioning.finalize(plan)
+                if args.provision_finalize
+                else provisioning.readiness_report(plan)
+            )
+        except Exception as ex:
+            report = {"schema": 1, "ready": False,
+                      "error": f"{type(ex).__name__}: {ex}"}
+        sys.stdout.write(json.dumps(report, sort_keys=True) + "\n")
+        return 0 if report.get("ready") else 1
 
     # Defer imports: read controller and server only when launched.
     try:

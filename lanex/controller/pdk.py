@@ -473,3 +473,37 @@ def check_pdk_ready(
     if run_mode == "container":
         return _check_container_ready(variant, scl, family, roots)
     return _check_local_ready(variant, scl, roots)
+
+
+def check_pdk_library_ready(pdk: str, library: str, *,
+                            required_version: Optional[str] = None) -> Dict[str, Any]:
+    """Read-only exact-version presence check for any Ciel library.
+
+    Unlike :func:`check_pdk_ready`, this also handles IO, primitive and SRAM
+    libraries that are not standard-cell libraries and therefore need not carry
+    Liberty timing files.
+    """
+    family, variant = _resolve_family(pdk)
+    family, variant = family or pdk, variant or pdk
+    version = required_version or required_pdk_version(family)
+    if not version:
+        return {"ready": False, "required_version": None,
+                "missing": [f"no locked version for {family}"]}
+    try:
+        import ciel  # type: ignore
+    except Exception as exc:
+        return {"ready": False, "required_version": version, "missing": [str(exc)]}
+    checked: List[str] = []
+    for root in _candidate_pdk_roots():
+        try:
+            home = ciel.get_ciel_home(str(root))
+            ver = ciel.Version(name=version, pdk=family)
+            libdir = Path(ver.get_dir(home)) / variant / "libs.ref" / library
+            checked.append(str(libdir))
+            if ver.is_installed(home) and libdir.is_dir() and any(libdir.rglob("*")):
+                return {"ready": True, "required_version": version,
+                        "where": [str(libdir)], "pdk_root": home, "missing": []}
+        except Exception:
+            continue
+    return {"ready": False, "required_version": version, "where": checked,
+            "missing": [f"{variant}/{library} is absent from locked version {version}"]}
