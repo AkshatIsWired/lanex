@@ -21,6 +21,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import re
 import shutil
 import socket
 import sys
@@ -455,44 +456,168 @@ def dns_ok(host: str = _DNS_PROBE_HOST, timeout: float = 4.0) -> Optional[bool]:
 
 
 def wsl_dns_remediation() -> str:
-    """The exact, copy-pasteable fix for the broken WSL2 ``/etc/resolv.conf``."""
+    """Safe WSL DNS guidance which preserves the host's resolver strategy."""
     return (
-        "WSL2 DNS looks broken — downloads can't resolve github.com. WSL "
-        "sometimes generates a non-working /etc/resolv.conf. Fix it in a WSL "
-        "terminal, then retry:\n"
-        "    sudo rm -f /etc/resolv.conf\n"
-        "    sudo bash -c 'echo \"nameserver 8.8.8.8\" > /etc/resolv.conf'\n"
-        "To make it stick across reboots, add to /etc/wsl.conf:\n"
-        "    [network]\n"
-        "    generateResolvConf = false"
+        "DNS resolution failed inside WSL. Keep WSL's generated resolver and DNS "
+        "tunneling enabled so VPN and company DNS continue to work. Check the "
+        "Windows network/VPN and WSL networking settings, restart only the LanEx "
+        "environment, then retry. A static resolv.conf is a last-resort, diagnosed "
+        "repair and must not replace an existing resolver configuration."
     )
 
 
-# Substrings that mark a name-resolution / connectivity failure in tool output.
-_NET_FAILURE_MARKERS = (
-    "temporary failure in name resolution",
-    "could not resolve host",
-    "name or service not known",
-    "getaddrinfo failed",
-    "failed to resolve",
-    "nodename nor servname",
-    "no address associated with hostname",
-    "connectionerror",
-    "readtimeout",
-    "read timed out",
-    "connecttimeout",
-    "connection timed out",
-    "max retries exceeded",
-    "network is unreachable",
+_DNS_FAILURE_MARKERS = (
+    "temporary failure in name resolution", "could not resolve host",
+    "name or service not known", "getaddrinfo failed", "failed to resolve",
+    "nodename nor servname", "no address associated with hostname",
+)
+_ROUTE_FAILURE_MARKERS = (
+    "network is unreachable", "enetunreach", "no route to host",
+    "destination host unreachable",
+)
+_TLS_FAILURE_MARKERS = (
+    "certificate verify failed", "certificate verification failed",
+    "unable to get local issuer certificate", "self signed certificate",
+    "tls handshake", "ssl certificate problem", "x509:",
+)
+_TIMEOUT_MARKERS = (
+    "readtimeout", "read timed out", "connecttimeout", "connection timed out",
+    "operation timed out", "timed out", "timeout was reached",
+)
+_CONNECTION_MARKERS = (
+    "connectionerror", "connection refused", "connection reset",
+    "connection aborted", "max retries exceeded", "couldn't connect",
+    "failed to connect",
 )
 
 
-def looks_like_network_failure(text: str) -> bool:
-    """True when *text* (tool stdout/stderr) shows a DNS/connectivity failure."""
+def redact_network_diagnostics(text: str) -> str:
+    """Remove proxy/HTTP credentials before diagnostics reach logs or state."""
     if not text:
-        return False
-    low = text.lower()
-    return any(m in low for m in _NET_FAILURE_MARKERS)
+        return ""
+    clean = re.sub(
+        r"(?i)(https?://)([^\s/@:]+):([^\s/@]+)@",
+        r"\1[redacted]@",
+        str(text),
+    )
+    clean = re.sub(
+        r"(?im)\b(authorization|proxy-authorization)\s*:\s*\S+[^\r\n]*",
+        r"\1: [redacted]",
+        clean,
+    )
+    clean = re.sub(
+        r"(?i)([?&](?:access_token|auth|key|password|sig|token)=)[^&\s]+",
+        r"\1[redacted]",
+        clean,
+    )
+    return clean
+
+
+def _diagnostic_tail(text: str, *, max_lines: int = 20, max_chars: int = 4000) -> str:
+    lines = redact_network_diagnostics(text).splitlines()[-max_lines:]
+    return "\n".join(lines)[-max_chars:]
+
+
+def diagnose_network_failure(output: str = "", *,
+                             dns_result: Optional[bool] = None) -> Optional[dict]:
+    """Classify a failed network/package operation without collapsing it to DNS.
+
+    The result is JSON-safe and includes a bounded, credential-redacted log tail.
+    ``None`` means the supplied evidence does not describe a known failure.
+    """
+    tail = _diagnostic_tail(output)
+    low = tail.lower()
+    if dns_result is None:
+        dns_result = dns_ok()
+
+    category = ""
+    retryable = False
+    summary = ""
+    remediation = ""
+
+    # Local resource/package-manager failures outrank incidental network text.
+    if any(m in low for m in ("no space left on device", "enospc", "disk quota exceeded")):
+        category, summary = "no-space", "The target filesystem ran out of space."
+        remediation = "Free space on the reported filesystem, then retry; completed caches are retained."
+    elif any(m in low for m in ("permission denied", "operation not permitted", "eacces")):
+        category, summary = "permission", "The operation was denied by filesystem permissions."
+        remediation = "Repair ownership of the LanEx-owned path shown in the log, then retry."
+    elif any(m in low for m in ("could not get lock", "unable to acquire the dpkg frontend lock",
+                                "waiting for cache lock", "is another process using it")):
+        category, retryable = "apt-lock", True
+        summary = "Another package manager currently owns the apt/dpkg lock."
+        remediation = "Let the active package operation finish, then retry; do not delete apt lock files."
+    elif any(m in low for m in ("dpkg was interrupted", "you must manually run 'dpkg --configure -a'",
+                                "dpkg --configure -a")):
+        category, retryable = "apt-interrupted", True
+        summary = "A previous package operation left dpkg configuration incomplete."
+        remediation = "LanEx can resume dpkg configuration after confirming no package manager is active."
+    elif any(m in low for m in ("unable to locate package", "some index files failed to download",
+                                "does not have a release file")):
+        category, retryable = "apt-index", True
+        summary = "The apt package index is missing, stale, or unavailable."
+        remediation = "Refresh the package index with bounded retries, preserving downloaded package caches."
+    elif "407" in low or "proxy authentication required" in low:
+        category = "proxy-auth"
+        summary = "The configured proxy requires authentication."
+        remediation = "Provide an explicit HTTP(S) proxy URL or ask the administrator for shell proxy settings; PAC files are not shell proxy URLs."
+    elif "429" in low or "too many requests" in low or "rate limit" in low:
+        category, retryable = "rate-limit", True
+        summary = "The remote service rate-limited the request."
+        remediation = "Wait for the service's retry window, then retry without discarding completed downloads."
+    elif any(m in low for m in _TLS_FAILURE_MARKERS):
+        category = "tls"
+        summary = "TLS certificate verification failed."
+        remediation = "Check the system clock, CA certificates, and any inspecting proxy; TLS verification will not be disabled."
+    elif any(m in low for m in _ROUTE_FAILURE_MARKERS) and dns_result is True:
+        category, retryable = "route", True
+        summary = "DNS works, but the destination has no reachable network route."
+        remediation = "Check VPN, firewall, route, and IPv4/IPv6 connectivity, then retry."
+    elif any(m in low for m in _DNS_FAILURE_MARKERS) or (not low and dns_result is False):
+        category, retryable = "dns", True
+        summary = "The destination name could not be resolved."
+        remediation = wsl_dns_remediation() if is_wsl() else (
+            "Check the current DNS/VPN/proxy configuration, then retry; LanEx will not replace it."
+        )
+    elif any(m in low for m in _ROUTE_FAILURE_MARKERS):
+        category, retryable = "route", True
+        summary = "The destination has no reachable network route."
+        remediation = "Check VPN, firewall, route, and IPv4/IPv6 connectivity, then retry."
+    elif any(m in low for m in _TIMEOUT_MARKERS):
+        category, retryable = "timeout", True
+        summary = "The network operation exceeded its bounded timeout."
+        remediation = "Check slow or filtered connectivity and retry; completed caches are retained."
+    elif re.search(r"\b(?:http[^\r\n]*\s)?(?:401|403)\b", low):
+        category = "http-auth"
+        summary = "The remote HTTP service rejected authorization."
+        remediation = "Check repository or registry access; the endpoint itself was reachable."
+    elif re.search(r"\b(?:http[^\r\n]*\s)?(?:4\d\d|5\d\d)\b", low):
+        category, retryable = "http-status", bool(re.search(r"\b5\d\d\b", low))
+        summary = "The remote HTTP service returned an error response."
+        remediation = "Verify the requested URL and retry later for a server-side error."
+    elif any(m in low for m in _CONNECTION_MARKERS):
+        category, retryable = "connection", True
+        summary = "The connection could not be established or was interrupted."
+        remediation = "Check proxy, VPN, firewall, and destination availability, then retry."
+    else:
+        return None
+
+    return {
+        "category": category,
+        "retryable": retryable,
+        "summary": summary,
+        "remediation": remediation,
+        "dns_ok": dns_result,
+        "log_tail": tail,
+    }
+
+
+def looks_like_network_failure(text: str) -> bool:
+    """True when *text* shows a transport, TLS, proxy, or HTTP failure."""
+    diagnosis = diagnose_network_failure(text, dns_result=True)
+    return bool(diagnosis and diagnosis["category"] not in {
+        "no-space", "permission", "apt-lock", "apt-interrupted", "apt-index",
+    })
 
 
 def network_remediation(output: str = "") -> Optional[str]:
@@ -502,19 +627,11 @@ def network_remediation(output: str = "") -> Optional[str]:
     otherwise returns generic connectivity guidance. Returns ``None`` when there
     is no evidence of a network problem and DNS resolves fine.
     """
-    net_evident = looks_like_network_failure(output)
     resolves = dns_ok()
-    if resolves is True and not net_evident:
+    diagnosis = diagnose_network_failure(output, dns_result=resolves)
+    if diagnosis is None:
         return None
-    if is_wsl() and (resolves is False or net_evident):
-        return wsl_dns_remediation()
-    if resolves is False or net_evident:
-        return (
-            "The download couldn't reach the network (DNS/connectivity). Check "
-            "your internet connection, any proxy/VPN/firewall, then retry. "
-            "If you're behind a proxy, set HTTP_PROXY/HTTPS_PROXY before launching."
-        )
-    return None
+    return diagnosis["summary"] + " " + diagnosis["remediation"]
 
 
 def host_display_available() -> bool:
@@ -554,13 +671,12 @@ def wsl_windows_path(linux_path: str) -> Optional[str]:
 def network_status() -> dict:
     """JSON-safe snapshot for the UI: WSL flag, DNS reachability, remediation."""
     resolves = dns_ok()
-    rem = None
-    if resolves is False:
-        rem = wsl_dns_remediation() if is_wsl() else network_remediation()
+    diagnosis = diagnose_network_failure("", dns_result=resolves)
     return {
         "wsl": is_wsl(),
         "dns_ok": resolves,
-        "remediation": rem,
+        "category": diagnosis["category"] if diagnosis else None,
+        "remediation": diagnosis["remediation"] if diagnosis else None,
     }
 
 
