@@ -290,7 +290,7 @@ func openShell() error {
 // their own PC, not something locked inside a black box. \\wsl.localhost is the
 // modern share name (\\wsl$ is the pre-2021 alias).
 func openProjectFiles() {
-	path := filepath.Join(`\\wsl.localhost\`+distroName, "home", distroName)
+	path := filepath.Join(`\\wsl.localhost\`+distroName, "home", appUser)
 	// explorer.exe exits non-zero even on success, so its error is not a signal.
 	_ = hiddenCmd("explorer.exe", path).Run()
 }

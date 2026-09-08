@@ -53,6 +53,21 @@ check "$APP_USER can write in its home" \
 check "apt-get is available for tool installs" "command -v apt-get"
 check "lanex --help"                   "runuser -l '$APP_USER' -c 'lanex --help'"
 check "lanex --version"                "runuser -l '$APP_USER' -c 'lanex --version'"
+locked_versions() {
+    # The single-quoted script is intentionally expanded by the target login
+    # shell, not this root self-test process.
+    # shellcheck disable=SC2016
+    runuser -l "$APP_USER" -c '
+        launcher=$(readlink -f "$(command -v lanex)")
+        py=$(sed -n "1s/^#!//p" "$launcher")
+        "$py" -c '\''import importlib.metadata as m; assert m.version("librelane") == "3.0.4"; assert m.version("ciel") == "2.6.1"'\''
+    '
+}
+if locked_versions >/dev/null 2>&1; then
+    ok "locked librelane 3.0.4 + ciel 2.6.1"
+else
+    bad "locked librelane 3.0.4 + ciel 2.6.1"
+fi
 # The distro's own first-run screen must never appear: `wsl --import` normally
 # skips OOBE, but the appliance promise is "no prompt, ever".
 if [ -f /etc/wsl-distribution.conf ]; then

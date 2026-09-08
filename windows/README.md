@@ -10,14 +10,16 @@ windows/
   installer/   lanex.iss — the Inno Setup script (preflight, WSL, import, uninstall)
   provision/   provision.sh — runs inside the imported distro, once, as root
                selftest.sh  — asserts a provisioned appliance is actually usable
+  setup/       exact build manifest, dependency lock, and durable state worker
 ```
 
 The design, in one paragraph: LanEx and every tool it drives are Linux programs,
 so on Windows LanEx runs in a **private Ubuntu WSL distro** that Setup imports
 with `wsl --import` — an appliance, the same pattern Docker Desktop and Rancher
 Desktop use. No Microsoft Store, no Ubuntu first-run screen, no contact with the
-user's own distros, and uninstall is `wsl --unregister lanex` plus deleting one
-folder. Each file's header comment explains its own decisions; start with
+user's own distros. Uninstall currently removes the Windows launcher while
+preserving the appliance and projects; the later identity-checked removal flow
+will make permanent data deletion an explicit choice. Each file's header comment explains its own decisions; start with
 `installer/lanex.iss`.
 
 ## Building locally
@@ -33,9 +35,16 @@ go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
 goversioninfo -64 -o resource.syso versioninfo.json
 go build -trimpath -ldflags "-H windowsgui -s -w" -o LanEx.exe .
 
-# 2. the installer
-cd ..\installer
-& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.0.0 lanex.iss
+# 2. the exact candidate wheel + manifest inputs (see CI for pin resolution)
+cd ..\..
+python -m build --wheel
+
+# 3. the installer. These defines are mandatory; never label a build a
+# candidate unless build-manifest.json was generated from the same commit/wheel.
+cd windows\installer
+& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.0.0 `
+  /DLanexRef=<full-commit-sha> /DLanexSourceSha=<full-commit-sha> `
+  /DLanexSourceRepo=<owner/repository> /DLanexWheel=<absolute-wheel-path> lanex.iss
 # -> windows\installer\LanEx-Setup.exe
 ```
 
@@ -47,11 +56,19 @@ To provision an appliance locally without touching WSL — the fastest way to te
 a `provision.sh` change, and what CI's `provision-e2e` job does:
 
 ```bash
-docker run -d --name lanex-e2e -v "$PWD/windows/provision:/lanex-provision:ro" \
-  -e LANEX_REF=$(git branch --show-current) ubuntu:24.04 sleep infinity
-docker exec lanex-e2e bash /lanex-provision/provision.sh   # ~3 min
-docker exec lanex-e2e bash /lanex-provision/selftest.sh
-docker exec lanex-e2e bash /lanex-provision/provision.sh   # the Repair path, ~30 s
+python -m build --wheel
+wheel=$(basename dist/*.whl)
+sha=$(git rev-parse HEAD)
+docker run -d --name lanex-e2e -v "$PWD:/checkout:ro" \
+  -e LANEX_REF="$sha" -e LANEX_SOURCE_SHA="$sha" \
+  -e LANEX_INSTALL_ID=11111111-2222-3333-4444-555555555555 \
+  -e LANEX_MANIFEST_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  -e LANEX_INSTALL_SCRIPT=/checkout/scripts/install.sh \
+  -e LANEX_FROM="/checkout/dist/$wheel" \
+  -e LANEX_PIP_CONSTRAINT=/checkout/windows/setup/constraints.txt \
+  ubuntu:24.04 sleep infinity
+docker exec lanex-e2e bash /checkout/windows/provision/provision.sh
+docker exec lanex-e2e bash /checkout/windows/provision/selftest.sh
 ```
 
 Use `ubuntu:24.04`, not the WSL image. The minimal base is the point: it ships
@@ -66,25 +83,14 @@ The tray icon and every Windows-side icon come from one generated file,
 `launcher/assets/lanex.ico`. Regenerate it from the cockpit's own favicon after a
 brand change: `python3 windows/launcher/assets/make-icon.py`.
 
-## Before tagging a release — do these in order
+## Before a tester candidate or release — do these in order
 
-Skipping step 1 ships an installer that works but installs the *wrong LanEx*, in
-a way nothing goes red about.
-
-1. **Merge first, tag second.** `provision.sh` fetches `scripts/install.sh` from
-   the ref it is given and installs LanEx from that same ref. A tag build bakes
-   the rootfs from the tag's own commit, so the appliance is self-consistent —
-   but only if the tag is on a branch that actually contains this work. Merge
-   `windows-installer-support` → `dev` → `main`, **then** tag.
-   * Until that merge lands, an installer built from any other ref installs
-     LanEx from `main`. Everything still runs (the launcher falls back to
-     port-scanning 8765–8771 when `~/.lanex/server.json` is absent) — it is just
-     not the code you tested.
-   * `docs/INSTALL.md` must be on `main` too: the Case 4 dialog's *Open the
-     instructions* button opens
-     `.../blob/main/docs/INSTALL.md#enable-virtualization`, which is a 404 until
-     the doc merges. Check the link resolves *and* jumps to the anchor.
-2. **Create the GitHub release before or with the tag push.** `bake-rootfs` and
+1. **Build and test the branch before merging.** CI checks out the exact PR head,
+   builds its wheel, bundles that wheel plus both install scripts, and records
+   their hashes/source SHA in `build-manifest.json`. Fork PRs do not fall back
+   to base or `main`. Give Akshat this candidate identity and collect the real
+   Windows acceptance evidence before any merge to `main`.
+2. **For a public release, create the GitHub release before or with the tag push.** `bake-rootfs` and
    `build` both `gh release upload` into it; neither creates it.
 3. **Let `bake-rootfs` finish before judging `build`.** `build` waits on it and
    compiles the baked URL + SHA256 in. If the bake fails, `build` is skipped; if
@@ -112,9 +118,9 @@ Acceptance gate — all ten must pass on x64 before a release:
 | 2 | Win 11 with an existing `Ubuntu-24.04` and the user's own WSL projects | Their distro and files untouched (compare `wsl -l -v` before/after); both coexist | — |
 | 3 | Win 10 22H2 x64 | Same as #1 (this is the DISM fallback path in `EnableWsl`) | — |
 | 4 | Virtualization disabled in BIOS | Friendly preflight dialog with a working help link; nothing partially installed | — |
-| 5 | Re-run Setup over a healthy install | Repair path; projects preserved; LanEx upgraded in place | — |
+| 5 | Re-run matching Setup over a healthy install | Identity + self-test pass; projects preserved; no dependency upgrade | — |
 | 6 | Double-click the icon while LanEx is running | No second server; the app window re-opens (mutex + health-probe path) | — |
-| 7 | Uninstall | `wsl -l -q` no longer lists `lanex`; `%LOCALAPPDATA%\LanEx` gone; other distros intact. Check it by listing names, not with `Test-Path` — Windows is case-insensitive, so `...\LanEx` matches the lowercase `lanex` browser profile and reports success on a machine with nothing installed | — |
+| 7 | Uninstall (current safe foundation) | Windows launcher/shortcuts removed; appliance, projects, PDKs, profile, and other distros preserved | — |
 | 8 | Standard (non-admin) user | Setup refuses at UAC with a clear message (documented limitation) | — |
 | 9 | Network dropped mid-provision | Retry re-runs provisioning idempotently and succeeds | — |
 | 10 | GUI viewers after a run | GTKWave opens from the RTL IDE and the layout viewer opens — proves the single interactive `wsl` invocation survived the launcher | — |

@@ -47,3 +47,7 @@ windows/launcher/LanEx.exe
 windows/launcher/resource.syso
 windows/installer/LanEx-Setup*.exe
 windows/installer/Output/
+/dist/
+/build/
+windows/setup/build-manifest.json
+windows/setup/pdk-pins.json

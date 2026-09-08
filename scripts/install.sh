@@ -21,7 +21,12 @@
 #   LANEX_FROM=github|pypi|<path or pip URL>  install source. Default: the
 #                     GitHub tarball of main (works before the PyPI release and
 #                     cannot be name-squatted). After the PyPI release, pypi.
-#   LANEX_REF=<ref>   GitHub branch/tag for the default source (default: main)
+#   LANEX_REF=<ref>   GitHub branch, tag, or commit SHA for the default source
+#                     (default: main)
+#   LANEX_REPO=<owner/name>  GitHub repository for LANEX_REF (default:
+#                     AkshatIsWired/lanex; useful for fork candidates)
+#   LANEX_PIP_CONSTRAINT=<path>  optional pip constraints file. The Windows
+#                     appliance uses this to lock the image-compatible toolchain.
 #   LANEX_SKIP_PULL=1 skip the optional container-image pre-pull
 #   LANEX_SKIP_GDS3D=1  skip the optional GDS3D 3D-viewer build/install
 #   LANEX_NO_PIPX=1   skip pipx entirely (escape hatch for a broken pipx);
@@ -29,9 +34,18 @@
 #   LANEX_ASSUME_YES=1  never prompt (CI / unattended)
 set -u -o pipefail
 
-REPO="AkshatIsWired/lanex"
+REPO="${LANEX_REPO:-AkshatIsWired/lanex}"
 REF="${LANEX_REF:-main}"
-TARBALL="https://github.com/${REPO}/archive/refs/heads/${REF}.tar.gz"
+# codeload's ref-aware endpoint resolves branches, tags, and full commit SHAs.
+# The old branch-qualified archive URL silently made tags and SHAs impossible.
+TARBALL="https://codeload.github.com/${REPO}/tar.gz/${REF}"
+
+if [ -n "${LANEX_PIP_CONSTRAINT:-}" ]; then
+    [ -f "$LANEX_PIP_CONSTRAINT" ] \
+        || { printf 'LanEx pip constraints file not found: %s\n' "$LANEX_PIP_CONSTRAINT" >&2; exit 1; }
+    # pip and the pip subprocess launched by pipx both honour PIP_CONSTRAINT.
+    export PIP_CONSTRAINT="$LANEX_PIP_CONSTRAINT"
+fi
 
 say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
@@ -451,6 +465,12 @@ wsl_notes() {
 
 # -------------------------------------------------------------------- main --
 main() {
+    # Side-effect-free diagnostic used by packaging tests to prove that branch,
+    # tag, SHA, fork repository, and local-wheel inputs resolve exactly.
+    if [ "${1:-}" = "--print-source" ]; then
+        resolve_source
+        return 0
+    fi
     detect_platform
     setup_privileges
     say "LanEx installer — $OS$( [ "$WSL" = "1" ] && echo ' (WSL)') / packages: $PKG"

@@ -23,6 +23,8 @@ a future edit could silently drop:
 """
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -31,8 +33,16 @@ INSTALL = REPO / "scripts" / "install.sh"
 SHIM = REPO / "scripts" / "install-wsl.sh"
 
 
+def _bash_executable() -> str:
+    for candidate in (Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe",
+                      Path(os.environ.get("ProgramFiles", "")) / "Git" / "usr" / "bin" / "bash.exe"):
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("bash") or "bash"
+
+
 def _bash_n(path: Path) -> None:
-    res = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
+    res = subprocess.run([_bash_executable(), "-n", str(path)], capture_output=True, text=True)
     assert res.returncode == 0, f"bash -n failed for {path.name}: {res.stderr}"
 
 
@@ -63,7 +73,8 @@ def test_no_set_e_fallback_chains_must_degrade() -> None:
 
 def test_default_source_is_github_tarball() -> None:
     body = INSTALL.read_text()
-    assert "archive/refs/heads/" in body
+    assert "codeload.github.com" in body
+    assert "archive/refs/heads/" not in body
     assert 'github) echo "$TARBALL"' in body
     # PyPI stays an explicit opt-in until the name is actually published.
     assert 'pypi)   echo "lanex"' in body

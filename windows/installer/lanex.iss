@@ -14,8 +14,8 @@
 ;  A person who does not know what a terminal is downloads one exe, clicks
 ;  Next -> Next -> Finish, and gets a Start-menu app called LanEx. They never
 ;  see WSL, Ubuntu, bash, sudo, a password prompt, or Docker. Uninstalling from
-;  Windows Settings removes every trace. Their own WSL distros, if they have
-;  any, are never touched.
+;  Windows Settings removes the launcher while preserving projects/appliance
+;  data by default. Their own WSL distros, if they have any, are never touched.
 ;
 ;  HOW
 ;  LanEx and every EDA tool it drives (OpenROAD, Yosys, Magic, KLayout) are
@@ -28,8 +28,8 @@
 ;    * A distro of our own means the user's existing Ubuntu (and its files) is
 ;      never read, written, upgraded, or even listed by us for anything other
 ;      than checking our own name.
-;    * Uninstall is `wsl --unregister lanex` plus deleting one folder. Total,
-;      clean, and provable — which is what makes the promise above trustworthy.
+;    * Appliance ownership is a UUID plus exact HKCU registration/path and a
+;      Linux marker. A matching distro name never authorizes repair or deletion.
 ;
 ;  THE FOUR PIECES
 ;    LanEx.exe        ../launcher    starts the appliance, sits in the tray
@@ -66,10 +66,19 @@
 #ifndef LanexRef
   #define LanexRef     "main"
 #endif
+#ifndef LanexSourceRepo
+  #define LanexSourceRepo "AkshatIsWired/lanex"
+#endif
+#ifndef LanexSourceSha
+  #error LanexSourceSha is required: Setup must identify an exact checked-out commit
+#endif
+#ifndef LanexWheel
+  #error LanexWheel is required: build the checkout wheel before compiling Setup
+#endif
 
 ; The appliance's identity. Same three strings in windows/provision/provision.sh
 ; and windows/launcher/main.go — change one, change all three.
-#define DistroName     "lanex"
+#define PreferredDistroName "lanex"
 #define AppUser        "lanex"
 #define DataDirName    "LanEx"
 
@@ -191,7 +200,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; the version and the reason.
 WindowsVersionNotSupported=LanEx needs Windows 10 version 2004 (build 19041) or newer, because it runs on WSL 2. Windows 11 is recommended.
 ; The wizard's own words, in the language of the person we are installing for.
-WelcomeLabel2=This will install [name/ver] on your computer.%n%nLanEx sets up its own private, self-contained environment — it will not change or touch any other software on your PC, and uninstalling removes every trace.%n%nSetup needs to download about {#RootfsSizeMB} MB and takes a few minutes.
+WelcomeLabel2=This will install [name/ver] on your computer.%n%nLanEx sets up its own private, self-contained environment — it will not change or touch any other software on your PC. Removing the Windows app preserves your projects and environment by default.%n%nSetup needs to download about {#RootfsSizeMB} MB and takes a few minutes.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -203,13 +212,19 @@ Source: "{#IconFile}"; DestDir: "{app}"; DestName: "lanex.ico"; Flags: ignorever
 ; dontcopy + ExtractTemporaryFile is what lets PrepareToInstall use it before
 ; the file-copy step has happened at all.
 Source: "..\provision\provision.sh"; Flags: dontcopy
+Source: "..\provision\selftest.sh"; Flags: dontcopy
+Source: "{#RepoRoot}scripts\install.sh"; Flags: dontcopy
+Source: "..\setup\setup.ps1"; Flags: dontcopy
+Source: "..\setup\constraints.txt"; Flags: dontcopy
+Source: "..\setup\build-manifest.json"; Flags: dontcopy
+Source: "{#LanexWheel}"; DestName: "lanex-candidate.whl"; Flags: dontcopy
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\LanEx.exe"; IconFilename: "{app}\lanex.ico"
 ; A shortcut straight into the appliance's home directory. Small feature, large
 ; payoff: it proves to the user that their designs are ordinary files on their
 ; own PC, not something sealed inside a black box.
-Name: "{group}\{#AppName} Project Files"; Filename: "\\wsl.localhost\{#DistroName}\home\{#AppUser}"; IconFilename: "{app}\lanex.ico"
+Name: "{group}\{#AppName} Project Files"; Filename: "{code:DistroProjectPath}"; IconFilename: "{app}\lanex.ico"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\LanEx.exe"; IconFilename: "{app}\lanex.ico"; Tasks: desktopicon
 
 [Run]
@@ -219,7 +234,6 @@ Filename: "{app}\LanEx.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 var
   // Set in InitializeSetup, read in PrepareToInstall.
   RepairExisting: Boolean;   // a lanex distro is already there: keep its data
-  RemoveExisting: Boolean;   // ...or wipe it and import a fresh one
   // True when Setup stopped early to reboot for WSL; suppresses the "Launch
   // LanEx" checkbox, because nothing has been provisioned yet.
   WslPending: Boolean;
@@ -227,6 +241,9 @@ var
   // appliance when this build has one and it downloaded cleanly, the pinned
   // Ubuntu image otherwise.
   ImportPath: String;
+  DistroNameValue: String;
+  InstallIdValue: String;
+  ManifestHashValue: String;
 
 // ---------------------------------------------------------------- locations --
 
@@ -241,10 +258,12 @@ begin
   Result := ExpandConstant('{localappdata}\{#DataDirName}');
 end;
 
-function DistroDir: String;  begin Result := AppDataRoot + '\distro'; end;
-function CacheDir: String;   begin Result := AppDataRoot + '\cache';  end;
+function ApplianceRoot: String; begin Result := AppDataRoot + '\appliance'; end;
+function DistroDir: String;  begin Result := ApplianceRoot + '\distro'; end;
+function CacheDir: String;   begin Result := AppDataRoot + '\installer-cache';  end;
 function LogDir: String;     begin Result := AppDataRoot + '\logs';   end;
 function LogFile: String;    begin Result := LogDir + '\install.log'; end;
+function StateFile: String;  begin Result := AppDataRoot + '\installer-state.json'; end;
 function RootfsPath: String; begin Result := CacheDir + '\{#RootfsFile}'; end;
 #ifdef BakedRootfsUrl
 function BakedRootfsPath: String; begin Result := CacheDir + '\{#BakedRootfsFile}'; end;
@@ -255,6 +274,18 @@ begin
   // {sys} is the real System32 even from a 32-bit process; wsl.exe does not
   // exist under SysWOW64, so never rely on PATH resolution here.
   Result := ExpandConstant('{sys}\wsl.exe');
+end;
+
+function DistroProjectPath(Param: String): String;
+begin
+  Result := '\\wsl.localhost\' + DistroNameValue + '\home\{#AppUser}';
+end;
+
+function PSQuote(const S: String): String;
+begin
+  Result := S;
+  StringChangeEx(Result, '''', '''''', True);
+  Result := '''' + Result + '''';
 end;
 
 // ------------------------------------------------------------------- helpers --
@@ -326,7 +357,8 @@ begin
   // than an empty file. -Encoding ascii keeps the result BOM-free.
   Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { '
     + Snippet + ' } *>&1 | Out-File -LiteralPath ''' + OutFile + ''' -Encoding ascii"';
-  Result := Exec('powershell.exe', Params, '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := Exec('powershell.exe', Params, '', SW_HIDE, ewWaitUntilTerminated, Code)
+    and (Code = 0);
   if FileExists(OutFile) and LoadStringFromFile(OutFile, Raw) then
     Output := Trim(StripNulls(String(Raw)));
 end;
@@ -412,7 +444,7 @@ begin
       Break;      // cannot happen (a #10 is appended above), but never loop forever
     Line := Trim(Copy(Text, 1, P - 1));
     Text := Copy(Text, P + 1, Length(Text) - P);
-    if CompareText(Line, '{#DistroName}') = 0 then
+    if CompareText(Line, DistroNameValue) = 0 then
     begin
       Result := True;
       Exit;
@@ -490,12 +522,13 @@ end;
 function InitializeSetup(): Boolean;
 var
   FreeGB: Integer;
-  Choice: Integer;
 begin
   Result := True;
   RepairExisting := False;
-  RemoveExisting := False;
   WslPending := False;
+  DistroNameValue := '{#PreferredDistroName}';
+  InstallIdValue := '';
+  ManifestHashValue := '';
 
   // 1. Virtualization off in BIOS. Checked first because it is unfixable from
   //    inside Windows and there is no point downloading 373 MB before it.
@@ -525,41 +558,72 @@ begin
     Exit;
   end;
 
-  // 3. An existing appliance. NOTHING here can affect any other distro: the
-  //    only name we ever act on is our own.
-  if DistroExists then
+  // Existing distro names are not ownership proof. The state worker resolves
+  // and binds the exact HKCU registration/path later, before any WSL mutation.
+end;
+
+function InitializeDurableState: String;
+var
+  Worker, Manifest, OperationName, Output, Snippet: String;
+  HadState: Boolean;
+begin
+  Result := '';
+  ExtractTemporaryFile('setup.ps1');
+  ExtractTemporaryFile('build-manifest.json');
+  ExtractTemporaryFile('install.sh');
+  ExtractTemporaryFile('constraints.txt');
+  ExtractTemporaryFile('lanex-candidate.whl');
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  Manifest := ExpandConstant('{tmp}\build-manifest.json');
+  HadState := FileExists(StateFile);
+  if ExpandConstant('{param:UPDATE|0}') = '1' then
+    OperationName := 'update'
+  else if HadState then
+    OperationName := 'repair'
+  else
+    OperationName := 'install';
+
+  Snippet := '& ' + PSQuote(Worker) + ' -Action InitializeState -StatePath '
+    + PSQuote(StateFile) + ' -ManifestPath ' + PSQuote(Manifest)
+    + ' -Operation ' + OperationName
+    + ' -ChoicesJson ''{"pdks":["sky130A"],"libraries":"all","engine":"docker"}'''
+    + ' -InstallerPath ' + PSQuote(ExpandConstant('{srcexe}'));
+  if not PowerShellCapture(Snippet, Output) then
   begin
-    if IsResumeRun then
-    begin
-      // Unattended continuation after the reboot — never prompt; provisioning
-      // is idempotent, so repairing is always the safe choice.
-      RepairExisting := True;
-      Exit;
-    end;
-    Choice := MsgBox('LanEx is already installed on this computer.'
-      + #13#10#13#10 + 'Yes  -  Repair it and update LanEx (your projects are kept).'
-      + #13#10 + 'No   -  Remove it completely and install fresh (ERASES the '
-      + 'projects stored inside LanEx).'
-      + #13#10 + 'Cancel  -  Leave everything as it is.',
-      mbConfirmation, MB_YESNOCANCEL);
-    if Choice = IDYES then
-      RepairExisting := True
-    else if Choice = IDNO then
-    begin
-      if MsgBox('Really erase the LanEx environment and everything stored inside '
-        + 'it?' + #13#10#13#10 + 'Your designs live in the LanEx environment. If '
-        + 'you want to keep them, choose No and use Repair instead — or open '
-        + '\\wsl.localhost\{#DistroName}\home\{#AppUser} first and copy them out.',
-        mbError, MB_YESNO) <> IDYES then
-      begin
-        Result := False;
-        Exit;
-      end;
-      RemoveExisting := True;
-    end
-    else
-      Result := False;
+    Result := 'LanEx could not validate its saved setup state.' + #13#10#13#10
+      + Output + #13#10#13#10
+      + 'No WSL distribution or user data was changed.';
+    Exit;
   end;
+
+  Snippet := '& ' + PSQuote(Worker) + ' -Action ResolveAppliance -StatePath '
+    + PSQuote(StateFile) + ' -PreferredDistroName {#PreferredDistroName}'
+    + ' -ExpectedBasePath ' + PSQuote(DistroDir);
+  if not PowerShellCapture(Snippet, Output) then
+  begin
+    Result := 'LanEx could not prove ownership of the saved appliance.'
+      + #13#10#13#10 + Output + #13#10#13#10
+      + 'The existing distribution was left untouched.';
+    Exit;
+  end;
+  if not PowerShellCapture(
+      '(Get-Content -LiteralPath ' + PSQuote(StateFile)
+        + ' -Raw | ConvertFrom-Json).appliance.name', DistroNameValue) then
+  begin
+    Result := 'LanEx could not read the selected appliance name from setup state.';
+    Exit;
+  end;
+  if not PowerShellCapture(
+      '(Get-Content -LiteralPath ' + PSQuote(StateFile)
+        + ' -Raw | ConvertFrom-Json).installId', InstallIdValue) then
+  begin
+    Result := 'LanEx could not read the install identity from setup state.';
+    Exit;
+  end;
+  ManifestHashValue := Lowercase(GetSHA256OfFile(Manifest));
+  RepairExisting := HadState and DistroExists;
+  LogLine('owned setup identity: ' + InstallIdValue + ' distro=' + DistroNameValue
+    + ' manifest=' + ManifestHashValue);
 end;
 
 // --------------------------------------------------------------- install work --
@@ -705,13 +769,20 @@ end;
 // ProvisionDistro runs provision.sh inside the freshly imported distro.
 function ProvisionDistro: String;
 var
-  ScriptPath, LinuxPath, Params: String;
+  ScriptPath, InstallPath, WheelPath, ConstraintPath, LinuxPath, LinuxInstall,
+  LinuxWheel, LinuxConstraint, Params: String;
   Code, Answer: Integer;
 begin
   Result := '';
   ExtractTemporaryFile('provision.sh');
   ScriptPath := ExpandConstant('{tmp}\provision.sh');
+  InstallPath := ExpandConstant('{tmp}\install.sh');
+  WheelPath := ExpandConstant('{tmp}\lanex-candidate.whl');
+  ConstraintPath := ExpandConstant('{tmp}\constraints.txt');
   LinuxPath := WindowsToWslPath(ScriptPath);
+  LinuxInstall := WindowsToWslPath(InstallPath);
+  LinuxWheel := WindowsToWslPath(WheelPath);
+  LinuxConstraint := WindowsToWslPath(ConstraintPath);
   // `tr -d '\r'` before running: if this repo is ever checked out with Windows
   // line endings (a CI runner with core.autocrlf=true), bash would fail on the
   // shebang with "bad interpreter: No such file or directory" — a bewildering
@@ -720,9 +791,13 @@ begin
   // `export`, not a `VAR=... bash script` prefix: provision.sh's own header
   // records why (a prefix applies to the one command it prefixes, so every knob
   // passed that way was silently inert).
-  Params := '-d {#DistroName} -u root -- bash -c "export LANEX_REF=''{#LanexRef}''; '
-    + 'tr -d ''\r'' < ''' + LinuxPath
-    + ''' > /tmp/lanex-provision.sh; bash /tmp/lanex-provision.sh"';
+  Params := '-d "' + DistroNameValue + '" -u root -- env '
+    + 'LANEX_REPO="{#LanexSourceRepo}" LANEX_REF="{#LanexRef}" '
+    + 'LANEX_SOURCE_SHA="{#LanexSourceSha}" LANEX_INSTALL_ID="' + InstallIdValue + '" '
+    + 'LANEX_MANIFEST_HASH="' + ManifestHashValue + '" '
+    + 'LANEX_INSTALL_SCRIPT="' + LinuxInstall + '" LANEX_FROM="' + LinuxWheel + '" '
+    + 'LANEX_PIP_CONSTRAINT="' + LinuxConstraint + '" '
+    + 'bash "' + LinuxPath + '"';
   repeat
     SetStatus('Preparing the LanEx environment - this takes a few minutes...');
     if RunLogged(WslExe, Params, Code) and (Code = 0) then
@@ -737,15 +812,65 @@ begin
     + 'Please report it — the log tells us exactly which step failed.';
 end;
 
+function VerifyRepairIdentity(var Failure: String): Boolean;
+var
+  WorkerOutput, Snippet: String;
+begin
+  Failure := '';
+  Snippet := '$m = (& ' + PSQuote(WslExe) + ' -d ' + PSQuote(DistroNameValue)
+    + ' -u root -- cat /etc/lanex/appliance.json) | ConvertFrom-Json; '
+    + 'if ($m.schema -ne 1 -or $m.installId -ne ' + PSQuote(InstallIdValue)
+    + ' -or $m.manifestHash -ne ' + PSQuote(ManifestHashValue)
+    + ' -or $m.sourceSha -ne ''{#LanexSourceSha}'') '
+    + '{ throw ''Linux appliance identity does not match owner/build state.'' }; ''identity-ok''';
+  Result := PowerShellCapture(Snippet, WorkerOutput);
+  if not Result then
+    Failure := WorkerOutput;
+end;
+
+function HealthyRepairNeedsNoChanges: Boolean;
+var
+  SelfTestPath, LinuxSelfTest: String;
+  Code: Integer;
+begin
+  ExtractTemporaryFile('selftest.sh');
+  SelfTestPath := ExpandConstant('{tmp}\selftest.sh');
+  LinuxSelfTest := WindowsToWslPath(SelfTestPath);
+  Result := RunLogged(WslExe, '-d "' + DistroNameValue
+    + '" -u root -- bash "' + LinuxSelfTest + '"', Code) and (Code = 0);
+end;
+
+procedure MarkAppComplete;
+var
+  Output, Worker, Manifest, Snippet: String;
+begin
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  Manifest := ExpandConstant('{tmp}\build-manifest.json');
+  Snippet := '$f=(Get-Content -LiteralPath ' + PSQuote(Manifest)
+    + ' -Raw | ConvertFrom-Json).componentFingerprints.app; & '
+    + PSQuote(Worker) + ' -Action SetComponent -StatePath ' + PSQuote(StateFile)
+    + ' -Component app -ComponentStatus complete -InputFingerprint $f -Phase base-provisioned';
+  if not PowerShellCapture(Snippet, Output) then
+    LogLine('WARNING: could not checkpoint app component: ' + Output);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
+  Output, Worker, IdentityFailure: String;
+  NeedProvision: Boolean;
 begin
   Result := '';
   ForceDirectories(LogDir);
   LogLine('');
   LogLine('=== LanEx Setup {#AppVersion} — ' + GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':')
     + ' (resume=' + ExpandConstant('{param:RESUME|0}') + ') ===');
+
+  // Establish immutable owner/build/appliance identity before enabling WSL,
+  // downloading, importing, terminating, or provisioning anything.
+  Result := InitializeDurableState;
+  if Result <> '' then
+    Exit;
 
   // 1. WSL itself.
   if not WslUsable then
@@ -782,16 +907,7 @@ begin
   if not (RunLogged(WslExe, '--update --web-download', Code) and (Code = 0)) then
     RunLogged(WslExe, '--update', Code);
 
-  // 3. A previous appliance the user asked us to erase.
-  if RemoveExisting then
-  begin
-    SetStatus('Removing the previous LanEx environment...');
-    RunLogged(WslExe, '--terminate {#DistroName}', Code);
-    RunLogged(WslExe, '--unregister {#DistroName}', Code);
-    DelTree(DistroDir, True, True, True);
-  end;
-
-  // 4./5. Download and import — skipped entirely when repairing, where the
+  // 3./4. Download and import — skipped entirely when repairing, where the
   //       distro already exists and only provisioning needs to re-run.
   if not (RepairExisting and DistroExists) then
   begin
@@ -804,7 +920,7 @@ begin
     // user's default version is none of our business.
     // --version 2 explicitly (again): `wsl --import` reads plain tar and .tar.gz
     // alike, so the baked and the Ubuntu path use one identical command.
-    if not (RunLogged(WslExe, '--import {#DistroName} "' + DistroDir + '" "'
+    if not (RunLogged(WslExe, '--import "' + DistroNameValue + '" "' + DistroDir + '" "'
         + ImportPath + '" --version 2', Code) and (Code = 0)) then
     begin
       Result := 'The LanEx environment could not be created.' + #13#10#13#10
@@ -812,23 +928,51 @@ begin
         + 'Full log: ' + LogFile;
       Exit;
     end;
+    Worker := ExpandConstant('{tmp}\setup.ps1');
+    if not PowerShellCapture('& ' + PSQuote(Worker) + ' -Action BindAppliance -StatePath '
+        + PSQuote(StateFile), Output) then
+    begin
+      Result := 'The LanEx environment was imported, but Setup could not bind its '
+        + 'exact Windows registration identity.' + #13#10#13#10 + Output
+        + #13#10#13#10 + 'It was left intact for a safe retry.';
+      Exit;
+    end;
   end;
 
-  // 6. Provision (idempotent — this is also the Repair path).
-  //
-  //    Runs after a BAKED import too, deliberately. It is near-instant when
-  //    everything is already present, it doubles as an integrity check on the
-  //    downloaded image, and it keeps Repair a single code path rather than one
-  //    that has to know how the distro was created.
-  Result := ProvisionDistro;
-  if Result <> '' then
-    Exit;
+  // 5. A no-op Repair proves owner/build identity and runs the appliance
+  // self-test without invoking pip or apt. Only a failed health check re-enters
+  // idempotent provisioning; an identity mismatch is never overwritten.
+  NeedProvision := True;
+  if RepairExisting then
+  begin
+    if not VerifyRepairIdentity(IdentityFailure) then
+    begin
+      Result := 'The registered environment does not match this saved LanEx '
+        + 'installation.' + #13#10#13#10 + IdentityFailure
+        + #13#10#13#10 + 'It was left untouched.';
+      Exit;
+    end;
+    if HealthyRepairNeedsNoChanges then
+    begin
+      NeedProvision := False;
+      LogLine('repair verified exact identity and health; no dependencies changed');
+    end;
+  end;
+
+  // 6. Provision a new or unhealthy-but-owned appliance.
+  if NeedProvision then
+  begin
+    Result := ProvisionDistro;
+    if Result <> '' then
+      Exit;
+  end;
+  MarkAppComplete;
 
   // 7. Restart the distro so it boots with the systemd + default-user settings
   //    provision.sh just wrote. Without this, the first launch would run as root
   //    with no Docker daemon.
   SetStatus('Finishing up...');
-  RunLogged(WslExe, '--terminate {#DistroName}', Code);
+  RunLogged(WslExe, '--terminate "' + DistroNameValue + '"', Code);
   LogLine('=== provisioning complete ===');
 end;
 
@@ -866,51 +1010,41 @@ procedure OpenProjectFolder;
 var
   Code: Integer;
 begin
-  ShellExec('open', '\\wsl.localhost\{#DistroName}\home\{#AppUser}', '', '',
+  ShellExec('open', DistroProjectPath(''), '', '',
             SW_SHOWNORMAL, ewNoWait, Code);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  Code, Answer: Integer;
-  ProfileDir: String;
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
 
-  // Removing LanEx removes the user's designs with it — they live inside the
-  // appliance. Anything less than an explicit warning here would be a trap, so
-  // the dialog also offers to open the folder first, and keeps offering until
-  // the user makes a decision.
-  repeat
-    Answer := MsgBox('This removes LanEx AND everything stored inside its '
-      + 'environment, including your designs and run results.' + #13#10#13#10
-      + 'Yes  -  Open the LanEx project folder first (nothing is removed yet).'
-      + #13#10 + 'No   -  Remove LanEx now.'
-      + #13#10 + 'Cancel  -  Keep LanEx.', mbError, MB_YESNOCANCEL);
-    if Answer = IDYES then
-      OpenProjectFolder
-    else if Answer = IDCANCEL then
-      Abort;   // nothing has been removed at this point — a clean bail-out
-  until Answer = IDNO;
-
-  // The appliance itself. --terminate first: --unregister on a running distro
-  // can fail and leave a phantom registration behind.
-  Exec(WslExe, '--terminate {#DistroName}', '', SW_HIDE, ewWaitUntilTerminated, Code);
-  Exec(WslExe, '--unregister {#DistroName}', '', SW_HIDE, ewWaitUntilTerminated, Code);
-
-  // Distro disk, cached rootfs, the resume copy of Setup, and the logs.
-  DelTree(AppDataRoot, True, True, True);
-
-  // The Windows-side browser profile the app window uses
-  // (appwindow.py:246-279) — note the lowercase directory, which is LanEx's own
-  // and predates this installer.
-  ProfileDir := ExpandConstant('{localappdata}\lanex');
-  DelTree(ProfileDir + '\app-profile', True, True, True);
-  RemoveDir(ProfileDir);   // only succeeds if nothing else of LanEx's is left
+  // M1 safety foundation: Windows removes the launcher only. The owned WSL
+  // appliance, projects, PDKs, installer state, caches, and the pre-existing
+  // browser profile are deliberately preserved until the later uninstall UI
+  // can offer verified export plus an explicit, identity-checked data removal.
+  MsgBox('LanEx will remove its Windows shortcuts and launcher. Your LanEx '
+    + 'environment, projects, PDKs, and run results will be kept so they can be '
+    + 'reused by a later install.' + #13#10#13#10
+    + 'No other WSL distribution or Windows WSL feature will be changed.',
+    mbInformation, MB_OK);
 
   // Deliberately NOT undone: the Windows Subsystem for Linux feature. It is a
   // machine-wide setting other software may now rely on, and turning it off
   // would need another reboot. Documented in docs/INSTALL.md; it is the one
   // trace we leave, and it is inert.
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Config: String;
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+  Config := '{"schema":1,"installId":"' + InstallIdValue
+    + '","distroName":"' + DistroNameValue
+    + '","sourceSha":"{#LanexSourceSha}","manifestHash":"'
+    + ManifestHashValue + '"}' + #13#10;
+  if not SaveStringToFile(ExpandConstant('{app}\appliance.json'), Config, False) then
+    LogLine('WARNING: could not write launcher appliance identity');
 end;

@@ -74,6 +74,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build exact checkout wheel
+        run: |
+          python -m pip install --quiet build
+          python -m build --wheel
+          echo "LANEX_WHEEL_NAME=$(basename dist/*.whl)" >> "$GITHUB_ENV"
+
       - name: Bake
         id: bake
         env:
@@ -84,14 +94,17 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name lanex-bake \
-            -v "$PWD/windows/provision:/lanex-provision:ro" \
+            -v "$PWD:/checkout:ro" \
             -e "LANEX_REF=$LANEX_REF" -e LANEX_BAKE=1 \
+            -e LANEX_INSTALL_SCRIPT=/checkout/scripts/install.sh \
+            -e "LANEX_FROM=/checkout/dist/$LANEX_WHEEL_NAME" \
+            -e LANEX_PIP_CONSTRAINT=/checkout/windows/setup/constraints.txt \
             ubuntu:24.04 sleep infinity
-          docker exec lanex-bake bash /lanex-provision/provision.sh
+          docker exec lanex-bake bash /checkout/windows/provision/provision.sh
 
           # Before export, never after: a broken appliance must not be able to
           # become a published release asset.
-          docker exec lanex-bake bash /lanex-provision/selftest.sh
+          docker exec lanex-bake bash /checkout/windows/provision/selftest.sh
 
           # `wsl --import` reads gzipped tar directly. -6 rather than -9: the
           # last few percent cost minutes of CI for seconds of user download.
@@ -146,6 +159,14 @@ jobs:
       SIGN: ${{ secrets.AZURE_TENANT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # PR artifacts contain the fork head itself, never a synthetic merge
+          # checkout or a silent fallback to the base branch.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - uses: actions/setup-go@v5
         with:
@@ -177,6 +198,66 @@ jobs:
           "LANEX_VER_MINOR=$($parts[1])"  | Out-File -Append $env:GITHUB_ENV
           "LANEX_VER_PATCH=$($parts[2])"  | Out-File -Append $env:GITHUB_ENV
           Write-Host "version: $ver (numeric $num)"
+
+      - name: Build exact candidate payload and manifest inputs
+        shell: pwsh
+        run: |
+          python -m pip install --quiet build
+          python -m build --wheel
+          python -m pip install --quiet -c windows/setup/constraints.txt .
+          python windows/setup/export_pdk_pins.py `
+            --catalog docs/windows-installer-handoff/CAPABILITY-INVENTORY.json `
+            --output windows/setup/pdk-pins.json
+          $wheels = @(Get-ChildItem 'dist/*.whl')
+          if ($wheels.Count -ne 1) { throw "expected exactly one candidate wheel" }
+          $wheel = $wheels[0].FullName
+          "LANEX_WHEEL=$wheel" | Out-File -Append $env:GITHUB_ENV
+          "LANEX_SOURCE_SHA=$(git rev-parse HEAD)" | Out-File -Append $env:GITHUB_ENV
+          "LANEX_SOURCE_REF=${{ github.event.pull_request.head.ref || github.ref_name }}" | Out-File -Append $env:GITHUB_ENV
+          "LANEX_SOURCE_REPO=${{ github.event.pull_request.head.repo.full_name || github.repository }}" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Resolve immutable external pins and generate build manifest
+        shell: pwsh
+        run: |
+          $image = 'ghcr.io/librelane/librelane:3.0.4'
+          $token = (Invoke-RestMethod 'https://ghcr.io/token?scope=repository%3Alibrelane%2Flibrelane%3Apull').token
+          $headers = @{
+            Authorization = "Bearer $token"
+            Accept = 'application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json'
+          }
+          $response = Invoke-WebRequest -Method Head -Uri 'https://ghcr.io/v2/librelane/librelane/manifests/3.0.4' -Headers $headers
+          $digest = [string]$response.Headers['Docker-Content-Digest']
+          if ($digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "no immutable image digest in registry response" }
+          $gds = (git ls-remote https://github.com/trilomix/GDS3D.git HEAD).Split()[0]
+          if ($gds -notmatch '^[0-9a-f]{40}$') { throw 'could not resolve GDS3D HEAD' }
+          $args = @{
+            Action = 'NewManifest'
+            OutputPath = 'windows/setup/build-manifest.json'
+            SourceRepository = $env:LANEX_SOURCE_REPO
+            SourceRef = $env:LANEX_SOURCE_REF
+            SourceSha = $env:LANEX_SOURCE_SHA
+            AppVersion = $env:LANEX_VERSION
+            WheelPath = $env:LANEX_WHEEL
+            InstallScriptPath = 'scripts/install.sh'
+            ProvisionScriptPath = 'windows/provision/provision.sh'
+            SelftestPath = 'windows/provision/selftest.sh'
+            ConstraintsPath = 'windows/setup/constraints.txt'
+            CatalogPath = 'docs/windows-installer-handoff/CAPABILITY-INVENTORY.json'
+            PdkPinsPath = 'windows/setup/pdk-pins.json'
+            RootfsUrl = 'https://releases.ubuntu.com/24.04.4/ubuntu-24.04.4-wsl-amd64.wsl'
+            RootfsSha256 = '9b2f7730dc68227dd04a9f3e5eab86ad85caf556b8606ad94f1f29ff5c4fd3f5'
+            RootfsSizeBytes = 391118848
+            ImageReference = $image
+            ImageDigest = $digest
+            Gds3dCommit = $gds
+          }
+          $baked = '${{ needs.bake-rootfs.outputs.sha256 }}'
+          if ($baked) {
+            $args.BakedRootfsUrl = '${{ needs.bake-rootfs.outputs.url }}'
+            $args.BakedRootfsSha256 = $baked
+            $args.BakedRootfsSizeBytes = [int64]('${{ needs.bake-rootfs.outputs.size-mb }}') * 1MB
+          }
+          & windows/setup/setup.ps1 @args | Write-Host
 
       - name: go vet
         working-directory: windows/launcher
@@ -265,7 +346,10 @@ jobs:
           # The ref this Setup was built from, so provision.sh installs the LanEx
           # that belongs with it — and so a Repair cannot silently pull the
           # appliance back to main. Same reasoning as the bake job's LANEX_REF.
-          $defines += "/DLanexRef=${{ github.head_ref || github.ref_name }}"
+          $defines += "/DLanexRef=$env:LANEX_SOURCE_SHA"
+          $defines += "/DLanexSourceSha=$env:LANEX_SOURCE_SHA"
+          $defines += "/DLanexSourceRepo=$env:LANEX_SOURCE_REPO"
+          $defines += "/DLanexWheel=$env:LANEX_WHEEL"
           # Only a bake that ran AND produced a hash gets wired in. Anything else
           # compiles the installer exactly as it was before Phase 2a: it
           # downloads the pinned Ubuntu image and provisions on the user's
@@ -386,28 +470,22 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      # Which ref's scripts/install.sh should the appliance install? The one
-      # being built — otherwise a green tick would only prove that `main` still
-      # works. head_ref is the PR's source branch; ref_name covers pushes and
-      # tags. A fork PR's head_ref does not exist in THIS repo, so the URL is
-      # probed and falls back to the base branch rather than 404-ing four
-      # minutes into the run.
-      - name: Resolve the ref to provision from
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Build and mount the checkout itself. Fork PRs therefore exercise their
+      # actual wheel/scripts; no ref-probe may silently fall back to base/main.
+      - name: Build exact checkout wheel
         run: |
           set -euo pipefail
-          base="${{ github.event.pull_request.base.ref || github.ref_name }}"
-          for ref in "${{ github.head_ref }}" "${{ github.ref_name }}" "$base" main; do
-            [ -n "$ref" ] || continue
-            url="https://raw.githubusercontent.com/${{ github.repository }}/$ref/scripts/install.sh"
-            if curl -fsI --max-time 30 "$url" >/dev/null 2>&1; then
-              echo "provisioning from ref: $ref"
-              echo "LANEX_REF=$ref" >> "$GITHUB_ENV"
-              exit 0
-            fi
-            echo "not fetchable: $ref"
-          done
-          echo "::error::no usable ref for scripts/install.sh"; exit 1
+          python -m pip install --quiet build
+          python -m build --wheel
+          echo "LANEX_SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "LANEX_WHEEL_NAME=$(basename dist/*.whl)" >> "$GITHUB_ENV"
 
       # A plain ubuntu:24.04 base, not the WSL image: provision.sh is written to
       # run in both (see its header, rule 4) and the minimal one is the honest
@@ -418,15 +496,21 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name lanex-e2e \
-            -v "$PWD/windows/provision:/lanex-provision:ro" \
-            -e "LANEX_REF=$LANEX_REF" \
+            -v "$PWD:/checkout:ro" \
+            -e "LANEX_REF=$LANEX_SOURCE_SHA" \
+            -e "LANEX_SOURCE_SHA=$LANEX_SOURCE_SHA" \
+            -e LANEX_INSTALL_ID=11111111-2222-3333-4444-555555555555 \
+            -e LANEX_MANIFEST_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            -e LANEX_INSTALL_SCRIPT=/checkout/scripts/install.sh \
+            -e "LANEX_FROM=/checkout/dist/$LANEX_WHEEL_NAME" \
+            -e LANEX_PIP_CONSTRAINT=/checkout/windows/setup/constraints.txt \
             ubuntu:24.04 sleep infinity
           start=$(date +%s)
-          docker exec lanex-e2e bash /lanex-provision/provision.sh
+          docker exec lanex-e2e bash /checkout/windows/provision/provision.sh
           echo "first run: $(( $(date +%s) - start ))s" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Self-test the provisioned appliance
-        run: docker exec lanex-e2e bash /lanex-provision/selftest.sh
+        run: docker exec lanex-e2e bash /checkout/windows/provision/selftest.sh
 
       # The installer's Repair button and a re-run of Setup both re-execute this
       # script over a working appliance. A second run that is slow is a warning;
@@ -436,12 +520,12 @@ jobs:
         run: |
           set -euo pipefail
           start=$(date +%s)
-          docker exec lanex-e2e bash /lanex-provision/provision.sh | tee repair.log
+          docker exec lanex-e2e bash /checkout/windows/provision/provision.sh | tee repair.log
           took=$(( $(date +%s) - start ))
           echo "repair run: ${took}s" >> "$GITHUB_STEP_SUMMARY"
           grep -q "already exists" repair.log || { echo "::error::repair re-created the user"; exit 1; }
           grep -q "already installed" repair.log || { echo "::error::repair re-installed Docker"; exit 1; }
-          docker exec lanex-e2e bash /lanex-provision/selftest.sh
+          docker exec lanex-e2e bash /checkout/windows/provision/selftest.sh
 
       # Sizes the Phase 2a rootfs bake, and a sudden jump is the cheapest
       # possible signal that a dependency started dragging half of Ubuntu in.

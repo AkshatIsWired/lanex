@@ -1,0 +1,4 @@
+# Exact Windows-appliance dependency set. Keep the ordinary project metadata's
+# supported range in pyproject.toml; Setup alone consumes this reproducible lock.
+librelane==3.0.4
+ciel==2.6.1

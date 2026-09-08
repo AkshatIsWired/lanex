@@ -23,18 +23,24 @@
 #     working, not two.
 #
 # Environment knobs:
-#   LANEX_REF=<ref>        branch/tag of the repo to install (default: main)
-#   LANEX_USER=<name>      appliance user (default: lanex; the launcher and the
-#                          Inno script hardcode "lanex" — override for testing)
+#   LANEX_REF=<ref>        branch/tag/SHA of the repo to install (default: main)
+#   LANEX_REPO=<owner/name> source repository (default: AkshatIsWired/lanex)
+#   LANEX_INSTALL_SCRIPT=<path> exact bundled scripts/install.sh to execute
+#   LANEX_FROM=<path/url>   exact LanEx wheel/source passed to install.sh
+#   LANEX_PIP_CONSTRAINT=<path> locked Windows dependency constraints
+#   LANEX_SOURCE_SHA=<sha>  immutable source identity recorded in the appliance
+#   LANEX_INSTALL_ID=<uuid> owner identity recorded in the appliance marker
+#   LANEX_MANIFEST_HASH=<sha256> build-manifest identity for the marker
+#   LANEX_USER=<name>      appliance user (default: lanex; override for testing)
 #   LANEX_PROVISION_DNS=1  force the WSL DNS fix even if github.com is reachable
 #   LANEX_BAKE=1           CI is cooking a rootfs image, not provisioning a
 #                          user's machine (see bake() below)
 set -u -o pipefail
 
-REPO="AkshatIsWired/lanex"
+REPO="${LANEX_REPO:-AkshatIsWired/lanex}"
 REF="${LANEX_REF:-main}"
 APP_USER="${LANEX_USER:-lanex}"
-INSTALL_SH="https://raw.githubusercontent.com/${REPO}/${REF}/scripts/install.sh"
+INSTALL_SH="${LANEX_INSTALL_SCRIPT:-}"
 
 # Baking (.github/workflows/windows-installer.yml, job bake-rootfs) runs this
 # exact script in a container and exports the result as the image Setup
@@ -276,21 +282,77 @@ install_lanex() {
     #   LANEX_SKIP_GDS3D  — the optional 3D viewer compiles from source (minutes).
     #                       One click in the Tools tab installs it later; Phase 2
     #                       pre-bakes it into the rootfs.
-    # A re-run upgrades LanEx in place (install.sh:17) — that is the Repair path.
-    #
-    # `export VAR=...; curl | bash`, NOT `VAR=... curl | bash`. A prefix
-    # assignment applies to the ONE command it prefixes — curl — and install.sh
-    # runs in the `bash` on the other side of the pipe, which saw none of these
-    # four. Every knob below was silently inert: Setup installed LanEx from main
-    # whatever ref it was built from, then spent minutes compiling GDS3D and
-    # attempting the ~3 GB image pull it explicitly opted out of, behind a
-    # progress label that says "this takes a few minutes".
-    runuser -l "$APP_USER" -c "export LANEX_ASSUME_YES=1 LANEX_SKIP_PULL=1 \
-        LANEX_SKIP_GDS3D=${SKIP_GDS3D} LANEX_REF='${REF}'; \
-        curl -fsSL '${INSTALL_SH}' | bash" \
+    # Windows passes the installer script and candidate wheel from the Setup
+    # payload. CI uses the same local-source route. A direct universal run may
+    # omit both, in which case we download the requested ref to a file, check
+    # the transfer and syntax, and only then execute it. Never curl | bash here:
+    # a failed fetch must not leave an old install looking like a successful
+    # Repair.
+    local payload_dir="/var/tmp/lanex-setup-payload"
+    local installer="${payload_dir}/install.sh"
+    local source="${LANEX_FROM:-github}"
+    local constraint=""
+    mkdir -p "$payload_dir" || die "could not create the setup payload directory."
+
+    if [ -n "$INSTALL_SH" ]; then
+        [ -f "$INSTALL_SH" ] || die "the bundled LanEx installer is missing. Run Setup again."
+        cp "$INSTALL_SH" "$installer" || die "could not stage the bundled LanEx installer."
+    else
+        ensure_curl
+        curl -fL --retry 2 --connect-timeout 15 \
+            "https://raw.githubusercontent.com/${REPO}/${REF}/scripts/install.sh" \
+            -o "${installer}.download" \
+            || die "could not download the LanEx installer for ${REPO}@${REF}."
+        mv "${installer}.download" "$installer" \
+            || die "could not stage the downloaded LanEx installer."
+    fi
+    bash -n "$installer" || die "the LanEx installer payload is invalid."
+    chmod 0644 "$installer"
+
+    if [ "$source" != "github" ] && [ "$source" != "pypi" ] && [ -f "$source" ]; then
+        cp "$source" "$payload_dir/$(basename "$source")" \
+            || die "could not stage the LanEx source payload."
+        source="$payload_dir/$(basename "$source")"
+        chmod 0644 "$source"
+    fi
+    if [ -n "${LANEX_PIP_CONSTRAINT:-}" ]; then
+        [ -f "$LANEX_PIP_CONSTRAINT" ] || die "the bundled dependency lock is missing."
+        constraint="$payload_dir/constraints.txt"
+        cp "$LANEX_PIP_CONSTRAINT" "$constraint" \
+            || die "could not stage the dependency lock."
+        chmod 0644 "$constraint"
+    fi
+
+    runuser -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
+        LOGNAME="$APP_USER" PATH="/usr/local/bin:/usr/bin:/bin" \
+        LANEX_ASSUME_YES=1 LANEX_SKIP_PULL=1 LANEX_SKIP_GDS3D="$SKIP_GDS3D" \
+        LANEX_REPO="$REPO" LANEX_REF="$REF" LANEX_FROM="$source" \
+        LANEX_PIP_CONSTRAINT="$constraint" bash "$installer" \
         || die "the LanEx installer did not finish.
    The log above ends with its own error message.
    Click Retry — this step is safe to repeat."
+}
+
+write_identity_marker() {
+    # Bake artifacts are shared templates and intentionally have no per-install
+    # owner. Runtime Setup always supplies all three values together.
+    [ "$BAKE" = "1" ] && return 0
+    if [ -z "${LANEX_INSTALL_ID:-}" ] || [ -z "${LANEX_MANIFEST_HASH:-}" ] \
+       || [ -z "${LANEX_SOURCE_SHA:-}" ]; then
+        die "Setup did not provide the appliance identity. Run the same Setup again."
+    fi
+    printf '%s' "$LANEX_INSTALL_ID" | grep -Eq '^[0-9a-fA-F-]{36}$' \
+        || die "Setup provided an invalid install identity."
+    printf '%s' "$LANEX_MANIFEST_HASH" | grep -Eq '^[0-9a-fA-F]{64}$' \
+        || die "Setup provided an invalid manifest identity."
+    printf '%s' "$LANEX_SOURCE_SHA" | grep -Eq '^[0-9a-fA-F]{40}$' \
+        || die "Setup provided an invalid source identity."
+    mkdir -p /etc/lanex || die "could not create the appliance identity directory."
+    umask 077
+    printf '{"schema":1,"installId":"%s","manifestHash":"%s","sourceSha":"%s"}\n' \
+        "$LANEX_INSTALL_ID" "$LANEX_MANIFEST_HASH" "$LANEX_SOURCE_SHA" \
+        > /etc/lanex/appliance.json \
+        || die "could not record the appliance identity."
 }
 
 # ----------------------------------------------------------------- 7. verify --
@@ -358,6 +420,7 @@ main() {
     app_user
     docker_ce
     install_lanex
+    write_identity_marker
     verify
     # After verify(), never before: a broken appliance must fail the checks
     # while its logs are still there to read.

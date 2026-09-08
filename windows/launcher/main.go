@@ -49,11 +49,9 @@ import (
 )
 
 const (
-	// Keep these three in step with windows/installer/lanex.iss and
-	// windows/provision/provision.sh — they are the same appliance.
-	distroName = "lanex"
 	appName    = "LanEx"
 	installDir = "LanEx" // subdirectory of %LOCALAPPDATA% for logs
+	appUser    = "lanex"
 
 	// Global\ (not Local\) so the instance check spans terminal-server
 	// sessions: two logged-in users each starting LanEx would otherwise both
@@ -81,6 +79,7 @@ const (
 )
 
 func main() {
+	loadApplianceConfig()
 	first, err := acquireSingleInstance()
 	if err != nil {
 		// A mutex we could not create must never block a launch — worst case we
