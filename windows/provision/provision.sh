@@ -268,6 +268,33 @@ docker_ce() {
     note "daemon will start automatically when the environment restarts."
 }
 
+SELECTED_ENGINE="docker"
+select_engine() {
+    local choices="${LANEX_SETUP_CHOICES:-}"
+    if [ -f "$choices" ] && command -v python3 >/dev/null 2>&1; then
+        SELECTED_ENGINE="$(python3 -c \
+            'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(d.get("choices", d).get("engine", "docker"))' \
+            "$choices")" \
+            || die "the saved container-engine choice is unreadable."
+    fi
+    case "$SELECTED_ENGINE" in
+        docker|podman) note "selected container engine: ${SELECTED_ENGINE}." ;;
+        *) die "the saved container-engine choice is invalid." ;;
+    esac
+}
+
+podman_engine() {
+    say "Container engine (Podman)"
+    if command -v podman >/dev/null 2>&1; then
+        note "already installed ($(podman --version 2>/dev/null || echo 'version unknown'))."
+        return
+    fi
+    $APT install -y podman \
+        || die "could not install Podman inside the LanEx environment. Click Retry."
+    command -v podman >/dev/null 2>&1 \
+        || die "Podman installation finished without a usable command. Click Retry."
+}
+
 # ----------------------------------------------------------------- 6. lanex --
 install_lanex() {
     say "LanEx"
@@ -277,7 +304,8 @@ install_lanex() {
     # debugged across distros; duplicating any of it here would mean two
     # installers to keep in sync. Deliberately skipped:
     #   LANEX_SKIP_PULL / LANEX_SKIP_GDS3D — explicitly deferred to finalize(),
-    #                       after systemd/Docker are live. The finalizer invokes
+    #                       after systemd/the selected engine are live. The
+    #                       finalizer invokes
     #                       the same LanEx backends and treats selected failures
     #                       as fatal instead of ordinary install warnings.
     # Windows passes the installer script and candidate wheel from the Setup
@@ -363,9 +391,9 @@ verify() {
         || die "LanEx installed but does not run.
    Click Retry, and if it keeps failing please report the log above."
     note "lanex responds."
-    command -v docker >/dev/null 2>&1 \
-        || die "Docker is missing after installation. Click Retry."
-    note "docker present."
+    command -v "$SELECTED_ENGINE" >/dev/null 2>&1 \
+        || die "The selected container engine is missing after installation. Click Retry."
+    note "${SELECTED_ENGINE} present."
     # A wsl.conf typo would surface as "no systemd" / wrong user on next boot —
     # cheap to catch now.
     grep -q "default *= *${APP_USER}" /etc/wsl.conf 2>/dev/null \
@@ -381,17 +409,16 @@ finalize() {
     [ -f "$choices" ] || die "the saved component choices are missing. Run the same Setup again."
     local attempt
     for attempt in $(seq 1 60); do
-        if [ "$(cat /proc/1/comm 2>/dev/null)" = "systemd" ] &&
-           runuser -u "$APP_USER" -- docker info >/dev/null 2>&1; then
-            note "systemd and the Docker socket are ready."
+        if [ "$(cat /proc/1/comm 2>/dev/null)" = "systemd" ]; then
+            note "systemd is ready."
             break
         fi
         if [ "$attempt" -eq 60 ]; then
-            die "Docker did not become ready within two minutes after the appliance restart.
+            die "systemd did not become ready within two minutes after the appliance restart.
    Click Retry; Setup will recheck the same owned environment."
         fi
         if [ $((attempt % 5)) -eq 0 ]; then
-            note "waiting for systemd and Docker ($((attempt * 2))s)..."
+            note "waiting for systemd ($((attempt * 2))s)..."
         fi
         sleep 2
     done
@@ -459,7 +486,11 @@ main() {
     # ubuntu:24.04 base (the Phase 2a rootfs bake) does not.
     base_packages
     app_user
-    docker_ce
+    select_engine
+    case "$SELECTED_ENGINE" in
+        docker) docker_ce ;;
+        podman) podman_engine ;;
+    esac
     install_lanex
     write_identity_marker
     verify
@@ -468,7 +499,7 @@ main() {
     # while its logs are still there to read.
     bake
     say "LanEx base provisioning is complete."
-    note "Setup will now restart only this environment, wait for systemd/Docker, and finalize selections."
+    note "Setup will now restart only this environment, wait for systemd, and finalize selections."
 }
 
 main "$@"

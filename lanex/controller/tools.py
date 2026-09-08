@@ -647,17 +647,19 @@ def sg_wrap_argv(argv: List[str]) -> List[str]:
     return ["sg", "docker", "-c", shlex.join(argv)]
 
 
-def resolve_engine() -> Dict[str, Any]:
+def resolve_engine(preferred: Optional[str] = None) -> Dict[str, Any]:
     """Single source of truth for which engine to use and how to invoke it.
 
     Preference: a usable Docker → a usable Podman → Docker via ``sg`` group
-    activation. Returns ``{engine, ready, sg_wrap, env}`` where ``env`` forces
-    LibreLane to the chosen engine via the documented ``LIBRELANE_CONTAINER_ENGINE``
-    variable (so a present-but-unusable Docker never shadows a working Podman).
+    activation; when *preferred* is supplied, no different engine substitutes
+    for that saved selection. Returns ``{engine, ready, sg_wrap, env}``, where
+    ``env`` forces LibreLane to the chosen engine via the documented
+    ``LIBRELANE_CONTAINER_ENGINE`` variable (so a present-but-unusable Docker
+    never shadows a working Podman).
     """
     res: Dict[str, Any] = {"engine": None, "ready": False, "sg_wrap": False, "env": {}}
-    docker_path = shutil.which("docker")
-    podman_path = shutil.which("podman")
+    docker_path = shutil.which("docker") if preferred in (None, "docker") else None
+    podman_path = shutil.which("podman") if preferred in (None, "podman") else None
     if docker_path and _engine_usable("docker")[0]:
         res.update(engine="docker", ready=True, env={"LIBRELANE_CONTAINER_ENGINE": "docker"})
     elif podman_path and _engine_usable("podman")[0]:

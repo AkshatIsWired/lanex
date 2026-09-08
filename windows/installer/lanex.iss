@@ -878,20 +878,24 @@ end;
 // ProvisionDistro runs provision.sh inside the freshly imported distro.
 function ProvisionDistro: String;
 var
-  ScriptPath, InstallPath, WheelPath, ConstraintPath, LinuxPath, LinuxInstall,
-  LinuxWheel, LinuxConstraint, Params: String;
+  ScriptPath, InstallPath, WheelPath, ConstraintPath, ManifestPath, LinuxPath, LinuxInstall,
+  LinuxWheel, LinuxConstraint, LinuxManifest, LinuxChoices, Params: String;
   Code, Answer: Integer;
 begin
   Result := '';
   ExtractTemporaryFile('provision.sh');
+  ExtractTemporaryFile('build-manifest.json');
   ScriptPath := ExpandConstant('{tmp}\provision.sh');
   InstallPath := ExpandConstant('{tmp}\install.sh');
   WheelPath := ExpandConstant('{tmp}\lanex-candidate.whl');
   ConstraintPath := ExpandConstant('{tmp}\constraints.txt');
+  ManifestPath := ExpandConstant('{tmp}\build-manifest.json');
   LinuxPath := WindowsToWslPath(ScriptPath);
   LinuxInstall := WindowsToWslPath(InstallPath);
   LinuxWheel := WindowsToWslPath(WheelPath);
   LinuxConstraint := WindowsToWslPath(ConstraintPath);
+  LinuxManifest := WindowsToWslPath(ManifestPath);
+  LinuxChoices := WindowsToWslPath(StateFile);
   // `tr -d '\r'` before running: if this repo is ever checked out with Windows
   // line endings (a CI runner with core.autocrlf=true), bash would fail on the
   // shebang with "bad interpreter: No such file or directory" — a bewildering
@@ -906,6 +910,7 @@ begin
     + 'LANEX_MANIFEST_HASH="' + ManifestHashValue + '" '
     + 'LANEX_INSTALL_SCRIPT="' + LinuxInstall + '" LANEX_FROM="' + LinuxWheel + '" '
     + 'LANEX_PIP_CONSTRAINT="' + LinuxConstraint + '" '
+    + 'LANEX_BUILD_MANIFEST="' + LinuxManifest + '" LANEX_SETUP_CHOICES="' + LinuxChoices + '" '
     + 'bash "' + LinuxPath + '" base';
   repeat
     SetStatus('Preparing the LanEx environment - this takes a few minutes...');

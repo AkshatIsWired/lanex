@@ -2742,7 +2742,7 @@ def pull_image_sync(reference: str, expected_digest: str, *,
 
     if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", expected_digest or ""):
         return {"ok": False, "reason": "the build manifest image digest is invalid"}
-    resolved = tools.resolve_engine()
+    resolved = tools.resolve_engine(expected_engine)
     if not resolved.get("ready"):
         return {"ok": False, "reason": "the selected container engine is not reachable",
                 "resolved": resolved}
@@ -2751,6 +2751,14 @@ def pull_image_sync(reference: str, expected_digest: str, *,
         return {"ok": False,
                 "reason": f"selected engine is {expected_engine}, but {engine} is the resolved engine",
                 "resolved": resolved}
+    if engine == "docker":
+        rc, endpoint, error = _shell_exec_quiet(
+            ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+            timeout=15.0,
+        )
+        if rc != 0 or endpoint.strip() != "unix:///var/run/docker.sock":
+            return {"ok": False, "reason": "Docker is not using the appliance-local socket",
+                    "context": endpoint.strip(), "detail": error.strip()}
     target = f"{reference.split('@', 1)[0]}@{expected_digest.lower()}"
     argv = [engine, "pull", target]
     if resolved.get("sg_wrap"):

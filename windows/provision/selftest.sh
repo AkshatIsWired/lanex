@@ -22,6 +22,12 @@
 set -u
 
 APP_USER="${LANEX_USER:-lanex}"
+ENGINE="docker"
+if [ -f "${LANEX_SETUP_CHOICES:-}" ] && command -v python3 >/dev/null 2>&1; then
+    ENGINE="$(python3 -c \
+        'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(d.get("choices", d).get("engine", "docker"))' \
+        "$LANEX_SETUP_CHOICES")" || ENGINE="invalid"
+fi
 pass=0
 fail=0
 
@@ -42,8 +48,14 @@ check "passwordless sudo works"        "runuser -l '$APP_USER' -c 'sudo -n true'
 check "wsl.conf: systemd = true"       "grep -Eq '^systemd *= *true' /etc/wsl.conf"
 check "wsl.conf: default = $APP_USER"  "grep -Eq '^default *= *$APP_USER' /etc/wsl.conf"
 check "wsl.conf: interop enabled"      "grep -Eq '^enabled *= *true' /etc/wsl.conf"
-check "docker is installed"            "command -v docker"
-check "$APP_USER is in the docker group" "id -nG '$APP_USER' | grep -qw docker"
+case "$ENGINE" in
+    docker)
+        check "docker is installed"            "command -v docker"
+        check "$APP_USER is in the docker group" "id -nG '$APP_USER' | grep -qw docker"
+        ;;
+    podman) check "podman is installed" "command -v podman" ;;
+    *) bad "saved container-engine choice is valid" ;;
+esac
 # Both preconditions the appliance's "you never need a terminal" promise rests
 # on. The home dir is where the launcher's `cd ~` puts the server and where new
 # designs land; apt-get is what the Tools tab installs a build toolchain with

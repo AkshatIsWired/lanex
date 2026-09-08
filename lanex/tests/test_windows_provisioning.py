@@ -154,7 +154,9 @@ def test_image_pull_uses_manifest_digest_and_selected_engine(
     from lanex.controller import tools
 
     monkeypatch.setattr(
-        tools, "resolve_engine", lambda: {"ready": True, "engine": "docker", "sg_wrap": False}
+        tools,
+        "resolve_engine",
+        lambda *args: {"ready": True, "engine": "docker", "sg_wrap": False},
     )
     calls = []
     monkeypatch.setattr(
@@ -162,11 +164,25 @@ def test_image_pull_uses_manifest_digest_and_selected_engine(
         "_run_argv",
         lambda argv, **kwargs: (calls.append(argv) or {"ok": True, "rc": 0, "output": []}),
     )
+    monkeypatch.setattr(
+        installer,
+        "_shell_exec_quiet",
+        lambda argv, timeout: (0, "unix:///var/run/docker.sock\n", ""),
+    )
     monkeypatch.setattr(installer, "record_image_digest", lambda *a, **k: "sha256:" + "d" * 64)
     digest = "sha256:" + "d" * 64
     result = installer.pull_image_sync("ghcr.io/librelane/librelane:3.0.4", digest)
     assert result["ok"] is True
     assert calls == [["docker", "pull", f"ghcr.io/librelane/librelane:3.0.4@{digest}"]]
+
+
+def test_engine_resolver_honors_selected_podman(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lanex.controller import tools
+
+    monkeypatch.setattr(tools.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(tools, "_engine_usable", lambda name, **kwargs: (True, ""))
+    assert tools.resolve_engine("podman")["engine"] == "podman"
+    assert tools.resolve_engine("docker")["engine"] == "docker"
 
 
 def test_readiness_is_strict_if_any_selected_requirement_fails(
@@ -189,7 +205,7 @@ def test_readiness_is_strict_if_any_selected_requirement_fails(
         "version",
         lambda name: {"librelane": "3.0.4", "ciel": "2.6.1"}[name],
     )
-    monkeypatch.setattr(tools, "resolve_engine", lambda: {"ready": True, "engine": "docker"})
+    monkeypatch.setattr(tools, "resolve_engine", lambda *args: {"ready": True, "engine": "docker"})
     monkeypatch.setattr(container_run, "image_ref", lambda: "example/image:3.0.4")
 
     def probe(argv, timeout=30):
@@ -231,7 +247,7 @@ def test_readiness_names_missing_gds_daemon_image_and_library(
     monkeypatch.setattr(
         tools,
         "resolve_engine",
-        lambda: {"ready": False, "engine": "docker", "reason": "daemon unavailable"},
+        lambda *args: {"ready": False, "engine": "docker", "reason": "daemon unavailable"},
     )
     monkeypatch.setattr(
         pdk,
@@ -259,6 +275,7 @@ def test_finalizer_waits_for_synchronous_pdk_result(
         },
     )
     initial_checks = {
+        "engine:docker": {"ready": True},
         "container:image": {"ready": True},
         "pdk:sky130A:io": {"ready": False},
         "pdk:sky130A:hd": {"ready": False},
@@ -288,6 +305,8 @@ def test_shell_and_setup_sequence_base_restart_finalize() -> None:
     assert "base|finalize" in provision
     assert "DEFERRED(selected-components)" in provision
     assert 'runuser -u "$APP_USER"' in provision and "--provision-finalize" in provision
+    assert 'case "$SELECTED_ENGINE"' in provision
+    assert "LANEX_SETUP_CHOICES=" in inno
     assert 'bash "' + "' + LinuxPath + '" + '" base' in inno
     assert inno.index("--terminate") < inno.index("Result := FinalizeDistro")
     assert "wsl --shutdown" not in inno

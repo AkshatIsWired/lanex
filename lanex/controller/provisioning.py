@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
@@ -234,8 +235,8 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
             )
         checks[f"native:{key}"] = probe
 
-    resolved = tools.resolve_engine()
     engine = plan["engine"]
+    resolved = tools.resolve_engine(engine)
     engine_ready = bool(resolved.get("ready") and resolved.get("engine") == engine)
     engine_check: Dict[str, Any] = {"ready": engine_ready, "resolved": resolved}
     if engine_ready and engine == "docker":
@@ -323,7 +324,7 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
 
 def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
     """Install selected components synchronously, then return strict readiness."""
-    from . import installer
+    from . import installer, tools
     from .events import bus
 
     cursor = bus.max_seq
@@ -340,18 +341,43 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                 print(str(line).rstrip(), flush=True)
 
     failures: List[Dict[str, Any]] = []
+    engine = plan["engine"]
+    if not initial["checks"].get(f"engine:{engine}", {}).get("ready"):
+        result = installer.install_tool(engine)
+        drain()
+        if not result.get("ok"):
+            failures.append({"component": f"engine:{engine}", "result": result})
+        else:
+            for attempt in range(1, 61):
+                if tools.resolve_engine(engine).get("ready"):
+                    print(f"selected engine is reachable: {engine}", flush=True)
+                    break
+                if attempt % 5 == 0:
+                    print(f"waiting for {engine} readiness ({attempt * 2}s)...", flush=True)
+                time.sleep(2)
+            else:
+                failures.append(
+                    {
+                        "component": f"engine:{engine}",
+                        "result": {
+                            "ok": False,
+                            "reason": "engine did not become reachable within two minutes",
+                        },
+                    }
+                )
     previous_commit = os.environ.get("LANEX_GDS3D_COMMIT")
     os.environ["LANEX_GDS3D_COMMIT"] = plan["manifest"]["gds3d"]["commit"]
     try:
-        for key in plan["nativeTools"]:
-            if initial["checks"].get(f"native:{key}", {}).get("ready"):
-                print(f"already verified: native:{key}", flush=True)
-                continue
-            result = installer.install_tool(key)
-            drain()
-            if not result.get("ok"):
-                failures.append({"component": f"native:{key}", "result": result})
-                break
+        if not failures:
+            for key in plan["nativeTools"]:
+                if initial["checks"].get(f"native:{key}", {}).get("ready"):
+                    print(f"already verified: native:{key}", flush=True)
+                    continue
+                result = installer.install_tool(key)
+                drain()
+                if not result.get("ok"):
+                    failures.append({"component": f"native:{key}", "result": result})
+                    break
     finally:
         if previous_commit is None:
             os.environ.pop("LANEX_GDS3D_COMMIT", None)
