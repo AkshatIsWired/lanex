@@ -58,6 +58,18 @@ def _manifest(path: Path, sha: str = "a" * 40, app_fp: str = "app-1") -> None:
     path.write_text(json.dumps({
         "schema": 1,
         "source": {"repository": "owner/fork", "ref": "feature/pr", "sha": sha},
+        "rootfs": {"sizeBytes": 400_000_000},
+        "pdkCatalog": {
+            "sky130A": {"family": "sky130", "approx_gb": 2.5,
+                         "libraries": ["sky130_fd_sc_hd", "sky130_fd_io"],
+                         "default_libraries": ["sky130_fd_sc_hd"]},
+            "sky130B": {"family": "sky130", "approx_gb": 2.5,
+                         "libraries": ["sky130_fd_sc_hd"],
+                         "default_libraries": ["sky130_fd_sc_hd"]},
+            "gf180mcuD": {"family": "gf180mcu", "approx_gb": 1.8,
+                           "libraries": ["gf180mcu_fd_sc_mcu7t5v0"],
+                           "default_libraries": ["gf180mcu_fd_sc_mcu7t5v0"]},
+        },
         "componentFingerprints": {"app": app_fp, "rootfs": "root-1"},
     }), encoding="utf-8")
 
@@ -134,7 +146,9 @@ def test_state_preserves_choices_and_exact_source_on_repair(tmp_path: Path) -> N
         "-InstallerPath", installer, "-TestOwnerSid", OWNER,
     )
     assert second["installId"] == first["installId"]
-    assert second["choices"] == {"pdks": ["sky130A"]}
+    assert second["choices"]["profile"] == "custom"
+    assert second["choices"]["pdks"] == ["sky130A"]
+    assert second["choices"]["engine"] == "docker"
     assert second["source"]["sha"] == "a" * 40
 
 
@@ -332,7 +346,8 @@ def test_owner_bound_resume_is_verified_and_bounded(tmp_path: Path) -> None:
         "-InstallerPath", staged, "-ResumeMode", "1", "-BootIdentity", "boot-b",
         "-TestOwnerSid", OWNER,
     )
-    assert resumed["choices"] == {"pdks": ["sky130A"]}
+    assert resumed["choices"]["profile"] == "custom"
+    assert resumed["choices"]["pdks"] == ["sky130A"]
     _run_setup("-Action", "RegisterResume", "-StatePath", state,
                "-BootIdentity", "boot-b", "-TestResumeRoot", resume_root,
                "-TestOwnerSid", OWNER)
@@ -340,6 +355,73 @@ def test_owner_bound_resume_is_verified_and_bounded(tmp_path: Path) -> None:
                            "-BootIdentity", "boot-c", "-TestResumeRoot", resume_root,
                            "-TestOwnerSid", OWNER, ok=False)
     assert "restart limit" in exhausted.stderr
+
+
+def test_recommended_and_minimal_plans_are_canonical_and_honest(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    _manifest(manifest)
+    recommended = _run_setup(
+        "-Action", "PlanChoices", "-ManifestPath", manifest,
+        "-ChoicesJson", '{"profile":"recommended"}',
+    )
+    assert recommended["choices"] == {
+        "schema": 1, "profile": "recommended", "engine": "docker", "image": True,
+        "nativeTools": ["verilator", "iverilog", "graphviz", "gtkwave", "gds3d"],
+        "pdks": ["sky130A"], "libraries": "all",
+    }
+    assert recommended["estimates"]["downloadBytes"] > 6 * 1024**3
+    assert recommended["estimates"]["volumes"]["tempRequiredBytes"] == 400_000_000
+    assert "restarts" in recommended["estimates"]["notes"][1]
+
+    minimal = _run_setup(
+        "-Action", "PlanChoices", "-ManifestPath", manifest,
+        "-ChoicesJson", '{"profile":"minimal"}',
+    )
+    assert minimal["choices"]["engine"] == "none"
+    assert minimal["choices"]["image"] is False
+    assert minimal["choices"]["pdks"] == []
+    assert minimal["estimates"]["downloadBytes"] < recommended["estimates"]["downloadBytes"]
+
+
+@pytest.mark.parametrize(
+    ("choices", "message"),
+    [
+        ({"profile": "custom", "engine": "none", "image": True, "pdks": []},
+         "requires Docker or Podman"),
+        ({"profile": "custom", "engine": "docker", "image": True,
+          "pdks": ["sky130A", "sky130B"]}, "Select only one sky130 variant"),
+        ({"profile": "custom", "engine": "docker", "image": True,
+          "pdks": ["sky130A"], "libraries": {"sky130A": ["not-a-library"]}},
+         "Unknown library"),
+    ],
+)
+def test_selection_plan_rejects_impossible_or_unbound_choices(
+    tmp_path: Path, choices: dict, message: str,
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    _manifest(manifest)
+    failed = _run_setup(
+        "-Action", "PlanChoices", "-ManifestPath", manifest,
+        "-ChoicesJson", json.dumps(choices), ok=False,
+    )
+    assert message in failed.stderr
+
+
+def test_selection_file_is_validated_and_normalized(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    _manifest(manifest)
+    selections = tmp_path / "selections.json"
+    selections.write_text(json.dumps({"choices": {
+        "profile": "custom", "engine": "podman", "image": True,
+        "nativeTools": ["iverilog"], "pdks": ["gf180mcuD"],
+        "libraries": {"gf180mcuD": []},
+    }}), encoding="utf-8")
+    plan = _run_setup(
+        "-Action", "PlanChoices", "-ManifestPath", manifest,
+        "-ChoicesPath", selections,
+    )
+    assert plan["choices"]["engine"] == "podman"
+    assert plan["choices"]["libraries"]["gf180mcuD"] == ["gf180mcu_fd_sc_mcu7t5v0"]
 
 
 def test_resume_rejects_tampered_installer_and_trigger_failure(tmp_path: Path) -> None:

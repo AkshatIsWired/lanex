@@ -72,13 +72,30 @@ def load_plan(
     if not isinstance(choices, Mapping):
         raise ProvisioningInputError("saved selections must be an object")
 
+    profile = choices.get("profile", "custom")
+    if profile not in ("recommended", "custom", "minimal"):
+        raise ProvisioningInputError("profile must be recommended, custom, or minimal")
+    if profile == "recommended":
+        choices = {
+            "profile": "recommended",
+            "engine": "docker",
+            "image": True,
+            "nativeTools": list(_NATIVE_DEFAULTS),
+            "pdks": ["sky130A"],
+            "libraries": "all",
+        }
+    elif profile == "minimal":
+        choices = {
+            "profile": "minimal", "engine": "none", "image": False,
+            "nativeTools": [], "pdks": [], "libraries": {},
+        }
+
     selected = choices.get("pdks", ["sky130A"])
     if (
         not isinstance(selected, list)
-        or not selected
         or not all(isinstance(x, str) for x in selected)
     ):
-        raise ProvisioningInputError("pdks must be a non-empty string array")
+        raise ProvisioningInputError("pdks must be a string array")
     selected = list(dict.fromkeys(selected))
     library_choice = choices.get("libraries", "all")
     pdks: List[Dict[str, Any]] = []
@@ -125,15 +142,24 @@ def load_plan(
         )
 
     engine = choices.get("engine", "docker")
-    if engine not in ("docker", "podman"):
-        raise ProvisioningInputError("engine must be docker or podman")
+    image_selected = choices.get("image", True)
+    if not isinstance(image_selected, bool):
+        raise ProvisioningInputError("image must be true or false")
+    if engine not in ("docker", "podman", "none"):
+        raise ProvisioningInputError("engine must be docker, podman or none")
+    if (image_selected or pdks) and engine == "none":
+        raise ProvisioningInputError("a selected image or PDK requires docker or podman")
+    if pdks and not image_selected:
+        raise ProvisioningInputError("selected PDKs require the matched flow image")
     native = choices.get("nativeTools", list(_NATIVE_DEFAULTS))
     if not isinstance(native, list) or not all(x in _NATIVE_DEFAULTS for x in native):
         raise ProvisioningInputError("nativeTools contains an unsupported appliance tool")
     return {
         "schema": 1,
+        "profile": profile,
         "manifest": manifest,
         "engine": engine,
+        "image": image_selected,
         "nativeTools": list(dict.fromkeys(native)),
         "pdks": pdks,
     }
@@ -236,7 +262,7 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
         checks[f"native:{key}"] = probe
 
     engine = plan["engine"]
-    resolved = tools.resolve_engine(engine)
+    resolved = {"ready": True, "engine": "none"} if engine == "none" else tools.resolve_engine(engine)
     engine_ready = bool(resolved.get("ready") and resolved.get("engine") == engine)
     engine_check: Dict[str, Any] = {"ready": engine_ready, "resolved": resolved}
     if engine_ready and engine == "docker":
@@ -248,11 +274,14 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
         engine_check["context"] = context
         engine_check["ready"] = bool(context.get("ready") and context["localSocket"])
         engine_ready = bool(engine_check["ready"])
-    checks[f"engine:{engine}"] = engine_check
+    if engine != "none":
+        checks[f"engine:{engine}"] = engine_check
     image = plan["manifest"]["image"]["reference"]
     image_digest = plan["manifest"].get("image", {}).get("digest")
     image_target = f"{image.split('@', 1)[0]}@{image_digest}"
-    if engine_ready:
+    if not plan["image"]:
+        image_check = {"ready": True, "selected": False}
+    elif engine_ready:
         inspect = [engine, "image", "inspect", image_target, "--format", "{{json .RepoDigests}}"]
         if resolved.get("sg_wrap"):
             inspect = tools.sg_wrap_argv(inspect)
@@ -285,7 +314,8 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
             "expectedDigest": image_digest,
             "missing": ["usable selected container engine"],
         }
-    checks["container:image"] = image_check
+    if plan["image"]:
+        checks["container:image"] = image_check
 
     for selected in plan["pdks"]:
         for library in selected["libraries"]:
@@ -342,7 +372,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
 
     failures: List[Dict[str, Any]] = []
     engine = plan["engine"]
-    if not initial["checks"].get(f"engine:{engine}", {}).get("ready"):
+    if engine != "none" and not initial["checks"].get(f"engine:{engine}", {}).get("ready"):
         result = installer.install_tool(engine)
         drain()
         if not result.get("ok"):
@@ -383,7 +413,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
             os.environ.pop("LANEX_GDS3D_COMMIT", None)
         else:
             os.environ["LANEX_GDS3D_COMMIT"] = previous_commit
-    if not failures:
+    if not failures and plan["image"]:
         image = plan["manifest"]["image"]
         if initial["checks"].get("container:image", {}).get("ready"):
             print("already verified: container:image", flush=True)

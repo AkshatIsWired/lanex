@@ -12,13 +12,14 @@ Windows PowerShell 5.1 is the compatibility floor.
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('NewManifest', 'InitializeState', 'ResolveAppliance', 'BindAppliance', 'SetComponent', 'ReadState',
-        'Preflight', 'EnableFeatures', 'StageInstaller', 'RegisterResume', 'ClearResume')]
+        'Preflight', 'EnableFeatures', 'StageInstaller', 'RegisterResume', 'ClearResume', 'PlanChoices')]
     [string]$Action,
     [string]$StatePath,
     [string]$ManifestPath,
     [ValidateSet('install', 'repair', 'update')]
     [string]$Operation = 'install',
     [string]$ChoicesJson = '{}',
+    [string]$ChoicesPath,
     [string]$InstallerPath,
     [string]$PreferredDistroName = 'lanex',
     [string]$ExpectedBasePath,
@@ -197,6 +198,184 @@ function Normalize-Path([string]$Path) {
 function Add-OrSet($Object, [string]$Name, $Value) {
     if ($Object.PSObject.Properties[$Name]) { $Object.$Name = $Value }
     else { $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value }
+}
+
+function Get-ChoiceProperty($Object, [string]$Name, $Default) {
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $Default }
+    return $property.Value
+}
+
+function ConvertTo-NormalizedChoices($Manifest, $RawChoices) {
+    <# Interactive and unattended setup meet at this strict boundary. Nothing
+       selected here may become a Linux argument unless it occurs in the
+       hash-bound manifest. A missing profile is the compatible M3/M4 shape. #>
+    if ($null -eq $RawChoices -or $RawChoices -isnot [psobject]) {
+        throw 'Selections must contain a JSON object.'
+    }
+    $catalog = $Manifest.pdkCatalog
+    if ($null -eq $catalog) { throw 'Build manifest has no PDK catalog.' }
+    $profile = [string](Get-ChoiceProperty $RawChoices 'profile' 'custom')
+    if ($profile -notin @('recommended', 'custom', 'minimal')) {
+        throw 'profile must be recommended, custom, or minimal.'
+    }
+    if ($profile -eq 'recommended') {
+        if ($null -eq $catalog.PSObject.Properties['sky130A']) {
+            throw 'The recommended sky130A PDK is absent from the build manifest.'
+        }
+        return [pscustomobject][ordered]@{
+            schema = 1; profile = 'recommended'; engine = 'docker'; image = $true
+            nativeTools = @('verilator', 'iverilog', 'graphviz', 'gtkwave', 'gds3d')
+            pdks = @('sky130A'); libraries = 'all'
+        }
+    }
+    if ($profile -eq 'minimal') {
+        return [pscustomobject][ordered]@{
+            schema = 1; profile = 'minimal'; engine = 'none'; image = $false
+            nativeTools = @(); pdks = @(); libraries = [pscustomobject][ordered]@{}
+        }
+    }
+
+    $engine = [string](Get-ChoiceProperty $RawChoices 'engine' 'docker')
+    if ($engine -notin @('docker', 'podman', 'none')) {
+        throw 'engine must be docker, podman, or none.'
+    }
+    $imageValue = Get-ChoiceProperty $RawChoices 'image' $true
+    if ($imageValue -isnot [bool]) { throw 'image must be true or false.' }
+    $image = [bool]$imageValue
+    $allowedTools = @('verilator', 'iverilog', 'graphviz', 'gtkwave', 'gds3d')
+    $nativeProperty = $RawChoices.PSObject.Properties['nativeTools']
+    if ($null -ne $nativeProperty -and $nativeProperty.Value -isnot [array]) {
+        throw 'nativeTools must be an array.'
+    }
+    $nativeRaw = if ($null -eq $nativeProperty) { $allowedTools } else { @($nativeProperty.Value) }
+    $native = @()
+    foreach ($tool in @($nativeRaw)) {
+        if ($tool -isnot [string] -or $tool -notin $allowedTools) {
+            throw "Unsupported native tool selection: $tool"
+        }
+        if ($native -notcontains [string]$tool) { $native += [string]$tool }
+    }
+
+    $selectedProperty = $RawChoices.PSObject.Properties['pdks']
+    if ($null -ne $selectedProperty -and $selectedProperty.Value -isnot [array]) {
+        throw 'pdks must be an array.'
+    }
+    $selectedRaw = if ($null -eq $selectedProperty) { @('sky130A') } else { @($selectedProperty.Value) }
+    $selected = @()
+    $families = @{}
+    foreach ($variantValue in @($selectedRaw)) {
+        $variant = [string]$variantValue
+        $entry = $catalog.PSObject.Properties[$variant]
+        if (-not $variant -or $null -eq $entry) { throw "Unknown PDK variant: $variant" }
+        $family = [string]$entry.Value.family
+        if ($families.ContainsKey($family) -and $families[$family] -ne $variant) {
+            throw "Select only one $family variant at a time ($($families[$family]), $variant)."
+        }
+        $families[$family] = $variant
+        if ($selected -notcontains $variant) { $selected += $variant }
+    }
+    if (($image -or $selected.Count -gt 0) -and $engine -eq 'none') {
+        throw 'A selected flow image or PDK requires Docker or Podman.'
+    }
+    if ($selected.Count -gt 0 -and -not $image) {
+        throw 'Selected PDKs require the matched flow image.'
+    }
+
+    $libraryRaw = Get-ChoiceProperty $RawChoices 'libraries' 'all'
+    if ($libraryRaw -is [string]) {
+        if ([string]$libraryRaw -ne 'all') {
+            throw "libraries must be 'all' or an object keyed by selected PDK."
+        }
+        $libraries = 'all'
+    } else {
+        if ($libraryRaw -isnot [System.Management.Automation.PSCustomObject]) {
+            throw "libraries must be 'all' or an object keyed by selected PDK."
+        }
+        $libraries = [pscustomobject][ordered]@{}
+        foreach ($property in @($libraryRaw.PSObject.Properties)) {
+            if ($selected -notcontains $property.Name) {
+                throw "Libraries were supplied for an unselected PDK: $($property.Name)"
+            }
+        }
+        foreach ($variant in $selected) {
+            $entry = $catalog.PSObject.Properties[$variant].Value
+            $allowed = @($entry.libraries | ForEach-Object { [string]$_ })
+            $required = @($entry.default_libraries | ForEach-Object { [string]$_ })
+            $requestedProperty = $libraryRaw.PSObject.Properties[$variant]
+            if ($null -ne $requestedProperty -and
+                    $requestedProperty.Value -isnot [array]) {
+                throw "Libraries for $variant must be an array."
+            }
+            $requested = if ($null -eq $requestedProperty) { @() } else { @($requestedProperty.Value) }
+            $merged = @()
+            foreach ($libraryValue in @($required) + @($requested)) {
+                $library = [string]$libraryValue
+                if (-not $library -or $allowed -notcontains $library) {
+                    throw "Unknown library for ${variant}: $library"
+                }
+                if ($merged -notcontains $library) { $merged += $library }
+            }
+            Add-OrSet $libraries $variant $merged
+        }
+    }
+    return [pscustomobject][ordered]@{
+        schema = 1; profile = 'custom'; engine = $engine; image = $image
+        nativeTools = $native; pdks = $selected; libraries = $libraries
+    }
+}
+
+function Get-SelectionEstimate($Manifest, $Choices) {
+    # Planning estimates, never download promises. Base/rootfs/image values are
+    # measured in the documented 2026 reference run; PDK sizes come from the
+    # locked Ciel catalog and receive extraction/cache headroom.
+    $gib = [int64]1073741824
+    $rootfs = [int64]$Manifest.rootfs.sizeBytes
+    $baseInstalled = [int64]([math]::Ceiling(1.3 * $gib))
+    $baseNetwork = [int64]([math]::Ceiling(0.9 * $gib))
+    $nativeInstalled = if (@($Choices.nativeTools).Count -gt 0) { [int64]([math]::Ceiling(1.2 * $gib)) } else { 0 }
+    $nativeNetwork = if (@($Choices.nativeTools).Count -gt 0) { [int64]([math]::Ceiling(0.7 * $gib)) } else { 0 }
+    $imageNetwork = if ($Choices.image) { 3 * $gib } else { 0 }
+    $imageInstalled = if ($Choices.image) { 4 * $gib } else { 0 }
+    $pdkNetwork = [int64]0
+    foreach ($variant in @($Choices.pdks)) {
+        $approx = [double]$Manifest.pdkCatalog.PSObject.Properties[[string]$variant].Value.approx_gb
+        $pdkNetwork += [int64]([math]::Ceiling($approx * $gib))
+    }
+    $pdkInstalled = [int64]([math]::Ceiling($pdkNetwork * 1.6))
+    $runHeadroom = if ($Choices.image) { 4 * $gib } else { 1 * $gib }
+    return [pscustomobject][ordered]@{
+        schema = 1
+        measuredBasis = '2026 reference run plus locked catalog approximations'
+        downloadBytes = $rootfs + $baseNetwork + $nativeNetwork + $imageNetwork + $pdkNetwork
+        installedBytes = $baseInstalled + $nativeInstalled + $imageInstalled + $pdkInstalled
+        extractionHeadroomBytes = [int64]([math]::Ceiling(($imageNetwork + $pdkNetwork) * 0.35))
+        practicalRunHeadroomBytes = $runHeadroom
+        volumes = [pscustomobject][ordered]@{
+            appDataRequiredBytes = $rootfs + $baseInstalled + $nativeInstalled + $imageInstalled + $pdkInstalled + $runHeadroom
+            tempRequiredBytes = $rootfs
+        }
+        notes = @(
+            'Completed rootfs, image layers and validated PDK data are reusable.',
+            'An interrupted rootfs transfer restarts; partial-range resume is not claimed.',
+            'Actual registry compression, selected libraries and future design runs can vary.'
+        )
+    }
+}
+
+function Get-PlannedChoices {
+    $manifest = Read-JsonFile $ManifestPath 'Build manifest'
+    Assert-Manifest $manifest
+    $raw = if ($ChoicesPath) {
+        Read-JsonFile $ChoicesPath 'Selection file'
+    } else {
+        try { $ChoicesJson | ConvertFrom-Json } catch { throw 'ChoicesJson is malformed.' }
+    }
+    if ($raw.PSObject.Properties['choices']) { $raw = $raw.choices }
+    $choices = ConvertTo-NormalizedChoices $manifest $raw
+    return [pscustomobject][ordered]@{
+        schema = 1; choices = $choices; estimates = Get-SelectionEstimate $manifest $choices
+    }
 }
 
 function Get-FeatureState([string]$Name) {
@@ -580,7 +759,16 @@ function New-BuildManifest {
         gds3d = [ordered]@{ repository = 'trilomix/GDS3D'; commit = $Gds3dCommit.ToLowerInvariant() }
         pdkPins = $pins
         pdkCatalog = $catalog.pdk_catalog
-        sizeEstimates = [ordered]@{ minimumFreeBytes = 10737418240; rootfsDownloadBytes = $RootfsSizeBytes }
+        sizeEstimates = [ordered]@{
+            rootfsDownloadBytes = $RootfsSizeBytes
+            measuredBaseInstalledBytes = [int64]1395864372
+            measuredBaseNetworkBytes = [int64]966367642
+            estimatedNativeInstalledBytes = [int64]1288490189
+            estimatedNativeNetworkBytes = [int64]751619277
+            estimatedImageDownloadBytes = [int64]3221225472
+            estimatedImageInstalledBytes = [int64]4294967296
+            practicalRunHeadroomBytes = [int64]4294967296
+        }
         componentFingerprints = [ordered]@{}
     }
     $manifest.componentFingerprints.app = Get-TextSha256 (($manifest.source | ConvertTo-Json -Compress) + ($payload | ConvertTo-Json -Compress))
@@ -597,7 +785,13 @@ function Initialize-State {
     $manifestHash = Get-Sha256 $ManifestPath
     $owner = Get-OwnerSid
     $installerSha = Get-Sha256 $InstallerPath
-    $choices = try { $ChoicesJson | ConvertFrom-Json } catch { throw 'ChoicesJson is malformed.' }
+    $rawChoices = if ($ChoicesPath) {
+        Read-JsonFile $ChoicesPath 'Selection file'
+    } else {
+        try { $ChoicesJson | ConvertFrom-Json } catch { throw 'ChoicesJson is malformed.' }
+    }
+    if ($rawChoices.PSObject.Properties['choices']) { $rawChoices = $rawChoices.choices }
+    $choices = ConvertTo-NormalizedChoices $manifest $rawChoices
     if (Test-Path -LiteralPath $StatePath) {
         $state = Migrate-State (Read-JsonFile $StatePath 'Install state')
         Assert-StateOwner $state $owner
@@ -627,6 +821,7 @@ function Initialize-State {
         # Existing choices are authoritative on resume/manual rerun. New choices
         # are accepted only for an explicit update.
         if ($Operation -eq 'update') { $state.choices = $choices }
+        else { $state.choices = ConvertTo-NormalizedChoices $manifest $state.choices }
     } else {
         if ($Operation -eq 'repair') { throw 'Repair requires an existing owner-scoped install state.' }
         $state = [pscustomobject][ordered]@{
@@ -721,6 +916,7 @@ $result = switch ($Action) {
     'StageInstaller' { Stage-ResumeInstaller }
     'RegisterResume' { Register-OwnerResume }
     'ClearResume' { Clear-OwnerResume }
+    'PlanChoices' { Get-PlannedChoices }
     'ReadState' {
         $s = Migrate-State (Read-JsonFile $StatePath 'Install state')
         Assert-StateOwner $s (Get-OwnerSid)

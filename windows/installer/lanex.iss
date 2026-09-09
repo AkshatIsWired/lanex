@@ -699,7 +699,7 @@ begin
   Snippet := '& ' + PSQuote(Worker) + ' -Action InitializeState -StatePath '
     + PSQuote(StateFile) + ' -ManifestPath ' + PSQuote(Manifest)
     + ' -Operation ' + OperationName
-    + ' -ChoicesJson ''{"pdks":["sky130A"],"libraries":"all","engine":"docker"}'''
+    + ' -ChoicesJson ''{"profile":"recommended"}'''
     + ' -InstallerPath ' + PSQuote(ExpandConstant('{srcexe}'));
   if IsResumeRun then
     Snippet := Snippet + ' -ResumeMode 1 -BootIdentity ' + PSQuote(BootIdentityValue);

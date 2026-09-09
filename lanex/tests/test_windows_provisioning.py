@@ -75,6 +75,25 @@ def test_same_family_variants_cannot_run_concurrently(tmp_path: Path) -> None:
         )
 
 
+def test_minimal_plan_has_no_implicit_engine_image_tools_or_pdks(tmp_path: Path) -> None:
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()), choices={"profile": "minimal"}
+    )
+    assert plan["engine"] == "none"
+    assert plan["image"] is False
+    assert plan["nativeTools"] == []
+    assert plan["pdks"] == []
+
+
+def test_custom_plan_rejects_pdk_without_image(tmp_path: Path) -> None:
+    with pytest.raises(provisioning.ProvisioningInputError, match="require.*flow image"):
+        provisioning.load_plan(
+            _write(tmp_path, _manifest()),
+            choices={"profile": "custom", "engine": "docker", "image": False,
+                     "pdks": ["sky130A"], "nativeTools": []},
+        )
+
+
 def test_gds3d_requires_linux_cpp_driver_not_cc(monkeypatch: pytest.MonkeyPatch) -> None:
     from lanex.controller import platform_env
 
