@@ -588,7 +588,7 @@ def test_ci_builds_and_mounts_exact_pr_checkout() -> None:
     body = WORKFLOW.read_text()
     assert "github.event.pull_request.head.sha || github.sha" in body
     assert "LANEX_INSTALL_SCRIPT=/checkout/scripts/install.sh" in body
-    assert "LANEX_FROM=/candidate/lanex-candidate.whl" in body
+    assert 'LANEX_FROM=/candidate/$LANEX_WHEEL_NAME' in body
     assert "name: lanex-candidate-inputs" in body
     assert "NewManifest" in body and "LANEX_SOURCE_SHA=$(git rev-parse HEAD)" in body
     assert "SetupWorkerSha256" in body and "Get-FileHash ..\\setup\\setup.ps1" in body
@@ -599,6 +599,8 @@ def test_inno_requires_exact_payload_and_never_deletes_distro_by_name() -> None:
     body = INNO.read_text()
     assert "#error LanexSourceSha is required" in body
     assert 'Source: "{#LanexWheel}"' in body
+    assert 'DestName: "{#LanexWheelFile}"' in body
+    assert "lanex-candidate.whl" not in body
     assert "BindAppliance" in body and "VerifyRepairIdentity" in body
     uninstall = body[body.index("procedure CurUninstallStepChanged") :]
     assert "DelTree(AppDataRoot" not in uninstall

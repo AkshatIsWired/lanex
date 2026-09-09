@@ -76,6 +76,7 @@
 #ifndef LanexWheel
   #error LanexWheel is required: build the checkout wheel before compiling Setup
 #endif
+#define LanexWheelFile ExtractFileName(LanexWheel)
 #ifndef SetupWorkerSha256
   #error SetupWorkerSha256 is required: elevated helper must be bound to the bundled worker
 #endif
@@ -219,7 +220,7 @@ Source: "..\setup\setup.ps1"; Flags: dontcopy
 Source: "..\setup\setup.ps1"; DestDir: "{app}"; DestName: "setup-worker.ps1"; Flags: ignoreversion
 Source: "..\setup\constraints.txt"; Flags: dontcopy
 Source: "..\setup\build-manifest.json"; Flags: dontcopy
-Source: "{#LanexWheel}"; DestName: "lanex-candidate.whl"; Flags: dontcopy
+Source: "{#LanexWheel}"; DestName: "{#LanexWheelFile}"; Flags: dontcopy
 
 [Icons]
 Name: "{userprograms}\{#AppName}\{#AppName}"; Filename: "{app}\LanEx.exe"; IconFilename: "{app}\lanex.ico"
@@ -1156,7 +1157,7 @@ begin
   ExtractTemporaryFile('build-manifest.json');
   ExtractTemporaryFile('install.sh');
   ExtractTemporaryFile('constraints.txt');
-  ExtractTemporaryFile('lanex-candidate.whl');
+  ExtractTemporaryFile('{#LanexWheelFile}');
   Worker := ExpandConstant('{tmp}\setup.ps1');
   Manifest := ExpandConstant('{tmp}\build-manifest.json');
   HadState := FileExists(StateFile);
@@ -1438,7 +1439,7 @@ begin
   ExtractTemporaryFile('build-manifest.json');
   ScriptPath := ExpandConstant('{tmp}\provision.sh');
   InstallPath := ExpandConstant('{tmp}\install.sh');
-  WheelPath := ExpandConstant('{tmp}\lanex-candidate.whl');
+  WheelPath := ExpandConstant('{tmp}\{#LanexWheelFile}');
   ConstraintPath := ExpandConstant('{tmp}\constraints.txt');
   ManifestPath := ExpandConstant('{tmp}\build-manifest.json');
   LinuxPath := WindowsToWslPath(ScriptPath);

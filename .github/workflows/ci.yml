@@ -47,6 +47,10 @@ jobs:
           pip install pytest
 
       - name: Python tests
+        env:
+          # This renderer probe is version-independent. Run it once so four
+          # simultaneous Chromium processes cannot starve a shared runner pool.
+          LANEX_SKIP_BROWSER_LAYOUT: ${{ matrix.python-version != '3.12' && '1' || '0' }}
         run: python -m pytest lanex/tests -q --junitxml=pytest-report.xml
 
       # Rich Summary-tab report: every test group + what a failure there means.

@@ -80,6 +80,7 @@ jobs:
     timeout-minutes: 20
     outputs:
       wheel-sha256: ${{ steps.inputs.outputs.wheel-sha256 }}
+      wheel-name: ${{ steps.inputs.outputs.wheel-name }}
       image-digest: ${{ steps.inputs.outputs.image-digest }}
       gds3d-commit: ${{ steps.inputs.outputs.gds3d-commit }}
     steps:
@@ -103,7 +104,8 @@ jobs:
           .candidate-venv/bin/python windows/setup/export_pdk_pins.py \
             --catalog docs/windows-installer-handoff/CAPABILITY-INVENTORY.json \
             --output pdk-pins.json
-          cp "$wheel" lanex-candidate.whl
+          wheel_name=$(basename "$wheel")
+          cp "$wheel" "$wheel_name"
 
           token=$(curl -fsSL 'https://ghcr.io/token?scope=repository%3Alibrelane%2Flibrelane%3Apull' |
             python -c 'import json,sys; print(json.load(sys.stdin)["token"])')
@@ -116,7 +118,8 @@ jobs:
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$gds" =~ ^[0-9a-f]{40}$ ]]
           {
-            echo "wheel-sha256=$(sha256sum lanex-candidate.whl | cut -d' ' -f1)"
+            echo "wheel-name=$wheel_name"
+            echo "wheel-sha256=$(sha256sum "$wheel_name" | cut -d' ' -f1)"
             echo "image-digest=$digest"
             echo "gds3d-commit=$gds"
           } >> "$GITHUB_OUTPUT"
@@ -124,7 +127,7 @@ jobs:
         with:
           name: lanex-candidate-inputs
           path: |
-            lanex-candidate.whl
+            lanex-*.whl
             pdk-pins.json
           if-no-files-found: error
           retention-days: 14
@@ -168,13 +171,14 @@ jobs:
           # built beside it claims to install. Self-consistency is the point:
           # see the release checklist in windows/README.md.
           LANEX_REF: ${{ github.sha }}
+          LANEX_WHEEL_NAME: ${{ needs.candidate-inputs.outputs.wheel-name }}
         run: |
           set -euo pipefail
           docker run -d --name lanex-bake \
             -v "$PWD:/checkout:ro" \
             -e "LANEX_REF=$LANEX_REF" -e LANEX_BAKE=1 \
             -e LANEX_INSTALL_SCRIPT=/checkout/scripts/install.sh \
-            -e LANEX_FROM=/candidate/lanex-candidate.whl \
+            -e "LANEX_FROM=/candidate/$LANEX_WHEEL_NAME" \
             -e LANEX_PIP_CONSTRAINT=/checkout/windows/setup/constraints.txt \
             -v "$PWD/.candidate-inputs:/candidate:ro" \
             ubuntu:24.04 sleep infinity
@@ -313,23 +317,24 @@ jobs:
 
       - name: Bind exact candidate payload and manifest inputs
         shell: pwsh
+        env:
+          EVENT_SOURCE_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          EVENT_SOURCE_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          LANEX_WHEEL_NAME: ${{ needs.candidate-inputs.outputs.wheel-name }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $wheel = (Resolve-Path '.candidate-inputs/lanex-candidate.whl').Path
+          $wheel = (Resolve-Path (Join-Path '.candidate-inputs' $env:LANEX_WHEEL_NAME)).Path
           $actual = (Get-FileHash $wheel -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne '${{ needs.candidate-inputs.outputs.wheel-sha256 }}') {
             throw 'downloaded candidate wheel does not match the producing job'
           }
-          Copy-Item -LiteralPath $wheel -Destination 'windows/setup/lanex-candidate.whl'
-          $wheel = (Resolve-Path 'windows/setup/lanex-candidate.whl').Path
+          Copy-Item -LiteralPath $wheel -Destination 'windows/setup/'
+          $wheel = (Resolve-Path (Join-Path 'windows/setup' $env:LANEX_WHEEL_NAME)).Path
           Copy-Item -LiteralPath '.candidate-inputs/pdk-pins.json' -Destination 'windows/setup/pdk-pins.json'
           "LANEX_WHEEL=$wheel" | Out-File -Append $env:GITHUB_ENV
           "LANEX_SOURCE_SHA=$(git rev-parse HEAD)" | Out-File -Append $env:GITHUB_ENV
           "LANEX_SOURCE_REF=$env:EVENT_SOURCE_REF" | Out-File -Append $env:GITHUB_ENV
           "LANEX_SOURCE_REPO=$env:EVENT_SOURCE_REPO" | Out-File -Append $env:GITHUB_ENV
-        env:
-          EVENT_SOURCE_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
-          EVENT_SOURCE_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Resolve immutable external pins and generate build manifest
         shell: pwsh
@@ -557,7 +562,7 @@ jobs:
             windows/launcher/LanEx.exe
             windows/setup/build-manifest.json
             windows/setup/pdk-pins.json
-            windows/setup/lanex-candidate.whl
+            windows/setup/lanex-*.whl
             LICENSE
             NOTICE
           if-no-files-found: error
@@ -766,12 +771,12 @@ jobs:
           cp .windows-build/windows/launcher/LanEx.exe candidate/
           cp .windows-build/windows/setup/build-manifest.json candidate/
           cp .windows-build/windows/setup/pdk-pins.json candidate/
-          cp .windows-build/windows/setup/lanex-candidate.whl candidate/
+          cp .windows-build/windows/setup/lanex-*.whl candidate/
           cp .windows-build/LICENSE .windows-build/NOTICE candidate/
           cp .rootfs/lanex-rootfs-amd64.tar.gz .rootfs/baked-package-inventory.json candidate/
           python scripts/ci/windows_candidate.py verify-bundle \
             --manifest candidate/build-manifest.json \
-            --wheel candidate/lanex-candidate.whl \
+            --wheel candidate/lanex-*.whl \
             --pdk-pins candidate/pdk-pins.json \
             --setup candidate/LanEx-Setup.exe \
             --launcher candidate/LanEx.exe \
