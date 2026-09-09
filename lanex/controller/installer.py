@@ -654,22 +654,29 @@ def _strategy_conda(env: Dict[str, Any], key: str) -> Optional[List[str]]:
 @_strategy(["apt"], "apt install (Linux)", priority=30)
 def _strategy_apt(env: Dict[str, Any], key: str) -> Optional[List[str]]:
     apt = "apt-fast" if _check_cmd("apt-fast") else "apt-get"
+    apt_options = ("-o DPkg::Lock::Timeout=300 "
+                   "-o Acquire::http::Timeout=30 "
+                   "-o Acquire::https::Timeout=30 -o Acquire::Retries=3")
+    base = ["sudo", apt, "-o", "DPkg::Lock::Timeout=300",
+            "-o", "Acquire::http::Timeout=30",
+            "-o", "Acquire::https::Timeout=30",
+            "-o", "Acquire::Retries=3", "install", "-y"]
     # Debian/Ubuntu ship yosys, klayout, verilator. They do NOT package
     # OpenROAD, and their `magic`/`netgen` are unrelated tools — so those are
     # intentionally omitted (use conda/nix/Docker instead).
     mapping = {
-        "yosys": ["sudo", apt, "install", "-y", "yosys"],
-        "klayout": ["sudo", apt, "install", "-y", "klayout"],
-        "verilator": ["sudo", apt, "install", "-y", "verilator"],
-        "iverilog": ["sudo", apt, "install", "-y", "iverilog"],
-        "graphviz": ["sudo", apt, "install", "-y", "graphviz"],
-        "gtkwave": ["sudo", apt, "install", "-y", "gtkwave"],
-        "ciel": ["sh", "-c", f"sudo {apt} install -y python3-pip && pip3 install ciel 2>/dev/null || pipx install ciel 2>/dev/null || pip3 install --break-system-packages ciel"],
+        "yosys": base + ["yosys"],
+        "klayout": base + ["klayout"],
+        "verilator": base + ["verilator"],
+        "iverilog": base + ["iverilog"],
+        "graphviz": base + ["graphviz"],
+        "gtkwave": base + ["gtkwave"],
+        "ciel": ["sh", "-c", f"sudo {apt} {apt_options} install -y python3-pip && pip3 install ciel 2>/dev/null || pipx install ciel 2>/dev/null || pip3 install --break-system-packages ciel"],
         # Container engines: Podman is the rootless, daemonless choice and is the
         # simplest to bring up on Debian/Ubuntu. Docker via apt installs the
         # daemon (you may then need to add your user to the `docker` group).
-        "podman": ["sudo", apt, "install", "-y", "podman"],
-        "docker": ["sudo", apt, "install", "-y", "docker.io"],
+        "podman": base + ["podman"],
+        "docker": base + ["docker.io"],
     }
     return mapping.get(key)
 

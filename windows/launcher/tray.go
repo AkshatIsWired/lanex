@@ -100,6 +100,10 @@ func (t *tray) waitReady(open *systray.MenuItem) {
 		t.port.Store(int64(port))
 		systray.SetTooltip(fmt.Sprintf("%s — running on port %d", appName, port))
 		open.Enable()
+		if err := openAppWindow(port); err != nil {
+			showError(fmt.Sprintf("LanEx is ready at http://127.0.0.1:%d/ but its "+
+				"window could not be opened.\n\n%v", port, err))
+		}
 		return
 	}
 	if t.quitting.Load() {
@@ -112,16 +116,13 @@ func (t *tray) waitReady(open *systray.MenuItem) {
 		return
 	default:
 	}
-	// Still alive but not answering after 90 s. The overwhelmingly common cause
-	// is broken Windows->WSL localhost forwarding, and `wsl --shutdown` is the
-	// documented one-time fix — the same advice LanEx prints itself
-	// (cli.py:296-301).
+	// Still alive but not answering after 90 s. Stop only this owned appliance;
+	// never tell the user to shut down every WSL distribution on the machine.
 	t.stopServer()
 	showError("LanEx could not start.\n\n" +
-		"Try again. If it keeps failing, open a Windows terminal, run\n\n" +
-		"    wsl --shutdown\n\n" +
-		"and relaunch LanEx — that clears a known one-time WSL networking " +
-		"problem.\n\nDetails are in:\n" + logPath())
+		"Windows could not reach the LanEx health check. Retry once; if it keeps " +
+		"failing, use Repair so LanEx can diagnose its own WSL networking without " +
+		"stopping your other WSL environments.\n\nDetails are in:\n" + logPath())
 	t.quitting.Store(true)
 	systray.Quit()
 }
@@ -138,8 +139,8 @@ func (t *tray) watchServer() {
 	// instantly with every run still in place. Only Quit stops the server.
 	if t.port.Load() == 0 {
 		showError("LanEx stopped before it finished starting.\n\n" +
-			"Try again. If it keeps failing, open a Windows terminal, run\n\n" +
-			"    wsl --shutdown\n\nand relaunch LanEx.\n\nDetails are in:\n" + logPath())
+			"Try again. If it keeps failing, run LanEx Setup and choose Repair. " +
+			"Your projects and other WSL environments are preserved.\n\nDetails are in:\n" + logPath())
 	}
 	systray.Quit()
 }

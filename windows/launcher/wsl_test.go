@@ -10,6 +10,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -59,6 +60,17 @@ func TestDecodeConsoleUnicode(t *testing.T) {
 	}
 	if got := decodeConsole(utf16le("Ubuntu-Ärger\n")); got != "Ubuntu-Ärger\n" {
 		t.Errorf("utf16 decode: got %q", got)
+	}
+}
+
+func TestStartServerDefersWindowUntilWindowsHealth(t *testing.T) {
+	args := startServerArgs()
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "exec lanex --no-browser") {
+		t.Fatalf("server command can race-open an unverified URL: %q", args)
+	}
+	if strings.Contains(joined, "--tab") {
+		t.Fatalf("server command must not open a fallback browser tab: %q", args)
 	}
 }
 

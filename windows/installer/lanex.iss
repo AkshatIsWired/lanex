@@ -235,6 +235,9 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\LanEx.exe"; IconFilename: "{a
 Filename: "{app}\LanEx.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent; Check: InstallCompleted
 
 [Code]
+function SetProcessEnvironmentVariable(lpName, lpValue: String): Boolean;
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall';
+
 var
   // Set in InitializeSetup, read in PrepareToInstall.
   RepairExisting: Boolean;   // a lanex distro is already there: keep its data
@@ -375,6 +378,8 @@ end;
 // The nested-quote shape (/C ""prog" args >> "log"") is cmd's documented rule
 // for a command line whose program path is quoted.
 function RunLogged(const FileName, Params: String; var ResultCode: Integer): Boolean;
+var
+  PreviousWslEnv, ForwardedWslEnv: String;
 begin
   ForceDirectories(LogDir);
   LogLine('$ ' + FileName + ' ' + Params);
@@ -383,10 +388,39 @@ begin
   // that is otherwise single-byte, and every WSL line comes back as
   // "T h e   o p e r a t i o n   c o m p l e t e d" — in the one file we ask
   // users to send us when an install fails.
-  Result := Exec(ExpandConstant('{cmd}'),
-    '/C "set WSL_UTF8=1&& "' + FileName + '" ' + Params
-      + ' >> "' + LogFile + '" 2>&1"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // WSL does not normally import arbitrary Windows environment variables.
+  // WSLENV forwards only explicit proxy variables without putting their values
+  // (often credentials) on the command line or in install.log. The previous
+  // process-local WSLENV is restored immediately after the child exits.
+  PreviousWslEnv := GetEnv('WSLENV');
+  ForwardedWslEnv := 'HTTP_PROXY:HTTPS_PROXY:NO_PROXY:http_proxy:https_proxy:no_proxy';
+  if PreviousWslEnv <> '' then
+    ForwardedWslEnv := PreviousWslEnv + ':' + ForwardedWslEnv;
+  SetProcessEnvironmentVariable('WSLENV', ForwardedWslEnv);
+  try
+    Result := Exec(ExpandConstant('{cmd}'),
+      '/C "set WSL_UTF8=1&& "' + FileName + '" ' + Params
+        + ' >> "' + LogFile + '" 2>&1"',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  finally
+    SetProcessEnvironmentVariable('WSLENV', PreviousWslEnv);
+  end;
+end;
+
+function ProxyFailureHint: String;
+var
+  PacUrl: String;
+begin
+  Result := '';
+  if (GetEnv('HTTP_PROXY') <> '') or (GetEnv('HTTPS_PROXY') <> '') or
+     (GetEnv('http_proxy') <> '') or (GetEnv('https_proxy') <> '') then
+    Exit;
+  if RegQueryStringValue(HKCU,
+       'Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+       'AutoConfigURL', PacUrl) and (PacUrl <> '') then
+    Result := #13#10#13#10 + 'Windows is configured with an automatic proxy (PAC) file. '
+      + 'Linux command-line downloads cannot use a PAC URL directly; ask your administrator '
+      + 'for an explicit HTTPS proxy URL. The PAC address and proxy credentials are not logged.';
 end;
 
 // LogTail returns the last Count lines of install.log, for failure dialogs: the
@@ -919,7 +953,8 @@ begin
     Answer := MsgBox('Setting up the LanEx environment did not finish.'
       + #13#10#13#10 + 'This is almost always a network problem, and retrying is '
       + 'safe — it continues where it left off.' + #13#10#13#10
-      + 'Last lines of the log:' + #13#10 + LogTail(12), mbError, MB_RETRYCANCEL);
+      + 'Last lines of the log:' + #13#10 + LogTail(12) + ProxyFailureHint,
+      mbError, MB_RETRYCANCEL);
   until Answer <> IDRETRY;
   Result := 'The LanEx environment could not be prepared.' + #13#10#13#10
     + 'The full log is at:' + #13#10 + LogFile + #13#10#13#10
@@ -982,7 +1017,7 @@ begin
       Exit;
     Answer := MsgBox('The selected LanEx components did not all become ready.'
       + #13#10#13#10 + 'Retrying preserves completed tools, image layers, PDKs, and projects.'
-      + #13#10#13#10 + 'Last lines of the log:' + #13#10 + LogTail(16),
+      + #13#10#13#10 + 'Last lines of the log:' + #13#10 + LogTail(16) + ProxyFailureHint,
       mbError, MB_RETRYCANCEL);
   until Answer <> IDRETRY;
   Result := 'LanEx base setup is intact, but selected-component readiness failed.'

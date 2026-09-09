@@ -99,23 +99,39 @@ setup_privileges() {
 
 # --------------------------------------------------------------- preflight --
 net_check() {
+    local url="https://codeload.github.com/${REPO}/tar.gz/${REF}" out rc detail
     if command -v curl >/dev/null 2>&1; then
-        curl -fsI -m 12 https://github.com >/dev/null 2>&1 && return 0
+        out="$(mktemp)" || die "Could not create a temporary network diagnostic."
+        curl -fsSL -r 0-0 --connect-timeout 10 --max-time 25 --retry 2 \
+            -o /dev/null "$url" 2>"$out"
+        rc=$?
+        if [ "$rc" -eq 0 ]; then rm -f "$out"; return 0; fi
+        detail="$(tail -n 8 "$out" | sed -E \
+            's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[redacted]@#g')"
+        rm -f "$out"
+        case "$rc" in
+            5|6) die "DNS could not resolve the LanEx source host.
+   ${detail}
+   Preserve WSL's generated resolver/DNS tunneling; check VPN or company DNS, then re-run." ;;
+            7) die "The source host resolved, but no connection route was available.
+   ${detail}
+   Check VPN, firewall and IPv4/IPv6 routing, then re-run." ;;
+            28) die "The source download exceeded its bounded timeout.
+   ${detail}
+   Check a slow connection or proxy, then re-run; completed caches are retained." ;;
+            35|51|58|60|77|80|83|90) die "TLS certificate verification failed for the LanEx source.
+   ${detail}
+   Check the clock, CA certificates or inspecting proxy; TLS verification is not disabled." ;;
+            *) die "The LanEx source download failed (curl ${rc}).
+   ${detail}
+   Check the exact error, current proxy/VPN and source access, then re-run." ;;
+        esac
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --spider -T 12 https://github.com >/dev/null 2>&1 && return 0
+        wget -q --spider -T 25 "$url" >/dev/null 2>&1 && return 0
     else
         return 0   # no probe tool yet — let the real download speak later
     fi
-    if [ "$WSL" = "1" ]; then
-        die "Cannot reach github.com — on WSL this is almost always the broken
-   auto-generated /etc/resolv.conf. Fix (one time):
-     sudo sh -c 'printf \"[network]\\ngenerateResolvConf = false\\n\" >> /etc/wsl.conf'
-     sudo rm -f /etc/resolv.conf
-     sudo sh -c 'echo nameserver 8.8.8.8 > /etc/resolv.conf'
-   then from Windows:  wsl --shutdown   and re-open Ubuntu and re-run this."
-    fi
-    die "Cannot reach github.com — check your network/proxy and re-run.
-   (Proxies: export https_proxy=... before re-running; apt/pip/curl honour it.)"
+    die "The LanEx source could not be reached with wget. Check its output, network/proxy and re-run."
 }
 
 disk_free_gb() {  # free space in GiB on $HOME (portable-ish df)
@@ -123,29 +139,38 @@ disk_free_gb() {  # free space in GiB on $HOME (portable-ish df)
 }
 
 # ------------------------------------------------------------ system deps  --
+apt_run() {
+    if [ -n "$SUDO" ]; then
+        sudo apt-get -o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 -o Acquire::Retries=3 "$@"
+    else
+        apt-get -o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 -o Acquire::Retries=3 "$@"
+    fi
+}
+
 apt_stage() {
     # Fresh-boot Ubuntu/WSL often holds the dpkg lock (unattended-upgrades);
     # DPkg::Lock::Timeout waits instead of dying with "could not get lock".
-    local A="$SUDO apt-get -o DPkg::Lock::Timeout=300"
     say "System packages (apt)"
-    $A update || warn "apt update failed — trying with the existing package lists."
+    apt_run update || warn "apt update failed — trying with the existing package lists."
     # Must-haves: interpreter + venv (pipx AND the venv fallback both need it).
-    $A install -y python3 python3-venv ca-certificates \
+    apt_run install -y python3 python3-venv ca-certificates \
         || die "apt could not install python3/python3-venv. Run 'sudo apt update' manually, read its error, then re-run this script."
     # Nice-to-haves: each degrades alone. pipx: not packaged before Ubuntu 22.04
     # / Debian 12 (those pythons are too old anyway — caught below).
-    $A install -y pipx || warn "no apt 'pipx' package — will fall back to pip/venv."
+    apt_run install -y pipx || warn "no apt 'pipx' package — will fall back to pip/venv."
     # git: the in-app GDS3D viewer build clones its source, and git-based
     # installs need it. Its absence surfaces much later as a confusing
     # "gds3d install failed — needs: git" in the Tools tab.
-    $A install -y git || warn "git failed to install — the GDS3D build (Tools tab) needs it."
+    apt_run install -y git || warn "git failed to install — the GDS3D build (Tools tab) needs it."
     # X11 fixed fonts + Mesa GL: without them GDS3D segfaults and GL viewers
     # open blank windows. Cosmetic for the cockpit itself → never fatal.
-    $A install -y xfonts-base libgl1 libgl1-mesa-dri libegl1 \
+    apt_run install -y xfonts-base libgl1 libgl1-mesa-dri libegl1 \
         || warn "GL/font packages failed to install — desktop viewers may need them later (Tools tab offers a one-click fix)."
     # gtkwave: the RTL IDE's "Open in GTKWave" waveform viewer. Optional —
     # the built-in canvas viewer works without it; the Tools tab can retry.
-    $A install -y gtkwave \
+    apt_run install -y gtkwave \
         || warn "gtkwave failed to install — the RTL IDE's 'Open in GTKWave' needs it (Tools tab can retry)."
 }
 
@@ -326,7 +351,7 @@ build_tools_stage() {
     # which needs a C/C++ toolchain that minimal installs don't have.
     say "A dependency must be compiled from source — installing build tools, then retrying"
     case "$PKG" in
-        apt)    $SUDO apt-get -o DPkg::Lock::Timeout=300 install -y build-essential python3-dev || true ;;
+        apt)    apt_run install -y build-essential python3-dev || true ;;
         dnf)    $SUDO dnf install -y gcc gcc-c++ make python3-devel || true ;;
         pacman) $SUDO pacman -S --noconfirm --needed base-devel || true ;;
         zypper) $SUDO zypper --non-interactive install gcc gcc-c++ make python3-devel || true ;;
@@ -372,6 +397,8 @@ expose_on_path() {
     case ":${PATH}:" in *":$(dirname "$LAUNCHER"):"*) : ;; *)
         local rc="$HOME/.bashrc"
         case "${SHELL:-}" in */zsh) rc="$HOME/.zshrc" ;; esac
+        # $PATH is intentionally literal so the user's shell expands it later.
+        # shellcheck disable=SC2016
         printf '\nexport PATH="%s:$PATH"\n' "$(dirname "$LAUNCHER")" >> "$rc" 2>/dev/null || true
     esac
 }
@@ -430,7 +457,7 @@ gds3d_stage() {
     # Build deps first, per package manager. The apt path can self-install these
     # from inside the app later; dnf/pacman/zypper cannot, so seed them now.
     case "$PKG" in
-        apt)    $SUDO apt-get -o DPkg::Lock::Timeout=300 install -y \
+        apt)    apt_run install -y \
                     build-essential libx11-dev libxmu-dev libxi-dev \
                     libgl1-mesa-dev libglu1-mesa-dev freeglut3-dev \
                     || warn "GDS3D build deps failed — the Tools tab can retry them later." ;;

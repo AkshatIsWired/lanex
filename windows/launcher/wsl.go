@@ -133,10 +133,12 @@ func decodeUTF16LE(b []byte) string {
 // `;` not `&&`: a cd that somehow fails must not stop LanEx from starting.
 //
 // `exec lanex` replaces the shell, so the process tree stays wsl.exe -> lanex
-// and killing the child is unambiguous. No --tab/--no-browser: LanEx opening its
-// own app window is the point (see the package comment in main.go).
+// and killing the child is unambiguous. The Windows launcher owns the initial
+// window: `--no-browser` prevents the Linux process from declaring success after
+// merely spawning Edge, before Windows has proved that /api/health is reachable.
+// tray.waitReady opens exactly one app window only after that Windows-side probe.
 func startServer() (*exec.Cmd, error) {
-	cmd := hiddenCmd(wslExe, "-d", distroName, "--", "bash", "-ic", "cd ~ 2>/dev/null; exec lanex")
+	cmd := hiddenCmd(wslExe, startServerArgs()...)
 	// The appliance's stdout/stderr is the only diagnostic that exists when a
 	// launch fails, and the failure dialogs point the user at this file.
 	if f, err := openLogFile(); err == nil {
@@ -148,6 +150,11 @@ func startServer() (*exec.Cmd, error) {
 		return nil, err
 	}
 	return cmd, nil
+}
+
+func startServerArgs() []string {
+	return []string{"-d", distroName, "--", "bash", "-ic",
+		"cd ~ 2>/dev/null; exec lanex --no-browser"}
 }
 
 // terminateDistro shuts the appliance VM down. Killing wsl.exe on the Windows

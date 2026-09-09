@@ -394,7 +394,7 @@ def test_provision_executes_complete_bundled_installer_not_curl_pipeline() -> No
     body = PROVISION.read_text()
     stage = body[body.index("install_lanex()") : body.index("write_identity_marker()")]
     assert 'if [ -n "$INSTALL_SH" ]' in stage and "bash -n" in stage
-    assert "curl -fL" in stage and '-o "${installer}.download"' in stage
+    assert "-fL --retry" in stage and '-o "${installer}.download"' in stage
     assert "curl -fsSL '${INSTALL_SH}' | bash" not in stage
     assert 'LANEX_FROM="$source"' in stage
 

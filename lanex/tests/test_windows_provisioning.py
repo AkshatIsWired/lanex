@@ -304,7 +304,7 @@ def test_shell_and_setup_sequence_base_restart_finalize() -> None:
     inno = (repo / "windows/installer/lanex.iss").read_text()
     assert "base|finalize" in provision
     assert "DEFERRED(selected-components)" in provision
-    assert 'runuser -u "$APP_USER"' in provision and "--provision-finalize" in provision
+    assert 'runuser -m -u "$APP_USER"' in provision and "--provision-finalize" in provision
     assert 'case "$SELECTED_ENGINE"' in provision
     assert "LANEX_SETUP_CHOICES=" in inno
     assert 'bash "' + "' + LinuxPath + '" + '" base' in inno

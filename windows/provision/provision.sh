@@ -34,7 +34,7 @@
 #   LANEX_BUILD_MANIFEST=<path> immutable component catalog/pins for finalization
 #   LANEX_SETUP_CHOICES=<path> owner state or choices JSON for finalization
 #   LANEX_USER=<name>      appliance user (default: lanex; override for testing)
-#   LANEX_PROVISION_DNS=1  force the WSL DNS fix even if github.com is reachable
+#   LANEX_PROVISION_DNS=1  deprecated; static DNS is never applied automatically
 #   LANEX_BAKE=1           CI is cooking a rootfs image, not provisioning a
 #                          user's machine (see bake() below)
 set -u -o pipefail
@@ -71,27 +71,99 @@ require_root() {
     [ "$(id -u)" = "0" ] || die "this script must run as root inside the LanEx environment."
 }
 
-# One apt front-end for the whole script. DPkg::Lock::Timeout: a freshly booted
-# Ubuntu runs unattended-upgrades in the background and holds the dpkg lock for
-# minutes — waiting beats dying with "could not get lock" (install.sh:113-115).
-APT="apt-get -o DPkg::Lock::Timeout=300 -qq"
+# One bounded apt front-end for the whole script. Waiting for the real lock owner
+# beats deleting locks; fetch timeouts keep a half-working route from hanging.
+APT="apt-get -o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 -qq"
+CURL_FAMILY=""
 export DEBIAN_FRONTEND=noninteractive
 
-# ------------------------------------------------------------------- 1. DNS --
-DNS_FIXED=0     # set by dns_guard; read by wsl_conf (generateResolvConf)
+# --------------------------------------------------------------- 1. network --
+network_failure() {
+    local rc="$1" endpoint="$2" detail="$3" kind="connection"
+    case "$rc" in
+        5|6) kind="DNS" ;;
+        7) kind="route/connection" ;;
+        28) kind="timeout" ;;
+        35|51|58|60|77|80|83|90) kind="TLS/certificate" ;;
+        22) kind="HTTP" ;;
+    esac
+    die "${kind} failure while checking ${endpoint}.
+   ${detail}
+   Check the current VPN, proxy, firewall and resolver settings, then click Retry.
+   LanEx does not replace WSL DNS or disable TLS verification."
+}
 
-# The single most common fresh-WSL failure: the auto-generated /etc/resolv.conf
-# points at a nameserver the host can't route to, so every download in this
-# script would fail. Same fix install.sh:96-101 documents, applied for the user
-# instead of printed at them. Factored out because ensure_curl needs it too:
-# when curl is missing, apt is the thing that hits the broken resolver first.
-apply_dns_fix() {
-    DNS_FIXED=1
-    # Order matters: resolv.conf may be a symlink into /run — remove, don't
-    # append, or the write lands in a file nothing reads.
-    rm -f /etc/resolv.conf 2>/dev/null || true
-    { printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf; } 2>/dev/null \
-        || warn "could not write /etc/resolv.conf (read-only?) — continuing; downloads may fail."
+probe_endpoint() {
+    local label="$1" url="$2" out rc code detail family family_code family_rc
+    out="$(mktemp)" || die "could not create a temporary network diagnostic."
+    code="$(curl ${CURL_FAMILY:+$CURL_FAMILY} -sS -L -o /dev/null -w '%{http_code}' --connect-timeout 10 \
+        --max-time 25 --retry 2 --retry-delay 2 "$url" 2>"$out")"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        # Never echo proxy environment values or credential-bearing URLs.
+        detail="$(tail -n 8 "$out" | sed -E \
+            's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[redacted]@#g')"
+        if [ -z "$CURL_FAMILY" ] && { [ "$rc" -eq 7 ] || [ "$rc" -eq 28 ]; }; then
+            for family in -4 -6; do
+                family_code="$(curl "$family" -sS -L -o /dev/null -w '%{http_code}' \
+                    --connect-timeout 8 --max-time 15 "$url" 2>/dev/null)"
+                family_rc=$?
+                case "$family_code" in 2??|3??|401|405) ;; *) family_rc=1 ;; esac
+                if [ "$family_rc" -eq 0 ]; then
+                    CURL_FAMILY="$family"
+                    if [ "$family" = "-4" ]; then
+                        APT="$APT -o Acquire::ForceIPv4=true"
+                        note "${label}: the default/IPv6 path failed, but IPv4 is reachable; using per-command IPv4 fallback."
+                    else
+                        APT="$APT -o Acquire::ForceIPv6=true"
+                        note "${label}: the default/IPv4 path failed, but IPv6 is reachable; using per-command IPv6 fallback."
+                    fi
+                    rm -f "$out"
+                    return 0
+                fi
+            done
+        fi
+        rm -f "$out"
+        network_failure "$rc" "$label" "$detail"
+    fi
+    rm -f "$out"
+    case "$code" in
+        2??|3??|401|405) note "${label} reachable (HTTP ${code})." ;;
+        407) network_failure 22 "$label" "The configured proxy requires authentication; a Windows PAC file is not a shell proxy URL." ;;
+        429) network_failure 22 "$label" "The service is rate limiting requests; wait for its retry window." ;;
+        *) network_failure 22 "$label" "The service returned HTTP ${code}." ;;
+    esac
+}
+
+package_manager_active() {
+    if command -v fuser >/dev/null 2>&1; then
+        fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock >/dev/null 2>&1
+        return $?
+    fi
+    pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 \
+        || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgrade >/dev/null 2>&1
+}
+
+recover_interrupted_dpkg() {
+    local audit="" attempt
+    command -v dpkg >/dev/null 2>&1 || return 0
+    audit="$(dpkg --audit 2>&1 || true)"
+    if [ -z "$audit" ] && ! find /var/lib/dpkg/updates -type f -print -quit 2>/dev/null | grep -q .; then
+        return 0
+    fi
+    warn "a previous package operation left dpkg configuration incomplete."
+    for attempt in $(seq 1 60); do
+        package_manager_active || break
+        [ $((attempt % 6)) -ne 0 ] || note "waiting for the active package manager before recovery ($((attempt * 5))s)..."
+        sleep 5
+    done
+    package_manager_active && die "another package manager still owns the apt/dpkg lock after five minutes.
+   Let it finish and click Retry; LanEx never deletes package-manager lock files."
+    printf '%s\n' "$audit"
+    timeout 300 dpkg --configure -a \
+        || die "dpkg recovery did not finish within its bounded attempt.
+   Review the package error above, then click Retry; downloaded packages are retained."
+    note "completed the interrupted dpkg configuration."
 }
 
 # curl is both the network probe below and every download in this script.
@@ -103,34 +175,24 @@ apply_dns_fix() {
 ensure_curl() {
     command -v curl >/dev/null 2>&1 && return 0
     note "installing curl (minimal base image)."
-    $APT update >/dev/null 2>&1
-    $APT install -y curl ca-certificates >/dev/null 2>&1 && return 0
-    warn "could not install curl — applying the known WSL DNS fix and retrying."
-    apply_dns_fix
-    $APT update >/dev/null 2>&1
-    $APT install -y curl ca-certificates \
-        || die "no internet connection inside the LanEx environment.
-   Check your network (and any VPN or company proxy), then click Retry.
-   Corporate proxy? Set https_proxy in your environment before running Setup."
+    $APT update || warn "apt update failed while preparing curl; using any retained package lists."
+    $APT install -y curl ca-certificates && return 0
+    die "apt could not install curl and CA certificates in the LanEx environment.
+   The apt output above preserves whether this was DNS, route, TLS, proxy, lock or disk failure.
+   Check that exact category, then click Retry; package caches are retained."
 }
 
 dns_guard() {
     say "Network check"
     ensure_curl
-    if [ "${LANEX_PROVISION_DNS:-0}" != "1" ] \
-       && curl -fsI -m 12 https://github.com >/dev/null 2>&1; then
-        note "github.com reachable."
-        return 0
+    if [ "${LANEX_PROVISION_DNS:-0}" = "1" ]; then
+        warn "LANEX_PROVISION_DNS is deprecated; preserving the current resolver instead of installing public DNS."
     fi
-    warn "Cannot reach github.com — applying the known WSL DNS fix."
-    apply_dns_fix
-    if curl -fsI -m 12 https://github.com >/dev/null 2>&1; then
-        note "network OK after the DNS fix."
-    else
-        die "no internet connection inside the LanEx environment.
-   Check your network (and any VPN or company proxy), then click Retry.
-   Corporate proxy? Set https_proxy in your environment before running Setup."
-    fi
+    probe_endpoint "Ubuntu archive" "https://archive.ubuntu.com/ubuntu/dists/noble/InRelease"
+    probe_endpoint "Docker repository" "https://download.docker.com/linux/ubuntu/dists/noble/InRelease"
+    probe_endpoint "Python package index" "https://pypi.org/simple/"
+    probe_endpoint "GHCR registry" "https://ghcr.io/v2/"
+    probe_endpoint "PDK release redirects" "https://github.com/fossi-foundation/ciel/releases/latest"
 }
 
 # -------------------------------------------------------------- 2. wsl.conf --
@@ -152,13 +214,28 @@ wsl_conf() {
     #                         (appwindow.py:96-103, 272-303). Both default to
     #                         on; we pin them so a future default flip, or a
     #                         stray edit, can't silently kill the app window.
-    local extra=""
-    if [ "$DNS_FIXED" = "1" ]; then
-        # Without this WSL regenerates resolv.conf on every boot and undoes the
-        # fix applied above.
-        extra=$'\n[network]\ngenerateResolvConf = false\n'
+    local network="" legacy_dns=0 wsl_temp="" wsl_write_rc=0
+    if [ -f /etc/wsl.conf ]; then
+        network="$(awk '
+            /^\[network\][[:space:]]*$/ { keep=1 }
+            /^\[/ && $0 !~ /^\[network\][[:space:]]*$/ { keep=0 }
+            keep { print }
+        ' /etc/wsl.conf)"
+        if grep -q '^# Managed by LanEx Setup' /etc/wsl.conf \
+           && printf '%s\n' "$network" | grep -qi 'generateResolvConf[[:space:]]*=[[:space:]]*false' \
+           && [ -f /etc/resolv.conf ] \
+           && grep -q '^nameserver 8\.8\.8\.8$' /etc/resolv.conf \
+           && grep -q '^nameserver 1\.1\.1\.1$' /etc/resolv.conf; then
+            legacy_dns=1
+            cp -p /etc/wsl.conf /etc/wsl.conf.lanex-legacy-dns.bak \
+                || die "could not back up the LanEx-owned legacy WSL DNS configuration."
+            cp -p /etc/resolv.conf /etc/resolv.conf.lanex-legacy-dns.bak \
+                || die "could not back up the LanEx-owned legacy resolver."
+            network=""
+        fi
     fi
-    cat > /etc/wsl.conf <<EOF
+    wsl_temp="$(mktemp)" || die "could not create a temporary WSL configuration."
+    cat > "$wsl_temp" <<EOF
 # Managed by LanEx Setup. Edits are overwritten on repair/reinstall.
 [boot]
 systemd = true
@@ -172,8 +249,24 @@ appendWindowsPath = true
 
 [automount]
 enabled = true
-${extra}
+${network}
 EOF
+    wsl_write_rc=$?
+    if [ "$wsl_write_rc" -ne 0 ] || ! chmod 0644 "$wsl_temp" || ! mv -f "$wsl_temp" /etc/wsl.conf; then
+        rm -f "$wsl_temp"
+        die "could not atomically update /etc/wsl.conf; the existing DNS configuration was not changed."
+    fi
+    if [ "$legacy_dns" = "1" ]; then
+        if ! rm -f /etc/resolv.conf \
+           || grep -qi 'generateResolvConf[[:space:]]*=[[:space:]]*false' /etc/wsl.conf; then
+            cp -p /etc/wsl.conf.lanex-legacy-dns.bak /etc/wsl.conf 2>/dev/null || true
+            cp -p /etc/resolv.conf.lanex-legacy-dns.bak /etc/resolv.conf 2>/dev/null || true
+            die "could not verify the LanEx legacy DNS migration; the backed-up configuration was restored."
+        fi
+        note "backed up and retired LanEx's legacy public-DNS override; WSL will regenerate its resolver on the next appliance start."
+    elif [ -n "$network" ]; then
+        note "preserved the existing WSL network section."
+    fi
     note "wrote /etc/wsl.conf (systemd on, default user ${APP_USER})."
 
     # Canonical's WSL images ship /etc/wsl-distribution.conf, whose [oobe]
@@ -248,7 +341,14 @@ docker_ce() {
         # The official convenience script — same one the Tools tab uses, so
         # there is exactly one Docker install path in the project. We are root
         # here, so no `sudo sh` (installer.py:617 needs the sudo; we don't).
-        curl -fsSL https://get.docker.com | sh \
+        local docker_script
+        docker_script="$(mktemp)" || die "could not create a temporary Docker installer file."
+        curl ${CURL_FAMILY:+$CURL_FAMILY} -fsSL --connect-timeout 15 --max-time 120 --retry 3 \
+            https://get.docker.com -o "$docker_script" \
+            && sh "$docker_script"
+        local docker_rc=$?
+        rm -f "$docker_script"
+        [ "$docker_rc" -eq 0 ] \
             || die "could not install Docker inside the LanEx environment.
    This is almost always a network problem. Click Retry.
    (LanEx can also install it later from its own Tools tab.)"
@@ -325,7 +425,7 @@ install_lanex() {
         cp "$INSTALL_SH" "$installer" || die "could not stage the bundled LanEx installer."
     else
         ensure_curl
-        curl -fL --retry 2 --connect-timeout 15 \
+        curl ${CURL_FAMILY:+$CURL_FAMILY} -fL --retry 2 --connect-timeout 15 --max-time 120 \
             "https://raw.githubusercontent.com/${REPO}/${REF}/scripts/install.sh" \
             -o "${installer}.download" \
             || die "could not download the LanEx installer for ${REPO}@${REF}."
@@ -349,7 +449,7 @@ install_lanex() {
         chmod 0644 "$constraint"
     fi
 
-    runuser -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
+    runuser -m -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
         LOGNAME="$APP_USER" PATH="/usr/local/bin:/usr/bin:/bin" \
         LANEX_ASSUME_YES=1 LANEX_SKIP_PULL=1 LANEX_SKIP_GDS3D="$SKIP_GDS3D" \
         LANEX_REPO="$REPO" LANEX_REF="$REF" LANEX_FROM="$source" \
@@ -425,7 +525,7 @@ finalize() {
     # The appliance user owns its home, Ciel store, image lock and GDS3D build.
     # Running the strict CLI as root would recreate the historical root-owned
     # PDK store failure and would violate the per-user appliance contract.
-    runuser -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
+    runuser -m -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
         LOGNAME="$APP_USER" PATH="/usr/local/bin:/usr/bin:/bin:/home/${APP_USER}/.local/bin" \
         lanex --provision-finalize "$manifest" --setup-choices "$choices" \
         || die "one or more selected components did not become ready.
@@ -478,6 +578,7 @@ main() {
     else
         note "ref: ${REF}   user: ${APP_USER}"
     fi
+    recover_interrupted_dpkg
     dns_guard
     wsl_conf
     # base_packages BEFORE app_user: the sudo package owns /etc/sudoers.d, and

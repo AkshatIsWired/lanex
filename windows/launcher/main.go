@@ -24,11 +24,10 @@
 //  3. Waits for /api/health, then sits in the tray (probe.go, tray.go).
 //  4. Stops the server and shuts the appliance down on Quit.
 //
-// It deliberately does NOT open the app window on a normal start: LanEx opens
-// its own chromeless Edge `--app=` window from inside WSL over the interop
-// bridge (lanex/controller/appwindow.py) — already written, already debugged,
-// and it knows about the dedicated browser profile. A second opener here would
-// only race it.
+// The initial app window is opened from Windows only after the Windows-side
+// /api/health probe succeeds. A process spawned inside WSL cannot prove that
+// Windows localhost forwarding works; opening there produced a convincing but
+// dead Edge window while the launcher still waited in the tray.
 //
 // Windows-only by construction (Win32 mutex, message boxes, registry, tray):
 //
