@@ -52,6 +52,8 @@ param(
     [string]$BakedRootfsUrl = '',
     [string]$BakedRootfsSha256 = '',
     [Int64]$BakedRootfsSizeBytes = 0,
+    [string]$BakedRootfsFile = 'lanex-rootfs-amd64.tar.gz',
+    [string]$BakedPackageInventoryPath = '',
     [string]$ImageReference = 'ghcr.io/librelane/librelane:3.0.4',
     [string]$ImageDigest,
     [string]$Gds3dCommit,
@@ -822,7 +824,15 @@ function Remove-OwnedAppliance {
     $root = Normalize-Path $OwnedDataRoot
     $stateFull = Normalize-Path $StatePath
     $base = Normalize-Path ([string]$state.appliance.basePath)
-    if (-not $root -or -not $stateFull.StartsWith($root + '\') -or -not $base.StartsWith($root + '\')) {
+    $separator = [IO.Path]::DirectorySeparatorChar
+    $comparison = if ($env:OS -eq 'Windows_NT') {
+        [StringComparison]::OrdinalIgnoreCase
+    } else {
+        [StringComparison]::Ordinal
+    }
+    if (-not $root -or
+            -not $stateFull.StartsWith($root + $separator, $comparison) -or
+            -not $base.StartsWith($root + $separator, $comparison)) {
         throw 'Owned paths are outside the expected LanEx data root; no distribution was changed.'
     }
     [void](Clear-OwnerResume)
@@ -885,6 +895,9 @@ function New-BuildManifest {
     }
     if ($SourceSha -notmatch '^[0-9a-fA-F]{40}$') { throw 'SourceSha must be a full commit SHA.' }
     if ($RootfsSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'RootfsSha256 is invalid.' }
+    if ($BakedRootfsSha256 -and $BakedRootfsSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw 'BakedRootfsSha256 is invalid.'
+    }
     if ($ImageDigest -notmatch '^sha256:[0-9a-fA-F]{64}$') { throw 'ImageDigest must be an immutable sha256 digest.' }
     if ($Gds3dCommit -notmatch '^[0-9a-fA-F]{40}$') { throw 'Gds3dCommit must be a full commit SHA.' }
     $catalog = Read-JsonFile $CatalogPath 'Capability catalog'
@@ -899,6 +912,10 @@ function New-BuildManifest {
         catalogSha256 = Get-Sha256 $CatalogPath
         pdkPinsSha256 = Get-Sha256 $PdkPinsPath
     }
+    $bakedInventory = $null
+    if ($BakedPackageInventoryPath) {
+        $bakedInventory = Read-JsonFile $BakedPackageInventoryPath 'Baked package inventory'
+    }
     $manifest = [ordered]@{
         schema = $ManifestSchema
         generatedUtc = [DateTime]::UtcNow.ToString('o')
@@ -906,7 +923,16 @@ function New-BuildManifest {
         app = [ordered]@{ version = $AppVersion; channel = $Channel }
         target = [ordered]@{ os = 'windows'; architecture = 'amd64'; minBuild = 19044; primary = 'windows-11-x64' }
         rootfs = [ordered]@{ url = $RootfsUrl; sha256 = $RootfsSha256.ToLowerInvariant(); sizeBytes = $RootfsSizeBytes }
-        bakedRootfs = if ($BakedRootfsUrl) { [ordered]@{ url = $BakedRootfsUrl; sha256 = $BakedRootfsSha256.ToLowerInvariant(); sizeBytes = $BakedRootfsSizeBytes } } else { $null }
+        bakedRootfs = if ($BakedRootfsSha256) {
+            [ordered]@{
+                file = $BakedRootfsFile
+                url = if ($BakedRootfsUrl) { $BakedRootfsUrl } else { $null }
+                sha256 = $BakedRootfsSha256.ToLowerInvariant()
+                sizeBytes = $BakedRootfsSizeBytes
+                packageInventory = $bakedInventory
+                packageInventorySha256 = if ($BakedPackageInventoryPath) { Get-Sha256 $BakedPackageInventoryPath } else { $null }
+            }
+        } else { $null }
         payload = $payload
         python = [ordered]@{ supported = @('3.10', '3.11', '3.12', '3.13'); constraintsFile = [IO.Path]::GetFileName($ConstraintsPath) }
         dependencies = [ordered]@{ librelane = '3.0.4'; ciel = '2.6.1' }

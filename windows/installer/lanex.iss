@@ -110,29 +110,34 @@
 ; turning into the appliance, live, on the user's machine — which also means
 ; every install depends on apt, GitHub and Docker's repository all being up at
 ; that moment. The `bake-rootfs` CI job runs the SAME provision.sh once, in a
-; container, and publishes the result as a release asset; a tag build passes it
-; in here:
+; container. Candidate bundles place that verified image beside Setup; an
+; explicitly staged release may also give Setup the immutable asset URL:
 ;
 ;   iscc /DBakedRootfsUrl=https://.../lanex-rootfs-amd64.tar.gz ^
 ;        /DBakedRootfsSha256=<hash> /DBakedRootfsSizeMB=<n> lanex.iss
 ;
-; Undefined — every PR build, every local build, and any tag whose bake job did
-; not produce an asset — the installer compiles EXACTLY as it did before. That
-; is deliberate: a build must never carry a URL that does not exist yet.
+; Undefined — ordinary push/PR and local builds — Setup uses the bare path.
+; A dispatch candidate can use /DCompanionRootfsSha256 without inventing a
+; release URL: the adjacent image is hash-checked before it reaches wsl import.
 ;
 ; At runtime the baked path is still only a preference. Setup verifies the hash,
 ; and on any failure at all (asset deleted, corrupt download, no route) it logs
 ; the reason and falls back to the Ubuntu image, which always works. A dead
 ; release asset can slow an install down; it can never brick one.
+#ifndef BakedRootfsFile
+  #define BakedRootfsFile "lanex-rootfs-amd64.tar.gz"
+#endif
+#ifndef BakedRootfsSizeMB
+  #define BakedRootfsSizeMB "900"
+#endif
 #ifdef BakedRootfsUrl
   #ifndef BakedRootfsSha256
     #error BakedRootfsUrl requires BakedRootfsSha256 (an unverified rootfs is not shippable)
   #endif
-  #ifndef BakedRootfsFile
-    #define BakedRootfsFile "lanex-rootfs-amd64.tar.gz"
-  #endif
-  #ifndef BakedRootfsSizeMB
-    #define BakedRootfsSizeMB "900"
+#endif
+#ifdef CompanionRootfsSha256
+  #if Len(CompanionRootfsSha256) != 64
+    #error CompanionRootfsSha256 must be a SHA256 digest
   #endif
 #endif
 
@@ -290,9 +295,7 @@ function LogDir: String;     begin Result := AppDataRoot + '\logs';   end;
 function LogFile: String;    begin Result := LogDir + '\install.log'; end;
 function StateFile: String;  begin Result := AppDataRoot + '\installer-state.json'; end;
 function RootfsPath: String; begin Result := CacheDir + '\{#RootfsFile}'; end;
-#ifdef BakedRootfsUrl
 function BakedRootfsPath: String; begin Result := CacheDir + '\{#BakedRootfsFile}'; end;
-#endif
 
 function WslExe: String;
 begin
@@ -1366,7 +1369,29 @@ end;
 // EnsureRootfs puts an importable image on disk and sets ImportPath to it.
 // Returns '' on success or a message for the user.
 function EnsureRootfs: String;
+var
+  Companion: String;
 begin
+#ifdef CompanionRootfsSha256
+  Companion := ExpandConstant('{src}\{#BakedRootfsFile}');
+  if FileExists(Companion) then
+  begin
+    if CompareText(GetSHA256OfFile(Companion), '{#CompanionRootfsSha256}') = 0 then
+    begin
+      if (CompareText(Companion, BakedRootfsPath) = 0) or
+         FileCopy(Companion, BakedRootfsPath, False) then
+      begin
+        ImportPath := BakedRootfsPath;
+        LogLine('using the verified companion appliance image');
+        Result := '';
+        Exit;
+      end;
+      LogLine('could not cache the verified companion image; trying configured downloads');
+    end
+    else
+      LogLine('ignored adjacent appliance image because its SHA256 does not match this Setup');
+  end;
+#endif
 #ifdef BakedRootfsUrl
   // Preferred: the appliance CI already cooked for this exact build. One
   // download, ~1 minute of import, and apt/GitHub/Docker being down stops being

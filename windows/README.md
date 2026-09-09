@@ -110,16 +110,25 @@ brand change: `python3 windows/launcher/assets/make-icon.py`.
    their hashes/source SHA in `build-manifest.json`. Fork PRs do not fall back
    to base or `main`. Give Akshat this candidate identity and collect the real
    Windows acceptance evidence before any merge to `main`.
-2. **For a public release, create the GitHub release before or with the tag push.** `bake-rootfs` and
-   `build` both `gh release upload` into it; neither creates it.
-3. **Let `bake-rootfs` finish before judging `build`.** `build` waits on it and
-   compiles the baked URL + SHA256 in. If the bake fails, `build` is skipped; if
-   it produced nothing, `build` compiles the pre-Phase-2a installer instead and
-   says so in the job summary. Read the summary — do not assume.
+2. **Create an Actions candidate with `workflow_dispatch`, publication off.**
+   The gated artifact contains Setup, the launcher, exact wheel/manifest, notices,
+   and a hash-bound baked rootfs beside Setup. It is self-contained for testing
+   and does not depend on a made-up branch release URL.
+3. **Let every candidate gate finish.** `candidate-gate` requires the input lock,
+   rootfs bake/selfcheck, Windows build, shell lint, bare-Ubuntu provisioning,
+   repair rerun, and live rootfs pin check. A failed or skipped required job
+   produces no candidate artifact.
 4. **Check `rootfs-pin` is green.** It only runs on tags, schedules and manual
    runs, and a stale pin is a 404 for every new user.
-5. **Walk the acceptance matrix below** on x64 and update its Verified column.
+5. **Walk the acceptance matrix below** on x64 and record candidate-bound JSON
+   evidence for M8.
    Never mark a row verified that you did not watch.
+6. **Publish only through the workflow's explicit publication input.** Supply a
+   new release tag and the repository-relative acceptance evidence file. The
+   job verifies that evidence against the exact Setup hash, requires successful
+   CI and Differential runs for the same source SHA, creates a draft, uploads
+   without `--clobber`, re-downloads and hashes the assets, then makes it public.
+   Reusing an existing release tag is rejected.
 
 ## Testing — read this before shipping a change
 

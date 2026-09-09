@@ -44,11 +44,91 @@ on:
     # files when the next one ships, so a stale pin is a broken installer.
     - cron: "0 7 * * 1"
   workflow_dispatch:
+    inputs:
+      candidate_version:
+        description: Candidate version stamped into PE, Setup, manifest and diagnostics
+        required: true
+        default: 1.0.0-test.1
+        type: string
+      release_tag:
+        description: Future unique tag for a staged release; blank keeps the candidate local-artifact only
+        required: false
+        default: ''
+        type: string
+      publish_release:
+        description: Publish only after matching acceptance evidence and all same-SHA workflows pass
+        required: true
+        default: false
+        type: boolean
+      acceptance_evidence_path:
+        description: Repository-relative M8 evidence JSON required when publishing
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: windows-installer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  candidate-inputs:
+    name: Exact candidate inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      wheel-sha256: ${{ steps.inputs.outputs.wheel-sha256 }}
+      image-digest: ${{ steps.inputs.outputs.image-digest }}
+      gds3d-commit: ${{ steps.inputs.outputs.gds3d-commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and lock the exact checkout payload
+        id: inputs
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet build
+          python -m build --wheel
+          wheel=$(find dist -maxdepth 1 -name '*.whl' -type f -print -quit)
+          test -n "$wheel"
+          python -m venv .candidate-venv
+          .candidate-venv/bin/python -m pip install --quiet \
+            -c windows/setup/constraints.txt "$wheel"
+          .candidate-venv/bin/python windows/setup/export_pdk_pins.py \
+            --catalog docs/windows-installer-handoff/CAPABILITY-INVENTORY.json \
+            --output pdk-pins.json
+          cp "$wheel" lanex-candidate.whl
+
+          token=$(curl -fsSL 'https://ghcr.io/token?scope=repository%3Alibrelane%2Flibrelane%3Apull' |
+            python -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          digest=$(curl -fsSI \
+            -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            https://ghcr.io/v2/librelane/librelane/manifests/3.0.4 |
+            tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')
+          gds=$(git ls-remote https://github.com/trilomix/GDS3D.git HEAD | cut -f1)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$gds" =~ ^[0-9a-f]{40}$ ]]
+          {
+            echo "wheel-sha256=$(sha256sum lanex-candidate.whl | cut -d' ' -f1)"
+            echo "image-digest=$digest"
+            echo "gds3d-commit=$gds"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanex-candidate-inputs
+          path: |
+            lanex-candidate.whl
+            pdk-pins.json
+          if-no-files-found: error
+          retention-days: 14
+
   # Phase 2a. Cook the appliance ONCE, here, and let Setup download the result —
   # instead of every user's machine spending several minutes running apt, pip and
   # a Docker install that all have to be up at that moment.
@@ -62,27 +142,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    permissions:
-      contents: write
+    needs: candidate-inputs
     outputs:
       # Empty when the bake produced nothing usable — `build` reads these and
       # simply omits the ISCC defines, so a failed bake degrades to the old
       # behaviour rather than shipping a URL that 404s.
       sha256: ${{ steps.bake.outputs.sha256 }}
       size-mb: ${{ steps.bake.outputs.size-mb }}
-      url: ${{ steps.bake.outputs.url }}
+      size-bytes: ${{ steps.bake.outputs.size-bytes }}
+      inventory-sha256: ${{ steps.bake.outputs.inventory-sha256 }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Build exact checkout wheel
-        run: |
-          python -m pip install --quiet build
-          python -m build --wheel
-          echo "LANEX_WHEEL_NAME=$(basename dist/*.whl)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: lanex-candidate-inputs
+          path: .candidate-inputs
 
       - name: Bake
         id: bake
@@ -90,21 +167,41 @@ jobs:
           # The tag's own ref, so the image contains the LanEx the installer
           # built beside it claims to install. Self-consistency is the point:
           # see the release checklist in windows/README.md.
-          LANEX_REF: ${{ github.ref_name }}
+          LANEX_REF: ${{ github.sha }}
         run: |
           set -euo pipefail
           docker run -d --name lanex-bake \
             -v "$PWD:/checkout:ro" \
             -e "LANEX_REF=$LANEX_REF" -e LANEX_BAKE=1 \
             -e LANEX_INSTALL_SCRIPT=/checkout/scripts/install.sh \
-            -e "LANEX_FROM=/checkout/dist/$LANEX_WHEEL_NAME" \
+            -e LANEX_FROM=/candidate/lanex-candidate.whl \
             -e LANEX_PIP_CONSTRAINT=/checkout/windows/setup/constraints.txt \
+            -v "$PWD/.candidate-inputs:/candidate:ro" \
             ubuntu:24.04 sleep infinity
           docker exec lanex-bake bash /checkout/windows/provision/provision.sh
 
           # Before export, never after: a broken appliance must not be able to
           # become a published release asset.
           docker exec lanex-bake bash /checkout/windows/provision/selftest.sh
+
+          docker exec lanex-bake bash -lc '
+            launcher=$(runuser -l lanex -c "command -v lanex")
+            launcher=$(readlink -f "$launcher")
+            app_python=$(sed -n "1s/^#!//p" "$launcher")
+            "$app_python" - <<"PY"
+          import importlib.metadata as metadata
+          import json, platform, subprocess
+          packages = {}
+          for name in ("bash", "curl", "docker-ce", "git", "python3", "sudo"):
+              result = subprocess.run(["dpkg-query", "-W", "-f=${Version}", name], text=True, capture_output=True)
+              packages[name] = result.stdout if result.returncode == 0 else None
+          print(json.dumps({
+              "schema": 1,
+              "architecture": platform.machine(),
+              "packages": packages,
+              "python": {name: metadata.version(name) for name in ("lanex", "librelane", "ciel")},
+          }, sort_keys=True))
+          PY' > baked-package-inventory.json
 
           # `wsl --import` reads gzipped tar directly. -6 rather than -9: the
           # last few percent cost minutes of CI for seconds of user download.
@@ -114,7 +211,8 @@ jobs:
           {
             echo "sha256=$sha"
             echo "size-mb=$mb"
-            echo "url=https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/lanex-rootfs-amd64.tar.gz"
+            echo "size-bytes=$(stat -c%s lanex-rootfs-amd64.tar.gz)"
+            echo "inventory-sha256=$(sha256sum baked-package-inventory.json | cut -d' ' -f1)"
           } >> "$GITHUB_OUTPUT"
           {
             echo "## Pre-baked appliance rootfs"
@@ -126,31 +224,26 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: lanex-rootfs-amd64
-          path: lanex-rootfs-amd64.tar.gz
+          path: |
+            lanex-rootfs-amd64.tar.gz
+            baked-package-inventory.json
           if-no-files-found: error
-
-      # Must land BEFORE the installer that points at it — hence this job being
-      # a dependency of `build` rather than running alongside it.
-      - name: Attach to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" lanex-rootfs-amd64.tar.gz --clobber
+          retention-days: 14
 
   build:
     name: Build LanEx.exe + LanEx-Setup.exe
     runs-on: windows-latest
     timeout-minutes: 30
+    outputs:
+      signed: ${{ steps.signing-result.outputs.signed }}
     # bake-rootfs is skipped on every ordinary push and PR. `always()` keeps this
     # job running when it is skipped; the two result checks still stop a build
     # from shipping after a bake that actually broke.
-    needs: bake-rootfs
+    needs: [candidate-inputs, bake-rootfs]
     if: >
-      always() && needs.bake-rootfs.result != 'failure'
+      always() && needs.candidate-inputs.result == 'success'
+      && needs.bake-rootfs.result != 'failure'
       && needs.bake-rootfs.result != 'cancelled'
-    permissions:
-      # Needed only by the release step at the end (tag pushes).
-      contents: write
     env:
       # Signing lights up on its own once the owner adds Azure Trusted Signing
       # secrets; until then the build is unsigned and the README documents the
@@ -168,6 +261,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: lanex-candidate-inputs
+          path: .candidate-inputs
+
+      - uses: actions/download-artifact@v4
+        if: needs.bake-rootfs.result == 'success'
+        with:
+          name: lanex-rootfs-amd64
+          path: .baked-rootfs
+
       - uses: actions/setup-go@v5
         with:
           # Matches the `go` directive in windows/launcher/go.mod. Pinned rather
@@ -182,10 +286,16 @@ jobs:
       - name: Resolve version
         shell: pwsh
         run: |
-          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+          $ErrorActionPreference = 'Stop'
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $ver = $env:LANEX_REQUESTED_VERSION
+          } elseif ($env:GITHUB_REF -like 'refs/tags/v*') {
             $ver = $env:GITHUB_REF -replace '^refs/tags/v', ''
           } else {
             $ver = '0.0.0'
+          }
+          if ($ver -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
+            throw "invalid candidate version '$ver'"
           }
           # VERSIONINFO and Inno both want a plain numeric x.y.z, so strip any
           # pre-release suffix (v1.2.3-rc1 -> 1.2.3) for those fields.
@@ -198,38 +308,36 @@ jobs:
           "LANEX_VER_MINOR=$($parts[1])"  | Out-File -Append $env:GITHUB_ENV
           "LANEX_VER_PATCH=$($parts[2])"  | Out-File -Append $env:GITHUB_ENV
           Write-Host "version: $ver (numeric $num)"
+        env:
+          LANEX_REQUESTED_VERSION: ${{ inputs.candidate_version }}
 
-      - name: Build exact candidate payload and manifest inputs
+      - name: Bind exact candidate payload and manifest inputs
         shell: pwsh
         run: |
-          python -m pip install --quiet build
-          python -m build --wheel
-          python -m pip install --quiet -c windows/setup/constraints.txt .
-          python windows/setup/export_pdk_pins.py `
-            --catalog docs/windows-installer-handoff/CAPABILITY-INVENTORY.json `
-            --output windows/setup/pdk-pins.json
-          $wheels = @(Get-ChildItem 'dist/*.whl')
-          if ($wheels.Count -ne 1) { throw "expected exactly one candidate wheel" }
-          $wheel = $wheels[0].FullName
+          $ErrorActionPreference = 'Stop'
+          $wheel = (Resolve-Path '.candidate-inputs/lanex-candidate.whl').Path
+          $actual = (Get-FileHash $wheel -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '${{ needs.candidate-inputs.outputs.wheel-sha256 }}') {
+            throw 'downloaded candidate wheel does not match the producing job'
+          }
+          Copy-Item -LiteralPath $wheel -Destination 'windows/setup/lanex-candidate.whl'
+          $wheel = (Resolve-Path 'windows/setup/lanex-candidate.whl').Path
+          Copy-Item -LiteralPath '.candidate-inputs/pdk-pins.json' -Destination 'windows/setup/pdk-pins.json'
           "LANEX_WHEEL=$wheel" | Out-File -Append $env:GITHUB_ENV
           "LANEX_SOURCE_SHA=$(git rev-parse HEAD)" | Out-File -Append $env:GITHUB_ENV
-          "LANEX_SOURCE_REF=${{ github.event.pull_request.head.ref || github.ref_name }}" | Out-File -Append $env:GITHUB_ENV
-          "LANEX_SOURCE_REPO=${{ github.event.pull_request.head.repo.full_name || github.repository }}" | Out-File -Append $env:GITHUB_ENV
+          "LANEX_SOURCE_REF=$env:EVENT_SOURCE_REF" | Out-File -Append $env:GITHUB_ENV
+          "LANEX_SOURCE_REPO=$env:EVENT_SOURCE_REPO" | Out-File -Append $env:GITHUB_ENV
+        env:
+          EVENT_SOURCE_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          EVENT_SOURCE_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Resolve immutable external pins and generate build manifest
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $image = 'ghcr.io/librelane/librelane:3.0.4'
-          $token = (Invoke-RestMethod 'https://ghcr.io/token?scope=repository%3Alibrelane%2Flibrelane%3Apull').token
-          $headers = @{
-            Authorization = "Bearer $token"
-            Accept = 'application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json'
-          }
-          $response = Invoke-WebRequest -Method Head -Uri 'https://ghcr.io/v2/librelane/librelane/manifests/3.0.4' -Headers $headers
-          $digest = [string]$response.Headers['Docker-Content-Digest']
-          if ($digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "no immutable image digest in registry response" }
-          $gds = (git ls-remote https://github.com/trilomix/GDS3D.git HEAD).Split()[0]
-          if ($gds -notmatch '^[0-9a-f]{40}$') { throw 'could not resolve GDS3D HEAD' }
+          $digest = '${{ needs.candidate-inputs.outputs.image-digest }}'
+          $gds = '${{ needs.candidate-inputs.outputs.gds3d-commit }}'
           $args = @{
             Action = 'NewManifest'
             OutputPath = 'windows/setup/build-manifest.json'
@@ -253,11 +361,18 @@ jobs:
           }
           $baked = '${{ needs.bake-rootfs.outputs.sha256 }}'
           if ($baked) {
-            $args.BakedRootfsUrl = '${{ needs.bake-rootfs.outputs.url }}'
             $args.BakedRootfsSha256 = $baked
-            $args.BakedRootfsSizeBytes = [int64]('${{ needs.bake-rootfs.outputs.size-mb }}') * 1MB
+            $args.BakedRootfsSizeBytes = [int64]('${{ needs.bake-rootfs.outputs.size-bytes }}')
+            $args.BakedPackageInventoryPath = '.baked-rootfs/baked-package-inventory.json'
+            $tag = $env:LANEX_RELEASE_TAG
+            if ($tag) {
+              if ($tag -notmatch '^v[0-9A-Za-z][0-9A-Za-z._-]*$') { throw "invalid release tag '$tag'" }
+              $args.BakedRootfsUrl = "https://github.com/$env:LANEX_SOURCE_REPO/releases/download/$tag/lanex-rootfs-amd64.tar.gz"
+            }
           }
           & windows/setup/setup.ps1 @args | Write-Host
+        env:
+          LANEX_RELEASE_TAG: ${{ inputs.release_tag }}
 
       - name: go vet
         working-directory: windows/launcher
@@ -358,16 +473,22 @@ jobs:
           # machine. No phantom URLs in PR builds.
           $baked = "${{ needs.bake-rootfs.outputs.sha256 }}"
           if ($baked) {
-            $defines += "/DBakedRootfsUrl=${{ needs.bake-rootfs.outputs.url }}"
             $defines += "/DBakedRootfsSha256=$baked"
+            $defines += "/DCompanionRootfsSha256=$baked"
             $defines += "/DBakedRootfsSizeMB=${{ needs.bake-rootfs.outputs.size-mb }}"
-            Write-Host "building WITH the pre-baked rootfs (${{ needs.bake-rootfs.outputs.size-mb }} MB)"
+            $tag = $env:LANEX_RELEASE_TAG
+            if ($tag) {
+              $defines += "/DBakedRootfsUrl=https://github.com/$env:LANEX_SOURCE_REPO/releases/download/$tag/lanex-rootfs-amd64.tar.gz"
+            }
+            Write-Host "building for the verified companion rootfs (${{ needs.bake-rootfs.outputs.size-mb }} MB)"
           } else {
             Write-Host "building without a pre-baked rootfs (provision runs on the user's machine)"
           }
           & $iscc /Qp @defines lanex.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem LanEx-Setup.exe
+        env:
+          LANEX_RELEASE_TAG: ${{ inputs.release_tag }}
 
       - name: Sign LanEx-Setup.exe
         if: env.SIGN == 'true'
@@ -381,6 +502,23 @@ jobs:
           certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
           files-folder: windows/installer
           files-folder-filter: exe
+
+      - name: Verify both Authenticode signatures and timestamps
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @('windows/launcher/LanEx.exe', 'windows/installer/LanEx-Setup.exe')) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($signature.Status -ne 'Valid') { throw "$path signature is $($signature.Status)" }
+            if ($null -eq $signature.TimeStamperCertificate) { throw "$path has no trusted timestamp" }
+          }
+
+      - name: Record honest signing state
+        id: signing-result
+        shell: pwsh
+        run: |
+          "signed=$($env:SIGN.ToLowerInvariant())" | Out-File -Append $env:GITHUB_OUTPUT
 
       # The SHA256 belongs in the job summary: it is what a cautious user checks
       # against the release page before running an installer that asks for admin.
@@ -413,30 +551,17 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: LanEx-Setup-${{ env.LANEX_VERSION }}
-          path: windows/installer/LanEx-Setup.exe
+          name: lanex-windows-build
+          path: |
+            windows/installer/LanEx-Setup.exe
+            windows/launcher/LanEx.exe
+            windows/setup/build-manifest.json
+            windows/setup/pdk-pins.json
+            windows/setup/lanex-candidate.whl
+            LICENSE
+            NOTICE
           if-no-files-found: error
-
-      # The launcher on its own, not only sealed inside Setup. A launcher-only
-      # change (it is one file in %ProgramFiles%\LanEx) can then be tested by
-      # dropping this over the installed copy — no reinstall, and above all no
-      # `wsl --unregister`, which would take the user's designs with it.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: LanEx-launcher-${{ env.LANEX_VERSION }}
-          path: windows/launcher/LanEx.exe
-          if-no-files-found: error
-
-      # gh is preinstalled on the runner, so no third-party release Action is
-      # needed. --clobber makes a re-run of a tag idempotent.
-      - name: Attach to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ github.ref_name }}" `
-            windows/installer/LanEx-Setup.exe --clobber
+          retention-days: 14
 
   provision-lint:
     name: provision.sh (bash -n + shellcheck)
@@ -604,3 +729,119 @@ jobs:
             echo "- upstream: \`$up_url\`"
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$fail"
+
+  candidate-gate:
+    name: Gated downloadable candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [candidate-inputs, bake-rootfs, build, provision-lint, provision-e2e, rootfs-pin]
+    if: >
+      always() && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
+      && needs.candidate-inputs.result == 'success'
+      && needs.bake-rootfs.result == 'success'
+      && needs.build.result == 'success'
+      && needs.provision-lint.result == 'success'
+      && needs.provision-e2e.result == 'success'
+      && needs.rootfs-pin.result == 'success'
+    outputs:
+      setup-sha256: ${{ steps.verify.outputs.setup-sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: lanex-windows-build
+          path: .windows-build
+      - uses: actions/download-artifact@v4
+        with:
+          name: lanex-rootfs-amd64
+          path: .rootfs
+      - name: Assemble and verify one self-contained tester bundle
+        id: verify
+        run: |
+          set -euo pipefail
+          mkdir candidate
+          cp .windows-build/windows/installer/LanEx-Setup.exe candidate/
+          cp .windows-build/windows/launcher/LanEx.exe candidate/
+          cp .windows-build/windows/setup/build-manifest.json candidate/
+          cp .windows-build/windows/setup/pdk-pins.json candidate/
+          cp .windows-build/windows/setup/lanex-candidate.whl candidate/
+          cp .windows-build/LICENSE .windows-build/NOTICE candidate/
+          cp .rootfs/lanex-rootfs-amd64.tar.gz .rootfs/baked-package-inventory.json candidate/
+          python scripts/ci/windows_candidate.py verify-bundle \
+            --manifest candidate/build-manifest.json \
+            --wheel candidate/lanex-candidate.whl \
+            --pdk-pins candidate/pdk-pins.json \
+            --setup candidate/LanEx-Setup.exe \
+            --launcher candidate/LanEx.exe \
+            --rootfs candidate/lanex-rootfs-amd64.tar.gz \
+            --inventory candidate/baked-package-inventory.json \
+            --source-sha "$GITHUB_SHA" \
+            --output candidate/candidate-manifest.json \
+            ${{ needs.build.outputs.signed == 'true' && '--signed' || '' }}
+          (cd candidate && sha256sum * > SHA256SUMS)
+          echo "setup-sha256=$(sha256sum candidate/LanEx-Setup.exe | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LanEx-Windows-candidate-${{ inputs.candidate_version || github.ref_name }}-${{ github.run_number }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish accepted Windows release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: candidate-gate
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: LanEx-Windows-candidate-${{ inputs.candidate_version }}-${{ github.run_number }}
+          path: candidate
+      - name: Require exact acceptance evidence and same-commit green workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_PATH: ${{ inputs.acceptance_evidence_path }}
+          SETUP_SHA: ${{ needs.candidate-gate.outputs.setup-sha256 }}
+        run: |
+          set -euo pipefail
+          test -n "$EVIDENCE_PATH"
+          evidence=$(python -c 'import os,pathlib; r=pathlib.Path.cwd().resolve(); p=(r/os.environ["EVIDENCE_PATH"]).resolve(); p.relative_to(r); print(p)')
+          python scripts/ci/windows_candidate.py verify-acceptance \
+            --evidence "$evidence" --source-sha "$GITHUB_SHA" --setup-sha "$SETUP_SHA"
+          for workflow in ci.yml differential.yml; do
+            ok=$(gh run list --workflow "$workflow" --commit "$GITHUB_SHA" --status completed \
+              --json conclusion --jq 'any(.[]; .conclusion == "success")')
+            test "$ok" = true || { echo "required workflow $workflow has no successful run for $GITHUB_SHA"; exit 1; }
+          done
+      - name: Create, verify, then publish a new immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9A-Za-z][0-9A-Za-z._-]*$ ]]
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "release $RELEASE_TAG already exists; refusing to overwrite immutable assets"
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" \
+            --title "LanEx $CANDIDATE_VERSION" \
+            --notes "Windows candidate verified against the acceptance evidence in source $GITHUB_SHA."
+          gh release upload "$RELEASE_TAG" \
+            candidate/LanEx-Setup.exe candidate/lanex-rootfs-amd64.tar.gz \
+            candidate/candidate-manifest.json candidate/SHA256SUMS \
+            candidate/LICENSE candidate/NOTICE
+          verify_dir=$(mktemp -d)
+          gh release download "$RELEASE_TAG" --dir "$verify_dir"
+          (cd "$verify_dir" && sha256sum --check SHA256SUMS --ignore-missing)
+          gh release edit "$RELEASE_TAG" --draft=false

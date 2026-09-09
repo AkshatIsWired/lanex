@@ -537,13 +537,22 @@ def test_resume_rejects_tampered_installer_and_trigger_failure(tmp_path: Path) -
 
 
 def test_manifest_generator_hashes_exact_checkout_payloads(tmp_path: Path) -> None:
-    wheel = tmp_path / "lanex.whl"; wheel.write_bytes(b"wheel from checkout")
-    install = tmp_path / "install.sh"; install.write_bytes(b"installer")
-    provision = tmp_path / "provision.sh"; provision.write_bytes(b"provision")
-    selftest = tmp_path / "selftest.sh"; selftest.write_bytes(b"selftest")
-    constraints = tmp_path / "constraints.txt"; constraints.write_bytes(b"librelane==3.0.4\n")
-    catalog = tmp_path / "catalog.json"; catalog.write_text('{"pdk_catalog":{"sky130A":{"libraries":["sky130_fd_sc_hd"]}}}')
-    pins = tmp_path / "pins.json"; pins.write_text('{"sky130":"pdk-hash"}')
+    wheel = tmp_path / "lanex.whl"
+    wheel.write_bytes(b"wheel from checkout")
+    install = tmp_path / "install.sh"
+    install.write_bytes(b"installer")
+    provision = tmp_path / "provision.sh"
+    provision.write_bytes(b"provision")
+    selftest = tmp_path / "selftest.sh"
+    selftest.write_bytes(b"selftest")
+    constraints = tmp_path / "constraints.txt"
+    constraints.write_bytes(b"librelane==3.0.4\n")
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text('{"pdk_catalog":{"sky130A":{"libraries":["sky130_fd_sc_hd"]}}}')
+    pins = tmp_path / "pins.json"
+    pins.write_text('{"sky130":"pdk-hash"}')
+    inventory = tmp_path / "baked-inventory.json"
+    inventory.write_text('{"schema":1,"packages":{"python3":"3.12.3"}}')
     output = tmp_path / "build-manifest.json"
     manifest = _run_setup(
         "-Action", "NewManifest", "-OutputPath", output,
@@ -554,10 +563,15 @@ def test_manifest_generator_hashes_exact_checkout_payloads(tmp_path: Path) -> No
         "-ConstraintsPath", constraints, "-CatalogPath", catalog,
         "-PdkPinsPath", pins, "-RootfsUrl", "https://example.invalid/rootfs",
         "-RootfsSha256", "d" * 64, "-RootfsSizeBytes", "123",
+        "-BakedRootfsSha256", "1" * 64, "-BakedRootfsSizeBytes", "456",
+        "-BakedPackageInventoryPath", inventory,
         "-ImageDigest", "sha256:" + "e" * 64, "-Gds3dCommit", "f" * 40,
     )
     assert manifest["source"] == {"repository": "owner/fork", "ref": "pull/7/head", "sha": "c" * 40}
     assert manifest["payload"]["wheel"]["sha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
+    assert manifest["bakedRootfs"]["url"] is None
+    assert manifest["bakedRootfs"]["packageInventory"]["packages"]["python3"] == "3.12.3"
+    assert manifest["bakedRootfs"]["packageInventorySha256"] == hashlib.sha256(inventory.read_bytes()).hexdigest()
     assert json.loads(output.read_text())["image"]["digest"] == "sha256:" + "e" * 64
 
 
@@ -574,7 +588,8 @@ def test_ci_builds_and_mounts_exact_pr_checkout() -> None:
     body = WORKFLOW.read_text()
     assert "github.event.pull_request.head.sha || github.sha" in body
     assert "LANEX_INSTALL_SCRIPT=/checkout/scripts/install.sh" in body
-    assert 'LANEX_FROM=/checkout/dist/$LANEX_WHEEL_NAME' in body
+    assert "LANEX_FROM=/candidate/lanex-candidate.whl" in body
+    assert "name: lanex-candidate-inputs" in body
     assert "NewManifest" in body and "LANEX_SOURCE_SHA=$(git rev-parse HEAD)" in body
     assert "SetupWorkerSha256" in body and "Get-FileHash ..\\setup\\setup.ps1" in body
     assert "no usable ref for scripts/install.sh" not in body
