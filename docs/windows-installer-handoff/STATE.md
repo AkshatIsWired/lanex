@@ -1,98 +1,79 @@
 # LanEx installer checkpoint
 
-Date: 2026-09-09
-Stage: M0-M5 implementation complete; M6 is next.
+Date: 2026-09-10
+Stage: M0-M6 implementation complete; M7 is next.
 Canonical pack: `C:\Users\itsva\lanex\docs\windows-installer-handoff`.
 Repo: `C:\Users\itsva\lanex`
 Branch: `windows-installer-support`
-M0 commits: `1d60f2a`, `ff82cfc`
-M1 implementation: `f75c1568254c4b8ce5581be49f66d8653b17709c`
-M2 implementation: `39dd4c439d319ce9a37c9f5aaa0262b6f2567ab2`
-M3 implementation: `bfc1ad3`, `eebc69e`
-M4 implementation: `4aa748d`, `2f79507`, `04a8991`
-M5 foundation: `c87fafc`
-M5 implementation: `3bc4498`
-Git status before this checkpoint commit: only M5 evidence/checkpoint docs;
-generated wheel/manifest/pins/EXEs and task-work evidence are ignored/outside repo.
+M0: `1d60f2a`, `ff82cfc`
+M1: `f75c156`
+M2: `39dd4c4`
+M3: `bfc1ad3`, `eebc69e`
+M4: `4aa748d`, `2f79507`, `04a8991`
+M5: `c87fafc`, `3bc4498`
+M6 implementation: `1ecbf3562c734348dd96af4180119ad486d4d1e8`
+Git status before this checkpoint commit: only M6 checkpoint docs; generated
+wheel/manifest/pins/EXEs and task evidence are ignored/outside the repository.
 
 ## Decisions
 
 - Keep the private Ubuntu WSL appliance, Inno Setup, Go launcher, and shared
-  LanEx installers. Docker is default; Podman is an explicit alternative.
+  LanEx installers. Docker is default; Podman is the explicit alternative.
 - Windows 11 x64 is primary. Windows 10 remains unadvertised pending its real
   acceptance leg. ARM64 remains rejected for the amd64 appliance.
-- Windows locks LibreLane 3.0.4 + Ciel 2.6.1. PDK/image/GDS3D pins come from
-  that exact build manifest; ordinary project dependency ranges are unchanged.
+- Windows locks LibreLane 3.0.4 + Ciel 2.6.1 and immutable image/PDK/GDS3D pins.
 - Authority requires owner SID, install UUID, exact HKCU registration ID/path,
-  and matching Linux marker. A distro name is never ownership proof.
+  and matching Linux marker. A distro name or health service string is never
+  ownership/server proof.
+- Setup is original-user/per-user. Machine changes stay allowlisted/elevated;
+  appliance import, state, shortcuts and resume remain with the original user.
 - Main stays untouched until Akshat tests the finished M8 candidate and merge is
-  explicitly authorized. No release/publication/contact is authorized yet.
-- Setup is original-user/per-user. Only the hash-bound, allowlisted two-feature
-  worker elevates. Resume is owner HKCU + manual shortcut, two attempts total.
-- Base provisioning and strict selected-component finalization are separate.
-  Setup terminates only its owner-bound appliance between them.
+  explicitly authorized. Publication/contact are not authorized.
 
-## Completed M0-M5
+## Completed M0-M6
 
-- M0 adopted the handoff, protected existing distros, fixed the stale sudo test,
-  added branch CI, and established isolated Linux/Windows baselines.
-- M1 bound exact source/wheel/scripts/manifest and owner/appliance identities;
-  malformed/foreign/newer state and name-only mutation are rejected.
-- M2 added structured preflight, feature-only UAC, owner resume, bounded restart,
-  capable-WSL reuse, targeted termination, and user-facing support behavior.
-- M3 synchronously installs and verifies every selected component after the
-  owner-bound systemd boot; partial work never becomes final-ready.
-- M4 classifies network/package failures, preserves WSL DNS/VPN/proxy strategy,
-  applies bounded apt/dpkg recovery, and defers the Windows app window until the
-  strict health endpoint is reachable.
-- M5 adds recommended/custom/minimal wizard choices, all catalogued PDK variants
-  and advanced libraries, cache-aware per-volume estimates/rechecks, bounded
-  live logs/elapsed phases/diagnostics, cooperative scoped cancellation,
-  readiness-derived Finish, durable outcomes, and documented silent inputs.
-- Details/evidence: `M0-BASELINE.md`, `M1-IDENTITY.md`, `M2-PREFLIGHT.md`,
-  `M3-COMPONENTS.md`, `M4-NETWORK.md`, `M5-PROGRESS.md`.
+- M0 established protected-resource inventory, isolated baselines and branch CI.
+- M1 bound exact payload/source/manifest plus owner/appliance state identities.
+- M2 added preflight, feature-only UAC and owner-bound bounded restart/resume.
+- M3 synchronously installs and strictly verifies every selected component.
+- M4 added network/package recovery and Windows-reachable launch gating.
+- M5 added manifest-bound choices, estimates, responsive progress/diagnostics,
+  cooperative cancellation, readiness-derived outcomes and silent inputs.
+- M6 requires ready owner state and live registration before launch; starts as
+  the explicit app user; binds record/health to instance + source; scopes mutex
+  and profile; checkpoints/restores explicit updates; and provides keep,
+  export, and identity-checked erase uninstall paths.
+- Details: `M0-BASELINE.md` through `M6-LIFECYCLE.md`.
 
-## Verified M4 evidence
+## Verified M6 evidence
 
-Evidence: `C:\Users\itsva\Documents\Codex\2026-09-09\from-m0-to-m3-is-done\work\m4-evidence-20260909`.
+Evidence directory:
+`C:\Users\itsva\Documents\Codex\2026-09-09\implement-the-lanex-windows-installer-handoff-2\work`.
 
-- Windows focused suite: **110 passed, 2 platform skips**; isolated Ubuntu
-  M4 focus: **51 passed**; launcher tests/vet and both ShellCheck legs passed.
-- Inno compiled exact source `04a899175d870b62c8ae82e490b37407e0d68b59`.
-- Proof Setup SHA256:
-  `ee3a489e2caf76471ea3b2a57fda59fa5437c661c2a7bec4ccd0e0a9b054aa4e`.
-- A broader Ubuntu run found one missing CI implication row, now fixed, plus five
-  unrelated host-contamination failures from pre-existing PDK/GDS3D state. It
-  is not claimed as a clean full-suite pass; M3's isolated full baseline stands.
-
-## Verified M5 evidence
-
-- Windows selection/provision/network suite: **79 passed**; Git Bash syntax and
-  Inno compile passed. A broader run was 112 passed / one known missing-LibreLane
-  environment failure, not an M5 regression.
-- Exact proof source: `3bc44989126e86aded87196b450e1a4821f4034e`.
-- Setup SHA256: `bd5468d9bc4570aab47fdcd1ab0b423a305871bcd6625ac3666d6621ad8dac6f`.
-- Recommended resolves to Docker + image + five native tools + sky130A/all;
-  minimal resolves to no engine/image/native tools/PDKs. Invalid dependency,
-  family and library combinations fail before WSL mutation.
+- Python M6 focus: **113 passed**; final narrow rerun: **74 passed**.
+- Go formatting, Windows test cross-compile, `go vet`, launcher build and the
+  cross-compiled Windows test binary passed.
+- ShellCheck + `bash -n` on provisioning, PowerShell 5.1 parse, Inno compile,
+  and `git diff --check` passed.
+- Exact proof source: `1ecbf3562c734348dd96af4180119ad486d4d1e8`.
+- Setup SHA256: `30bfc80830fe1e0b19dba7f0a8fe6e4f809896e169ccf016493fece7bd35829c`.
+- Launcher: `f0929c678c4b4b18121c83f89668a13c3be5d305f1790359b31e586b04873442`.
+- Manifest: `701d1a4d2523b22aa9b2b369b74374b94f318d78727f8e7502d059f488ddbb1f`.
+- Wheel: `ca4a14dea72b2ea10f44f32d5a85d9bc3500a887add4e657ff6d82688d87f39f`.
 
 ## Current / next action
 
-Start M6 launcher/upgrade/uninstall safety. Preserve M1 ownership, M5 choices,
-state outcomes and the scoped cancel contract. Do not install this proof EXE on
-the development PC; M8 produces the Akshat tester candidate.
+Start M7 CI/artifact/release gates from source `1ecbf356`. Do not install the M6
+proof EXE on this PC; M8 produces the Akshat tester candidate.
 
 ## Outstanding acceptance / protected resources
 
-- M6-M8 pending. No Setup installed; no real WSL import/provision/finalize,
-  Docker/Podman daemon mutation, PDK/image download, WSLg/GUI, restart, UAC split,
-  offline, uninstall/data-removal, or RTL-to-GDS case ran for this candidate.
-- Real EXE legs require a disposable Windows VM/Akshat machine. Reboot,
-  firmware/security changes, publication, and merge remain explicit boundaries.
-- Existing `Ubuntu`, `lanex`, `Ubuntu-22.04`, defaults/data, and
+- M7-M8 pending. No real Setup/uninstaller, WSL import/finalize, daemon/PDK
+  download, WSLg/GUI, restart/UAC, offline, export, unregister or RTL-to-GDS
+  candidate case ran.
+- Real M6 port/two-user/legacy Program Files/update rollback/uninstall/reinstall
+  legs require disposable Windows VMs or Akshat's machine.
+- Existing `Ubuntu`, `lanex`, `Ubuntu-22.04`, their defaults/data, and
   `%LOCALAPPDATA%\LanEx`/legacy profile remain protected and unchanged.
-- Ubuntu ran isolated temp-venv tests and ShellCheck only; no distro/VM/service
-  was created, stopped, globally shut down, or provisioned. Temp Linux venvs
-  self-removed; owned scratch/evidence remains under this task's `work`.
-- Owned packaging venv `.m5-build-venv` remains in this task workspace; deletion
-  was policy-blocked. It has no running process and is safe to remove later.
+- Ubuntu ran compiler/static checks only. No distro/VM/service was created,
+  provisioned, terminated or globally shut down.
