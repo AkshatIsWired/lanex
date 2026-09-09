@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
@@ -359,6 +360,30 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
 
     cursor = bus.max_seq
     initial = readiness_report(plan, functional=False)
+    cancel_path = os.environ.get("LANEX_SETUP_CANCEL_FILE", "")
+    cancel_requested = threading.Event()
+    current_key: List[str] = []
+
+    def announce(component: str, message: str) -> None:
+        current_key[:] = [component]
+        print("@@LANEX:" + json.dumps({
+            "schema": 1, "event": "component", "component": component,
+            "message": message,
+        }, separators=(",", ":")), flush=True)
+
+    def watch_cancel() -> None:
+        if not cancel_path:
+            return
+        while not cancel_requested.is_set():
+            if Path(cancel_path).is_file():
+                cancel_requested.set()
+                if current_key:
+                    installer.cancel_install(current_key[0])
+                return
+            time.sleep(0.2)
+
+    if cancel_path:
+        threading.Thread(target=watch_cancel, name="lanex-setup-cancel", daemon=True).start()
 
     def drain() -> None:
         nonlocal cursor
@@ -373,12 +398,16 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
     failures: List[Dict[str, Any]] = []
     engine = plan["engine"]
     if engine != "none" and not initial["checks"].get(f"engine:{engine}", {}).get("ready"):
+        announce(engine, f"installing {engine}")
         result = installer.install_tool(engine)
         drain()
         if not result.get("ok"):
             failures.append({"component": f"engine:{engine}", "result": result})
         else:
             for attempt in range(1, 61):
+                if cancel_requested.is_set():
+                    failures.append({"component": f"engine:{engine}", "cancelled": True})
+                    break
                 if tools.resolve_engine(engine).get("ready"):
                     print(f"selected engine is reachable: {engine}", flush=True)
                     break
@@ -400,9 +429,13 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
     try:
         if not failures:
             for key in plan["nativeTools"]:
+                if cancel_requested.is_set():
+                    failures.append({"component": f"native:{key}", "cancelled": True})
+                    break
                 if initial["checks"].get(f"native:{key}", {}).get("ready"):
                     print(f"already verified: native:{key}", flush=True)
                     continue
+                announce(key, f"installing and verifying native tool {key}")
                 result = installer.install_tool(key)
                 drain()
                 if not result.get("ok"):
@@ -418,6 +451,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
         if initial["checks"].get("container:image", {}).get("ready"):
             print("already verified: container:image", flush=True)
         else:
+            announce("image", "pulling and verifying the matched LibreLane image")
             result = installer.pull_image_sync(
                 image["reference"], image["digest"], expected_engine=plan["engine"]
             )
@@ -426,10 +460,14 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                 failures.append({"component": "container:image", "result": result})
     if not failures:
         for selected in plan["pdks"]:
+            if cancel_requested.is_set():
+                failures.append({"component": f"pdk:{selected['variant']}", "cancelled": True})
+                break
             keys = [f"pdk:{selected['variant']}:{lib}" for lib in selected["libraries"]]
             if all(initial["checks"].get(key, {}).get("ready") for key in keys):
                 print(f"already verified: pdk:{selected['variant']}", flush=True)
                 continue
+            announce(f"pdk:{selected['variant']}", f"installing and verifying {selected['variant']}")
             result = installer.install_pdk_sync(
                 selected["variant"],
                 selected["libraries"],
@@ -440,7 +478,12 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
             if not result.get("ok"):
                 failures.append({"component": f"pdk:{selected['variant']}", "result": result})
                 break
-    report = readiness_report(plan)
+    if cancel_requested.is_set():
+        report = {"schema": 1, "ready": False, "checks": initial["checks"]}
+    else:
+        report = readiness_report(plan)
     report["installFailures"] = failures
+    report["cancelled"] = cancel_requested.is_set()
     report["ready"] = bool(report["ready"] and not failures)
+    current_key.clear()
     return report

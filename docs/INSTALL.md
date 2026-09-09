@@ -31,17 +31,23 @@ run it, click through the wizard. Setup stays in your Windows account. If WSL's
 two Windows features are off, Windows asks once for administrator approval;
 those feature commands are the only part that runs elevated.
 
-**Requirements:** Windows 11 x64, about 10 GB free disk space. Windows Home is
-fine. Windows 10 build 19044 is the technical floor but is not advertised as a
+**Requirements:** Windows 11 x64. Windows Home is fine. Setup calculates the
+space needed for your exact tool/PDK selection and checks both the LanEx data
+drive and temporary-files drive before large phases. A recommended setup needs
+substantially more than the small rootfs download because it includes the flow
+image, PDK extraction space, caches, and practical run headroom. Windows 10
+build 19044 is the technical floor but is not advertised as a
 supported installer target until its separate real-machine acceptance leg
 passes. This amd64 appliance is rejected on ARM64 even when Windows can emulate
 x64 apps.
 
-**What you get:** a Start-menu app called **LanEx**. Clicking it opens the
-cockpit in its own desktop window, usually within about 15 seconds. On first
-launch, open the **Tools** tab and click **Install the toolchain** — a one-time
-~3 GB download that brings in every EDA tool at the versions LibreLane was
-tested against. After that, LanEx works offline.
+**What you get:** a Start-menu app called **LanEx**. The recommended profile
+installs Docker, the matched LibreLane image, Verilator, Icarus, Graphviz,
+GTKWave, GDS3D, and sky130A with all supported family libraries before Setup
+offers Launch. Custom setup lets you choose Docker or Podman, every supported
+PDK family/variant, and advanced libraries. Minimal deliberately leaves flow
+components for the Tools page. Setup does not claim success until every selected
+component passes its operational readiness check.
 
 > **"Windows protected your PC"?** Until the installer is code-signed, Windows
 > SmartScreen shows a blue warning for it (it warns about any new publisher, not
@@ -83,8 +89,40 @@ It does exactly five things:
    path to keep working. On the ready-made image this step finds everything
    already in place and takes seconds; from the plain Ubuntu image it is the
    part that takes a few minutes.
-5. **Creates two Start-menu shortcuts**: **LanEx** (the app) and **LanEx Project
+5. **Finalizes and verifies your choices** after the private environment boots
+   with systemd. The wizard shows phase count, elapsed activity, live output,
+   and real download bytes when available. **Cancel** asks the Linux worker to
+   stop its own process group; during package-database work it waits safely
+   rather than corrupting dpkg. Retry rechecks readiness and reuses completed,
+   validated rootfs/image/PDK data. Open, copy, or save the bounded diagnostics
+   log directly from the progress page.
+6. **Creates two Start-menu shortcuts**: **LanEx** (the app) and **LanEx Project
    Files** (opens your designs in File Explorer).
+
+### Unattended Windows setup
+
+Use Inno Setup's `/SILENT` or `/VERYSILENT` with `/NORESTART`. LanEx-specific
+selection flags are:
+
+- `/PROFILE=recommended` (default) or `/PROFILE=minimal`.
+- `/SELECTIONS=C:\path\lanex-selections.json` for custom choices. The JSON is
+  validated against the exact bundled catalog; unknown tools, PDKs, libraries,
+  or conflicting variants fail before WSL is changed.
+- `/ALLOWWSLUPDATE=1` explicitly permits a required machine-wide WSL runtime
+  update. Without it, silent setup stops with recovery guidance.
+
+Selection files contain either the choices object or `{ "choices": { ... } }`.
+Supported fields are `profile`, `engine` (`docker`, `podman`, or `none`),
+`image`, `nativeTools`, `pdks`, and `libraries`. Use the wizard to create normal
+choices; selection files are primarily for managed deployment.
+
+Exit status follows Inno Setup: `0` means selected readiness passed; `8` means
+a restart is required; initialization errors return `1`; pre-install failure or
+cooperative cancellation returns a nonzero status (normally `7`). The owner
+state at `%LOCALAPPDATA%\LanEx\installer-state.json` distinguishes `failed`,
+`cancelled`, `restart-required`, and `ready`; automation must require `ready`
+rather than treating an arbitrary zero from a child process as success. Silent
+mode never waits for a hidden Retry or WSL-update confirmation.
 
 **What it touches, and what it does not:**
 

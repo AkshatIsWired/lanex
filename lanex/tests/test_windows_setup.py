@@ -424,6 +424,75 @@ def test_selection_file_is_validated_and_normalized(tmp_path: Path) -> None:
     assert plan["choices"]["libraries"]["gf180mcuD"] == ["gf180mcu_fd_sc_mcu7t5v0"]
 
 
+def test_selection_estimate_credits_only_completed_state(tmp_path: Path) -> None:
+    state, manifest, _, _ = _initialize(tmp_path)
+    cold = _run_setup(
+        "-Action", "PlanChoices", "-ManifestPath", manifest,
+        "-ChoicesPath", state,
+    )
+    for component in ("app", "image", "pdks"):
+        _run_setup(
+            "-Action", "SetComponent", "-StatePath", state,
+            "-Component", component, "-ComponentStatus", "complete",
+            "-InputFingerprint", f"fixture-{component}", "-TestOwnerSid", OWNER,
+        )
+    warm = _run_setup(
+        "-Action", "PlanChoices", "-ManifestPath", manifest,
+        "-ChoicesPath", state,
+    )
+    assert warm["estimates"]["reusedInstalledBytes"] > 0
+    assert warm["estimates"]["downloadBytes"] < cold["estimates"]["downloadBytes"]
+    assert warm["estimates"]["volumes"]["appDataRequiredBytes"] < cold["estimates"]["volumes"]["appDataRequiredBytes"]
+
+
+def test_setup_outcomes_distinguish_ready_failure_cancel_and_restart(tmp_path: Path) -> None:
+    state, _, _, _ = _initialize(tmp_path)
+    for outcome in ("failed", "cancelled", "restart-required"):
+        value = _run_setup(
+            "-Action", "RecordOutcome", "-StatePath", state,
+            "-Outcome", outcome, "-OutcomeMessage", f"fixture {outcome}",
+            "-TestOwnerSid", OWNER,
+        )
+        assert value["phase"] == outcome
+        assert value["failure"]["kind"] == outcome
+    ready = _run_setup(
+        "-Action", "RecordOutcome", "-StatePath", state,
+        "-Outcome", "ready", "-OutcomeMessage", "all checks passed",
+        "-TestOwnerSid", OWNER,
+    )
+    assert ready["phase"] == "ready"
+    assert ready["failure"] is None
+
+
+def test_inno_m5_wizard_progress_cancel_and_silent_contract() -> None:
+    body = INNO.read_text()
+    assert "Recommended" in body and "Docker, all supported tools" in body
+    assert "Minimal" in body and "LanEx application only" in body
+    assert "gf180mcuD" in body and "ihp-sg13g2" in body
+    assert "Advanced PDK libraries" in body and "sky130_fd_pr_reram" in body
+    assert "PlanChoices" in body and "CheckSelectionSpace" in body
+    assert "ExecAndLogOutput" in body and "Lines.Count > 400" in body
+    assert "install.previous.log" in body and "ProgressTimerProc" in body
+    assert "Stopping safely" in body and "/run/lanex/setup.cancel" in body
+    assert "Result := not CancelRequested" in body
+    assert "did not start the fallback download" in body
+    assert "WizardSilent then Answer := IDCANCEL" in body
+    assert "ALLOWWSLUPDATE" in body and "SELECTIONS" in body
+    assert "RecordSetupOutcome('ready'" in body
+
+
+def test_inno_pdk_and_advanced_library_catalog_is_complete() -> None:
+    body = INNO.read_text()
+    inventory = json.loads(
+        (REPO / "docs/windows-installer-handoff/CAPABILITY-INVENTORY.json").read_text()
+    )["pdk_catalog"]
+    for variant, entry in inventory.items():
+        assert variant in body
+        advanced = set(entry["libraries"]) - set(entry["default_libraries"])
+        for library in advanced:
+            assert library in body, f"advanced library missing from installer UI: {variant}/{library}"
+
+
 def test_resume_rejects_tampered_installer_and_trigger_failure(tmp_path: Path) -> None:
     state, _, installer, _ = _initialize(tmp_path)
     resume_root = tmp_path / "resume"

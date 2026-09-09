@@ -50,18 +50,29 @@ INSTALL_SH="${LANEX_INSTALL_SCRIPT:-}"
 # provision.sh has no WSL-only assumptions outside wsl_conf(): one file, one code
 # path, and Repair on a baked install re-runs the same stages it was built from.
 BAKE="${LANEX_BAKE:-0}"
+CANCEL_FILE="${LANEX_SETUP_CANCEL_FILE:-/run/lanex/setup.cancel}"
 
 # GDS3D and the LibreLane image are selected components.  They are deliberately
 # deferred until the imported appliance has rebooted with systemd and its Docker
 # daemon is usable.  Bare and baked images therefore execute the same finalizer.
 SKIP_GDS3D=1
 
-say()  { printf '\n== %s\n' "$*"; }
+say()  {
+    local message="${*//\"/\'}"
+    printf '\n@@LANEX:{"schema":1,"event":"phase","message":"%s"}\n== %s\n' "$message" "$*"
+}
 note() { printf '   %s\n' "$*"; }
 warn() { printf '!! %s\n' "$*"; }
 # die() text is what the installer's error page shows the user, so it must read
 # like a sentence a non-technical person can act on — no shell jargon.
 die()  { printf '\nXX provision failed: %s\n' "$*" >&2; exit 1; }
+
+check_cancel() {
+    if [ -f "$CANCEL_FILE" ]; then
+        printf '\n@@LANEX:cancelled | Setup stopped before the next component.\n' >&2
+        exit 130
+    fi
+}
 
 # Deliberately unstyled output (no ANSI): this streams into an Inno Setup log
 # window, which renders escape codes as garbage.
@@ -379,6 +390,7 @@ select_engine() {
     fi
     case "$SELECTED_ENGINE" in
         docker|podman) note "selected container engine: ${SELECTED_ENGINE}." ;;
+        none) note "minimal setup selected; no container engine requested." ;;
         *) die "the saved container-engine choice is invalid." ;;
     esac
 }
@@ -491,9 +503,11 @@ verify() {
         || die "LanEx installed but does not run.
    Click Retry, and if it keeps failing please report the log above."
     note "lanex responds."
-    command -v "$SELECTED_ENGINE" >/dev/null 2>&1 \
-        || die "The selected container engine is missing after installation. Click Retry."
-    note "${SELECTED_ENGINE} present."
+    if [ "$SELECTED_ENGINE" != "none" ]; then
+        command -v "$SELECTED_ENGINE" >/dev/null 2>&1 \
+            || die "The selected container engine is missing after installation. Click Retry."
+        note "${SELECTED_ENGINE} present."
+    fi
     # A wsl.conf typo would surface as "no systemd" / wrong user on next boot —
     # cheap to catch now.
     grep -q "default *= *${APP_USER}" /etc/wsl.conf 2>/dev/null \
@@ -509,6 +523,7 @@ finalize() {
     [ -f "$choices" ] || die "the saved component choices are missing. Run the same Setup again."
     local attempt
     for attempt in $(seq 1 60); do
+        check_cancel
         if [ "$(cat /proc/1/comm 2>/dev/null)" = "systemd" ]; then
             note "systemd is ready."
             break
@@ -527,6 +542,7 @@ finalize() {
     # PDK store failure and would violate the per-user appliance contract.
     runuser -m -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
         LOGNAME="$APP_USER" PATH="/usr/local/bin:/usr/bin:/bin:/home/${APP_USER}/.local/bin" \
+        LANEX_SETUP_CANCEL_FILE="$CANCEL_FILE" \
         lanex --provision-finalize "$manifest" --setup-choices "$choices" \
         || die "one or more selected components did not become ready.
    The readiness report above names every missing requirement. Click Retry."
@@ -565,6 +581,7 @@ main() {
         base|finalize) ;;
         *) die "unknown provisioning mode '$mode'." ;;
     esac
+    rm -f "$CANCEL_FILE"
     if [ "$mode" = "finalize" ]; then
         finalize
         return
@@ -579,21 +596,31 @@ main() {
         note "ref: ${REF}   user: ${APP_USER}"
     fi
     recover_interrupted_dpkg
+    check_cancel
     dns_guard
+    check_cancel
     wsl_conf
+    check_cancel
     # base_packages BEFORE app_user: the sudo package owns /etc/sudoers.d, and
     # granting the appliance user passwordless sudo means writing into it.
     # Ubuntu's WSL image ships sudo so the order was invisible there; a plain
     # ubuntu:24.04 base (the Phase 2a rootfs bake) does not.
     base_packages
+    check_cancel
     app_user
+    check_cancel
     select_engine
+    check_cancel
     case "$SELECTED_ENGINE" in
         docker) docker_ce ;;
         podman) podman_engine ;;
+        none) ;;
     esac
+    check_cancel
     install_lanex
+    check_cancel
     write_identity_marker
+    check_cancel
     verify
     note "DEFERRED(selected-components): image, native support tools, GDS3D and PDKs run after the systemd boot."
     # After verify(), never before: a broken appliance must fail the checks

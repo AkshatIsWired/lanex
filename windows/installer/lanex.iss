@@ -136,16 +136,6 @@
   #endif
 #endif
 
-; Space needed on the %LOCALAPPDATA% volume. The two download paths differ, so
-; this is sized for the larger one:
-;   cached image       ~0.4 GB (Ubuntu) or ~0.9 GB (baked, kept for Repair)
-;   imported distro    ~2 GB before selected native tools/PDKs
-;   LibreLane image    ~3 GB, pulled and verified by Setup after systemd boot
-;   run output         the rest
-; 10 GB leaves real headroom on both, and refusing an install that would have
-; worked is worse than a tight fit — so this stays a floor, not an estimate.
-#define MinFreeGB      10
-
 [Setup]
 ; NEVER change AppId: it is the identity Windows uses to find the previous
 ; install (upgrade in place) and the uninstall entry in Settings.
@@ -173,6 +163,7 @@ WizardStyle=modern
 ; explicit runas helper. Credential elevation under another administrator must
 ; never move HKCU or {localappdata} work into that administrator's profile.
 PrivilegesRequired=lowest
+AllowCancelDuringInstall=yes
 ; WSL 2 is 64-bit only. x64compatible also covers ARM64 running x64 code, but
 ; the launcher is x64 (see windows/launcher/wsl.go) so the appliance is too.
 ArchitecturesAllowed=x64compatible
@@ -204,7 +195,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; the version and the reason.
 WindowsVersionNotSupported=LanEx needs Windows 10 version 21H2 (build 19044) or newer for WSLg desktop tools. Windows 11 x64 is recommended.
 ; The wizard's own words, in the language of the person we are installing for.
-WelcomeLabel2=This will install [name/ver] on your computer.%n%nLanEx sets up its own private, self-contained environment. It preserves your existing WSL distributions and their data. If required, Windows asks separately before Setup enables WSL features or updates WSL.%n%nRemoving the Windows app preserves your projects and environment by default.%n%nSetup first downloads about {#RootfsSizeMB} MB; the selected toolchain and PDKs need additional space and downloads.
+WelcomeLabel2=This will install [name/ver] on your computer.%n%nLanEx sets up its own private, self-contained environment. It preserves your existing WSL distributions and their data. If required, Windows asks separately before Setup enables WSL features or updates WSL.%n%nRemoving the Windows app preserves your projects and environment by default.%n%nBefore installing, Setup shows an honest estimate for your selected tools and PDKs. Actual download and disk use varies with reusable caches and selected libraries.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -237,6 +228,12 @@ Filename: "{app}\LanEx.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 [Code]
 function SetProcessEnvironmentVariable(lpName, lpValue: String): Boolean;
   external 'SetEnvironmentVariableW@kernel32.dll stdcall';
+function SetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc: LongWord): LongWord;
+  external 'SetTimer@user32.dll stdcall';
+function KillTimer(hWnd, nIDEvent: LongWord): Boolean;
+  external 'KillTimer@user32.dll stdcall';
+function GetTickCount: LongWord;
+  external 'GetTickCount@kernel32.dll stdcall';
 
 var
   // Set in InitializeSetup, read in PrepareToInstall.
@@ -255,6 +252,19 @@ var
   BootIdentityValue: String;
   ComputerDisplayValue: String;
   FirmwareNoticeValue: Boolean;
+  ProfilePage, EnginePage, ComponentPage, PdkPage, LibraryPage: TInputOptionWizardPage;
+  EstimatePage: TOutputMsgWizardPage;
+  LiveLogMemo: TNewMemo;
+  OpenLogButton, CopyLogButton, SaveLogButton: TNewButton;
+  ChoicesJsonValue, ChoicesPathValue: String;
+  EstimateDownloadMB, EstimateInstalledMB, RequiredAppMB, RequiredTempMB: Int64;
+  ProgressPhase, ProgressPhaseCount: Integer;
+  ProgressActivity: String;
+  ProgressStartedTick: LongWord;
+  ProgressTimer: LongWord;
+  CancelRequested: Boolean;
+  BaseProvisionedForEstimate: Boolean;
+  EstimateReuseApplied: Boolean;
 
 // ---------------------------------------------------------------- locations --
 
@@ -309,13 +319,65 @@ begin
   SaveStringToFile(LogFile, S + #13#10, True);
 end;
 
+procedure RotateInstallLog;
+var
+  Size: Integer;
+begin
+  ForceDirectories(LogDir);
+  if FileSize(LogFile, Size) and (Size > 5 * 1024 * 1024) then
+  begin
+    DeleteFile(LogDir + '\install.previous.log');
+    RenameFile(LogFile, LogDir + '\install.previous.log');
+  end;
+end;
+
+function ElapsedText: String;
+var
+  Seconds: LongWord;
+begin
+  if ProgressStartedTick = 0 then
+    Result := '0:00'
+  else
+  begin
+    Seconds := (GetTickCount - ProgressStartedTick) div 1000;
+    Result := IntToStr(Seconds div 60) + ':' + Format('%.2d', [Seconds mod 60]);
+  end;
+end;
+
+procedure RefreshProgressCaption;
+var
+  Caption: String;
+begin
+  if ProgressActivity = '' then Exit;
+  Caption := ProgressActivity;
+  if ProgressPhase > 0 then
+    Caption := 'Phase ' + IntToStr(ProgressPhase) + ' of ' +
+      IntToStr(ProgressPhaseCount) + '  |  ' + ElapsedText + '  |  ' + Caption;
+  if WizardForm <> nil then
+  begin
+    WizardForm.PreparingLabel.Caption := Caption;
+    WizardForm.PreparingLabel.Update;
+    WizardForm.StatusLabel.Caption := Caption;
+    WizardForm.StatusLabel.Update;
+  end;
+end;
+
+procedure SetPhase(Number, Total: Integer; const S: String);
+begin
+  ProgressPhase := Number;
+  ProgressPhaseCount := Total;
+  ProgressActivity := S;
+  RefreshProgressCaption;
+  LogLine('--- phase ' + IntToStr(Number) + '/' + IntToStr(Total) + ': ' + S);
+end;
+
 procedure SetStatus(const S: String);
 begin
   // The one progress surface the user sees during the slow parts. Without it a
   // five-minute provision looks like a hang.
   //
   // TWO labels, and PreparingLabel is the one that matters. Everything slow in
-  // this installer — the 373 MB download, the import, the whole provisioning
+  // this installer — the rootfs download, import, and whole provisioning
   // run — happens inside PrepareToInstall, and PrepareToInstall runs while the
   // *Preparing* page is on screen. StatusLabel and ProgressGauge belong to the
   // *Installing* page, which is not reached until all of that is already over.
@@ -323,14 +385,55 @@ begin
   // page for eight minutes with no text, no bar and no way to tell a working
   // install from a hung one. StatusLabel is still set for the file-copy step
   // afterwards; writing to an off-screen control is harmless.
-  if WizardForm <> nil then
-  begin
-    WizardForm.PreparingLabel.Caption := S;
-    WizardForm.PreparingLabel.Update;
-    WizardForm.StatusLabel.Caption := S;
-    WizardForm.StatusLabel.Update;
-  end;
+  ProgressActivity := S;
+  RefreshProgressCaption;
   LogLine('--- ' + S);
+end;
+
+procedure ProgressTimerProc(HWnd, Msg, IdEvent, Time: LongWord);
+begin
+  RefreshProgressCaption;
+end;
+
+procedure AppendLiveLine(const S: String);
+begin
+  if (LiveLogMemo = nil) or WizardSilent then Exit;
+  LiveLogMemo.Lines.Add(S);
+  while LiveLogMemo.Lines.Count > 400 do
+    LiveLogMemo.Lines.Delete(0);
+  LiveLogMemo.SelStart := Length(LiveLogMemo.Text);
+end;
+
+function StripNulls(const S: String): String; forward;
+
+function ProgressMessage(const Line: String): String;
+var
+  Marker, Rest: String;
+  P: Integer;
+begin
+  Result := '';
+  Marker := '"message":"';
+  P := Pos(Marker, Line);
+  if P = 0 then Exit;
+  Rest := Copy(Line, P + Length(Marker), Length(Line));
+  P := Pos('"', Rest);
+  if P > 0 then Result := Copy(Rest, 1, P - 1);
+end;
+
+procedure CommandOutput(const S: String; const Error, FirstLine: Boolean);
+var
+  Line: String;
+begin
+  Line := Trim(StripNulls(S));
+  if Error then Line := 'Output reader error: ' + Line;
+  if Line = '' then Exit;
+  LogLine(Line);
+  AppendLiveLine(Line);
+  if (Pos('@@LANEX:', Line) = 1) and (ProgressMessage(Line) <> '') then
+    ProgressActivity := ProgressMessage(Line)
+  else
+    ProgressActivity := Copy(Line, 1, 140);
+  RefreshProgressCaption;
 end;
 
 // StripNulls turns a UTF-16LE byte stream that was loaded as bytes into
@@ -374,9 +477,8 @@ begin
     Output := Trim(StripNulls(String(Raw)));
 end;
 
-// RunLogged runs a command with its output appended to install.log.
-// The nested-quote shape (/C ""prog" args >> "log"") is cmd's documented rule
-// for a command line whose program path is quoted.
+// Output is consumed line-by-line so the wizard stays meaningful during slow
+// apt, image and PDK work. The memo is bounded; install.log rotates per run.
 function RunLogged(const FileName, Params: String; var ResultCode: Integer): Boolean;
 var
   PreviousWslEnv, ForwardedWslEnv: String;
@@ -398,10 +500,16 @@ begin
     ForwardedWslEnv := PreviousWslEnv + ':' + ForwardedWslEnv;
   SetProcessEnvironmentVariable('WSLENV', ForwardedWslEnv);
   try
-    Result := Exec(ExpandConstant('{cmd}'),
-      '/C "set WSL_UTF8=1&& "' + FileName + '" ' + Params
-        + ' >> "' + LogFile + '" 2>&1"',
-      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    SetProcessEnvironmentVariable('WSL_UTF8', '1');
+    ProgressTimer := SetTimer(0, 0, 1000, CreateCallback(@ProgressTimerProc));
+    try
+      Result := ExecAndLogOutput(FileName, Params, '', SW_HIDE,
+        ewWaitUntilTerminated, ResultCode, @CommandOutput);
+    finally
+      if ProgressTimer <> 0 then KillTimer(0, ProgressTimer);
+      ProgressTimer := 0;
+      SetProcessEnvironmentVariable('WSL_UTF8', '');
+    end;
   finally
     SetProcessEnvironmentVariable('WSLENV', PreviousWslEnv);
   end;
@@ -555,21 +663,6 @@ begin
     Failure := 'The structured preflight result was incomplete.';
 end;
 
-function EnoughDiskSpace(var FreeGB: Integer): Boolean;
-var
-  FreeMB, TotalMB: Cardinal;
-begin
-  FreeGB := 0;
-  // Unknown free space must not block the install; only a definite shortfall does.
-  if not GetSpaceOnDisk(ExpandConstant('{localappdata}'), True, FreeMB, TotalMB) then
-  begin
-    Result := True;
-    Exit;
-  end;
-  FreeGB := FreeMB div 1024;
-  Result := FreeGB >= {#MinFreeGB};
-end;
-
 function IsResumeRun: Boolean;
 begin
   // Set only by the owner-bound automatic trigger after a recorded restart.
@@ -589,10 +682,357 @@ begin
             SW_SHOWNORMAL, ewNoWait, Code);
 end;
 
+function PdkName(Index: Integer): String;
+begin
+  case Index of
+    0: Result := 'sky130A';
+    1: Result := 'sky130B';
+    2: Result := 'gf180mcuA';
+    3: Result := 'gf180mcuB';
+    4: Result := 'gf180mcuC';
+    5: Result := 'gf180mcuD';
+    6: Result := 'ihp-sg13g2';
+  else
+    Result := '';
+  end;
+end;
+
+procedure AddJsonString(var List: String; const Value: String);
+begin
+  if List <> '' then List := List + ',';
+  List := List + '"' + Value + '"';
+end;
+
+function SelectedPdkList: String;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to 6 do
+    if PdkPage.Values[I] then AddJsonString(Result, PdkName(I));
+end;
+
+function SelectedVariant(StartIndex, EndIndex: Integer): String;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := StartIndex to EndIndex do
+    if PdkPage.Values[I] then Result := PdkName(I);
+end;
+
+function LibraryName(Index: Integer): String;
+begin
+  case Index of
+    0: Result := 'sky130_fd_sc_hdll';
+    1: Result := 'sky130_fd_sc_lp';
+    2: Result := 'sky130_fd_sc_ls';
+    3: Result := 'sky130_fd_sc_ms';
+    4: Result := 'sky130_fd_sc_hs';
+    5: Result := 'sky130_fd_pr_reram';
+    6: Result := 'gf180mcu_osu_sc_gp12t3v3';
+    7: Result := 'gf180mcu_osu_sc_gp9t3v3';
+    8: Result := 'gf180mcu_as_sc_mcu7t3v3';
+    9: Result := 'gf180mcu_re_efuse';
+    10: Result := 'gf180mcu_ocd_io';
+    11: Result := 'gf180mcu_ocd_ip_sram';
+    12: Result := 'gf180mcu_ocd_alpha_small';
+    13: Result := 'gf180mcu_ocd_alpha_large';
+    14: Result := 'gf180mcu_ocd_alpha_misc';
+  else
+    Result := '';
+  end;
+end;
+
+function LibraryArray(StartIndex, EndIndex: Integer): String;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := StartIndex to EndIndex do
+    if LibraryPage.Values[I] then AddJsonString(Result, LibraryName(I));
+  Result := '[' + Result + ']';
+end;
+
+function BuildChoicesJson: String;
+var
+  Native, Libraries, Variant: String;
+begin
+  if ProfilePage.SelectedValueIndex = 0 then
+  begin
+    Result := '{"profile":"recommended"}';
+    Exit;
+  end;
+  if ProfilePage.SelectedValueIndex = 2 then
+  begin
+    Result := '{"profile":"minimal"}';
+    Exit;
+  end;
+  Native := '';
+  if ComponentPage.Values[1] then
+  begin
+    AddJsonString(Native, 'verilator');
+    AddJsonString(Native, 'iverilog');
+    AddJsonString(Native, 'graphviz');
+    AddJsonString(Native, 'gtkwave');
+  end;
+  if ComponentPage.Values[2] then AddJsonString(Native, 'gds3d');
+  if SelectedPdkList <> '' then ComponentPage.Values[0] := True;
+  Libraries := '';
+  Variant := SelectedVariant(0, 1);
+  if Variant <> '' then
+    Libraries := '"' + Variant + '":' + LibraryArray(0, 5);
+  Variant := SelectedVariant(2, 5);
+  if Variant <> '' then
+  begin
+    if Libraries <> '' then Libraries := Libraries + ',';
+    Libraries := Libraries + '"' + Variant + '":' + LibraryArray(6, 14);
+  end;
+  if PdkPage.Values[6] then
+  begin
+    if Libraries <> '' then Libraries := Libraries + ',';
+    Libraries := Libraries + '"ihp-sg13g2":[]';
+  end;
+  Result := '{"schema":1,"profile":"custom","engine":"';
+  if EnginePage.SelectedValueIndex = 1 then Result := Result + 'podman'
+  else Result := Result + 'docker';
+  Result := Result + '","image":';
+  if ComponentPage.Values[0] then Result := Result + 'true' else Result := Result + 'false';
+  Result := Result + ',"nativeTools":[' + Native + '],"pdks":[' +
+    SelectedPdkList + '],"libraries":{' + Libraries + '}}';
+end;
+
+function ValidatePdkFamilies(var Failure: String): Boolean;
+var
+  Sky, Gf, I: Integer;
+begin
+  Sky := 0; Gf := 0;
+  for I := 0 to 1 do if PdkPage.Values[I] then Sky := Sky + 1;
+  for I := 2 to 5 do if PdkPage.Values[I] then Gf := Gf + 1;
+  Result := (Sky <= 1) and (Gf <= 1);
+  if not Result then
+    Failure := 'Choose only one variant from each PDK family. You may combine one SkyWater, one GlobalFoundries, and IHP.';
+end;
+
+function PlanSelections(const InputJson, InputPath: String; var Failure: String): Boolean;
+var
+  Worker, Manifest, Snippet, Output: String;
+begin
+  Result := False;
+  Failure := '';
+  ExtractTemporaryFile('setup.ps1');
+  ExtractTemporaryFile('build-manifest.json');
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  Manifest := ExpandConstant('{tmp}\build-manifest.json');
+  Snippet := '$p=(& ' + PSQuote(Worker) + ' -Action PlanChoices -ManifestPath ' +
+    PSQuote(Manifest);
+  if InputPath <> '' then Snippet := Snippet + ' -ChoicesPath ' + PSQuote(InputPath)
+  else Snippet := Snippet + ' -ChoicesJson ' + PSQuote(InputJson);
+  Snippet := Snippet + ' | ConvertFrom-Json); ' +
+    '($p.choices|ConvertTo-Json -Depth 30 -Compress); ' +
+    '[math]::Ceiling($p.estimates.downloadBytes/1MB); ' +
+    '[math]::Ceiling($p.estimates.installedBytes/1MB); ' +
+    '[math]::Ceiling($p.estimates.volumes.appDataRequiredBytes/1MB); ' +
+    '[math]::Ceiling($p.estimates.volumes.tempRequiredBytes/1MB); ' +
+    '[math]::Ceiling($p.estimates.reusedInstalledBytes/1MB)';
+  if not PowerShellCapture(Snippet, Output) then
+  begin
+    Failure := Output;
+    Exit;
+  end;
+  ChoicesJsonValue := TakeLine(Output);
+  try
+    EstimateDownloadMB := StrToInt64(TakeLine(Output));
+    EstimateInstalledMB := StrToInt64(TakeLine(Output));
+    RequiredAppMB := StrToInt64(TakeLine(Output));
+    RequiredTempMB := StrToInt64(TakeLine(Output));
+    EstimateReuseApplied := StrToInt64(TakeLine(Output)) > 0;
+    Result := ChoicesJsonValue <> '';
+  except
+    Failure := 'The selection estimate returned an invalid value.';
+  end;
+end;
+
+function CheckSelectionSpace(var Failure: String): Boolean;
+var
+  AppFree, AppTotal, TempFree, TempTotal: Cardinal;
+  AppNeed, TempNeed: Int64;
+begin
+  Result := True;
+  Failure := '';
+  AppNeed := RequiredAppMB;
+  TempNeed := RequiredTempMB;
+  if BaseProvisionedForEstimate and not EstimateReuseApplied then
+  begin
+    AppNeed := AppNeed - 1332 - {#RootfsSizeMB};
+    TempNeed := 0;
+    if AppNeed < 0 then AppNeed := 0;
+  end
+  else if FileExists(RootfsPath) and
+     (CompareText(GetSHA256OfFile(RootfsPath), '{#RootfsSha256}') = 0) then
+  begin
+    AppNeed := AppNeed - {#RootfsSizeMB};
+    TempNeed := 0;
+  end;
+  if CompareText(ExtractFileDrive(AppDataRoot), ExtractFileDrive(ExpandConstant('{tmp}'))) = 0 then
+  begin
+    if GetSpaceOnDisk(AppDataRoot, True, AppFree, AppTotal) and
+       (Int64(AppFree) < AppNeed + TempNeed) then
+    begin
+      Failure := 'The selected setup needs about ' + IntToStr(AppNeed + TempNeed) +
+        ' MB free on ' + ExtractFileDrive(AppDataRoot) + ', but only ' +
+        IntToStr(AppFree) + ' MB is available.';
+      Result := False;
+    end;
+  end
+  else
+  begin
+    if GetSpaceOnDisk(AppDataRoot, True, AppFree, AppTotal) and (Int64(AppFree) < AppNeed) then
+    begin
+      Failure := 'The selected setup needs about ' + IntToStr(AppNeed) +
+        ' MB free for the LanEx environment, but only ' + IntToStr(AppFree) + ' MB is available.';
+      Result := False;
+      Exit;
+    end;
+    if GetSpaceOnDisk(ExpandConstant('{tmp}'), True, TempFree, TempTotal) and
+       (Int64(TempFree) < TempNeed) then
+    begin
+      Failure := 'Setup needs about ' + IntToStr(TempNeed) +
+        ' MB temporarily on ' + ExtractFileDrive(ExpandConstant('{tmp}')) + '.';
+      Result := False;
+    end;
+  end;
+end;
+
+procedure OpenDiagnostics(Sender: TObject);
+var
+  Code: Integer;
+begin
+  ShellExec('open', LogFile, '', '', SW_SHOWNORMAL, ewNoWait, Code);
+end;
+
+procedure CopyDiagnostics(Sender: TObject);
+var
+  Output: String;
+begin
+  if PowerShellCapture('Get-Content -LiteralPath ' + PSQuote(LogFile) +
+      ' -Raw | Set-Clipboard; ''copied''', Output) then
+    MsgBox('Diagnostics copied to the clipboard.', mbInformation, MB_OK)
+  else
+    MsgBox('Windows could not copy the log. Use Open log or Save log instead.', mbError, MB_OK);
+end;
+
+procedure SaveDiagnostics(Sender: TObject);
+var
+  Folder, Target: String;
+begin
+  Folder := ExpandConstant('{userdocs}');
+  if BrowseForFolder('Choose a folder for the LanEx diagnostics log.', Folder, True) then
+  begin
+    Target := AddBackslash(Folder) + 'LanEx-install-diagnostics-' +
+      GetDateTimeString('yyyymmdd-hhnnss', '', '') + '.log';
+    if FileCopy(LogFile, Target, False) then
+      MsgBox('Diagnostics saved to:' + #13#10 + Target, mbInformation, MB_OK)
+    else
+      MsgBox('The diagnostics log could not be saved there.', mbError, MB_OK);
+  end;
+end;
+
+procedure InitializeWizard;
+var
+  I: Integer;
+begin
+  ProfilePage := CreateInputOptionPage(wpLicense, 'Choose your LanEx setup',
+    'Recommended installs everything needed for a first RTL-to-GDS run.',
+    'Choose a setup profile. Custom exposes engines, tools, PDKs and advanced libraries.', True, False);
+  ProfilePage.Add('&Recommended — Docker, all supported tools, GDS3D, sky130A and all sky130 libraries');
+  ProfilePage.Add('&Custom — choose engine, tools, PDK variants and advanced libraries');
+  ProfilePage.Add('&Minimal — LanEx application only; the Tools page will show what remains');
+  ProfilePage.SelectedValueIndex := 0;
+
+  EnginePage := CreateInputOptionPage(ProfilePage.ID, 'Container engine',
+    'Docker and Podman are alternatives.', 'Choose one engine for container flows.', True, False);
+  EnginePage.Add('&Docker CE (recommended)');
+  EnginePage.Add('&Podman');
+  EnginePage.SelectedValueIndex := 0;
+
+  ComponentPage := CreateInputOptionPage(EnginePage.ID, 'Tools and flow support',
+    'Choose the capabilities Setup should make ready now.',
+    'PDKs automatically require the matched LibreLane image.', False, False);
+  ComponentPage.Add('Matched &LibreLane container image');
+  ComponentPage.Add('&Simulation/report/viewer tools — Verilator, Icarus, Graphviz, GTKWave');
+  ComponentPage.Add('&GDS3D layout viewer and build/runtime support');
+  for I := 0 to 2 do ComponentPage.Values[I] := True;
+
+  PdkPage := CreateInputOptionPage(ComponentPage.ID, 'Process design kits',
+    'Choose any supported families; choose only one variant within a family.',
+    'sky130A is the recommended default. Approximate full-family sizes are shown.', False, True);
+  PdkPage.Add('&sky130A — SkyWater 130 nm, ~2.5 GB (recommended)');
+  PdkPage.Add('sky130&B — SkyWater 130 nm with ReRAM/SONOS models, ~2.5 GB');
+  PdkPage.Add('gf180mcu&A — GlobalFoundries 180 nm, ~1.8 GB');
+  PdkPage.Add('gf180mcu&B — GlobalFoundries 180 nm, ~1.8 GB');
+  PdkPage.Add('gf180mcu&C — GlobalFoundries 180 nm, ~1.8 GB');
+  PdkPage.Add('gf180mcu&D — GlobalFoundries 180 nm, ~1.8 GB');
+  PdkPage.Add('&IHP SG13G2 — 130 nm SiGe BiCMOS, ~1.9 GB');
+  PdkPage.Values[0] := True;
+
+  LibraryPage := CreateInputOptionPage(PdkPage.ID, 'Advanced PDK libraries',
+    'Required libraries are always included. These are additional supported libraries.',
+    'Selections apply only to the chosen variant in that family.', False, True);
+  LibraryPage.Add('Sky130: sky130_fd_sc_hdll');
+  LibraryPage.Add('Sky130: sky130_fd_sc_lp');
+  LibraryPage.Add('Sky130: sky130_fd_sc_ls');
+  LibraryPage.Add('Sky130: sky130_fd_sc_ms');
+  LibraryPage.Add('Sky130: sky130_fd_sc_hs');
+  LibraryPage.Add('Sky130: sky130_fd_pr_reram');
+  LibraryPage.Add('GF180: gf180mcu_osu_sc_gp12t3v3');
+  LibraryPage.Add('GF180: gf180mcu_osu_sc_gp9t3v3');
+  LibraryPage.Add('GF180: gf180mcu_as_sc_mcu7t3v3');
+  LibraryPage.Add('GF180: gf180mcu_re_efuse');
+  LibraryPage.Add('GF180: gf180mcu_ocd_io');
+  LibraryPage.Add('GF180: gf180mcu_ocd_ip_sram');
+  LibraryPage.Add('GF180: gf180mcu_ocd_alpha_small');
+  LibraryPage.Add('GF180: gf180mcu_ocd_alpha_large');
+  LibraryPage.Add('GF180: gf180mcu_ocd_alpha_misc');
+  for I := 0 to 5 do LibraryPage.Values[I] := True;
+
+  EstimatePage := CreateOutputMsgPage(LibraryPage.ID, 'Review download and space',
+    'Measured estimates', 'Setup will calculate this from your choices.');
+
+  LiveLogMemo := TNewMemo.Create(WizardForm);
+  LiveLogMemo.Parent := WizardForm.InnerPage;
+  LiveLogMemo.Left := ScaleX(0);
+  LiveLogMemo.Top := ScaleY(78);
+  LiveLogMemo.Width := WizardForm.InnerPage.ClientWidth;
+  LiveLogMemo.Height := ScaleY(185);
+  LiveLogMemo.ScrollBars := ssVertical;
+  LiveLogMemo.ReadOnly := True;
+  LiveLogMemo.Anchors := [akLeft, akTop, akRight, akBottom];
+  LiveLogMemo.Visible := False;
+
+  OpenLogButton := TNewButton.Create(WizardForm);
+  OpenLogButton.Parent := WizardForm.InnerPage;
+  OpenLogButton.Caption := '&Open log';
+  OpenLogButton.SetBounds(ScaleX(0), ScaleY(270), ScaleX(90), ScaleY(24));
+  OpenLogButton.OnClick := @OpenDiagnostics;
+  OpenLogButton.Visible := False;
+  CopyLogButton := TNewButton.Create(WizardForm);
+  CopyLogButton.Parent := WizardForm.InnerPage;
+  CopyLogButton.Caption := '&Copy diagnostics';
+  CopyLogButton.SetBounds(ScaleX(98), ScaleY(270), ScaleX(115), ScaleY(24));
+  CopyLogButton.OnClick := @CopyDiagnostics;
+  CopyLogButton.Visible := False;
+  SaveLogButton := TNewButton.Create(WizardForm);
+  SaveLogButton.Parent := WizardForm.InnerPage;
+  SaveLogButton.Caption := '&Save log';
+  SaveLogButton.SetBounds(ScaleX(221), ScaleY(270), ScaleX(90), ScaleY(24));
+  SaveLogButton.OnClick := @SaveDiagnostics;
+  SaveLogButton.Visible := False;
+end;
+
 function InitializeSetup(): Boolean;
 var
-  FreeGB: Integer;
-  Failure, Detail: String;
+  Failure, Detail, SilentProfile: String;
 begin
   Result := True;
   RepairExisting := False;
@@ -604,10 +1044,23 @@ begin
   BootIdentityValue := '';
   ComputerDisplayValue := '';
   FirmwareNoticeValue := False;
+  ChoicesJsonValue := '';
+  ChoicesPathValue := ExpandConstant('{param:SELECTIONS|}');
+  EstimateDownloadMB := 0;
+  EstimateInstalledMB := 0;
+  RequiredAppMB := 0;
+  RequiredTempMB := 0;
+  ProgressPhase := 0;
+  ProgressPhaseCount := 6;
+  ProgressStartedTick := 0;
+  CancelRequested := False;
+  BaseProvisionedForEstimate := False;
+  EstimateReuseApplied := False;
 
   if not RunPreflight(Failure) then
   begin
-    MsgBox('LanEx could not inspect this PC''s Windows and WSL prerequisites.'
+    LogLine('preflight failed: ' + Failure);
+    if not WizardSilent then MsgBox('LanEx could not inspect this PC''s Windows and WSL prerequisites.'
       + #13#10#13#10 + Failure + #13#10#13#10
       + 'No Windows feature, WSL distribution, or user data was changed.',
       mbError, MB_OK);
@@ -617,7 +1070,7 @@ begin
 
   if PreflightDecision = 'unsupported-architecture' then
   begin
-    MsgBox('This LanEx installer contains an amd64 Linux appliance and requires '
+    if not WizardSilent then MsgBox('This LanEx installer contains an amd64 Linux appliance and requires '
       + 'an x64 Windows PC. ARM64 and other native architectures are not '
       + 'supported by this build.', mbError, MB_OK);
     Result := False;
@@ -625,14 +1078,14 @@ begin
   end;
   if PreflightDecision = 'unsupported-windows' then
   begin
-    MsgBox('LanEx needs Windows build 19044 or newer so its WSLg desktop tools '
+    if not WizardSilent then MsgBox('LanEx needs Windows build 19044 or newer so its WSLg desktop tools '
       + 'can open correctly. Windows 11 x64 is recommended.', mbError, MB_OK);
     Result := False;
     Exit;
   end;
   if PreflightDecision = 'preflight-query-failed' then
   begin
-    MsgBox('Windows did not allow Setup to determine the required WSL feature '
+    if not WizardSilent then MsgBox('Windows did not allow Setup to determine the required WSL feature '
       + 'states. On a managed PC, ask an administrator to enable Windows '
       + 'Subsystem for Linux and Virtual Machine Platform, then run Setup again.'
       + #13#10#13#10 + 'No feature or distribution was changed.', mbError, MB_OK);
@@ -647,28 +1100,38 @@ begin
     Detail := '';
     if ComputerDisplayValue <> '' then
       Detail := #13#10#13#10 + 'PC: ' + ComputerDisplayValue;
-    if MsgBox('LanEx cannot run because your computer''s virtualization feature '
+    if (not WizardSilent) and (MsgBox('LanEx cannot run because your computer''s virtualization feature '
       + 'is switched off.' + #13#10#13#10
       + 'It is a one-time setting in your PC''s BIOS/UEFI screen, not something '
       + 'Windows can change. Microsoft''s instructions include manufacturer links.'
       + Detail
       + #13#10#13#10 + 'Open the instructions now?',
-      mbError, MB_YESNO) = IDYES then
+      mbError, MB_YESNO) = IDYES) then
       OpenHelp('#enable-virtualization');
     Result := False;
     Exit;
   end;
 
-  // 2. Disk space, on the volume that will hold the distro.
-  if not EnoughDiskSpace(FreeGB) then
+  // Interactive choices do not exist until InitializeWizard. Silent setup uses
+  // either a named profile or a manifest-validated JSON selection file.
+  if WizardSilent then
   begin
-    MsgBox('LanEx needs at least {#MinFreeGB} GB free on your Windows drive, and '
-      + 'there is only ' + IntToStr(FreeGB) + ' GB.' + #13#10#13#10
-      + 'That covers LanEx''s environment plus the chip-design toolchain it '
-      + 'downloads before Setup finishes. Please free some space and run Setup again.',
-      mbError, MB_OK);
-    Result := False;
-    Exit;
+    SilentProfile := Lowercase(ExpandConstant('{param:PROFILE|recommended}'));
+    if ChoicesPathValue <> '' then
+      Result := PlanSelections('', ChoicesPathValue, Failure)
+    else if (SilentProfile = 'recommended') or (SilentProfile = 'minimal') then
+      Result := PlanSelections('{"profile":"' + SilentProfile + '"}', '', Failure)
+    else
+    begin
+      Failure := 'Silent /PROFILE must be recommended or minimal; use /SELECTIONS=<json file> for custom choices.';
+      Result := False;
+    end;
+    if Result then Result := CheckSelectionSpace(Failure);
+    if not Result then
+    begin
+      LogLine('silent selection failed: ' + Failure);
+      Exit;
+    end;
   end;
 
   // Existing distro names are not ownership proof. The state worker resolves
@@ -699,7 +1162,7 @@ begin
   Snippet := '& ' + PSQuote(Worker) + ' -Action InitializeState -StatePath '
     + PSQuote(StateFile) + ' -ManifestPath ' + PSQuote(Manifest)
     + ' -Operation ' + OperationName
-    + ' -ChoicesJson ''{"profile":"recommended"}'''
+    + ' -ChoicesJson ' + PSQuote(ChoicesJsonValue)
     + ' -InstallerPath ' + PSQuote(ExpandConstant('{srcexe}'));
   if IsResumeRun then
     Snippet := Snippet + ' -ResumeMode 1 -BootIdentity ' + PSQuote(BootIdentityValue);
@@ -711,7 +1174,7 @@ begin
     Exit;
   end;
 
-  if (PreflightDecision = 'features-required') and FirmwareNoticeValue then
+  if (not WizardSilent) and (PreflightDecision = 'features-required') and FirmwareNoticeValue then
     MsgBox('Windows could not confirm the firmware virtualization setting. '
       + 'Setup will enable the two Windows features it needs and check again '
       + 'after restart. If the PC then reports virtualization is disabled, '
@@ -835,10 +1298,10 @@ begin
     // download runs long before — so a number in the label is the only honest
     // signal available here, and it is the difference between waiting and
     // wondering.
-    SetStatus(Format('Downloading the LanEx environment... %d%% of %d MB', [
+    SetPhase(2, 6, Format('Downloading the LanEx environment... %d%% of %d MB', [
       Progress * 100 div ProgressMax, ProgressMax div 1048576]));
   end;
-  Result := True;
+  Result := not CancelRequested;
 end;
 
 // FetchRootfs downloads one image unless a copy that matches Sha256 is already
@@ -855,7 +1318,7 @@ begin
   // broken distro.
   if FileExists(Dest) then
   begin
-    SetStatus('Checking the downloaded LanEx environment...');
+    SetPhase(2, 6, 'Checking the downloaded LanEx environment...');
     if CompareText(GetSHA256OfFile(Dest), Sha256) = 0 then
     begin
       LogLine('cached rootfs verified: ' + Dest);
@@ -864,7 +1327,7 @@ begin
     LogLine('cached rootfs failed its checksum — downloading again: ' + Dest);
     DeleteFile(Dest);
   end;
-  SetStatus('Downloading the LanEx environment (about ' + SizeMB + ' MB)...');
+  SetPhase(2, 6, 'Downloading the LanEx environment (about ' + SizeMB + ' MB)...');
   try
     // Inno verifies the SHA256 itself and raises if it differs, so a corrupted
     // or substituted download can never reach `wsl --import`.
@@ -910,6 +1373,17 @@ begin
 end;
 
 // ProvisionDistro runs provision.sh inside the freshly imported distro.
+procedure RecordSetupOutcome(const Outcome, MessageText: String);
+var
+  Worker, Output, Snippet: String;
+begin
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  Snippet := '& ' + PSQuote(Worker) + ' -Action RecordOutcome -StatePath ' +
+    PSQuote(StateFile) + ' -Outcome ' + Outcome + ' -OutcomeMessage ' + PSQuote(MessageText);
+  if not PowerShellCapture(Snippet, Output) then
+    LogLine('WARNING: could not record setup outcome: ' + Output);
+end;
+
 function ProvisionDistro: String;
 var
   ScriptPath, InstallPath, WheelPath, ConstraintPath, ManifestPath, LinuxPath, LinuxInstall,
@@ -947,18 +1421,26 @@ begin
     + 'LANEX_BUILD_MANIFEST="' + LinuxManifest + '" LANEX_SETUP_CHOICES="' + LinuxChoices + '" '
     + 'bash "' + LinuxPath + '" base';
   repeat
-    SetStatus('Preparing the LanEx environment - this takes a few minutes...');
+    SetPhase(4, 6, 'Preparing the base LanEx environment...');
     if RunLogged(WslExe, Params, Code) and (Code = 0) then
       Exit;
-    Answer := MsgBox('Setting up the LanEx environment did not finish.'
-      + #13#10#13#10 + 'This is almost always a network problem, and retrying is '
-      + 'safe — it continues where it left off.' + #13#10#13#10
+    if CancelRequested then
+    begin
+      Result := 'LanEx Setup was cancelled. Completed verified downloads and project data were preserved.';
+      RecordSetupOutcome('cancelled', Result);
+      Exit;
+    end;
+    if WizardSilent then Answer := IDCANCEL
+    else Answer := MsgBox('Setting up the LanEx environment did not finish.'
+      + #13#10#13#10 + 'The failing component and recovery detail are shown below. '
+      + 'Retry rechecks completed work and preserves verified downloads.' + #13#10#13#10
       + 'Last lines of the log:' + #13#10 + LogTail(12) + ProxyFailureHint,
       mbError, MB_RETRYCANCEL);
   until Answer <> IDRETRY;
   Result := 'The LanEx environment could not be prepared.' + #13#10#13#10
     + 'The full log is at:' + #13#10 + LogFile + #13#10#13#10
     + 'Please report it — the log tells us exactly which step failed.';
+  RecordSetupOutcome('failed', Result);
 end;
 
 function VerifyRepairIdentity(var Failure: String): Boolean;
@@ -1012,10 +1494,18 @@ begin
     + 'LANEX_USER="lanex" LANEX_BUILD_MANIFEST="' + LinuxManifest + '" '
     + 'LANEX_SETUP_CHOICES="' + LinuxChoices + '" bash "' + LinuxScript + '" finalize';
   repeat
-    SetStatus('Installing and verifying the selected tools, image, and PDKs...');
+    SetPhase(6, 6, 'Installing and verifying the selected tools, image, and PDKs...');
     if RunLogged(WslExe, Params, Code) and (Code = 0) then
       Exit;
-    Answer := MsgBox('The selected LanEx components did not all become ready.'
+    if CancelRequested then
+    begin
+      Result := 'LanEx Setup was cancelled while stopping the current component safely. '
+        + 'Finalization did not continue, and completed verified data was preserved.';
+      RecordSetupOutcome('cancelled', Result);
+      Exit;
+    end;
+    if WizardSilent then Answer := IDCANCEL
+    else Answer := MsgBox('The selected LanEx components did not all become ready.'
       + #13#10#13#10 + 'Retrying preserves completed tools, image layers, PDKs, and projects.'
       + #13#10#13#10 + 'Last lines of the log:' + #13#10 + LogTail(16) + ProxyFailureHint,
       mbError, MB_RETRYCANCEL);
@@ -1023,6 +1513,7 @@ begin
   Result := 'LanEx base setup is intact, but selected-component readiness failed.'
     + #13#10#13#10 + 'No existing distribution or project was deleted.'
     + #13#10#13#10 + 'Full log: ' + LogFile;
+  RecordSetupOutcome('failed', Result);
 end;
 
 procedure MarkAppComplete;
@@ -1064,7 +1555,10 @@ var
   NeedProvision: Boolean;
 begin
   Result := '';
+  RotateInstallLog;
   ForceDirectories(LogDir);
+  ProgressStartedTick := GetTickCount;
+  if ChoicesJsonValue = '' then ChoicesJsonValue := '{"profile":"recommended"}';
   LogLine('');
   LogLine('=== LanEx Setup {#AppVersion} — ' + GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':')
     + ' (resume=' + ExpandConstant('{param:RESUME|0}') + ') ===');
@@ -1074,6 +1568,23 @@ begin
   Result := InitializeDurableState;
   if Result <> '' then
     Exit;
+  if not PlanSelections('', StateFile, Output) then
+  begin
+    Result := 'LanEx could not revalidate the saved component choices.' + #13#10#13#10 + Output;
+    Exit;
+  end;
+  if CancelRequested then
+  begin
+    Result := 'The environment download was cancelled. Setup did not start the fallback download.';
+    Exit;
+  end;
+  if not CheckSelectionSpace(Output) then
+  begin
+    Result := Output + #13#10#13#10 +
+      'Free space and run the same Setup again. Verified completed downloads and data are preserved.';
+    Exit;
+  end;
+  SetPhase(1, 6, 'Checking Windows, WSL, ownership, and selected disk space...');
 
   // Revalidate immediately before every machine-level or large operation. The
   // wizard may have been open for a while, and resume never trusts stale facts.
@@ -1106,7 +1617,7 @@ begin
   // authorize it, but execution returns here before any user-owned work.
   if PreflightDecision = 'features-required' then
   begin
-    SetStatus('Requesting permission for two Windows features...');
+    SetPhase(1, 6, 'Requesting permission for two Windows features...');
     if not EnableWsl then
     begin
       Result := 'Windows Subsystem for Linux could not be turned on.' + #13#10#13#10
@@ -1127,7 +1638,7 @@ begin
     end;
     WslPending := True;
     NeedsRestart := True;
-    MsgBox('Windows needs to restart to finish switching on the Linux subsystem.'
+    if not WizardSilent then MsgBox('Windows needs to restart to finish switching on the Linux subsystem.'
       + #13#10#13#10 + 'Setup registered one owner-only automatic continuation. '
       + 'If Windows blocks it, use Continue LanEx Setup in your Start menu. '
       + 'Your component and PDK choices are already saved.', mbInformation, MB_OK);
@@ -1150,23 +1661,44 @@ begin
 
   if PreflightDecision = 'wsl-update-required' then
   begin
-    if MsgBox('LanEx needs a newer WSL runtime for systemd and desktop tools.'
+    if WizardSilent and (ExpandConstant('{param:ALLOWWSLUPDATE|0}') <> '1') then
+    begin
+      Result := 'WSL update required. Silent setup will not change the machine-wide '
+        + 'WSL runtime without /ALLOWWSLUPDATE=1.';
+      Exit;
+    end;
+    if (not WizardSilent) and (MsgBox('LanEx needs a newer WSL runtime for systemd and desktop tools.'
       + #13#10#13#10 + 'Updating WSL is machine-wide and can briefly affect '
       + 'other WSL work. Save active WSL work before continuing. Setup will '
       + 'not shut down or convert any distribution.' + #13#10#13#10
-      + 'Update WSL now?', mbConfirmation, MB_YESNO) <> IDYES then
+      + 'Update WSL now?', mbConfirmation, MB_YESNO) <> IDYES) then
     begin
       Result := 'WSL update deferred. Your choices and exact installer are saved; '
         + 'choose Continue LanEx Setup from the Start menu when ready.';
       Exit;
     end;
-    SetStatus('Updating Windows Subsystem for Linux...');
-    if not (RunLogged(WslExe, '--update --web-download', Code) and (Code = 0)) and
-       not (RunLogged(WslExe, '--update', Code) and (Code = 0)) then
+    SetPhase(1, 6, 'Updating Windows Subsystem for Linux...');
+    if not (RunLogged(WslExe, '--update --web-download', Code) and (Code = 0)) then
     begin
-      Result := 'Windows could not update WSL. This may be a managed-policy or '
-        + 'network restriction; the existing distributions were not stopped or '
-        + 'changed.' + #13#10#13#10 + LogTail(12);
+      if CancelRequested then
+      begin
+        Result := 'LanEx Setup was cancelled after the current WSL update attempt stopped.';
+        RecordSetupOutcome('cancelled', Result);
+        Exit;
+      end;
+      if not (RunLogged(WslExe, '--update', Code) and (Code = 0)) then
+      begin
+        Result := 'Windows could not update WSL. This may be a managed-policy or '
+          + 'network restriction; the existing distributions were not stopped or '
+          + 'changed.' + #13#10#13#10 + LogTail(12);
+        Exit;
+      end;
+    end;
+    if CancelRequested then
+    begin
+      Result := 'LanEx Setup was cancelled after the current WSL update operation finished safely. '
+        + 'No distribution was stopped or converted.';
+      RecordSetupOutcome('cancelled', Result);
       Exit;
     end;
     if not RunPreflight(Output) then
@@ -1209,8 +1741,15 @@ begin
   begin
     Result := EnsureRootfs;
     if Result <> '' then
+    begin
+      if CancelRequested then
+      begin
+        Result := 'LanEx Setup was cancelled. A partial rootfs transfer was not cached; completed verified downloads remain reusable.';
+        RecordSetupOutcome('cancelled', Result);
+      end;
       Exit;
-    SetStatus('Creating the LanEx environment...');
+    end;
+    SetPhase(3, 6, 'Creating the private LanEx environment...');
     ForceDirectories(DistroDir);
     // --version 2 explicitly: Docker and the GUI viewers need WSL 2, and the
     // user's default version is none of our business.
@@ -1231,6 +1770,13 @@ begin
       Result := 'The LanEx environment was imported, but Setup could not bind its '
         + 'exact Windows registration identity.' + #13#10#13#10 + Output
         + #13#10#13#10 + 'It was left intact for a safe retry.';
+      Exit;
+    end;
+    if CancelRequested then
+    begin
+      Result := 'LanEx Setup was cancelled after safely finishing the environment import. '
+        + 'The owner-bound environment is preserved for Continue/Retry.';
+      RecordSetupOutcome('cancelled', Result);
       Exit;
     end;
   end;
@@ -1263,17 +1809,34 @@ begin
       Exit;
   end;
   MarkAppComplete;
+  BaseProvisionedForEstimate := True;
+
+  // Image and PDK extraction are the largest later phases. Recheck their
+  // destination volume after base apt/pip work has consumed real space.
+  if not CheckSelectionSpace(Output) then
+  begin
+    Result := Output + #13#10#13#10 +
+      'Base setup is preserved. Free space, then choose Retry/Continue; verified caches are reused.';
+    Exit;
+  end;
 
   // 7. Restart ONLY the owner-bound appliance, then run the shared strict
   //    finalizer after systemd and Docker are reachable. The finalizer executes
   //    as the appliance user and exits nonzero until every saved selection is
   //    operational; image/PDK caches and completed work survive Retry.
-  SetStatus('Restarting the private LanEx environment...');
+  SetPhase(5, 6, 'Restarting only the private LanEx environment...');
   if not (RunLogged(WslExe, '--terminate "' + DistroNameValue + '"', Code) and (Code = 0)) then
   begin
     Result := 'Windows could not restart the owner-bound LanEx environment.'
       + #13#10#13#10 + 'No other WSL distribution was stopped.' + #13#10#13#10
       + LogTail(10);
+    Exit;
+  end;
+  if CancelRequested then
+  begin
+    Result := 'LanEx Setup was cancelled after stopping only its owner-bound environment. '
+      + 'Selected-component finalization did not start.';
+    RecordSetupOutcome('cancelled', Result);
     Exit;
   end;
   Result := FinalizeDistro;
@@ -1285,6 +1848,7 @@ begin
       + 'owner-bound completion checkpoint. The appliance and all data were preserved.';
     Exit;
   end;
+  RecordSetupOutcome('ready', 'All selected components passed strict readiness.');
   Worker := ExpandConstant('{tmp}\setup.ps1');
   if not PowerShellCapture('& ' + PSQuote(Worker) + ' -Action ClearResume -StatePath '
       + PSQuote(StateFile), Output) then
@@ -1300,22 +1864,94 @@ begin
   Result := not WslPending;
 end;
 
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Failure: String;
+begin
+  Result := True;
+  if WizardSilent then Exit;
+  if (CurPageID = PdkPage.ID) and not ValidatePdkFamilies(Failure) then
+  begin
+    MsgBox(Failure, mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+  if ((CurPageID = ProfilePage.ID) and (ProfilePage.SelectedValueIndex <> 1)) or
+     (CurPageID = LibraryPage.ID) then
+  begin
+    if not PlanSelections(BuildChoicesJson, '', Failure) then
+    begin
+      MsgBox('Those selections cannot be installed:' + #13#10#13#10 + Failure,
+        mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+    if not CheckSelectionSpace(Failure) then
+    begin
+      MsgBox(Failure + #13#10#13#10 +
+        'Completed verified downloads are reused. Free space, then click Next again.',
+        mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+    EstimatePage.MsgLabel.Caption :=
+      'Estimated network download: about ' + IntToStr(EstimateDownloadMB div 1024) + ' GB' + #13#10 +
+      'Estimated installed components: about ' + IntToStr(EstimateInstalledMB div 1024) + ' GB' + #13#10 +
+      'Recommended free space on the LanEx data drive: about ' + IntToStr(RequiredAppMB div 1024) + ' GB' + #13#10 +
+      'Temporary space while the rootfs is copied: about ' + IntToStr(RequiredTempMB) + ' MB' + #13#10#13#10 +
+      'The estimate includes extraction space and practical design-run headroom. '
+      + 'Completed rootfs files, image layers and validated PDK data are reused. '
+      + 'A partial rootfs download restarts from the beginning; Setup does not claim range resume.';
+  end;
+end;
+
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   // The self-resuming run after the restart goes straight to the progress page:
   // the user already accepted the licence and chose their options.
-  Result := IsContinuationRun and
-            ((PageID = wpWelcome) or (PageID = wpLicense) or (PageID = wpSelectTasks));
+  Result := (IsContinuationRun and
+            ((PageID = wpWelcome) or (PageID = wpLicense) or
+             (PageID = wpSelectTasks) or (PageID = ProfilePage.ID) or
+             (PageID = EnginePage.ID) or (PageID = ComponentPage.ID) or
+             (PageID = PdkPage.ID) or (PageID = LibraryPage.ID) or
+             (PageID = EstimatePage.ID))) or
+            ((PageID = EnginePage.ID) or (PageID = ComponentPage.ID) or
+             (PageID = PdkPage.ID) or (PageID = LibraryPage.ID)) and
+             (ProfilePage.SelectedValueIndex <> 1);
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
+  if LiveLogMemo <> nil then
+  begin
+    LiveLogMemo.Visible := CurPageID = wpPreparing;
+    OpenLogButton.Visible := CurPageID = wpPreparing;
+    CopyLogButton.Visible := CurPageID = wpPreparing;
+    SaveLogButton.Visible := CurPageID = wpPreparing;
+  end;
   if (CurPageID = wpFinished) and not WslPending then
     // Setup now closes selected readiness before presenting Finish; the Tools
     // page remains available for later additions/removal and diagnostics.
     WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10
       + 'Your selected tools, container image, and PDK libraries were installed '
       + 'and passed LanEx''s setup readiness checks.';
+end;
+
+procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
+var
+  Code: Integer;
+begin
+  if ((CurPageID = wpPreparing) or (CurPageID = wpInstalling)) and
+     (DistroNameValue <> '') and not CancelRequested then
+  begin
+    CancelRequested := True;
+    Cancel := False;
+    Confirm := False;
+    SetStatus('Stopping safely... the current package database operation will finish first.');
+    LogLine('cancellation requested by user');
+    Exec(WslExe, '-d "' + DistroNameValue + '" -u root -- sh -c "mkdir -p /run/lanex; touch /run/lanex/setup.cancel"',
+      '', SW_HIDE, ewWaitUntilTerminated, Code);
+  end;
 end;
 
 // ------------------------------------------------------------------ uninstall --

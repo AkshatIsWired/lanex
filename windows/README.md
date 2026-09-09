@@ -31,6 +31,17 @@ user even when another administrator supplies UAC credentials. Restart uses a
 verified HKCU RunOnce entry plus a manual **Continue LanEx Setup** shortcut and
 is bounded by install-state boot identity/counters.
 
+The M5 wizard offers recommended, custom, and deliberate minimal profiles.
+Recommended closes every default capability before Launch; custom exposes both
+engines, all catalogued PDK variants, and advanced libraries. The same
+manifest-bound planner validates `/PROFILE` or `/SELECTIONS` unattended input
+and calculates separate download, installed, extraction, run-headroom,
+AppData-volume, and temp-volume estimates. Slow WSL commands stream into a
+bounded expandable log with elapsed phase progress and diagnostics actions.
+Cancellation writes only `/run/lanex/setup.cancel` in the owned appliance; the
+base recipe checks it between safe boundaries and the Python finalizer cancels
+only its active child process group.
+
 ## Building locally
 
 You need Go 1.21+, [Inno Setup 6.3+](https://jrsoftware.org/isdl.php), and (for

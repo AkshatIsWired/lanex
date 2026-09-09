@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -317,6 +318,44 @@ def test_finalizer_waits_for_synchronous_pdk_result(
     assert report["installFailures"][0]["component"] == "pdk:sky130A"
 
 
+def test_finalizer_cancel_file_stops_current_job_and_no_later_component(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()),
+        choices={"profile": "custom", "engine": "none", "image": False,
+                 "pdks": [], "libraries": {}, "nativeTools": ["iverilog", "graphviz"]},
+    )
+    initial = {"schema": 1, "ready": False,
+               "checks": {"native:iverilog": {"ready": False},
+                          "native:graphviz": {"ready": False}}}
+    monkeypatch.setattr(provisioning, "readiness_report", lambda *a, **k: initial)
+    cancel_file = tmp_path / "setup.cancel"
+    monkeypatch.setenv("LANEX_SETUP_CANCEL_FILE", str(cancel_file))
+    cancelled = []
+
+    def cancel(key: str) -> dict:
+        cancelled.append(key)
+        return {"ok": True, "status": "cancelling"}
+
+    def install(key: str) -> dict:
+        assert key == "iverilog"
+        cancel_file.touch()
+        for _ in range(100):
+            if cancelled:
+                return {"ok": False, "cancelled": True}
+            time.sleep(0.01)
+        raise AssertionError("cancel watcher did not stop the active component")
+
+    monkeypatch.setattr(installer, "cancel_install", cancel)
+    monkeypatch.setattr(installer, "install_tool", install)
+    report = provisioning.finalize(plan)
+    assert cancelled == ["iverilog"]
+    assert report["cancelled"] is True
+    assert report["ready"] is False
+    assert "graphviz" not in capsys.readouterr().out
+
+
 def test_shell_and_setup_sequence_base_restart_finalize() -> None:
     repo = Path(__file__).resolve().parents[2]
     provision = (repo / "windows/provision/provision.sh").read_text()
@@ -329,3 +368,7 @@ def test_shell_and_setup_sequence_base_restart_finalize() -> None:
     assert 'bash "' + "' + LinuxPath + '" + '" base' in inno
     assert inno.index("--terminate") < inno.index("Result := FinalizeDistro")
     assert "wsl --shutdown" not in inno
+    assert 'CANCEL_FILE="${LANEX_SETUP_CANCEL_FILE:-/run/lanex/setup.cancel}"' in provision
+    base = provision[provision.index('say "Provisioning the LanEx environment'):
+                     provision.index('say "LanEx base provisioning is complete')]
+    assert base.count("check_cancel") >= 7

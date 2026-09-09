@@ -12,7 +12,7 @@ Windows PowerShell 5.1 is the compatibility floor.
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('NewManifest', 'InitializeState', 'ResolveAppliance', 'BindAppliance', 'SetComponent', 'ReadState',
-        'Preflight', 'EnableFeatures', 'StageInstaller', 'RegisterResume', 'ClearResume', 'PlanChoices')]
+        'Preflight', 'EnableFeatures', 'StageInstaller', 'RegisterResume', 'ClearResume', 'PlanChoices', 'RecordOutcome')]
     [string]$Action,
     [string]$StatePath,
     [string]$ManifestPath,
@@ -29,6 +29,9 @@ param(
     [string]$ComponentStatus = 'pending',
     [string]$InputFingerprint,
     [string]$Phase,
+    [ValidateSet('ready', 'failed', 'cancelled', 'restart-required')]
+    [string]$Outcome,
+    [string]$OutcomeMessage,
     [string]$OutputPath,
     [string]$SourceRepository = 'AkshatIsWired/lanex',
     [string]$SourceRef = 'main',
@@ -325,7 +328,7 @@ function ConvertTo-NormalizedChoices($Manifest, $RawChoices) {
     }
 }
 
-function Get-SelectionEstimate($Manifest, $Choices) {
+function Get-SelectionEstimate($Manifest, $Choices, $ExistingState = $null) {
     # Planning estimates, never download promises. Base/rootfs/image values are
     # measured in the documented 2026 reference run; PDK sizes come from the
     # locked Ciel catalog and receive extraction/cache headroom.
@@ -344,16 +347,42 @@ function Get-SelectionEstimate($Manifest, $Choices) {
     }
     $pdkInstalled = [int64]([math]::Ceiling($pdkNetwork * 1.6))
     $runHeadroom = if ($Choices.image) { 4 * $gib } else { 1 * $gib }
+    $download = $rootfs + $baseNetwork + $nativeNetwork + $imageNetwork + $pdkNetwork
+    $installed = $baseInstalled + $nativeInstalled + $imageInstalled + $pdkInstalled
+    $appDataRequired = $rootfs + $installed + $runHeadroom
+    $tempRequired = $rootfs
+    $reused = [int64]0
+    if ($null -ne $ExistingState -and $null -ne $ExistingState.components) {
+        if ([string]$ExistingState.components.app.status -eq 'complete') {
+            $reused += $rootfs + $baseInstalled
+            $appDataRequired -= $rootfs + $baseInstalled
+            $tempRequired = 0
+            $download -= $rootfs + $baseNetwork
+        }
+        if ([string]$ExistingState.components.image.status -eq 'complete' -and $Choices.image) {
+            $reused += $imageInstalled
+            $appDataRequired -= $imageInstalled
+            $download -= $imageNetwork
+        }
+        if ([string]$ExistingState.components.pdks.status -eq 'complete' -and @($Choices.pdks).Count -gt 0) {
+            $reused += $pdkInstalled
+            $appDataRequired -= $pdkInstalled
+            $download -= $pdkNetwork
+        }
+    }
+    if ($download -lt 0) { $download = [int64]0 }
+    if ($appDataRequired -lt $runHeadroom) { $appDataRequired = [int64]$runHeadroom }
     return [pscustomobject][ordered]@{
         schema = 1
         measuredBasis = '2026 reference run plus locked catalog approximations'
-        downloadBytes = $rootfs + $baseNetwork + $nativeNetwork + $imageNetwork + $pdkNetwork
-        installedBytes = $baseInstalled + $nativeInstalled + $imageInstalled + $pdkInstalled
+        downloadBytes = [int64]$download
+        installedBytes = $installed
+        reusedInstalledBytes = $reused
         extractionHeadroomBytes = [int64]([math]::Ceiling(($imageNetwork + $pdkNetwork) * 0.35))
         practicalRunHeadroomBytes = $runHeadroom
         volumes = [pscustomobject][ordered]@{
-            appDataRequiredBytes = $rootfs + $baseInstalled + $nativeInstalled + $imageInstalled + $pdkInstalled + $runHeadroom
-            tempRequiredBytes = $rootfs
+            appDataRequiredBytes = [int64]$appDataRequired
+            tempRequiredBytes = [int64]$tempRequired
         }
         notes = @(
             'Completed rootfs, image layers and validated PDK data are reusable.',
@@ -371,10 +400,12 @@ function Get-PlannedChoices {
     } else {
         try { $ChoicesJson | ConvertFrom-Json } catch { throw 'ChoicesJson is malformed.' }
     }
+    $stateWrapper = $raw
     if ($raw.PSObject.Properties['choices']) { $raw = $raw.choices }
     $choices = ConvertTo-NormalizedChoices $manifest $raw
     return [pscustomobject][ordered]@{
-        schema = 1; choices = $choices; estimates = Get-SelectionEstimate $manifest $choices
+        schema = 1; choices = $choices
+        estimates = Get-SelectionEstimate $manifest $choices $stateWrapper
     }
 }
 
@@ -905,6 +936,24 @@ function Set-ComponentState {
     return $record
 }
 
+function Set-SetupOutcome {
+    if (-not $Outcome) { throw 'RecordOutcome requires Outcome.' }
+    $state = Migrate-State (Read-JsonFile $StatePath 'Install state')
+    Assert-StateOwner $state (Get-OwnerSid)
+    $state.phase = $Outcome
+    if ($Outcome -eq 'ready') {
+        $state.failure = $null
+    } else {
+        $state.failure = [pscustomobject][ordered]@{
+            kind = $Outcome
+            message = [string]$OutcomeMessage
+            recordedUtc = [DateTime]::UtcNow.ToString('o')
+        }
+    }
+    Write-AtomicJson $StatePath $state
+    return $state
+}
+
 $result = switch ($Action) {
     'NewManifest' { New-BuildManifest }
     'InitializeState' { Initialize-State }
@@ -917,6 +966,7 @@ $result = switch ($Action) {
     'RegisterResume' { Register-OwnerResume }
     'ClearResume' { Clear-OwnerResume }
     'PlanChoices' { Get-PlannedChoices }
+    'RecordOutcome' { Set-SetupOutcome }
     'ReadState' {
         $s = Migrate-State (Read-JsonFile $StatePath 'Install state')
         Assert-StateOwner $s (Get-OwnerSid)
