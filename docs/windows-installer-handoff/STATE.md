@@ -1,7 +1,7 @@
 # LanEx installer checkpoint
 
 Date: 2026-09-09
-Stage: M0-M4 complete; M5 selection/estimate foundation started.
+Stage: M0-M5 implementation complete; M6 is next.
 Canonical pack: `C:\Users\itsva\lanex\docs\windows-installer-handoff`.
 Repo: `C:\Users\itsva\lanex`
 Branch: `windows-installer-support`
@@ -11,6 +11,7 @@ M2 implementation: `39dd4c439d319ce9a37c9f5aaa0262b6f2567ab2`
 M3 implementation: `bfc1ad3`, `eebc69e`
 M4 implementation: `4aa748d`, `2f79507`, `04a8991`
 M5 foundation: `c87fafc`
+M5 implementation: `3bc4498`
 Git status before this checkpoint commit: only M5 evidence/checkpoint docs;
 generated wheel/manifest/pins/EXEs and task-work evidence are ignored/outside repo.
 
@@ -31,7 +32,7 @@ generated wheel/manifest/pins/EXEs and task-work evidence are ignored/outside re
 - Base provisioning and strict selected-component finalization are separate.
   Setup terminates only its owner-bound appliance between them.
 
-## Completed M0-M4 / M5 progress
+## Completed M0-M5
 
 - M0 adopted the handoff, protected existing distros, fixed the stale sudo test,
   added branch CI, and established isolated Linux/Windows baselines.
@@ -44,10 +45,10 @@ generated wheel/manifest/pins/EXEs and task-work evidence are ignored/outside re
 - M4 classifies network/package failures, preserves WSL DNS/VPN/proxy strategy,
   applies bounded apt/dpkg recovery, and defers the Windows app window until the
   strict health endpoint is reachable.
-- M5 now has a manifest-bound recommended/custom/minimal selection contract,
-  selection-file validation, dependency/family/library rejection, measured
-  download/install/extraction/run estimates, and matching minimal finalization
-  semantics. Wizard/progress/cancel/diagnostics work remains unfinished.
+- M5 adds recommended/custom/minimal wizard choices, all catalogued PDK variants
+  and advanced libraries, cache-aware per-volume estimates/rechecks, bounded
+  live logs/elapsed phases/diagnostics, cooperative scoped cancellation,
+  readiness-derived Finish, durable outcomes, and documented silent inputs.
 - Details/evidence: `M0-BASELINE.md`, `M1-IDENTITY.md`, `M2-PREFLIGHT.md`,
   `M3-COMPONENTS.md`, `M4-NETWORK.md`, `M5-PROGRESS.md`.
 
@@ -64,24 +65,26 @@ Evidence: `C:\Users\itsva\Documents\Codex\2026-09-09\from-m0-to-m3-is-done\work\
   unrelated host-contamination failures from pre-existing PDK/GDS3D state. It
   is not claimed as a clean full-suite pass; M3's isolated full baseline stands.
 
-## Verified M5 foundation evidence
+## Verified M5 evidence
 
-- Windows selection/provision/network suite: **74 passed**.
-- Inno Setup 6 compiled with current setup-worker hash and exact source define.
-  This was compile proof only, not an installed or test-ready M5 candidate.
+- Windows selection/provision/network suite: **79 passed**; Git Bash syntax and
+  Inno compile passed. A broader run was 112 passed / one known missing-LibreLane
+  environment failure, not an M5 regression.
+- Exact proof source: `3bc44989126e86aded87196b450e1a4821f4034e`.
+- Setup SHA256: `bd5468d9bc4570aab47fdcd1ab0b423a305871bcd6625ac3666d6621ad8dac6f`.
 - Recommended resolves to Docker + image + five native tools + sky130A/all;
   minimal resolves to no engine/image/native tools/PDKs. Invalid dependency,
   family and library combinations fail before WSL mutation.
 
 ## Current / next action
 
-Continue M5 in `lanex.iss`: consume the planner from interactive and documented
-silent selection inputs, display/recheck per-volume estimates, then implement
-bounded live progress, diagnostics, cooperative cancellation and U13 fixtures.
+Start M6 launcher/upgrade/uninstall safety. Preserve M1 ownership, M5 choices,
+state outcomes and the scoped cancel contract. Do not install this proof EXE on
+the development PC; M8 produces the Akshat tester candidate.
 
 ## Outstanding acceptance / protected resources
 
-- M5 UI/protocol and M6-M8 pending. No Setup installed; no real WSL import/provision/finalize,
+- M6-M8 pending. No Setup installed; no real WSL import/provision/finalize,
   Docker/Podman daemon mutation, PDK/image download, WSLg/GUI, restart, UAC split,
   offline, uninstall/data-removal, or RTL-to-GDS case ran for this candidate.
 - Real EXE legs require a disposable Windows VM/Akshat machine. Reboot,
