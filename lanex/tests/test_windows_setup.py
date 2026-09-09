@@ -668,6 +668,7 @@ def test_uninstall_unregister_failure_preserves_vhdx_state_and_profile(tmp_path:
         "-Action", "RemoveAppliance", "-StatePath", state,
         "-RegistrySnapshotPath", registry, "-LinuxMarkerFixturePath", marker,
         "-TestWslFixturePath", wsl, "-OwnedDataRoot", data,
+        "-TestResumeRoot", data / "resume-fixture",
         "-ConfirmedInstallId", saved["installId"], "-TestOwnerSid", OWNER, ok=False,
     )
     assert "VHDX, state, caches, and logs were preserved" in failed.stderr
@@ -690,6 +691,7 @@ def test_explicit_owned_removal_preserves_generic_profile(tmp_path: Path) -> Non
         "-Action", "RemoveAppliance", "-StatePath", state,
         "-RegistrySnapshotPath", registry, "-LinuxMarkerFixturePath", marker,
         "-TestWslFixturePath", wsl, "-OwnedDataRoot", data,
+        "-TestResumeRoot", data / "resume-fixture",
         "-ConfirmedInstallId", saved["installId"], "-TestOwnerSid", OWNER,
     )
     assert result["removed"] is True
