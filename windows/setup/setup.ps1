@@ -12,7 +12,8 @@ Windows PowerShell 5.1 is the compatibility floor.
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('NewManifest', 'InitializeState', 'ResolveAppliance', 'BindAppliance', 'SetComponent', 'ReadState',
-        'Preflight', 'EnableFeatures', 'StageInstaller', 'RegisterResume', 'ClearResume', 'PlanChoices', 'RecordOutcome')]
+        'Preflight', 'EnableFeatures', 'StageInstaller', 'RegisterResume', 'ClearResume', 'PlanChoices', 'RecordOutcome',
+        'ValidateUninstall', 'ExportAppliance', 'RemoveAppliance', 'CommitUpdate', 'RollbackUpdate')]
     [string]$Action,
     [string]$StatePath,
     [string]$ManifestPath,
@@ -63,7 +64,12 @@ param(
     [string]$TestResumeRoot,
     [string]$ExpectedSelfSha256,
     [string]$TestOwnerSid,
-    [string]$TestInstallId
+    [string]$TestInstallId,
+    [string]$LinuxMarkerFixturePath,
+    [string]$TestWslFixturePath,
+    [string]$ExportPath,
+    [string]$ConfirmedInstallId,
+    [string]$OwnedDataRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -727,7 +733,9 @@ function Clear-OwnerResume {
         Remove-Item -LiteralPath $paths.trigger -Force -ErrorAction SilentlyContinue
     } else {
         $expected = '"' + [string]$state.resume.installerPath + '" /RESUME=1 /SP-'
-        $actual = [string](Get-ItemPropertyValue -LiteralPath $paths.trigger -Name 'LanExSetupResume' -ErrorAction SilentlyContinue)
+        try {
+            $actual = [string](Get-ItemPropertyValue -LiteralPath $paths.trigger -Name 'LanExSetupResume' -ErrorAction Stop)
+        } catch { $actual = '' }
         if ($actual -eq $expected) {
             Remove-ItemProperty -LiteralPath $paths.trigger -Name 'LanExSetupResume' -ErrorAction SilentlyContinue
         }
@@ -739,6 +747,122 @@ function Clear-OwnerResume {
     $state.phase = 'resume-cleared'
     Write-AtomicJson $StatePath $state
     return $state
+}
+
+function Get-TestWslFixture {
+    if (-not $TestWslFixturePath) { return $null }
+    if ($env:LANEX_SETUP_TESTING -ne '1') { throw 'TestWslFixturePath is accepted only by the test harness.' }
+    return Read-JsonFile $TestWslFixturePath 'WSL fixture'
+}
+
+function Read-OwnedLinuxMarker($State) {
+    if ($LinuxMarkerFixturePath) {
+        if ($env:LANEX_SETUP_TESTING -ne '1') { throw 'LinuxMarkerFixturePath is accepted only by the test harness.' }
+        return Read-JsonFile $LinuxMarkerFixturePath 'Linux appliance marker'
+    }
+    $wsl = Join-Path $env:SystemRoot 'System32\wsl.exe'
+    $output = @(& $wsl '-d' ([string]$State.appliance.name) '-u' 'root' '--' 'cat' ([string]$State.appliance.linuxMarker) 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "Could not read the owned Linux appliance marker: $($output -join [Environment]::NewLine)" }
+    try { return (($output -join [Environment]::NewLine) | ConvertFrom-Json) }
+    catch { throw "Linux appliance marker is malformed JSON: $($_.Exception.Message)" }
+}
+
+function Validate-UninstallOwnership {
+    $state = Migrate-State (Read-JsonFile $StatePath 'Install state')
+    Assert-StateOwner $state (Get-OwnerSid)
+    if (-not $state.appliance.registryId -or -not $state.appliance.name -or -not $state.appliance.basePath) {
+        throw 'Saved appliance identity is incomplete; no distribution was changed.'
+    }
+    $matches = @(Get-RegistryEntries | Where-Object {
+        [string]$_.registryId -eq [string]$state.appliance.registryId -and
+        [string]::Equals([string]$_.name, [string]$state.appliance.name, [StringComparison]::OrdinalIgnoreCase) -and
+        (Normalize-Path ([string]$_.basePath)) -eq (Normalize-Path ([string]$state.appliance.basePath))
+    })
+    if ($matches.Count -ne 1) { throw 'The exact saved WSL registration identity/path does not match; no distribution was changed.' }
+    $marker = Read-OwnedLinuxMarker $state
+    if ([int]$marker.schema -ne 1 -or [string]$marker.installId -ne [string]$state.installId -or
+            [string]$marker.manifestHash -ne [string]$state.manifestHash -or
+            [string]$marker.sourceSha -ne [string]$state.source.sha) {
+        throw 'The Linux appliance marker does not match the saved owner/build identity; no distribution was changed.'
+    }
+    return $state
+}
+
+function Export-OwnedAppliance {
+    $state = Validate-UninstallOwnership
+    if ([string]::IsNullOrWhiteSpace($ExportPath)) { throw 'ExportAppliance requires an export path.' }
+    $destination = [IO.Path]::GetFullPath($ExportPath)
+    if (Test-Path -LiteralPath $destination) { throw 'The export destination already exists.' }
+    $parent = Split-Path -Parent $destination
+    if (-not (Test-Path -LiteralPath $parent -PathType Container)) { throw 'The export destination folder does not exist.' }
+    $fixture = Get-TestWslFixture
+    if ($null -ne $fixture) {
+        $exitCode = [int]$fixture.exportExitCode
+        if ($exitCode -eq 0) { [IO.File]::WriteAllBytes($destination, [byte[]](1, 2, 3, 4)) }
+    } else {
+        $wsl = Join-Path $env:SystemRoot 'System32\wsl.exe'
+        & $wsl '--export' ([string]$state.appliance.name) $destination
+        $exitCode = $LASTEXITCODE
+    }
+    if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $destination -PathType Leaf) -or
+            (Get-Item -LiteralPath $destination).Length -le 0) {
+        Remove-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
+        throw 'WSL export did not complete. The appliance and all data were preserved.'
+    }
+    return [pscustomobject][ordered]@{ schema = 1; exported = $true; path = $destination; installId = [string]$state.installId; distroName = [string]$state.appliance.name }
+}
+
+function Remove-OwnedAppliance {
+    $state = Validate-UninstallOwnership
+    $originalPhase = [string]$state.phase
+    if (-not $ConfirmedInstallId -or [string]$state.installId -ne $ConfirmedInstallId) {
+        throw 'Permanent removal confirmation does not match this install; no distribution was changed.'
+    }
+    if (-not $OwnedDataRoot) { throw 'RemoveAppliance requires the owned data root.' }
+    $root = Normalize-Path $OwnedDataRoot
+    $stateFull = Normalize-Path $StatePath
+    $base = Normalize-Path ([string]$state.appliance.basePath)
+    if (-not $root -or -not $stateFull.StartsWith($root + '\') -or -not $base.StartsWith($root + '\')) {
+        throw 'Owned paths are outside the expected LanEx data root; no distribution was changed.'
+    }
+    [void](Clear-OwnerResume)
+    $fixture = Get-TestWslFixture
+    if ($null -ne $fixture) {
+        $exitCode = [int]$fixture.unregisterExitCode
+    } else {
+        $wsl = Join-Path $env:SystemRoot 'System32\wsl.exe'
+        & $wsl '--terminate' ([string]$state.appliance.name) | Out-Null
+        & $wsl '--unregister' ([string]$state.appliance.name)
+        $exitCode = $LASTEXITCODE
+    }
+    if ($exitCode -ne 0) {
+        $preserved = Migrate-State (Read-JsonFile $StatePath 'Install state')
+        $preserved.phase = $originalPhase
+        Write-AtomicJson $StatePath $preserved
+        throw 'WSL could not unregister the verified LanEx appliance. Its VHDX, state, caches, and logs were preserved.'
+    }
+    if ($null -eq $fixture) {
+        $remaining = @(Get-RegistryEntries | Where-Object { [string]$_.registryId -eq [string]$state.appliance.registryId })
+        if ($remaining.Count -ne 0) {
+            $preserved = Migrate-State (Read-JsonFile $StatePath 'Install state')
+            $preserved.phase = $originalPhase
+            Write-AtomicJson $StatePath $preserved
+            throw 'Windows still reports the LanEx appliance as registered. Its files were preserved.'
+        }
+    }
+    # The historical browser profile is %LOCALAPPDATA%\lanex\app-profile,
+    # which aliases this root on case-insensitive Windows. Remove only paths
+    # created for this install ID; never recurse over the shared root.
+    foreach ($ownedPath in @(
+            ([IO.Path]::GetFullPath([string]$state.appliance.basePath)),
+            (Join-Path ([IO.Path]::GetFullPath($OwnedDataRoot)) 'installer-cache'),
+            (Join-Path ([IO.Path]::GetFullPath($OwnedDataRoot)) 'logs'),
+            (Join-Path ([IO.Path]::GetFullPath($OwnedDataRoot)) ('app-profile\' + [string]$state.installId)),
+            ([IO.Path]::GetFullPath($StatePath)))) {
+        Remove-Item -LiteralPath $ownedPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath (Join-Path ([IO.Path]::GetFullPath($OwnedDataRoot)) 'appliance') -Force -ErrorAction SilentlyContinue
+    return [pscustomobject][ordered]@{ schema = 1; removed = $true; installId = [string]$state.installId; distroName = [string]$state.appliance.name }
 }
 
 function Reset-ChangedComponents($State, $Manifest) {
@@ -843,6 +967,17 @@ function Initialize-State {
             throw 'Repair cannot change build identity. Run the matching Setup or choose an explicit Update.'
         }
         if ($Operation -eq 'update' -and [string]$state.manifestHash -ne $manifestHash) {
+            if (-not $state.PSObject.Properties['previousBuild']) {
+                $snapshot = [pscustomobject][ordered]@{
+                    manifestHash = [string]$state.manifestHash
+                    source = $state.source
+                    choices = $state.choices
+                    components = $state.components
+                    phase = [string]$state.phase
+                }
+                $snapshot = ($snapshot | ConvertTo-Json -Depth 100 | ConvertFrom-Json)
+                Add-OrSet $state 'previousBuild' $snapshot
+            }
             Reset-ChangedComponents $state $manifest
             $state.manifestHash = $manifestHash
             $state.source = $manifest.source
@@ -954,6 +1089,27 @@ function Set-SetupOutcome {
     return $state
 }
 
+function Complete-Update([bool]$Rollback) {
+    $state = Migrate-State (Read-JsonFile $StatePath 'Install state')
+    Assert-StateOwner $state (Get-OwnerSid)
+    if (-not $state.PSObject.Properties['previousBuild']) {
+        throw 'There is no pending update checkpoint.'
+    }
+    if ($Rollback) {
+        $previous = $state.previousBuild
+        $state.manifestHash = [string]$previous.manifestHash
+        $state.source = $previous.source
+        $state.choices = $previous.choices
+        $state.components = $previous.components
+        $state.phase = [string]$previous.phase
+        $state.operation = 'repair'
+        $state.failure = $null
+    }
+    $state.PSObject.Properties.Remove('previousBuild')
+    Write-AtomicJson $StatePath $state
+    return $state
+}
+
 $result = switch ($Action) {
     'NewManifest' { New-BuildManifest }
     'InitializeState' { Initialize-State }
@@ -967,6 +1123,11 @@ $result = switch ($Action) {
     'ClearResume' { Clear-OwnerResume }
     'PlanChoices' { Get-PlannedChoices }
     'RecordOutcome' { Set-SetupOutcome }
+    'ValidateUninstall' { Validate-UninstallOwnership }
+    'ExportAppliance' { Export-OwnedAppliance }
+    'RemoveAppliance' { Remove-OwnedAppliance }
+    'CommitUpdate' { Complete-Update $false }
+    'RollbackUpdate' { Complete-Update $true }
     'ReadState' {
         $s = Migrate-State (Read-JsonFile $StatePath 'Install state')
         Assert-StateOwner $s (Get-OwnerSid)

@@ -64,6 +64,9 @@ func TestDecodeConsoleUnicode(t *testing.T) {
 }
 
 func TestStartServerDefersWindowUntilWindowsHealth(t *testing.T) {
+	activeConfig = applianceConfig{InstallID: "11111111-2222-3333-4444-555555555555",
+		SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Manifest:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 	args := startServerArgs()
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "exec lanex --no-browser") {
@@ -71,6 +74,9 @@ func TestStartServerDefersWindowUntilWindowsHealth(t *testing.T) {
 	}
 	if strings.Contains(joined, "--tab") {
 		t.Fatalf("server command must not open a fallback browser tab: %q", args)
+	}
+	if !strings.Contains(joined, "-u lanex") || !strings.Contains(joined, "LANEX_INSTANCE_ID=") {
+		t.Fatalf("server is not bound to the appliance user and identity: %q", args)
 	}
 }
 

@@ -56,6 +56,8 @@ CANCEL_FILE="${LANEX_SETUP_CANCEL_FILE:-/run/lanex/setup.cancel}"
 # deferred until the imported appliance has rebooted with systemd and its Docker
 # daemon is usable.  Bare and baked images therefore execute the same finalizer.
 SKIP_GDS3D=1
+UPDATE_MODE="${LANEX_UPDATE_MODE:-0}"
+UPDATE_ROLLBACK_ROOT="/var/lib/lanex/update-rollback/${LANEX_INSTALL_ID:-unknown}"
 
 say()  {
     local message="${*//\"/\'}"
@@ -408,6 +410,47 @@ podman_engine() {
 }
 
 # ----------------------------------------------------------------- 6. lanex --
+prepare_update_rollback() {
+    [ "$UPDATE_MODE" = "1" ] || return 0
+    [ -f "$UPDATE_ROLLBACK_ROOT/app.tar" ] && return 0
+    mkdir -p "$UPDATE_ROLLBACK_ROOT" || die "could not stage the app update rollback."
+    : > "$UPDATE_ROLLBACK_ROOT/paths"
+    local relative
+    for relative in \
+        "home/${APP_USER}/.local/share/pipx/venvs/lanex" \
+        "home/${APP_USER}/.local/pipx/venvs/lanex" \
+        "home/${APP_USER}/.lanex/venv" \
+        "home/${APP_USER}/.local/bin/lanex" \
+        "usr/local/bin/lanex" \
+        "etc/lanex/appliance.json"; do
+        [ -e "/$relative" ] || [ -L "/$relative" ] || continue
+        printf '%s\n' "$relative" >> "$UPDATE_ROLLBACK_ROOT/paths"
+    done
+    [ -s "$UPDATE_ROLLBACK_ROOT/paths" ] \
+        || die "the existing LanEx app environment could not be located for rollback."
+    tar -C / -cpf "$UPDATE_ROLLBACK_ROOT/app.tar" -T "$UPDATE_ROLLBACK_ROOT/paths" \
+        || die "could not snapshot the existing LanEx app before update."
+    note "previous LanEx app environment saved for rollback."
+}
+
+rollback_update() {
+    [ -s "$UPDATE_ROLLBACK_ROOT/app.tar" ] \
+        || die "the previous app rollback archive is missing; data was left untouched."
+    rm -rf "/home/${APP_USER}/.local/share/pipx/venvs/lanex" \
+        "/home/${APP_USER}/.local/pipx/venvs/lanex" \
+        "/home/${APP_USER}/.lanex/venv"
+    rm -f "/home/${APP_USER}/.local/bin/lanex" /usr/local/bin/lanex /etc/lanex/appliance.json
+    tar -C / -xpf "$UPDATE_ROLLBACK_ROOT/app.tar" \
+        || die "the previous LanEx app environment could not be restored from its rollback archive."
+    chown -R "$APP_USER:$APP_USER" "/home/${APP_USER}/.local" "/home/${APP_USER}/.lanex" 2>/dev/null || true
+    note "previous LanEx app environment restored."
+}
+
+commit_update() {
+    rm -rf "$UPDATE_ROLLBACK_ROOT"
+    note "app update rollback checkpoint cleared after strict readiness."
+}
+
 install_lanex() {
     say "LanEx"
     # The repo's own universal installer, in silent mode, as the appliance user.
@@ -461,14 +504,15 @@ install_lanex() {
         chmod 0644 "$constraint"
     fi
 
+    prepare_update_rollback
     runuser -m -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
         LOGNAME="$APP_USER" PATH="/usr/local/bin:/usr/bin:/bin" \
         LANEX_ASSUME_YES=1 LANEX_SKIP_PULL=1 LANEX_SKIP_GDS3D="$SKIP_GDS3D" \
         LANEX_REPO="$REPO" LANEX_REF="$REF" LANEX_FROM="$source" \
         LANEX_PIP_CONSTRAINT="$constraint" bash "$installer" \
-        || die "the LanEx installer did not finish.
+        || { [ "$UPDATE_MODE" = "1" ] && rollback_update; die "the LanEx installer did not finish.
    The log above ends with its own error message.
-   Click Retry — this step is safe to repeat."
+   Click Retry — this step is safe to repeat."; }
 }
 
 write_identity_marker() {
@@ -578,10 +622,12 @@ main() {
     require_root
     local mode="${1:-base}"
     case "$mode" in
-        base|finalize) ;;
+        base|finalize|rollback-update|commit-update) ;;
         *) die "unknown provisioning mode '$mode'." ;;
     esac
     rm -f "$CANCEL_FILE"
+    if [ "$mode" = "rollback-update" ]; then rollback_update; return; fi
+    if [ "$mode" = "commit-update" ]; then commit_update; return; fi
     if [ "$mode" = "finalize" ]; then
         finalize
         return

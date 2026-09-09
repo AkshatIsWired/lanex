@@ -73,6 +73,8 @@ def test_health_ok(server):
     body = json.loads(resp.read())
     assert body["ok"] is True
     assert body["data"]["service"] == "lanex"
+    assert "instanceId" in body["data"]
+    assert "source" in body["data"]
 
 
 def test_about_endpoint(server):

@@ -148,11 +148,13 @@ def _path_within_roots(path: str) -> bool:
 
 def h_health(handler: Any) -> None:
     from ..controller import compat
+    from ..controller.instance_identity import current
     try:
         probe = compat.probe_compat()
     except Exception:  # never let the probe break the health check
         probe = {"ok": True, "issues": []}
-    _respond(handler, {"service": "lanex", "alive": True, "compat": probe})
+    _respond(handler, {"service": "lanex", "alive": True,
+                       **current(), "compat": probe})
 
 
 def h_about(handler: Any) -> None:

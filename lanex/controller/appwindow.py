@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -204,7 +205,7 @@ def find_chromium_candidates() -> List[str]:
             if os.path.isfile(p) and os.access(p, os.X_OK) and p not in out:
                 out.append(p)
         return out
-    if os.name == "nt":  # native Windows (unusual for LanEx, but must not crash)
+    if sys.platform == "win32":  # native Windows (unusual for LanEx, but must not crash)
         for root in (os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
                      os.environ.get("ProgramFiles", r"C:\Program Files")):
             for suffix in _WINDOWS_EXE_SUFFIXES:
@@ -296,7 +297,9 @@ def _windows_app_commands(url: str) -> List[Tuple[List[str], Optional[str]]]:
              *_window_flags()]
     lad = _windows_localappdata()
     if lad:
-        flags.append(f"--user-data-dir={lad}\\lanex\\app-profile")
+        install_id = os.environ.get("LANEX_INSTANCE_ID", "")
+        if re.fullmatch(r"[0-9a-fA-F-]{36}", install_id):
+            flags.append(f"--user-data-dir={lad}\\LanEx\\app-profile\\{install_id}")
 
     # 1) Direct exe via the interop bridge — args pass verbatim, no cmd quoting.
     for root in _WSL_PROGRAM_FILES:

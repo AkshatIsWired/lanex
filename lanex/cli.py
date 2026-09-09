@@ -259,7 +259,9 @@ def _write_server_record(url: str, port: int) -> None:
     try:
         path = _server_record_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        record = {"url": url, "port": port, "pid": os.getpid()}
+        from .controller.instance_identity import current
+
+        record = {"url": url, "port": port, "pid": os.getpid(), **current()}
         # Write-then-rename: a reader polling every 500 ms must never catch a
         # half-written file and conclude LanEx isn't running.
         tmp = path.with_name(path.name + ".tmp")

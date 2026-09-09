@@ -153,7 +153,11 @@ func startServer() (*exec.Cmd, error) {
 }
 
 func startServerArgs() []string {
-	return []string{"-d", distroName, "--", "bash", "-ic",
+	return []string{"-d", distroName, "-u", appUser, "--", "env",
+		"LANEX_INSTANCE_ID=" + activeConfig.InstallID,
+		"LANEX_SOURCE_SHA=" + activeConfig.SourceSHA,
+		"LANEX_MANIFEST_HASH=" + activeConfig.Manifest,
+		"bash", "-ic",
 		"cd ~ 2>/dev/null; exec lanex --no-browser"}
 }
 
@@ -204,7 +208,7 @@ func openAppWindow(port int) error {
 // "lanex" (the app-window profile predates this installer's %LOCALAPPDATA%\LanEx
 // install root, and the uninstaller removes both).
 func appProfileDir() string {
-	return filepath.Join(os.Getenv("LOCALAPPDATA"), "lanex", "app-profile")
+	return filepath.Join(os.Getenv("LOCALAPPDATA"), installDir, "app-profile", activeConfig.InstallID)
 }
 
 // Edge first: it ships with every Windows 10/11, so this practically always

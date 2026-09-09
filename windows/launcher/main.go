@@ -37,10 +37,12 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -51,11 +53,6 @@ const (
 	appName    = "LanEx"
 	installDir = "LanEx" // subdirectory of %LOCALAPPDATA% for logs
 	appUser    = "lanex"
-
-	// Global\ (not Local\) so the instance check spans terminal-server
-	// sessions: two logged-in users each starting LanEx would otherwise both
-	// start a server, and both would fight over port 8765 on the same host.
-	mutexName = `Global\LanExLauncher`
 
 	// First launch after a reboot starts a cold WSL VM: the Linux userspace
 	// boots, systemd brings up the Docker daemon, then Python starts. 90 s is
@@ -78,7 +75,13 @@ const (
 )
 
 func main() {
-	loadApplianceConfig()
+	if err := loadApplianceConfig(); err != nil {
+		logf("launcher ownership/readiness validation failed: %v", err)
+		showError("LanEx is not ready to launch.\n\n" + err.Error() +
+			"\n\nRun the saved LanEx Setup shortcut and choose Continue or Repair. " +
+			"It preserves your projects, PDKs, and other WSL environments.\n\nDetails are in:\n" + logPath())
+		os.Exit(1)
+	}
 	first, err := acquireSingleInstance()
 	if err != nil {
 		// A mutex we could not create must never block a launch — worst case we
@@ -106,8 +109,8 @@ func main() {
 	server, err := startServer()
 	if err != nil {
 		showError(fmt.Sprintf("LanEx could not start its environment.\n\n%v\n\n"+
-			"Try again. If it keeps failing, run  wsl --shutdown  from a Windows "+
-			"terminal, then relaunch LanEx.", err))
+			"Try again. If it keeps failing, run the saved LanEx Setup shortcut and choose Repair. "+
+			"Repair leaves your projects and other WSL environments untouched.", err))
 		os.Exit(1)
 	}
 	runTray(server)
@@ -138,7 +141,7 @@ var instanceMutex windows.Handle
 
 // acquireSingleInstance reports whether this process is the first instance.
 func acquireSingleInstance() (bool, error) {
-	name, err := windows.UTF16PtrFromString(mutexName)
+	name, err := windows.UTF16PtrFromString(scopedMutexName(activeConfig))
 	if err != nil {
 		return true, err
 	}
@@ -155,6 +158,12 @@ func acquireSingleInstance() (bool, error) {
 		return true, fmt.Errorf("CreateMutex: %w", err)
 	}
 	return true, nil
+}
+
+func scopedMutexName(cfg applianceConfig) string {
+	key := strings.ToLower(cfg.OwnerSID + ":" + cfg.InstallID + ":" + cfg.DistroName)
+	sum := sha256.Sum256([]byte(key))
+	return fmt.Sprintf(`Local\LanExLauncher-%x`, sum[:16])
 }
 
 // ------------------------------------------------------------------- dialogs --

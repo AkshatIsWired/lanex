@@ -16,6 +16,7 @@ INSTALL = REPO / "scripts" / "install.sh"
 PROVISION = REPO / "windows" / "provision" / "provision.sh"
 INNO = REPO / "windows" / "installer" / "lanex.iss"
 WORKFLOW = REPO / ".github" / "workflows" / "windows-installer.yml"
+LAUNCHER = REPO / "windows" / "launcher"
 POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
 
 
@@ -168,6 +169,25 @@ def test_repair_rejects_changed_manifest_and_update_invalidates_changed_componen
                          "-InstallerPath", installer, "-TestOwnerSid", OWNER)
     assert updated["components"]["app"]["status"] == "pending"
     assert updated["source"]["sha"] == "b" * 40
+    assert updated["previousBuild"]["source"]["sha"] == "a" * 40
+    rolled_back = _run_setup("-Action", "RollbackUpdate", "-StatePath", state,
+                             "-TestOwnerSid", OWNER)
+    assert rolled_back["source"]["sha"] == "a" * 40
+    assert rolled_back["components"]["app"]["status"] == "complete"
+    assert "previousBuild" not in rolled_back
+
+
+def test_successful_update_commit_keeps_new_identity(tmp_path: Path) -> None:
+    state, _, installer, _ = _initialize(tmp_path)
+    changed = tmp_path / "changed.json"
+    _manifest(changed, sha="b" * 40, app_fp="app-2")
+    _run_setup("-Action", "InitializeState", "-StatePath", state,
+               "-ManifestPath", changed, "-Operation", "update",
+               "-InstallerPath", installer, "-TestOwnerSid", OWNER)
+    committed = _run_setup("-Action", "CommitUpdate", "-StatePath", state,
+                           "-TestOwnerSid", OWNER)
+    assert committed["source"]["sha"] == "b" * 40
+    assert "previousBuild" not in committed
 
 
 def test_interrupted_atomic_write_preserves_previous_state(tmp_path: Path) -> None:
@@ -566,8 +586,130 @@ def test_inno_requires_exact_payload_and_never_deletes_distro_by_name() -> None:
     assert 'Source: "{#LanexWheel}"' in body
     assert "BindAppliance" in body and "VerifyRepairIdentity" in body
     uninstall = body[body.index("procedure CurUninstallStepChanged") :]
-    assert "--unregister" not in uninstall
     assert "DelTree(AppDataRoot" not in uninstall
+    assert "RemoveAppliance" in body and "ConfirmedInstallId" in body
+    assert "Validate-UninstallOwnership" in SETUP.read_text()
+
+
+def _owned_uninstall_fixture(tmp_path: Path):
+    data = tmp_path / "LanEx"
+    data.mkdir()
+    state, _, _, _ = _initialize(data)
+    base = data / "appliance" / "distro"
+    base.mkdir(parents=True)
+    empty_registry = tmp_path / "empty-registry.json"
+    empty_registry.write_text("[]", encoding="utf-8")
+    _run_setup("-Action", "ResolveAppliance", "-StatePath", state,
+               "-ExpectedBasePath", base, "-RegistrySnapshotPath", empty_registry,
+               "-TestOwnerSid", OWNER)
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps([{
+        "registryId": "{OWNED}", "name": "lanex", "basePath": str(base),
+    }]), encoding="utf-8")
+    _run_setup("-Action", "BindAppliance", "-StatePath", state,
+               "-RegistrySnapshotPath", registry, "-TestOwnerSid", OWNER)
+    saved = json.loads(state.read_text())
+    marker = tmp_path / "marker.json"
+    marker.write_text(json.dumps({
+        "schema": 1, "installId": saved["installId"],
+        "manifestHash": saved["manifestHash"], "sourceSha": saved["source"]["sha"],
+    }), encoding="utf-8")
+    return data, state, registry, marker
+
+
+def test_uninstall_export_failure_never_transitions_into_delete(tmp_path: Path) -> None:
+    data, state, registry, marker = _owned_uninstall_fixture(tmp_path)
+    sentinel = data / "appliance" / "distro" / "project-sentinel"
+    sentinel.write_text("keep me")
+    wsl = tmp_path / "wsl.json"
+    wsl.write_text(json.dumps({"exportExitCode": 1, "unregisterExitCode": 0}))
+    export = tmp_path / "backup.tar"
+    failed = _run_setup(
+        "-Action", "ExportAppliance", "-StatePath", state,
+        "-RegistrySnapshotPath", registry, "-LinuxMarkerFixturePath", marker,
+        "-TestWslFixturePath", wsl, "-ExportPath", export,
+        "-TestOwnerSid", OWNER, ok=False,
+    )
+    assert "all data were preserved" in failed.stderr
+    assert sentinel.read_text() == "keep me"
+    assert state.exists() and not export.exists()
+
+
+def test_uninstall_unregister_failure_preserves_vhdx_state_and_profile(tmp_path: Path) -> None:
+    data, state, registry, marker = _owned_uninstall_fixture(tmp_path)
+    saved = json.loads(state.read_text())
+    original_phase = saved["phase"]
+    sentinels = [
+        data / "appliance" / "distro" / "ext4.vhdx",
+        data / "installer-cache" / "payload",
+        data / "app-profile" / saved["installId"] / "Preferences",
+    ]
+    for path in sentinels:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("sentinel")
+    wsl = tmp_path / "wsl.json"
+    wsl.write_text(json.dumps({"exportExitCode": 0, "unregisterExitCode": 1}))
+    failed = _run_setup(
+        "-Action", "RemoveAppliance", "-StatePath", state,
+        "-RegistrySnapshotPath", registry, "-LinuxMarkerFixturePath", marker,
+        "-TestWslFixturePath", wsl, "-OwnedDataRoot", data,
+        "-ConfirmedInstallId", saved["installId"], "-TestOwnerSid", OWNER, ok=False,
+    )
+    assert "VHDX, state, caches, and logs were preserved" in failed.stderr
+    assert all(path.exists() for path in sentinels) and state.exists()
+    assert json.loads(state.read_text())["phase"] == original_phase
+
+
+def test_explicit_owned_removal_preserves_generic_profile(tmp_path: Path) -> None:
+    data, state, registry, marker = _owned_uninstall_fixture(tmp_path)
+    saved = json.loads(state.read_text())
+    generic = data / "app-profile" / "legacy-generic-profile"
+    generic.mkdir(parents=True)
+    (generic / "Preferences").write_text("preserve")
+    owned = data / "app-profile" / saved["installId"]
+    owned.mkdir()
+    (owned / "Preferences").write_text("remove")
+    wsl = tmp_path / "wsl.json"
+    wsl.write_text(json.dumps({"exportExitCode": 0, "unregisterExitCode": 0}))
+    result = _run_setup(
+        "-Action", "RemoveAppliance", "-StatePath", state,
+        "-RegistrySnapshotPath", registry, "-LinuxMarkerFixturePath", marker,
+        "-TestWslFixturePath", wsl, "-OwnedDataRoot", data,
+        "-ConfirmedInstallId", saved["installId"], "-TestOwnerSid", OWNER,
+    )
+    assert result["removed"] is True
+    assert (generic / "Preferences").read_text() == "preserve"
+    assert not owned.exists() and not state.exists()
+
+
+def test_m6_launcher_identity_and_port_takeover_contract() -> None:
+    config = (LAUNCHER / "config.go").read_text()
+    probe = (LAUNCHER / "probe.go").read_text()
+    wsl = (LAUNCHER / "wsl.go").read_text()
+    main = (LAUNCHER / "main.go").read_text()
+    assert "validateOwnedReadyState" in config and "validateOwnedRegistration" in config
+    assert "OwnerSID" in config and "RegistryID" in config and "BasePath" in config
+    assert "InstanceID" in probe and "ManifestHash" in probe
+    assert "bytes.Contains" not in probe and "scanForServer" not in probe
+    assert '"-u", appUser' in wsl and '"LANEX_INSTANCE_ID="' in wsl
+    assert '"home", appUser' in probe
+    assert "scopedMutexName" in main and "Global\\LanExLauncher" not in main
+
+
+def test_m6_update_rollback_and_uninstall_are_narrowly_scoped() -> None:
+    provision = PROVISION.read_text()
+    worker = SETUP.read_text()
+    inno = INNO.read_text()
+    assert "prepare_update_rollback" in provision
+    assert "rollback_update" in provision and "commit_update" in provision
+    assert "previousBuild" in worker and "RollbackUpdate" in worker and "CommitUpdate" in worker
+    assert "Validate-UninstallOwnership" in worker
+    assert "--export" in worker and "--unregister" in worker
+    assert "Remove-Item -LiteralPath ([IO.Path]::GetFullPath($OwnedDataRoot)) -Recurse" not in worker
+    assert "legacy-generic-profile" not in worker
+    assert "InitializeUninstall" in inno and "MB_DEFBUTTON1" in inno
+    assert "The export did not complete, so uninstall stopped" in inno
+    assert "CompleteUpdateCheckpoint(True)" in inno
 
 
 def test_inno_keeps_user_work_unelevated_and_limits_uac_to_features() -> None:

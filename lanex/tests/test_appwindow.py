@@ -19,6 +19,7 @@ browser. The contract locked in:
 """
 from __future__ import annotations
 
+import os
 import sys
 
 from lanex.controller import appwindow, platform_env
@@ -61,6 +62,7 @@ def test_lanex_browser_env_bare_name_resolved(monkeypatch):
 
 def test_candidate_order_prefers_chromium(monkeypatch):
     monkeypatch.delenv("LANEX_BROWSER", raising=False)
+    monkeypatch.setattr(appwindow.sys, "platform", "linux")
     hits = {"chromium": "/usr/bin/chromium", "google-chrome": "/usr/bin/google-chrome"}
     monkeypatch.setattr(platform_env, "usable_which", lambda n, path=None: hits.get(n))
     cands = appwindow.find_chromium_candidates()
@@ -238,19 +240,21 @@ def test_wsl_falls_back_to_linux_side(monkeypatch):
 
 
 def test_windows_app_commands_direct_exe_then_cmd_start(monkeypatch):
-    edge = "/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
+    edge = os.path.join(appwindow._WSL_PROGRAM_FILES[0],
+                        *appwindow._WINDOWS_EXE_SUFFIXES[0].split("/"))
     monkeypatch.setattr(appwindow.os.path, "isfile", lambda p: p == edge)
     monkeypatch.setattr(appwindow.os.path, "isdir", lambda p: p == "/mnt/c")
     monkeypatch.setattr(appwindow.shutil, "which",
                         lambda n: "/mnt/c/Windows/system32/cmd.exe" if n == "cmd.exe" else None)
     monkeypatch.setattr(appwindow, "_windows_localappdata",
                         lambda: "C:\\Users\\t\\AppData\\Local")
+    monkeypatch.setenv("LANEX_INSTANCE_ID", "11111111-2222-3333-4444-555555555555")
     cmds = appwindow._windows_app_commands("http://127.0.0.1:8765/landing")
     # Direct exe first, with a Windows-side dedicated profile.
     argv0, cwd0 = cmds[0]
     assert argv0[0] == edge
     assert argv0[1] == "--app=http://127.0.0.1:8765/landing"
-    assert any(a == "--user-data-dir=C:\\Users\\t\\AppData\\Local\\lanex\\app-profile"
+    assert any(a == "--user-data-dir=C:\\Users\\t\\AppData\\Local\\LanEx\\app-profile\\11111111-2222-3333-4444-555555555555"
                for a in argv0)
     # App-Paths fallback via `cmd start` present for both browsers.
     starts = [argv for argv, _ in cmds if argv[0].endswith("cmd.exe")]
@@ -261,7 +265,8 @@ def test_windows_app_commands_direct_exe_then_cmd_start(monkeypatch):
 
 
 def test_windows_app_commands_omit_profile_when_lad_unresolved(monkeypatch):
-    edge = "/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
+    edge = os.path.join(appwindow._WSL_PROGRAM_FILES[0],
+                        *appwindow._WINDOWS_EXE_SUFFIXES[0].split("/"))
     monkeypatch.setattr(appwindow.os.path, "isfile", lambda p: p == edge)
     monkeypatch.setattr(appwindow.shutil, "which", lambda n: None)
     monkeypatch.setattr(appwindow, "_windows_localappdata", lambda: None)

@@ -171,10 +171,9 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; WSL 2 needs Windows 10 2004 (build 19041). Enforced here so the friendly
 ; message below is the first thing an unsupported machine sees.
 MinVersion=10.0.19044
-; Refuse to install over a running LanEx — the mutex the launcher holds
-; (windows/launcher/main.go). Inno asks the user to close it first, which is far
-; better than importing over a distro that is mid-run.
-AppMutex=LanExLauncher
+; The launcher mutex is dynamically scoped to owner SID + install + appliance,
+; so a second Windows user cannot block this per-user Setup. Provisioning and
+; uninstall still terminate only the exact owner-bound appliance when needed.
 SetupMutex=LanExSetupMutex
 ; The wizard is Welcome -> License -> Tasks -> progress -> Finish. Everything
 ; else is hidden on purpose: an appliance has no install directory worth
@@ -210,6 +209,9 @@ Source: "..\provision\provision.sh"; Flags: dontcopy
 Source: "..\provision\selftest.sh"; Flags: dontcopy
 Source: "{#RepoRoot}scripts\install.sh"; Flags: dontcopy
 Source: "..\setup\setup.ps1"; Flags: dontcopy
+; The data-only worker remains available to the uninstaller for owner/marker
+; validation, verified export, resume cleanup, and explicit removal.
+Source: "..\setup\setup.ps1"; DestDir: "{app}"; DestName: "setup-worker.ps1"; Flags: ignoreversion
 Source: "..\setup\constraints.txt"; Flags: dontcopy
 Source: "..\setup\build-manifest.json"; Flags: dontcopy
 Source: "{#LanexWheel}"; DestName: "lanex-candidate.whl"; Flags: dontcopy
@@ -238,6 +240,7 @@ function GetTickCount: LongWord;
 var
   // Set in InitializeSetup, read in PrepareToInstall.
   RepairExisting: Boolean;   // a lanex distro is already there: keep its data
+  UpdateExisting: Boolean;   // explicit manifest change with rollback checkpoint
   // True when Setup stopped early to reboot for WSL; suppresses the "Launch
   // LanEx" checkbox, because nothing has been provisioned yet.
   WslPending: Boolean;
@@ -247,6 +250,7 @@ var
   ImportPath: String;
   DistroNameValue: String;
   InstallIdValue: String;
+  OwnerSidValue: String;
   ManifestHashValue: String;
   PreflightDecision: String;
   BootIdentityValue: String;
@@ -268,9 +272,9 @@ var
 
 // ---------------------------------------------------------------- locations --
 
-// Everything Setup creates outside {app} lives under one directory, so the
-// uninstaller can remove it with a single DelTree and the "no trace" promise is
-// one line of code rather than a list.
+// Setup-owned state lives under one root, but the historical lowercase LanEx
+// browser profile aliases it on Windows. Explicit erase therefore removes only
+// identity-scoped paths and never recursively deletes this whole root.
 //
 // %LOCALAPPDATA% (per user) is not a choice: `wsl --import` registers the distro
 // under HKCU for the user who runs it, so a machine-wide location would be a lie.
@@ -1036,6 +1040,7 @@ var
 begin
   Result := True;
   RepairExisting := False;
+  UpdateExisting := False;
   WslPending := False;
   DistroNameValue := '{#PreferredDistroName}';
   InstallIdValue := '';
@@ -1205,6 +1210,13 @@ begin
     Result := 'LanEx could not read the install identity from setup state.';
     Exit;
   end;
+  if not PowerShellCapture(
+      '(Get-Content -LiteralPath ' + PSQuote(StateFile)
+        + ' -Raw | ConvertFrom-Json).ownerSid', OwnerSidValue) then
+  begin
+    Result := 'LanEx could not read the owner identity from setup state.';
+    Exit;
+  end;
   ManifestHashValue := Lowercase(GetSHA256OfFile(Manifest));
 
   // Keep an immutable candidate copy and a manual continuation shortcut before
@@ -1229,6 +1241,12 @@ begin
     Exit;
   end;
   RepairExisting := HadState and DistroExists;
+  UpdateExisting := False;
+  if (OperationName = 'update') and HadState then
+    if PowerShellCapture(
+        '$s=Get-Content -LiteralPath ' + PSQuote(StateFile) + ' -Raw | ConvertFrom-Json; '
+        + '[bool]$s.PSObject.Properties[''previousBuild'']', Output) then
+      UpdateExisting := CompareText(Trim(Output), 'True') = 0;
   LogLine('owned setup identity: ' + InstallIdValue + ' distro=' + DistroNameValue
     + ' manifest=' + ManifestHashValue);
 end;
@@ -1387,7 +1405,7 @@ end;
 function ProvisionDistro: String;
 var
   ScriptPath, InstallPath, WheelPath, ConstraintPath, ManifestPath, LinuxPath, LinuxInstall,
-  LinuxWheel, LinuxConstraint, LinuxManifest, LinuxChoices, Params: String;
+  LinuxWheel, LinuxConstraint, LinuxManifest, LinuxChoices, Params, UpdateModeValue: String;
   Code, Answer: Integer;
 begin
   Result := '';
@@ -1404,6 +1422,7 @@ begin
   LinuxConstraint := WindowsToWslPath(ConstraintPath);
   LinuxManifest := WindowsToWslPath(ManifestPath);
   LinuxChoices := WindowsToWslPath(StateFile);
+  if UpdateExisting then UpdateModeValue := '1' else UpdateModeValue := '0';
   // `tr -d '\r'` before running: if this repo is ever checked out with Windows
   // line endings (a CI runner with core.autocrlf=true), bash would fail on the
   // shebang with "bad interpreter: No such file or directory" — a bewildering
@@ -1419,6 +1438,7 @@ begin
     + 'LANEX_INSTALL_SCRIPT="' + LinuxInstall + '" LANEX_FROM="' + LinuxWheel + '" '
     + 'LANEX_PIP_CONSTRAINT="' + LinuxConstraint + '" '
     + 'LANEX_BUILD_MANIFEST="' + LinuxManifest + '" LANEX_SETUP_CHOICES="' + LinuxChoices + '" '
+    + 'LANEX_UPDATE_MODE="' + UpdateModeValue + '" '
     + 'bash "' + LinuxPath + '" base';
   repeat
     SetPhase(4, 6, 'Preparing the base LanEx environment...');
@@ -1448,12 +1468,17 @@ var
   WorkerOutput, Snippet: String;
 begin
   Failure := '';
-  Snippet := '$m = (& ' + PSQuote(WslExe) + ' -d ' + PSQuote(DistroNameValue)
+  if UpdateExisting then
+    Snippet := '$s=Get-Content -LiteralPath ' + PSQuote(StateFile)
+      + ' -Raw | ConvertFrom-Json; $e=$s.previousBuild; '
+  else
+    Snippet := '$e=[pscustomobject]@{manifestHash=' + PSQuote(ManifestHashValue)
+      + ';source=[pscustomobject]@{sha=''{#LanexSourceSha}''}}; ';
+  Snippet := Snippet + '$m = (& ' + PSQuote(WslExe) + ' -d ' + PSQuote(DistroNameValue)
     + ' -u root -- cat /etc/lanex/appliance.json) | ConvertFrom-Json; '
     + 'if ($m.schema -ne 1 -or $m.installId -ne ' + PSQuote(InstallIdValue)
-    + ' -or $m.manifestHash -ne ' + PSQuote(ManifestHashValue)
-    + ' -or $m.sourceSha -ne ''{#LanexSourceSha}'') '
-    + '{ throw ''Linux appliance identity does not match owner/build state.'' }; ''identity-ok''';
+    + ' -or $m.manifestHash -ne $e.manifestHash -or $m.sourceSha -ne $e.source.sha) '
+    + '{ throw ''Linux appliance identity does not match the expected current build.'' }; ''identity-ok''';
   Result := PowerShellCapture(Snippet, WorkerOutput);
   if not Result then
     Failure := WorkerOutput;
@@ -1514,6 +1539,36 @@ begin
     + #13#10#13#10 + 'No existing distribution or project was deleted.'
     + #13#10#13#10 + 'Full log: ' + LogFile;
   RecordSetupOutcome('failed', Result);
+end;
+
+function CompleteUpdateCheckpoint(Rollback: Boolean): Boolean;
+var
+  ScriptPath, LinuxScript, ModeName, ActionName, Output: String;
+  Code: Integer;
+begin
+  Result := True;
+  if not UpdateExisting then Exit;
+  ExtractTemporaryFile('provision.sh');
+  ScriptPath := ExpandConstant('{tmp}\provision.sh');
+  LinuxScript := WindowsToWslPath(ScriptPath);
+  if Rollback then
+  begin
+    ModeName := 'rollback-update';
+    ActionName := 'RollbackUpdate';
+  end else begin
+    ModeName := 'commit-update';
+    ActionName := 'CommitUpdate';
+  end;
+  Result := RunLogged(WslExe, '-d "' + DistroNameValue + '" -u root -- env '
+    + 'LANEX_USER="{#AppUser}" LANEX_INSTALL_ID="' + InstallIdValue + '" '
+    + 'LANEX_UPDATE_MODE="1" bash "' + LinuxScript + '" ' + ModeName, Code)
+    and (Code = 0);
+  if not PowerShellCapture('& ' + PSQuote(ExpandConstant('{tmp}\setup.ps1'))
+      + ' -Action ' + ActionName + ' -StatePath ' + PSQuote(StateFile), Output) then
+  begin
+    LogLine('update checkpoint action failed: ' + Output);
+    Result := False;
+  end;
 end;
 
 procedure MarkAppComplete;
@@ -1806,7 +1861,10 @@ begin
   begin
     Result := ProvisionDistro;
     if Result <> '' then
+    begin
+      CompleteUpdateCheckpoint(True);
       Exit;
+    end;
   end;
   MarkAppComplete;
   BaseProvisionedForEstimate := True;
@@ -1817,6 +1875,7 @@ begin
   begin
     Result := Output + #13#10#13#10 +
       'Base setup is preserved. Free space, then choose Retry/Continue; verified caches are reused.';
+    CompleteUpdateCheckpoint(True);
     Exit;
   end;
 
@@ -1837,15 +1896,26 @@ begin
     Result := 'LanEx Setup was cancelled after stopping only its owner-bound environment. '
       + 'Selected-component finalization did not start.';
     RecordSetupOutcome('cancelled', Result);
+    CompleteUpdateCheckpoint(True);
     Exit;
   end;
   Result := FinalizeDistro;
   if Result <> '' then
+  begin
+    CompleteUpdateCheckpoint(True);
     Exit;
+  end;
   if not MarkSelectionsComplete then
   begin
     Result := 'The selected components are ready, but Setup could not save their '
       + 'owner-bound completion checkpoint. The appliance and all data were preserved.';
+    CompleteUpdateCheckpoint(True);
+    Exit;
+  end;
+  if not CompleteUpdateCheckpoint(False) then
+  begin
+    Result := 'The update became ready, but Setup could not close its rollback checkpoint. '
+      + 'The environment and rollback data were preserved for Repair.';
     Exit;
   end;
   RecordSetupOutcome('ready', 'All selected components passed strict readiness.');
@@ -1964,20 +2034,94 @@ begin
             SW_SHOWNORMAL, ewNoWait, Code);
 end;
 
+function UninstallWorker(const Snippet: String; var Output: String): Boolean;
+begin
+  Result := PowerShellCapture('& ' + PSQuote(ExpandConstant('{app}\setup-worker.ps1'))
+    + ' ' + Snippet, Output);
+end;
+
+function InitializeUninstall(): Boolean;
+var
+  Choice: Integer;
+  Output, ExportFile, Snippet: String;
+begin
+  Result := False;
+  Choice := MsgBox('Keep your LanEx environment and data? (Recommended)' + #13#10#13#10
+    + 'Yes keeps projects, run results, PDKs, caches, and the private WSL environment '
+    + 'for a later reinstall.' + #13#10#13#10
+    + 'No opens export and permanent-removal choices. Cancel stops uninstall.',
+    mbConfirmation, MB_YESNOCANCEL or MB_DEFBUTTON1);
+  if Choice = IDCANCEL then Exit;
+
+  if Choice = IDYES then
+  begin
+    if not UninstallWorker('-Action ClearResume -StatePath ' + PSQuote(StateFile), Output) then
+    begin
+      MsgBox('LanEx could not remove its owner-bound continuation hook, so uninstall '
+        + 'was stopped safely.' + #13#10#13#10 + Output, mbError, MB_OK);
+      Exit;
+    end;
+    MsgBox('The Windows launcher and shortcuts will be removed. Your private LanEx '
+      + 'environment remains at:' + #13#10 + ApplianceRoot + #13#10#13#10
+      + 'Run LanEx Setup later to verify and reuse it. Other WSL distributions and '
+      + 'Windows WSL features are unchanged.', mbInformation, MB_OK);
+    Result := True;
+    Exit;
+  end;
+
+  Choice := MsgBox('Choose what happens to the private LanEx environment.' + #13#10#13#10
+    + 'Yes exports a backup, then keeps the environment.' + #13#10
+    + 'No permanently removes the verified LanEx environment and its owned data.' + #13#10
+    + 'Cancel stops uninstall.', mbConfirmation, MB_YESNOCANCEL or MB_DEFBUTTON1);
+  if Choice = IDCANCEL then Exit;
+  if Choice = IDYES then
+  begin
+    ExportFile := ExpandConstant('{userdocs}\LanEx-environment-backup.tar');
+    if not GetSaveFileName('Export the LanEx environment before uninstalling', ExportFile,
+        ExpandConstant('{userdocs}'), 'WSL tar archive (*.tar)|*.tar', 'tar') then Exit;
+    if not UninstallWorker('-Action ExportAppliance -StatePath ' + PSQuote(StateFile)
+        + ' -ExportPath ' + PSQuote(ExportFile), Output) then
+    begin
+      MsgBox('The export did not complete, so uninstall stopped and all LanEx data '
+        + 'was preserved.' + #13#10#13#10 + Output, mbError, MB_OK);
+      Exit;
+    end;
+    if not UninstallWorker('-Action ClearResume -StatePath ' + PSQuote(StateFile), Output) then
+    begin
+      MsgBox('The backup completed, but LanEx could not clear its continuation hook. '
+        + 'Uninstall stopped; the environment and export are preserved.' + #13#10#13#10
+        + Output, mbError, MB_OK);
+      Exit;
+    end;
+    MsgBox('The verified backup was saved to:' + #13#10 + ExportFile + #13#10#13#10
+      + 'The private environment is also being kept.', mbInformation, MB_OK);
+    Result := True;
+    Exit;
+  end;
+
+  if MsgBox('Permanently remove this LanEx environment and its projects, run results, '
+      + 'PDKs, caches, and owned browser profile?' + #13#10#13#10
+      + 'This cannot be undone. Other WSL distributions, the pre-existing generic '
+      + 'LanEx browser profile, and Windows WSL features will not be changed.',
+      mbError, MB_YESNO or MB_DEFBUTTON2) <> IDYES then Exit;
+  Snippet := '-Action RemoveAppliance -StatePath ' + PSQuote(StateFile)
+    + ' -OwnedDataRoot ' + PSQuote(AppDataRoot)
+    + ' -ConfirmedInstallId $((Get-Content -LiteralPath ' + PSQuote(StateFile)
+    + ' -Raw | ConvertFrom-Json).installId)';
+  if not UninstallWorker(Snippet, Output) then
+  begin
+    MsgBox('Permanent removal did not complete. LanEx preserved the VHDX, state, '
+      + 'caches, and logs so the problem can be diagnosed safely.' + #13#10#13#10
+      + Output, mbError, MB_OK);
+    Exit;
+  end;
+  Result := True;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
-
-  // M1 safety foundation: Windows removes the launcher only. The owned WSL
-  // appliance, projects, PDKs, installer state, caches, and the pre-existing
-  // browser profile are deliberately preserved until the later uninstall UI
-  // can offer verified export plus an explicit, identity-checked data removal.
-  MsgBox('LanEx will remove its Windows shortcuts and launcher. Your LanEx '
-    + 'environment, projects, PDKs, and run results will be kept so they can be '
-    + 'reused by a later install.' + #13#10#13#10
-    + 'No other WSL distribution or Windows WSL feature will be changed.',
-    mbInformation, MB_OK);
 
   // Deliberately NOT undone: the Windows Subsystem for Linux feature. It is a
   // machine-wide setting other software may now rely on, and turning it off
@@ -1991,7 +2135,8 @@ var
 begin
   if CurStep <> ssPostInstall then
     Exit;
-  Config := '{"schema":1,"installId":"' + InstallIdValue
+  Config := '{"schema":2,"installId":"' + InstallIdValue
+    + '","ownerSid":"' + OwnerSidValue
     + '","distroName":"' + DistroNameValue
     + '","sourceSha":"{#LanexSourceSha}","manifestHash":"'
     + ManifestHashValue + '"}' + #13#10;

@@ -10,13 +10,13 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -28,15 +28,6 @@ import (
 const (
 	basePort = 8765
 	portSpan = 7
-
-	// How long a launch waits for the appliance to write ~/.lanex/server.json
-	// before it will believe a port it merely found by scanning. See
-	// scanForServer for why the scan is a last resort rather than the default;
-	// without this window it wins the race on every cold start, because writing
-	// the record takes a second or two and a stranger's server is answering the
-	// whole time. Comfortably longer than the write, far short of
-	// startupTimeout.
-	recordGrace = 20 * time.Second
 )
 
 func candidatePorts() []int {
@@ -66,10 +57,27 @@ func healthyAt(url string) bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	// Confirm it is actually LanEx and not some other dev server happy to answer
-	// 200 on 8765: routes.py's h_health replies {"service": "lanex", ...}.
-	return err == nil && bytes.Contains(body, []byte(`"lanex"`))
+	var health struct {
+		Service    string `json:"service"`
+		Alive      bool   `json:"alive"`
+		InstanceID string `json:"instanceId"`
+		Source     struct {
+			SHA          string `json:"sha"`
+			ManifestHash string `json:"manifestHash"`
+		} `json:"source"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 4096))
+	if err := decoder.Decode(&health); err != nil {
+		return false
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		return false
+	}
+	return health.Service == "lanex" && health.Alive &&
+		strings.EqualFold(health.InstanceID, activeConfig.InstallID) &&
+		strings.EqualFold(health.Source.SHA, activeConfig.SourceSHA) &&
+		strings.EqualFold(health.Source.ManifestHash, activeConfig.Manifest)
 }
 
 // findRunningServer returns the port of a live LanEx server, if there is one.
@@ -81,28 +89,6 @@ func findRunningServer() (int, bool) {
 	if port, ok := serverJSONPort(); ok {
 		return port, healthyAt(healthURL(port))
 	}
-	return scanForServer()
-}
-
-// scanForServer probes 8765..8771 for anything answering like LanEx.
-//
-// A LAST RESORT, not the normal path. It cannot tell our appliance apart from a
-// LanEx the user runs themselves — same endpoint, same {"service": "lanex"}
-// body — and it does not need bad luck to get it wrong: WSL 2 puts every distro
-// on one shared network namespace, so a LanEx already running in the user's own
-// distro holds 8765, the appliance's own server is pushed to 8766 by
-// find_free_port, and scanning upwards finds theirs first. Verified on a machine
-// with both: user's LanEx on 8765, appliance on 8766, both returning 200.
-//
-// It stays because an appliance older than the server.json feature writes no
-// record at all, and there a live wrong-server beats a launcher that gives up.
-// The next Repair upgrades that away.
-func scanForServer() (int, bool) {
-	for _, port := range candidatePorts() {
-		if healthyAt(healthURL(port)) {
-			return port, true
-		}
-	}
 	return 0, false
 }
 
@@ -110,7 +96,7 @@ func scanForServer() (int, bool) {
 // exit (lanex/cli.py), read over the \\wsl.localhost share. A variable so the
 // tests can point it at a real temp file.
 var serverRecordPath = func() string {
-	return filepath.Join(`\\wsl.localhost\`+distroName, "home", distroName,
+	return filepath.Join(`\\wsl.localhost\`+distroName, "home", appUser,
 		".lanex", "server.json")
 }
 
@@ -127,12 +113,20 @@ func serverJSONPort() (int, bool) {
 		return 0, false
 	}
 	var rec struct {
-		Port int `json:"port"`
+		Port       int    `json:"port"`
+		InstanceID string `json:"instanceId"`
+		Source     struct {
+			SHA          string `json:"sha"`
+			ManifestHash string `json:"manifestHash"`
+		} `json:"source"`
 	}
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		return 0, false
 	}
-	if rec.Port <= 0 || rec.Port > 65535 {
+	if rec.Port <= 0 || rec.Port > 65535 ||
+		!strings.EqualFold(rec.InstanceID, activeConfig.InstallID) ||
+		!strings.EqualFold(rec.Source.SHA, activeConfig.SourceSHA) ||
+		!strings.EqualFold(rec.Source.ManifestHash, activeConfig.Manifest) {
 		return 0, false
 	}
 	return rec.Port, true
@@ -142,20 +136,11 @@ func serverJSONPort() (int, bool) {
 // closes (the server process died — no point probing a corpse).
 func waitForHealth(timeout time.Duration, done <-chan struct{}) (int, bool) {
 	deadline := time.Now().Add(timeout)
-	scanAfter := time.Now().Add(recordGrace)
 	for {
-		// The record first and, for the first recordGrace, ONLY the record. We
-		// have just started the server ourselves; it needs a moment to bind a
-		// port and write the file. If the scan were allowed to answer during
-		// that moment it would hand back a LanEx running in the user's own
-		// distro — instantly, on the very first poll, every time.
+		// Only the identity-bound record can select a port. A scan cannot
+		// distinguish this appliance from a LanEx server in another distro.
 		if port, ok := serverJSONPort(); ok && healthyAt(healthURL(port)) {
 			return port, true
-		}
-		if time.Now().After(scanAfter) {
-			if port, ok := scanForServer(); ok {
-				return port, true
-			}
 		}
 		if time.Now().After(deadline) {
 			return 0, false

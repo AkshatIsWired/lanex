@@ -20,6 +20,10 @@ import (
 )
 
 func TestHealthyAt(t *testing.T) {
+	activeConfig = applianceConfig{InstallID: "11111111-2222-3333-4444-555555555555",
+		SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Manifest:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	valid := `{"service":"lanex","alive":true,"instanceId":"11111111-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`
 	cases := []struct {
 		name   string
 		status int
@@ -27,7 +31,8 @@ func TestHealthyAt(t *testing.T) {
 		want   bool
 	}{
 		// What routes.py's h_health actually replies.
-		{"lanex", 200, `{"service": "lanex", "alive": true, "compat": {"ok": true}}`, true},
+		{"owned lanex", 200, valid, true},
+		{"wrong instance", 200, `{"service":"lanex","alive":true,"instanceId":"99999999-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`, false},
 		// A 200 from something else on 8765 must NOT be mistaken for LanEx —
 		// otherwise the launcher points its window at a stranger's dev server.
 		{"other server", 200, `{"service": "vite", "ok": true}`, false},
@@ -96,18 +101,22 @@ func withRecord(t *testing.T, body string) {
 }
 
 func TestServerJSONPort(t *testing.T) {
+	activeConfig = applianceConfig{InstallID: "11111111-2222-3333-4444-555555555555",
+		SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Manifest:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	identity := `"instanceId":"11111111-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`
 	cases := []struct {
 		name string
 		body string
 		want int
 		ok   bool
 	}{
-		{"what cli.py writes", `{"url": "http://127.0.0.1:8766/", "port": 8766, "pid": 405}`, 8766, true},
+		{"what cli.py writes", `{"url":"http://127.0.0.1:8766/","port":8766,"pid":405,` + identity + `}`, 8766, true},
 		{"absent — an appliance older than the feature", "", 0, false},
 		// A file being written when we read it, and a shutdown that left the
 		// key behind. Both must read as "no record", never as port 0.
 		{"truncated", `{"url": "http://127.0.0`, 0, false},
-		{"zero port", `{"port": 0}`, 0, false},
+		{"zero port", `{"port":0,` + identity + `}`, 0, false},
 		{"out of range", `{"port": 70000}`, 0, false},
 		{"no port key", `{"url": "http://127.0.0.1:8766/"}`, 0, false},
 	}
@@ -129,8 +138,11 @@ func TestServerJSONPort(t *testing.T) {
 // the only thing that knows which is ours, so it decides — and when it says the
 // port is dead, that is an answer too, not a reason to go looking.
 func TestFindRunningServerUsesTheRecord(t *testing.T) {
+	activeConfig = applianceConfig{InstallID: "11111111-2222-3333-4444-555555555555",
+		SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Manifest:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"service": "lanex", "alive": true}`))
+		_, _ = w.Write([]byte(`{"service":"lanex","alive":true,"instanceId":"11111111-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`))
 	}))
 	defer srv.Close()
 	port, err := strconv.Atoi(srv.URL[strings.LastIndex(srv.URL, ":")+1:])
@@ -138,7 +150,7 @@ func TestFindRunningServerUsesTheRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	withRecord(t, fmt.Sprintf(`{"port": %d}`, port))
+	withRecord(t, fmt.Sprintf(`{"port":%d,"instanceId":"11111111-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`, port))
 	got, ok := findRunningServer()
 	if !ok || got != port {
 		t.Errorf("findRunningServer() = (%d, %v), want (%d, true)", got, ok, port)
