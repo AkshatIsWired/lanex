@@ -94,3 +94,5 @@ the development PC; M8 produces the Akshat tester candidate.
 - Ubuntu ran isolated temp-venv tests and ShellCheck only; no distro/VM/service
   was created, stopped, globally shut down, or provisioned. Temp Linux venvs
   self-removed; owned scratch/evidence remains under this task's `work`.
+- Owned packaging venv `.m5-build-venv` remains in this task workspace; deletion
+  was policy-blocked. It has no running process and is safe to remove later.
