@@ -1,7 +1,7 @@
 # LanEx installer checkpoint
 
 Date: 2026-09-10
-Stage: M0-M7 implementation and safe CI/artifact proof complete; M8 is next.
+Stage: M0-M7 complete; exact-candidate M8 transfer kit prepared; real Windows acceptance is next.
 Canonical pack: `C:\Users\itsva\lanex\docs\windows-installer-handoff`.
 Repo: `C:\Users\itsva\lanex`
 Branch: `windows-installer-support`
@@ -13,8 +13,8 @@ M4: `4aa748d`, `2f79507`, `04a8991`
 M5: `c87fafc`, `3bc4498`
 M6: `1ecbf35`
 M7: `5b96c17`, `0c52726`, `da2beb3`, `82f91da`
-HEAD before checkpoint: `82f91daa977d713886013842c78916f139d08dd4`
-Git status before checkpoint: only M7 checkpoint docs.
+HEAD before M8 transfer checkpoint: `e6b0c8a8bee12c438c41f125657eb0be642a1935`
+Git status before checkpoint: only this M8 checkpoint edit.
 
 ## Decisions
 
@@ -68,14 +68,25 @@ Git status before checkpoint: only M7 checkpoint docs.
 
 ## Current / next action
 
-Start M8 using this exact candidate on disposable Windows 11 x64 environments
-or Akshat's machine. Record the acceptance ledger JSON bound to source SHA and
-Setup SHA. Do not rebuild between acceptance and publication.
+M8 transfer kit prepared at current task
+`outputs\LanEx-M8-transfer-kit.zip` (461376582 bytes; SHA256
+`197887a04f0630772d6310381d15716a9dad8ba98d729a75ebadb39c335ca240`).
+It includes the exact candidate, complete Git bundle, source snapshot, canonical
+handoff, all-case JSON ledger and ready-to-paste Codex prompt. Candidate hashes,
+ledger JSON, Git bundle and required ZIP entries passed local verification.
+
+Next: copy the kit to a disposable Windows 11 x64 environment with working
+nested virtualization/WSL2, take a clean pre-WSL snapshot, and start W01 using
+the exact candidate. Record PASS/FAIL/BLOCKED per case. Do not rebuild between
+acceptance and publication.
 
 ## Outstanding / protected resources
 
 - No real Setup/uninstaller, WSL import/finalize, daemon/PDK download, WSLg/GUI,
   restart/UAC, offline, export/unregister or reinstall candidate case ran here.
+- VirtualBox is not installed on the development PC. Its existing Microsoft
+  hypervisor/WSL2 stack is active, so VirtualBox guest WSL2 viability is not yet
+  proven; the disposable guest must expose virtualization extensions.
 - Existing `Ubuntu`, `lanex`, `Ubuntu-22.04`, their defaults/data, and
   `%LOCALAPPDATA%\LanEx`/legacy profile remain protected and unchanged.
 - No distro/VM/service was created, provisioned, terminated or globally shut
