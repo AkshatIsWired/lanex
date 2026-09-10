@@ -13,8 +13,9 @@ M4: `4aa748d`, `2f79507`, `04a8991`
 M5: `c87fafc`, `3bc4498`
 M6: `1ecbf35`
 M7: `5b96c17`, `0c52726`, `da2beb3`, `82f91da`
-HEAD before M8 transfer checkpoint: `e6b0c8a8bee12c438c41f125657eb0be642a1935`
-Git status before checkpoint: only this M8 checkpoint edit.
+M8 transfer checkpoint: `52a99ce`
+HEAD before final handoff refresh: `52a99ce7e5e4234b68e0823ce75b63ddd5856594`
+Git status before checkpoint: only this compact checkpoint refresh.
 
 ## Decisions
 
@@ -69,8 +70,7 @@ Git status before checkpoint: only this M8 checkpoint edit.
 ## Current / next action
 
 M8 transfer kit prepared at current task
-`outputs\LanEx-M8-transfer-kit.zip` (461376582 bytes; SHA256
-`197887a04f0630772d6310381d15716a9dad8ba98d729a75ebadb39c335ca240`).
+`outputs\LanEx-M8-transfer-kit.zip`.
 It includes the exact candidate, complete Git bundle, source snapshot, canonical
 handoff, all-case JSON ledger and ready-to-paste Codex prompt. Candidate hashes,
 ledger JSON, Git bundle and required ZIP entries passed local verification.
