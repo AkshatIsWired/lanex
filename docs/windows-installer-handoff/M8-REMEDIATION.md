@@ -54,3 +54,13 @@ A replacement candidate must be generated from this committed source, with a
 new wheel, manifest, rootfs bindings, Setup hash and candidate identity. Branch
 CI and differential tests must pass at that exact SHA before the unpublished
 artifact is offered for Akshat's testing. Do not publish or merge first.
+
+## Prepared replacement
+
+- Candidate: `1.0.0-test.3`; source `fd9695cf578460a1818388837410de9fadb0aefb`.
+- Setup SHA256: `2fb685d20bed867dd465819b2966e9c42730f9e41882494dd80eb52a7e50a267`.
+- Rootfs SHA256: `5c93089d8833554fe1b83cbe11530cee96eab83db77398ca4d2ef0464d00b5f6`.
+- CI, Windows installer, Differential and unpublished candidate dispatch passed.
+- Independent 10-file hash, manifest, PE version and rootfs archive checks passed.
+- All 50 M8 ledger cases remain NOT RUN for this new candidate pending suitable
+  Windows hardware/VM evidence. Main and public releases remain untouched.
