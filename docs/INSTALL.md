@@ -101,8 +101,10 @@ It does exactly five things:
 
 ### Unattended Windows setup
 
-Use Inno Setup's `/SILENT` or `/VERYSILENT` with `/NORESTART`. LanEx-specific
-selection flags are:
+Use Inno Setup's `/SILENT` or `/VERYSILENT` with
+`/NORESTART /RESTARTEXITCODE=8`. The explicit restart exit-code option is
+required because Inno Setup otherwise returns `0` after a successful install
+that needs a restart. LanEx-specific selection flags are:
 
 - `/PROFILE=recommended` (default) or `/PROFILE=minimal`.
 - `/SELECTIONS=C:\path\lanex-selections.json` for custom choices. The JSON is
@@ -117,8 +119,9 @@ Supported fields are `profile`, `engine` (`docker`, `podman`, or `none`),
 choices; selection files are primarily for managed deployment.
 
 Exit status follows Inno Setup: `0` means selected readiness passed; `8` means
-a restart is required; initialization errors return `1`; pre-install failure or
-cooperative cancellation returns a nonzero status (normally `7`). The owner
+a restart is required when `/RESTARTEXITCODE=8` is supplied; initialization
+errors return `1`; pre-install failure or cooperative cancellation returns a
+nonzero status (normally `7`). The owner
 state at `%LOCALAPPDATA%\LanEx\installer-state.json` distinguishes `failed`,
 `cancelled`, `restart-required`, and `ready`; automation must require `ready`
 rather than treating an arbitrary zero from a child process as success. Silent

@@ -107,7 +107,7 @@ def _base_preflight(**overrides: object) -> dict:
         "pendingReboot": False,
         "bootIdentity": "boot-a",
         "wsl": {"present": True, "statusUsable": True, "version": "2.3.26.0",
-                "systemdCapable": True},
+                "systemdCapable": True, "kernelUsable": True},
     }
     facts.update(overrides)
     return facts
@@ -272,7 +272,11 @@ def test_corrupt_state_is_rejected_without_replacement(tmp_path: Path) -> None:
                                            "version": "2.3.26.0", "systemdCapable": True}},
          "restart-required"),
         ({"wsl": {"present": True, "statusUsable": False, "version": "0.66.2.0",
-                  "systemdCapable": False}}, "wsl-update-required"),
+                  "systemdCapable": False, "kernelUsable": False}}, "wsl-update-required"),
+        ({"hypervisorPresent": True, "firmwareVirtualization": "enabled",
+          "wsl": {"present": True, "statusUsable": True, "version": "2.3.26.0",
+                  "systemdCapable": True, "kernelUsable": False}},
+         "wsl-kernel-unavailable"),
         ({"features": {"wsl": "unknown", "virtualMachinePlatform": "unknown"}},
          "preflight-query-failed"),
     ],
@@ -287,6 +291,20 @@ def test_hypervisor_presence_overrides_misleading_firmware_false(tmp_path: Path)
     result = _preflight(tmp_path, _base_preflight(
         hypervisorPresent=True, firmwareVirtualization="disabled"))
     assert result["decision"]["code"] == "ready"
+
+
+def test_hypervisor_presence_does_not_replace_real_wsl2_kernel_probe(tmp_path: Path) -> None:
+    result = _preflight(tmp_path, _base_preflight(
+        hypervisorPresent=True,
+        wsl={"present": True, "statusUsable": True, "version": "2.3.26.0",
+             "systemdCapable": True, "kernelUsable": False}))
+    assert result["decision"] == {
+        "code": "wsl-kernel-unavailable",
+        "blocked": True,
+        "needsElevation": False,
+        "needsRestart": False,
+        "firmwareNotice": False,
+    }
 
 
 def test_unknown_firmware_is_warning_not_disabled_claim(tmp_path: Path) -> None:
@@ -360,10 +378,16 @@ def test_owner_bound_resume_is_verified_and_bounded(tmp_path: Path) -> None:
     )
     assert "restart has not been observed" in same_boot.stderr
 
+    # Windows can present the same owner-scoped file through an MSIX
+    # LocalCache alias. Exact bytes must resume even when the path spelling
+    # differs; tampered bytes are covered by the test below.
+    aliased = tmp_path / "Packages" / "Codex" / "LocalCache" / "LanEx-Setup.exe"
+    aliased.parent.mkdir(parents=True)
+    shutil.copy2(staged, aliased)
     resumed = _run_setup(
         "-Action", "InitializeState", "-StatePath", state,
         "-ManifestPath", tmp_path / "manifest.json", "-Operation", "repair",
-        "-InstallerPath", staged, "-ResumeMode", "1", "-BootIdentity", "boot-b",
+        "-InstallerPath", aliased, "-ResumeMode", "1", "-BootIdentity", "boot-b",
         "-TestOwnerSid", OWNER,
     )
     assert resumed["choices"]["profile"] == "custom"
@@ -498,7 +522,21 @@ def test_inno_m5_wizard_progress_cancel_and_silent_contract() -> None:
     assert "did not start the fallback download" in body
     assert "WizardSilent then Answer := IDCANCEL" in body
     assert "ALLOWWSLUPDATE" in body and "SELECTIONS" in body
+    assert "SaveStringToFile(StagedChoices, InputJson, False)" in body
+    assert "SaveStringToFile(StagedChoices, ChoicesJsonValue, False)" in body
+    assert "+ ' -ChoicesJson ' + PSQuote(ChoicesJsonValue)" not in body
+    assert "Copy-Item -LiteralPath" in body
+    assert "could not preserve the verified companion appliance for restart" in body
+    assert "-Action StageInstaller" in body
     assert "RecordSetupOutcome('ready'" in body
+    assert "wsl-kernel-unavailable" in body
+    assert "RecordSetupOutcome('failed', Result);" in body
+
+
+def test_unattended_docs_require_explicit_restart_exit_code() -> None:
+    body = (REPO / "docs/INSTALL.md").read_text(encoding="utf-8")
+    assert "/NORESTART /RESTARTEXITCODE=8" in body
+    assert "otherwise returns `0`" in body
 
 
 def test_inno_pdk_and_advanced_library_catalog_is_complete() -> None:

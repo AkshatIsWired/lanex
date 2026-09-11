@@ -824,7 +824,7 @@ end;
 
 function PlanSelections(const InputJson, InputPath: String; var Failure: String): Boolean;
 var
-  Worker, Manifest, Snippet, Output: String;
+  Worker, Manifest, Snippet, Output, StagedChoices: String;
 begin
   Result := False;
   Failure := '';
@@ -834,8 +834,22 @@ begin
   Manifest := ExpandConstant('{tmp}\build-manifest.json');
   Snippet := '$p=(& ' + PSQuote(Worker) + ' -Action PlanChoices -ManifestPath ' +
     PSQuote(Manifest);
-  if InputPath <> '' then Snippet := Snippet + ' -ChoicesPath ' + PSQuote(InputPath)
-  else Snippet := Snippet + ' -ChoicesJson ' + PSQuote(InputJson);
+  if InputPath <> '' then
+    Snippet := Snippet + ' -ChoicesPath ' + PSQuote(InputPath)
+  else
+  begin
+    // PowerShell's raw -Command command line is parsed by Windows before
+    // PowerShell sees single-quoted JSON. Embedded double quotes can therefore
+    // disappear even though PSQuote is correct PowerShell syntax. Stage JSON in
+    // a UTF-8 file and pass only its quoted path across the process boundary.
+    StagedChoices := ExpandConstant('{tmp}\choices-input.json');
+    if not SaveStringToFile(StagedChoices, InputJson, False) then
+    begin
+      Failure := 'Setup could not stage the selected component choices.';
+      Exit;
+    end;
+    Snippet := Snippet + ' -ChoicesPath ' + PSQuote(StagedChoices);
+  end;
   Snippet := Snippet + ' | ConvertFrom-Json); ' +
     '($p.choices|ConvertTo-Json -Depth 30 -Compress); ' +
     '[math]::Ceiling($p.estimates.downloadBytes/1MB); ' +
@@ -1149,7 +1163,8 @@ end;
 
 function InitializeDurableState: String;
 var
-  Worker, Manifest, OperationName, Output, Snippet, SetupCopy: String;
+  Worker, Manifest, OperationName, Output, Snippet, SetupCopy,
+    StagedChoices, SourceCompanion, CachedCompanion: String;
   HadState: Boolean;
 begin
   Result := '';
@@ -1168,10 +1183,18 @@ begin
   else
     OperationName := 'install';
 
+  StagedChoices := ExpandConstant('{tmp}\choices-state.json');
+  if not SaveStringToFile(StagedChoices, ChoicesJsonValue, False) then
+  begin
+    Result := 'LanEx could not stage its selected component choices.'
+      + #13#10#13#10 + 'No WSL distribution or user data was changed.';
+    Exit;
+  end;
+
   Snippet := '& ' + PSQuote(Worker) + ' -Action InitializeState -StatePath '
     + PSQuote(StateFile) + ' -ManifestPath ' + PSQuote(Manifest)
     + ' -Operation ' + OperationName
-    + ' -ChoicesJson ' + PSQuote(ChoicesJsonValue)
+    + ' -ChoicesPath ' + PSQuote(StagedChoices)
     + ' -InstallerPath ' + PSQuote(ExpandConstant('{srcexe}'));
   if IsResumeRun then
     Snippet := Snippet + ' -ResumeMode 1 -BootIdentity ' + PSQuote(BootIdentityValue);
@@ -1231,10 +1254,39 @@ begin
   if CompareText(ExpandConstant('{srcexe}'), SetupCopy) <> 0 then
     if not FileCopy(ExpandConstant('{srcexe}'), SetupCopy, False) then
     begin
-      Result := 'LanEx could not stage a durable copy of this exact installer.'
+      // CopyFile can be rejected for a running EXE when Windows applies its
+      // RedirectionGuard mitigation. The same unelevated owner may still copy
+      // it normally; StageInstaller below then requires an exact SHA256 match.
+      Snippet := 'Copy-Item -LiteralPath ' + PSQuote(ExpandConstant('{srcexe}'))
+        + ' -Destination ' + PSQuote(SetupCopy) + ' -Force';
+      if not PowerShellCapture(Snippet, Output) then
+      begin
+        Result := 'LanEx could not stage a durable copy of this exact installer.'
+          + #13#10#13#10 + Output + #13#10#13#10
+          + 'No Windows feature or WSL distribution was changed.';
+        Exit;
+      end;
+    end;
+#ifdef CompanionRootfsSha256
+  // Resume runs from the immutable cache, so preserve the verified companion
+  // beside the cached EXE instead of silently switching to a network fallback
+  // after reboot. A missing companion remains allowed and uses the existing
+  // pinned fallback path.
+  SourceCompanion := ExpandConstant('{src}\{#BakedRootfsFile}');
+  CachedCompanion := CacheDir + '\{#BakedRootfsFile}';
+  if FileExists(SourceCompanion) and
+     (CompareText(GetSHA256OfFile(SourceCompanion), '{#CompanionRootfsSha256}') = 0) and
+     (CompareText(SourceCompanion, CachedCompanion) <> 0) then
+  begin
+    if (not FileCopy(SourceCompanion, CachedCompanion, False)) or
+       (CompareText(GetSHA256OfFile(CachedCompanion), '{#CompanionRootfsSha256}') <> 0) then
+    begin
+      Result := 'LanEx could not preserve the verified companion appliance for restart.'
         + #13#10#13#10 + 'No Windows feature or WSL distribution was changed.';
       Exit;
     end;
+  end;
+#endif
   Snippet := '& ' + PSQuote(Worker) + ' -Action StageInstaller -StatePath '
     + PSQuote(StateFile) + ' -ResumeInstallerPath ' + PSQuote(SetupCopy);
   if not PowerShellCapture(Snippet, Output) then
@@ -1694,6 +1746,18 @@ begin
     Exit;
   end;
 
+  if PreflightDecision = 'wsl-kernel-unavailable' then
+  begin
+    Result := 'Windows reports that WSL is installed, but the WSL 2 kernel could '
+      + 'not start. If this PC is a virtual machine, its host must expose nested '
+      + 'virtualization to the guest; on physical hardware, verify virtualization '
+      + 'and the Windows hypervisor configuration.' + #13#10#13#10
+      + 'Setup did not download or import an environment. Existing WSL '
+      + 'distributions were not started, stopped, or changed.';
+    RecordSetupOutcome('failed', Result);
+    Exit;
+  end;
+
   // Only the feature operation crosses UAC. A different administrator may
   // authorize it, but execution returns here before any user-owned work.
   if PreflightDecision = 'features-required' then
@@ -1842,6 +1906,7 @@ begin
       Result := 'The LanEx environment could not be created.' + #13#10#13#10
         + 'Last lines of the log:' + #13#10 + LogTail(10) + #13#10
         + 'Full log: ' + LogFile;
+      RecordSetupOutcome('failed', Result);
       Exit;
     end;
     Worker := ExpandConstant('{tmp}\setup.ps1');

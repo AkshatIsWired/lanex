@@ -486,6 +486,18 @@ function Get-LivePreflightFacts {
     }
     $systemdCapable = $false
     try { $systemdCapable = ([version]$wslVersion -ge [version]'0.67.6') } catch {}
+    $kernelUsable = $false
+    if ($wslPresent -and $statusUsable -and $systemdCapable) {
+        try {
+            # --status can succeed even when the WSL2 utility VM cannot start
+            # (for example, a guest whose outer hypervisor does not expose the
+            # capabilities required by nested Hyper-V). The Store WSL system
+            # distro is disposable and starts no user-owned distribution, so a
+            # no-op inside it is the narrowest real kernel-start proof.
+            & $wslExe --system --exec /bin/true *> $null
+            $kernelUsable = ($LASTEXITCODE -eq 0)
+        } catch {}
+    }
     $boot = ''
     if ($null -ne $operatingSystem -and $null -ne $operatingSystem.LastBootUpTime) {
         try { $boot = $operatingSystem.LastBootUpTime.ToUniversalTime().ToString('o') } catch {}
@@ -512,6 +524,7 @@ function Get-LivePreflightFacts {
             statusUsable = $statusUsable
             version = $wslVersion
             systemdCapable = $systemdCapable
+            kernelUsable = $kernelUsable
         }
     }
 }
@@ -543,6 +556,10 @@ function Get-PreflightDecision($Facts) {
         $firmwareNotice = ([string]$Facts.firmwareVirtualization -eq 'unknown')
     } elseif ($Facts.wsl.statusUsable -ne $true -or $Facts.wsl.systemdCapable -ne $true) {
         $code = 'wsl-update-required'
+    } elseif ($Facts.wsl.kernelUsable -ne $true) {
+        # HypervisorPresent and firmware capability flags describe host
+        # configuration, not whether WSL2 can actually launch its utility VM.
+        $code = 'wsl-kernel-unavailable'; $blocked = $true
     }
     return [pscustomobject][ordered]@{
         code = $code
@@ -980,10 +997,14 @@ function Initialize-State {
         if ($ResumeMode -eq '1') {
             $incomingSha = Get-Sha256 $InstallerPath
             if (-not $state.resume.installerSha256 -or
-                    $incomingSha -ne [string]$state.resume.installerSha256 -or
-                    (Normalize-Path $InstallerPath) -ne (Normalize-Path ([string]$state.resume.installerPath))) {
+                    $incomingSha -ne [string]$state.resume.installerSha256) {
                 throw 'Automatic resume installer identity does not match saved state.'
             }
+            # MSIX-packaged launchers can expose the same owner-scoped file
+            # through Packages\<family>\LocalCache\Local while an unelevated
+            # installer records the ordinary LocalAppData spelling. Exact
+            # content identity plus the owner-bound state is authoritative;
+            # requiring the alias string to match makes a valid restart fail.
             if (-not $BootIdentity -or [string]$state.boot.lastIdentity -eq $BootIdentity) {
                 throw 'The required restart has not been observed; Setup will not loop in the same boot.'
             }
