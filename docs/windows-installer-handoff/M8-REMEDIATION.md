@@ -1,7 +1,8 @@
 # M8 failed-candidate remediation
 
 Date: 2026-09-11
-Source commit: `7e9712ff3f3162c5aecfe4d396c3c2e4e54746c9`
+Source commits: `7e9712ff3f3162c5aecfe4d396c3c2e4e54746c9`,
+`375dd1c7111f2606527a568dd0494a29c00eced2`
 
 ## Scope
 
@@ -24,6 +25,8 @@ boundaries but does not convert any diagnostic run into candidate acceptance.
 6. Kernel-start and import failures record durable `failed` state before Setup
    exits, leaving user-owned distributions untouched.
 7. Unattended instructions require `/RESTARTEXITCODE=8` with `/NORESTART`.
+8. Candidate prerelease text and a distinct numeric build are embedded into
+   Setup's PE metadata; CI reads the compiled EXE and rejects version drift.
 
 ## Local verification
 
@@ -39,6 +42,10 @@ boundaries but does not convert any diagnostic run into candidate acceptance.
 - Inno Setup 6.3.3 diagnostic compile: PASS. It reused old payloads solely to
   exercise compilation and is not identity-coherent acceptance evidence.
 - Live preflight: WSL 2.4.13, systemd and kernel probes passed, decision ready.
+- `1.0.0-test.2` passed all ten artifact checks and the bundle verifier, but
+  local PE inspection found Setup version `1.0.0`. It was rejected before M8.
+- Corrected Inno compile reports text `1.0.0-test.3` and numeric `1.0.0.3`;
+  focused setup/release tests: 51 passed.
 
 ## Candidate boundary
 

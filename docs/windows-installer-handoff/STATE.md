@@ -1,12 +1,12 @@
 # LanEx installer checkpoint
 
 Date: 2026-09-11
-Stage: M0-M7 complete; M8 candidate 1.0.0-test.1 failed; remediation committed.
+Stage: M0-M7 complete; M8 candidates test.1/test.2 rejected; remediation committed.
 Canonical pack: `C:\Users\itsva\lanex\docs\windows-installer-handoff`.
 Repo: `C:\Users\itsva\lanex`
 Branch: `windows-installer-support`
-HEAD: `7e9712ff3f3162c5aecfe4d396c3c2e4e54746c9`
-Git status after source commit: clean, branch ahead of origin by 1.
+HEAD before checkpoint refresh: `375dd1c7111f2606527a568dd0494a29c00eced2`
+Git status before checkpoint refresh: only this STATE/evidence update.
 
 ## Milestones and decisions
 
@@ -36,6 +36,9 @@ Git status after source commit: clean, branch ahead of origin by 1.
 - Remaining 48 cases are NOT RUN. Diagnostic binaries earn no acceptance PASS.
 - The VirtualBox guest later enabled WSL features but every WSL2 import failed
   with `HCS_E_HYPERV_NOT_INSTALLED`; it could not prove M8 acceptance.
+- Replacement `1.0.0-test.2` built green at `726b733`, but independent local
+  inspection rejected it before testing: Setup's PE version was `1.0.0`, not
+  its manifest identity `1.0.0-test.2`. It is not an Akshat test candidate.
 
 ## Handback and remediation
 
@@ -50,6 +53,8 @@ Git status after source commit: clean, branch ahead of origin by 1.
   `failed` state and preserve existing distributions/data.
 - Unattended documentation now requires
   `/NORESTART /RESTARTEXITCODE=8` for a reliable restart-required exit code.
+- `375dd1c` gives Setup distinct full-text and numeric PE versions, maps
+  `test.N` to numeric build `N`, and makes CI verify both fields after compile.
 - Detailed implementation/test evidence: `M8-REMEDIATION.md`.
 
 ## Verified local evidence
@@ -60,6 +65,10 @@ Git status after source commit: clean, branch ahead of origin by 1.
 - Setup + release + provisioning + network suites: 91 passed.
 - Inno Setup 6.3.3 compile passed with preserved candidate payloads strictly as
   a diagnostic syntax/build check; no acceptance identity was assigned.
+- Candidate `test.2` artifact: 10/10 SHA256SUMS and repository bundle verifier
+  passed; PE inspection then correctly prevented handoff.
+- Corrected local version build: text `1.0.0-test.3`, numeric `1.0.0.3`; 51
+  setup/release contract tests passed.
 - Live read-only preflight on this development PC: Windows build 26200, WSL
   2.4.13, both features enabled, kernel no-op passed, decision `ready`.
 - The live probe started only WSL's disposable system distro. It did not list,
@@ -67,9 +76,9 @@ Git status after source commit: clean, branch ahead of origin by 1.
 
 ## Current / next action
 
-- Push the two focused commits to `origin/windows-installer-support`.
+- Commit and push this checkpoint plus `375dd1c` to the support branch.
 - Wait for branch CI and differential workflows at the exact replacement SHA.
-- If green, dispatch unpublished candidate `1.0.0-test.2` with empty release
+- If green, dispatch unpublished candidate `1.0.0-test.3` with empty release
   tag, `publish_release=false`, and no acceptance-evidence path.
 - Download and independently verify the candidate bundle and all manifest/hash
   bindings. Prepare a new M8 transfer kit bound only to that exact source/EXE.
