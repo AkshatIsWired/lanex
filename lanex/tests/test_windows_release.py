@@ -99,7 +99,7 @@ def test_candidate_version_is_bound_to_numeric_and_text_pe_fields() -> None:
     assert '"/DAppVersion=${{ env.LANEX_VERSION }}"' in workflow
     assert '"/DAppVersionNumeric=${{ env.LANEX_VERSION_NUM }}"' in workflow
     assert "FileVersionRaw.ToString() -ne $env:LANEX_VERSION_NUM" in workflow
-    assert "ProductVersion -ne $env:LANEX_VERSION" in workflow
+    assert "ProductVersion.Trim() -ne $env:LANEX_VERSION" in workflow
     assert "VersionInfoVersion={#AppVersionNumeric}" in inno
     assert "VersionInfoProductVersion={#AppVersionNumeric}" in inno
     assert "VersionInfoTextVersion={#AppVersion}" in inno

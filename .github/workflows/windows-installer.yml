@@ -509,7 +509,9 @@ jobs:
           if ($version.FileVersionRaw.ToString() -ne $env:LANEX_VERSION_NUM) {
             throw "Setup numeric file version '$($version.FileVersionRaw)' does not match '$env:LANEX_VERSION_NUM'"
           }
-          if ($version.ProductVersion -ne $env:LANEX_VERSION) {
+          # Inno pads the PE string table value with spaces on some compiler
+          # builds; compare the displayed text after removing that padding.
+          if ($version.ProductVersion.Trim() -ne $env:LANEX_VERSION) {
             throw "Setup product version '$($version.ProductVersion)' does not match '$env:LANEX_VERSION'"
           }
           $setup
