@@ -301,16 +301,26 @@ jobs:
           if ($ver -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
             throw "invalid candidate version '$ver'"
           }
-          # VERSIONINFO and Inno both want a plain numeric x.y.z, so strip any
-          # pre-release suffix (v1.2.3-rc1 -> 1.2.3) for those fields.
-          $num = ($ver -split '-')[0]
-          $parts = $num -split '\.'
+          # PE binary versions are numeric, but the text resources retain the
+          # complete candidate identity. Map a trailing prerelease number into
+          # the fourth numeric field so test.1 and test.2 do not both claim
+          # 1.0.0.0 in Windows properties.
+          $versionParts = $ver -split '-', 2
+          $base = $versionParts[0]
+          $build = 0
+          if ($versionParts.Count -eq 2 -and $versionParts[1] -match '(\d+)$') {
+            $build = [int]$Matches[1]
+          }
+          if ($build -gt 65535) { throw "candidate numeric build exceeds 65535: $build" }
+          $num = "$base.$build"
+          $parts = $base -split '\.'
           while ($parts.Count -lt 3) { $parts += '0' }
           "LANEX_VERSION=$ver"            | Out-File -Append $env:GITHUB_ENV
           "LANEX_VERSION_NUM=$num"        | Out-File -Append $env:GITHUB_ENV
           "LANEX_VER_MAJOR=$($parts[0])"  | Out-File -Append $env:GITHUB_ENV
           "LANEX_VER_MINOR=$($parts[1])"  | Out-File -Append $env:GITHUB_ENV
           "LANEX_VER_PATCH=$($parts[2])"  | Out-File -Append $env:GITHUB_ENV
+          "LANEX_VER_BUILD=$build"        | Out-File -Append $env:GITHUB_ENV
           Write-Host "version: $ver (numeric $num)"
         env:
           LANEX_REQUESTED_VERSION: ${{ inputs.candidate_version }}
@@ -415,11 +425,11 @@ jobs:
             -ver-major ${{ env.LANEX_VER_MAJOR }} `
             -ver-minor ${{ env.LANEX_VER_MINOR }} `
             -ver-patch ${{ env.LANEX_VER_PATCH }} `
-            -ver-build 0 `
+            -ver-build ${{ env.LANEX_VER_BUILD }} `
             -product-ver-major ${{ env.LANEX_VER_MAJOR }} `
             -product-ver-minor ${{ env.LANEX_VER_MINOR }} `
             -product-ver-patch ${{ env.LANEX_VER_PATCH }} `
-            -product-ver-build 0 `
+            -product-ver-build ${{ env.LANEX_VER_BUILD }} `
             -file-version "${{ env.LANEX_VERSION }}" `
             -product-version "${{ env.LANEX_VERSION }}" `
             versioninfo.json
@@ -462,7 +472,10 @@ jobs:
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          $defines = @("/DAppVersion=${{ env.LANEX_VERSION_NUM }}")
+          $defines = @(
+            "/DAppVersion=${{ env.LANEX_VERSION }}",
+            "/DAppVersionNumeric=${{ env.LANEX_VERSION_NUM }}"
+          )
           # The ref this Setup was built from, so provision.sh installs the LanEx
           # that belongs with it — and so a Repair cannot silently pull the
           # appliance back to main. Same reasoning as the bake job's LANEX_REF.
@@ -491,7 +504,15 @@ jobs:
           }
           & $iscc /Qp @defines lanex.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-ChildItem LanEx-Setup.exe
+          $setup = Get-Item LanEx-Setup.exe
+          $version = $setup.VersionInfo
+          if ($version.FileVersionRaw.ToString() -ne $env:LANEX_VERSION_NUM) {
+            throw "Setup numeric file version '$($version.FileVersionRaw)' does not match '$env:LANEX_VERSION_NUM'"
+          }
+          if ($version.ProductVersion -ne $env:LANEX_VERSION) {
+            throw "Setup product version '$($version.ProductVersion)' does not match '$env:LANEX_VERSION'"
+          }
+          $setup
         env:
           LANEX_RELEASE_TAG: ${{ inputs.release_tag }}
 

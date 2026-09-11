@@ -46,6 +46,9 @@
 #ifndef AppVersion
   #define AppVersion   "1.0.0"
 #endif
+#ifndef AppVersionNumeric
+  #define AppVersionNumeric AppVersion
+#endif
 #define AppPublisher   "LanEx Contributors"
 #define AppURL         "https://github.com/AkshatIsWired/lanex"
 #define VirtualizationHelpURL "https://support.microsoft.com/en-US/Windows/Experience/enable-virtualization-on-windows"
@@ -153,7 +156,12 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/issues
 AppUpdatesURL={#AppURL}/releases
-VersionInfoVersion={#AppVersion}
+; Windows' binary version is numeric, while candidate identities retain their
+; full prerelease text in the version string resource and uninstall metadata.
+VersionInfoVersion={#AppVersionNumeric}
+VersionInfoProductVersion={#AppVersionNumeric}
+VersionInfoTextVersion={#AppVersion}
+VersionInfoProductTextVersion={#AppVersion}
 DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 LicenseFile={#RepoRoot}LICENSE

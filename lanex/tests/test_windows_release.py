@@ -89,3 +89,18 @@ def test_workflow_has_one_gated_publish_path_and_no_clobber() -> None:
     assert "github.event_name == 'workflow_dispatch'" in body
     assert "candidate-inputs" in body
     assert "CompanionRootfsSha256" in body
+
+
+def test_candidate_version_is_bound_to_numeric_and_text_pe_fields() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    inno = (REPO / "windows/installer/lanex.iss").read_text(encoding="utf-8")
+    assert '"LANEX_VER_BUILD=$build"' in workflow
+    assert "-ver-build ${{ env.LANEX_VER_BUILD }}" in workflow
+    assert '"/DAppVersion=${{ env.LANEX_VERSION }}"' in workflow
+    assert '"/DAppVersionNumeric=${{ env.LANEX_VERSION_NUM }}"' in workflow
+    assert "FileVersionRaw.ToString() -ne $env:LANEX_VERSION_NUM" in workflow
+    assert "ProductVersion -ne $env:LANEX_VERSION" in workflow
+    assert "VersionInfoVersion={#AppVersionNumeric}" in inno
+    assert "VersionInfoProductVersion={#AppVersionNumeric}" in inno
+    assert "VersionInfoTextVersion={#AppVersion}" in inno
+    assert "VersionInfoProductTextVersion={#AppVersion}" in inno
