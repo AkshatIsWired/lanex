@@ -5,7 +5,7 @@ Stage: M0-M7 complete; M8 candidates test.1/test.2 rejected; remediation committ
 Canonical pack: `C:\Users\itsva\lanex\docs\windows-installer-handoff`.
 Repo: `C:\Users\itsva\lanex`
 Branch: `windows-installer-support`
-HEAD before checkpoint refresh: `375dd1c7111f2606527a568dd0494a29c00eced2`
+HEAD before checkpoint refresh: `e0f98287db5e49c9b3b07e89bdfd569aff4de371`
 Git status before checkpoint refresh: only this STATE/evidence update.
 
 ## Milestones and decisions
@@ -55,6 +55,8 @@ Git status before checkpoint refresh: only this STATE/evidence update.
   `/NORESTART /RESTARTEXITCODE=8` for a reliable restart-required exit code.
 - `375dd1c` gives Setup distinct full-text and numeric PE versions, maps
   `test.N` to numeric build `N`, and makes CI verify both fields after compile.
+- `e0f9828` normalizes Inno's space-padded PE text before the CI comparison;
+  the first push run proved the gate fails closed on an unequal raw value.
 - Detailed implementation/test evidence: `M8-REMEDIATION.md`.
 
 ## Verified local evidence
@@ -68,7 +70,7 @@ Git status before checkpoint refresh: only this STATE/evidence update.
 - Candidate `test.2` artifact: 10/10 SHA256SUMS and repository bundle verifier
   passed; PE inspection then correctly prevented handoff.
 - Corrected local version build: text `1.0.0-test.3`, numeric `1.0.0.3`; 51
-  setup/release contract tests passed.
+  setup/release tests plus the final 4 release-gate tests passed.
 - Live read-only preflight on this development PC: Windows build 26200, WSL
   2.4.13, both features enabled, kernel no-op passed, decision `ready`.
 - The live probe started only WSL's disposable system distro. It did not list,
