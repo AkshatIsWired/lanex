@@ -63,4 +63,3 @@ func TestNormalizeWindowsPath(t *testing.T) {
 		}
 	}
 }
-
