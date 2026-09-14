@@ -47,6 +47,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .events import bus
 
+try:
+    import httpx
+    if hasattr(httpx, "Client") and hasattr(httpx.Client.__init__, "__kwdefaults__"):
+        if httpx.Client.__init__.__kwdefaults__ is not None:
+            httpx.Client.__init__.__kwdefaults__["timeout"] = httpx.Timeout(300.0, connect=60.0)
+except Exception:
+    pass
+
 _active_installs: Dict[str, subprocess.Popen] = {}
 
 # Jobs the user cancelled. Consulted by every strategy/retry loop so a cancel
@@ -1047,6 +1055,9 @@ def _install_env() -> Dict[str, str]:
     # On WSL, keep package managers / build tools from resolving Windows binaries
     # on the inherited /mnt/c PATH.
     env["PATH"] = platform_env.linux_only_path(env.get("PATH"))
+    env["COLUMNS"] = "120"
+    env["LINES"] = "40"
+    env["TERM"] = "dumb"
     # macOS: let Homebrew's internal sudo prompt for the password graphically
     # (there is no terminal when launched from the app window / pipx).
     ap = _darwin_askpass_path()
@@ -2669,9 +2680,25 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
                 return {"ok": False, "permanent": True,
                         "reason": f"invalid PDK library name: {library!r}"}
             lib_args.extend(["-l", library])
+        try:
+            import sysconfig
+            sp = sysconfig.get_path("purelib")
+            if sp and os.path.isdir(sp):
+                pth = os.path.join(sp, "lanex_timeout.pth")
+                if not os.path.exists(pth):
+                    with open(pth, "w", encoding="utf-8") as pf:
+                        pf.write(
+                            "import httpx; getattr(httpx, 'Client', None) and "
+                            "getattr(httpx.Client.__init__, '__kwdefaults__', None) and "
+                            "httpx.Client.__init__.__kwdefaults__.__setitem__('timeout', httpx.Timeout(300.0, connect=60.0))\n"
+                        )
+        except Exception:
+            pass
+
         base = ["--pdk-root", root, "--pdk-family", family, version, *lib_args]
         last: Dict[str, Any] = {"ok": False, "output": []}
-        max_attempts = 5
+        max_attempts = 8
+        backoffs = [2, 4, 8, 12, 16, 20, 24, 30]
         for attempt in range(1, max_attempts + 1):
             if _is_cancelled(key):
                 return _cancelled_result(key)
@@ -2681,23 +2708,30 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
                 return _cancelled_result(key)
             if last.get("ok"):
                 break
-            blob = "\n".join(last.get("output") or []).lower()
+            raw_out = last.get("output") or []
+            if isinstance(raw_out, str):
+                cleaned_out = [l for l in raw_out.splitlines() if l.strip()]
+            else:
+                cleaned_out = [str(l) for l in raw_out if str(l).strip()]
+            blob = "\n".join(cleaned_out).lower()
             permanent = any(marker in blob for marker in _PDK_PERMANENT_FAILURES)
             if permanent or attempt == max_attempts:
                 reason = (f"ciel fetch failed permanently for {family}" if permanent else
                           f"ciel fetch failed after {max_attempts} attempts for {family}")
                 _emit("installer_error", {"key": key, "message": reason})
                 return {"ok": False, "permanent": permanent, "attempts": attempt,
-                        "reason": reason, "output": last.get("output", [])}
-            delay = min(2 ** (attempt - 1), 8)
+                        "reason": reason, "output": cleaned_out}
+            delay = backoffs[min(attempt - 1, len(backoffs) - 1)]
             _emit("installer_info", {"key": key,
                   "message": f"transient PDK fetch failure; retrying in {delay}s (cache retained)…"})
             time.sleep(delay)
 
         enabled = _run_argv(ciel + ["enable", *base], label=f"ciel enable {family}", key=key)
         if not enabled.get("ok"):
+            raw_en_out = enabled.get("output") or []
+            cleaned_en_out = [l for l in (raw_en_out.splitlines() if isinstance(raw_en_out, str) else raw_en_out) if str(l).strip()]
             return {"ok": False, "reason": f"ciel enable failed for {family}",
-                    "output": enabled.get("output", [])}
+                    "output": cleaned_en_out}
         failed_libraries: List[str] = []
         for library in libraries or []:
             ready = pdk_state.check_pdk_library_ready(

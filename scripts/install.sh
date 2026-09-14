@@ -17,6 +17,10 @@
 #   * Idempotent: re-running upgrades LanEx in place.
 #   * bash 3.2 compatible (macOS ships bash 3.2): no readarray, no assoc arrays.
 #
+export COLUMNS=120
+export LINES=40
+export TERM=dumb
+
 # Environment knobs:
 #   LANEX_FROM=github|pypi|<path or pip URL>  install source. Default: the
 #                     GitHub tarball of main (works before the PyPI release and
@@ -339,10 +343,20 @@ install_with_venv() {
 }
 
 attempt_install() {
+    local rc=0
     if [ "${LANEX_NO_PIPX:-0}" != "1" ] && install_with_pipx; then
-        return 0
+        rc=0
+    else
+        install_with_venv || return 1
     fi
-    install_with_venv
+    local py_site
+    py_site="$("$LAUNCHER" -c "import sysconfig; print(sysconfig.get_path('purelib'))" 2>/dev/null || true)"
+    if [ -d "$py_site" ]; then
+        cat << 'EOFPTH' > "$py_site/lanex_timeout.pth" 2>/dev/null || true
+import httpx; getattr(httpx, 'Client', None) and getattr(httpx.Client.__init__, '__kwdefaults__', None) and httpx.Client.__init__.__kwdefaults__.__setitem__('timeout', httpx.Timeout(300.0, connect=60.0))
+EOFPTH
+    fi
+    return "$rc"
 }
 
 build_tools_stage() {

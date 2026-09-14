@@ -59,7 +59,11 @@ def main() -> int:
     launcher_exe = REPO_ROOT / "windows" / "launcher" / "LanEx.exe"
     print("[*] Compiling Windows launcher LanEx.exe...")
     wsl_go_cmd = "cd /mnt/c/Users/itsva/lanex/windows/launcher && GOOS=windows GOARCH=amd64 go build -buildvcs=false -o LanEx.exe ."
-    run_cmd(["wsl.exe", "-d", "lanex", "-u", "root", "--", "bash", "-c", wsl_go_cmd])
+    go_distro = "Ubuntu"
+    chk = subprocess.run(["wsl.exe", "-d", go_distro, "-u", "root", "--", "which", "go"], capture_output=True)
+    if chk.returncode != 0:
+        go_distro = "lanex"
+    run_cmd(["wsl.exe", "-d", go_distro, "-u", "root", "--", "bash", "-c", wsl_go_cmd])
     if not launcher_exe.exists():
         raise SystemExit("LanEx.exe failed to build")
     print(f"[*] Built LanEx.exe: {sha256_file(launcher_exe)}")

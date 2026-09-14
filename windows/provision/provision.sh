@@ -38,6 +38,9 @@
 #   LANEX_BAKE=1           CI is cooking a rootfs image, not provisioning a
 #                          user's machine (see bake() below)
 set -u -o pipefail
+export COLUMNS=120
+export LINES=40
+export TERM=dumb
 
 REPO="${LANEX_REPO:-AkshatIsWired/lanex}"
 REF="${LANEX_REF:-main}"
@@ -529,6 +532,13 @@ install_lanex() {
         || { [ "$UPDATE_MODE" = "1" ] && rollback_update; die "the LanEx installer did not finish.
    The log above ends with its own error message.
    Click Retry — this step is safe to repeat."; }
+
+    find "/home/${APP_USER}/.local" -type d -name "site-packages" 2>/dev/null | while IFS= read -r sp; do
+        cat << 'EOFPTH' > "$sp/lanex_timeout.pth"
+import httpx; getattr(httpx, 'Client', None) and getattr(httpx.Client.__init__, '__kwdefaults__', None) and httpx.Client.__init__.__kwdefaults__.__setitem__('timeout', httpx.Timeout(300.0, connect=60.0))
+EOFPTH
+        chown "$APP_USER:$APP_USER" "$sp/lanex_timeout.pth" 2>/dev/null || true
+    done
 }
 
 write_identity_marker() {
@@ -603,6 +613,7 @@ finalize() {
     # PDK store failure and would violate the per-user appliance contract.
     runuser -m -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
         LOGNAME="$APP_USER" PATH="/usr/local/bin:/usr/bin:/bin:/home/${APP_USER}/.local/bin" \
+        COLUMNS=120 LINES=40 TERM=dumb \
         LANEX_SETUP_CANCEL_FILE="$CANCEL_FILE" \
         lanex --provision-finalize "$manifest" --setup-choices "$choices" \
         || die "one or more selected components did not become ready.

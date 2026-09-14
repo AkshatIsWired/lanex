@@ -585,6 +585,9 @@ begin
       '@echo off' + #13#10 +
       'chcp 65001 >nul' + #13#10 +
       'set WSL_UTF8=1' + #13#10 +
+      'set COLUMNS=120' + #13#10 +
+      'set LINES=40' + #13#10 +
+      'set TERM=dumb' + #13#10 +
       'call "' + FileName + '" ' + Params + ' >> "' + OutFile + '" 2>&1' + #13#10 +
       'echo %errorlevel% > "' + DoneFile + '"' + #13#10, False);
 
@@ -593,28 +596,31 @@ begin
     LastPos := 1;
     while not FileExists(DoneFile) do
     begin
-      Sleep(60);
+      Sleep(50);
       ProcessSystemMessages;
-      if FileExists(OutFile) and LoadStringFromFile(OutFile, Raw) then
+      if FileSize(OutFile, CurrLen) and (CurrLen >= LastPos) then
       begin
-        CurrLen := Length(Raw);
-        if CurrLen > LastPos then
+        if LoadStringFromFile(OutFile, Raw) then
         begin
-          P := LastPos;
-          while P <= CurrLen do
+          CurrLen := Length(Raw);
+          if CurrLen >= LastPos then
           begin
-            NextNL := P;
-            while (NextNL <= CurrLen) and (Raw[NextNL] <> #10) do
-              NextNL := NextNL + 1;
-            if NextNL <= CurrLen then
+            P := LastPos;
+            while P <= CurrLen do
             begin
-              Line := Copy(String(Raw), P, NextNL - P);
-              CommandOutput(Line, False, False);
-              P := NextNL + 1;
-              LastPos := P;
-            end
-            else
-              Break;
+              NextNL := P;
+              while (NextNL <= CurrLen) and (Raw[NextNL] <> #10) do
+                NextNL := NextNL + 1;
+              if NextNL <= CurrLen then
+              begin
+                Line := Copy(String(Raw), P, NextNL - P);
+                CommandOutput(Line, False, False);
+                P := NextNL + 1;
+                LastPos := P;
+              end
+              else
+                Break;
+            end;
           end;
         end;
       end;
@@ -2174,7 +2180,7 @@ begin
   LinuxChoices := WindowsToWslPath(StateFile);
   Params := '-d ' + DistroNameValue + ' -u root -- env '
     + 'LANEX_USER="lanex" LANEX_BUILD_MANIFEST="' + LinuxManifest + '" '
-    + 'LANEX_SETUP_CHOICES="' + LinuxChoices + '" bash "' + LinuxScript + '" finalize';
+    + 'LANEX_SETUP_CHOICES="' + LinuxChoices + '" COLUMNS=120 LINES=40 TERM=dumb bash "' + LinuxScript + '" finalize';
   repeat
     SetPhase(6, 6, 'Installing and verifying the selected tools, image, and PDKs...');
     if RunLogged(WslExe, Params, Code) and (Code = 0) then
