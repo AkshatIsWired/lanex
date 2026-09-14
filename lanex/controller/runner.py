@@ -936,6 +936,7 @@ class FlowRunner:
                 extra_sources=extra_sources,
                 extra_extras=extra_extras,
                 overwrite=overwrite,
+                entry_module="lanex.controller.librelane_entry",
             )
             # Force LibreLane to the engine the GUI determined is usable (so a
             # present-but-unusable Docker can't shadow a working Podman), and
@@ -943,10 +944,15 @@ class FlowRunner:
             # usable without a re-login.
             run_env = os.environ.copy()
             try:
-                from . import tools
+                from . import tools, container_run
 
                 resolved = tools.resolve_engine()
                 run_env.update(resolved.get("env") or {})
+                if resolved.get("engine"):
+                    run_env["LIBRELANE_CONTAINER_ENGINE"] = resolved["engine"]
+                img = container_run.image_ref()
+                if img:
+                    run_env["LIBRELANE_IMAGE_OVERRIDE"] = img
                 if resolved.get("sg_wrap"):
                     argv = tools.sg_wrap_argv(argv)
             except Exception:
@@ -1160,13 +1166,19 @@ class FlowRunner:
                 # Only the FIRST step may overwrite an existing tag; later steps
                 # MUST reuse the run dir (overwrite would wipe prior step state).
                 overwrite=bool(c["overwrite"]) and idx == 0,
+                entry_module="lanex.controller.librelane_entry",
             )
             run_env = os.environ.copy()
             try:
-                from . import tools
+                from . import tools, container_run
 
                 resolved = tools.resolve_engine()
                 run_env.update(resolved.get("env") or {})
+                if resolved.get("engine"):
+                    run_env["LIBRELANE_CONTAINER_ENGINE"] = resolved["engine"]
+                img = container_run.image_ref()
+                if img:
+                    run_env["LIBRELANE_IMAGE_OVERRIDE"] = img
                 if resolved.get("sg_wrap"):
                     argv = tools.sg_wrap_argv(argv)
             except Exception:

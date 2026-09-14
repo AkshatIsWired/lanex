@@ -54,6 +54,7 @@ case "$ENGINE" in
         check "$APP_USER is in the docker group" "id -nG '$APP_USER' | grep -qw docker"
         ;;
     podman) check "podman is installed" "command -v podman" ;;
+    none) ok "engine: none (minimal profile)" ;;
     *) bad "saved container-engine choice is valid" ;;
 esac
 # Both preconditions the appliance's "you never need a terminal" promise rests

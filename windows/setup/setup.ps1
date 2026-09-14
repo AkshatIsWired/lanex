@@ -17,7 +17,7 @@ param(
     [string]$Action,
     [string]$StatePath,
     [string]$ManifestPath,
-    [ValidateSet('install', 'repair', 'update')]
+    [ValidateSet('install', 'repair', 'update', 'modify', 'resume')]
     [string]$Operation = 'install',
     [string]$ChoicesJson = '{}',
     [string]$ChoicesPath,
@@ -203,7 +203,15 @@ function Get-RegistryEntries {
 
 function Normalize-Path([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
-    return [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Path)).TrimEnd('\').ToLowerInvariant()
+    $p = [Environment]::ExpandEnvironmentVariables($Path).Trim().Trim('"')
+    if ($p.StartsWith('\\?\UNC\', [StringComparison]::OrdinalIgnoreCase)) {
+        $p = '\\' + $p.Substring(8)
+    } elseif ($p.StartsWith('\\?\', [StringComparison]::OrdinalIgnoreCase)) {
+        $p = $p.Substring(4)
+    } elseif ($p.StartsWith('\\.\', [StringComparison]::OrdinalIgnoreCase)) {
+        $p = $p.Substring(4)
+    }
+    return [IO.Path]::GetFullPath($p).TrimEnd('\').ToLowerInvariant()
 }
 
 function Add-OrSet($Object, [string]$Name, $Value) {
@@ -346,26 +354,48 @@ function Get-SelectionEstimate($Manifest, $Choices, $ExistingState = $null) {
     $baseNetwork = [int64]([math]::Ceiling(0.9 * $gib))
     $nativeInstalled = if (@($Choices.nativeTools).Count -gt 0) { [int64]([math]::Ceiling(1.2 * $gib)) } else { 0 }
     $nativeNetwork = if (@($Choices.nativeTools).Count -gt 0) { [int64]([math]::Ceiling(0.7 * $gib)) } else { 0 }
-    $imageNetwork = if ($Choices.image) { 3 * $gib } else { 0 }
-    $imageInstalled = if ($Choices.image) { 4 * $gib } else { 0 }
+    $imageNetwork = if ($Choices.image) { [int64](3.2 * $gib) } else { 0 }
+    $imageInstalled = if ($Choices.image) { [int64]7524155924 } else { 0 }
     $pdkNetwork = [int64]0
+    $pdkInstalled = [int64]0
+    $hasSky130 = $false
+    $hasGf180 = $false
+    $hasIhp = $false
     foreach ($variant in @($Choices.pdks)) {
-        $approx = [double]$Manifest.pdkCatalog.PSObject.Properties[[string]$variant].Value.approx_gb
-        $pdkNetwork += [int64]([math]::Ceiling($approx * $gib))
+        $pdkProp = $Manifest.pdkCatalog.PSObject.Properties[[string]$variant]
+        if ($null -ne $pdkProp) {
+            $approx = [double]$pdkProp.Value.approx_gb
+            $pdkNetwork += [int64]([math]::Ceiling($approx * $gib))
+            $fam = [string]$pdkProp.Value.family
+            if ($fam -eq 'sky130' -and -not $hasSky130) {
+                $hasSky130 = $true
+                $pdkInstalled += [int64]16500000000
+            } elseif ($fam -eq 'gf180mcu' -and -not $hasGf180) {
+                $hasGf180 = $true
+                $pdkInstalled += [int64](8.5 * $gib)
+            } elseif ($fam -eq 'ihp-sg13g2' -and -not $hasIhp) {
+                $hasIhp = $true
+                $pdkInstalled += [int64](4.0 * $gib)
+            }
+        }
     }
-    $pdkInstalled = [int64]([math]::Ceiling($pdkNetwork * 1.6))
+    if ($pdkInstalled -eq 0 -and $pdkNetwork -gt 0) {
+        $pdkInstalled = [int64]([math]::Ceiling($pdkNetwork * 1.6))
+    }
     $runHeadroom = if ($Choices.image) { 4 * $gib } else { 1 * $gib }
-    $download = $rootfs + $baseNetwork + $nativeNetwork + $imageNetwork + $pdkNetwork
+    $extractionHeadroomBytes = [int64]([math]::Ceiling(($imageNetwork + $pdkNetwork) * 0.35))
+    $isEmbedded = ($env:LANEX_EMBEDDED_ROOTFS -eq '1')
+    $rootfsDownload = if ($isEmbedded) { [int64]0 } else { $rootfs }
+    $download = $rootfsDownload + $baseNetwork + $nativeNetwork + $imageNetwork + $pdkNetwork
     $installed = $baseInstalled + $nativeInstalled + $imageInstalled + $pdkInstalled
-    $appDataRequired = $rootfs + $installed + $runHeadroom
-    $tempRequired = $rootfs
+    $appDataRequired = $rootfsDownload + $installed + $runHeadroom + $extractionHeadroomBytes
+    $tempRequired = if ($isEmbedded) { [int64]0 } else { $rootfs }
     $reused = [int64]0
     if ($null -ne $ExistingState -and $null -ne $ExistingState.components) {
         if ([string]$ExistingState.components.app.status -eq 'complete') {
-            $reused += $rootfs + $baseInstalled
-            $appDataRequired -= $rootfs + $baseInstalled
-            $tempRequired = 0
-            $download -= $rootfs + $baseNetwork
+            $reused += $baseInstalled
+            $appDataRequired -= $baseInstalled
+            $download -= $baseNetwork
         }
         if ([string]$ExistingState.components.image.status -eq 'complete' -and $Choices.image) {
             $reused += $imageInstalled
@@ -386,7 +416,7 @@ function Get-SelectionEstimate($Manifest, $Choices, $ExistingState = $null) {
         downloadBytes = [int64]$download
         installedBytes = $installed
         reusedInstalledBytes = $reused
-        extractionHeadroomBytes = [int64]([math]::Ceiling(($imageNetwork + $pdkNetwork) * 0.35))
+        extractionHeadroomBytes = $extractionHeadroomBytes
         practicalRunHeadroomBytes = $runHeadroom
         volumes = [pscustomobject][ordered]@{
             appDataRequiredBytes = [int64]$appDataRequired
@@ -502,7 +532,22 @@ function Get-LivePreflightFacts {
     if ($null -ne $operatingSystem -and $null -ne $operatingSystem.LastBootUpTime) {
         try { $boot = $operatingSystem.LastBootUpTime.ToUniversalTime().ToString('o') } catch {}
     }
-    if (-not $boot) { $boot = 'uptime-' + [string][Environment]::TickCount64 }
+    if (-not $boot) {
+        try {
+            $cim = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+            if ($cim -and $cim.LastBootUpTime) {
+                $boot = $cim.LastBootUpTime.ToUniversalTime().ToString('o')
+            }
+        } catch {}
+    }
+    if (-not $boot) {
+        try {
+            $tick = [System.Environment]::TickCount
+            $boot = 'uptime-' + [string]$tick
+        } catch {
+            $boot = 'uptime-' + [string][DateTime]::UtcNow.Ticks
+        }
+    }
 
     return [pscustomobject][ordered]@{
         nativeArchitecture = $nativeArchitecture.ToUpperInvariant()
@@ -644,7 +689,7 @@ function Get-ResumePaths {
             trigger = Join-Path $TestResumeRoot 'runonce.txt'
         }
     }
-    $folder = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\LanEx'
+    $folder = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\LanEx (EDA)'
     [IO.Directory]::CreateDirectory($folder) | Out-Null
     return [pscustomobject]@{
         shortcut = Join-Path $folder 'Continue LanEx Setup.lnk'
@@ -763,7 +808,6 @@ function Clear-OwnerResume {
         Remove-Item -LiteralPath ([string]$state.resume.manualShortcut) -Force -ErrorAction SilentlyContinue
     }
     $state.resume.triggerRegistered = $false
-    $state.phase = 'resume-cleared'
     Write-AtomicJson $StatePath $state
     return $state
 }
@@ -1032,9 +1076,12 @@ function Initialize-State {
         Add-OrSet $state 'currentInstallerSha256' $installerSha
         $state.operation = $Operation
         # Existing choices are authoritative on resume/manual rerun. New choices
-        # are accepted only for an explicit update.
-        if ($Operation -eq 'update') { $state.choices = $choices }
-        else { $state.choices = ConvertTo-NormalizedChoices $manifest $state.choices }
+        # are accepted only for an explicit update or modify.
+        if ($Operation -eq 'update' -or $Operation -eq 'modify') {
+            if ($rawChoices) { $state.choices = $choices }
+        } else {
+            $state.choices = ConvertTo-NormalizedChoices $manifest $state.choices
+        }
     } else {
         if ($Operation -eq 'repair') { throw 'Repair requires an existing owner-scoped install state.' }
         $state = [pscustomobject][ordered]@{
@@ -1067,13 +1114,36 @@ function Resolve-Appliance {
     $state = Migrate-State (Read-JsonFile $StatePath 'Install state')
     Assert-StateOwner $state (Get-OwnerSid)
     $entries = @(Get-RegistryEntries)
+    $canonExpected = Normalize-Path $ExpectedBasePath
     if ($state.appliance.registryId) {
         $owned = @($entries | Where-Object {
             [string]$_.registryId -eq [string]$state.appliance.registryId -and
             [string]::Equals([string]$_.name, [string]$state.appliance.name, [StringComparison]::OrdinalIgnoreCase) -and
             (Normalize-Path ([string]$_.basePath)) -eq (Normalize-Path ([string]$state.appliance.basePath))
         })
-        if ($owned.Count -ne 1) { throw 'The recorded appliance registration identity no longer matches Windows.' }
+        if ($owned.Count -eq 1) { return $state.appliance }
+        throw 'The recorded appliance registration identity no longer matches Windows.'
+    }
+    $atExpected = @($entries | Where-Object { (Normalize-Path ([string]$_.basePath)) -eq $canonExpected })
+    if ($atExpected.Count -eq 1) {
+        $matched = $atExpected[0]
+        $markerRaw = & wsl.exe -d ([string]$matched.name) -u root -- cat /etc/lanex/appliance.json 2>$null
+        if ($LASTEXITCODE -eq 0 -and $markerRaw) {
+            try {
+                $marker = ($markerRaw | Out-String) | ConvertFrom-Json
+                if ($marker.installId -and [string]$marker.installId -ne [string]$state.installId) {
+                    throw "An existing distribution at $ExpectedBasePath belongs to installId $($marker.installId), not $($state.installId)."
+                }
+            } catch {
+                if ($_.Exception.Message -match "belongs to installId") { throw $_ }
+                throw "Linux ownership marker in distribution $($matched.name) is malformed."
+            }
+        }
+        $state.appliance.name = [string]$matched.name
+        $state.appliance.basePath = $ExpectedBasePath
+        $state.appliance.registryId = [string]$matched.registryId
+        $state.phase = 'appliance-bound'
+        Write-AtomicJson $StatePath $state
         return $state.appliance
     }
     $collision = @($entries | Where-Object { [string]::Equals([string]$_.name, $PreferredDistroName, [StringComparison]::OrdinalIgnoreCase) })
@@ -1090,9 +1160,10 @@ function Resolve-Appliance {
 function Bind-Appliance {
     $state = Migrate-State (Read-JsonFile $StatePath 'Install state')
     Assert-StateOwner $state (Get-OwnerSid)
+    $targetPath = Normalize-Path ([string]$state.appliance.basePath)
     $matches = @(Get-RegistryEntries | Where-Object {
         [string]::Equals([string]$_.name, [string]$state.appliance.name, [StringComparison]::OrdinalIgnoreCase) -and
-        (Normalize-Path ([string]$_.basePath)) -eq (Normalize-Path ([string]$state.appliance.basePath))
+        (Normalize-Path ([string]$_.basePath)) -eq $targetPath
     })
     if ($matches.Count -ne 1) { throw 'Imported appliance registration did not match its expected name and path.' }
     $state.appliance.registryId = [string]$matches[0].registryId

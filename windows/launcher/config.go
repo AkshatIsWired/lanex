@@ -96,6 +96,21 @@ func validateOwnedReadyState(cfg applianceConfig, raw []byte, ownerSID string) e
 	return nil
 }
 
+func normalizeWindowsPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	p = strings.TrimSpace(os.ExpandEnv(p))
+	p = strings.Trim(p, `"`)
+	lower := strings.ToLower(p)
+	if strings.HasPrefix(lower, `\\?\unc\`) {
+		p = `\\` + p[8:]
+	} else if strings.HasPrefix(lower, `\\?\`) || strings.HasPrefix(lower, `\\.\`) {
+		p = p[4:]
+	}
+	return filepath.Clean(p)
+}
+
 func validateOwnedRegistration(raw []byte) error {
 	var state installerState
 	if err := json.Unmarshal(raw, &state); err != nil {
@@ -111,7 +126,7 @@ func validateOwnedRegistration(raw []byte) error {
 	name, _, nameErr := key.GetStringValue("DistributionName")
 	base, _, baseErr := key.GetStringValue("BasePath")
 	if nameErr != nil || baseErr != nil || !strings.EqualFold(name, state.Appliance.Name) ||
-		!strings.EqualFold(filepath.Clean(os.ExpandEnv(base)), filepath.Clean(os.ExpandEnv(state.Appliance.BasePath))) {
+		!strings.EqualFold(normalizeWindowsPath(base), normalizeWindowsPath(state.Appliance.BasePath)) {
 		return fmt.Errorf("owned WSL registration name/path no longer matches saved state")
 	}
 	return nil

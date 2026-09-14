@@ -395,6 +395,17 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
             if line:
                 print(str(line).rstrip(), flush=True)
 
+    draining = threading.Event()
+
+    def periodic_drain() -> None:
+        while not draining.is_set():
+            drain()
+            time.sleep(0.2)
+        drain()
+
+    drain_thread = threading.Thread(target=periodic_drain, name="lanex-setup-drain", daemon=True)
+    drain_thread.start()
+
     failures: List[Dict[str, Any]] = []
     engine = plan["engine"]
     if engine != "none" and not initial["checks"].get(f"engine:{engine}", {}).get("ready"):
@@ -451,7 +462,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
         if initial["checks"].get("container:image", {}).get("ready"):
             print("already verified: container:image", flush=True)
         else:
-            announce("image", "pulling and verifying the matched LibreLane image")
+            announce("container:image", "pulling and verifying the matched LibreLane image")
             result = installer.pull_image_sync(
                 image["reference"], image["digest"], expected_engine=plan["engine"]
             )
@@ -485,5 +496,35 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
     report["installFailures"] = failures
     report["cancelled"] = cancel_requested.is_set()
     report["ready"] = bool(report["ready"] and not failures)
+    draining.set()
+    drain_thread.join(timeout=1.0)
     current_key.clear()
+    if report["ready"]:
+        try:
+            from . import platform_env
+
+            home = platform_env.home()
+            home.mkdir(parents=True, exist_ok=True)
+            img_info = plan["manifest"].get("image", {})
+            ref = img_info.get("reference", "")
+            dig = img_info.get("digest", "")
+            rt_contract = {
+                "schema": 1,
+                "engine": plan["engine"],
+                "image": ref,
+                "digest": dig,
+                "imageRef": f"{ref}@{dig}" if (ref and dig) else ref,
+                "pdks": plan["pdks"],
+            }
+            tmp_path = home / "runtime.json.tmp"
+            tmp_path.write_text(
+                json.dumps(rt_contract, indent=2) + "\n", encoding="utf-8"
+            )
+            tmp_path.replace(home / "runtime.json")
+        except Exception as exc:
+            report["ready"] = False
+            report["installFailures"].append({
+                "component": "runtime:contract",
+                "result": {"ok": False, "reason": f"could not write runtime contract: {exc}"}
+            })
     return report

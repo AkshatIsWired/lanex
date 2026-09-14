@@ -23,6 +23,7 @@ without internet, the rest still imports) shells out to ``pip``,
 ``ciel``, ``brew`` or ``apt-get`` and streams its stdout back.
 """
 
+import json
 import os
 import re
 import shutil
@@ -657,6 +658,20 @@ def resolve_engine(preferred: Optional[str] = None) -> Dict[str, Any]:
     ``LIBRELANE_CONTAINER_ENGINE`` variable (so a present-but-unusable Docker
     never shadows a working Podman).
     """
+    if preferred is None:
+        try:
+            from . import platform_env
+
+            home = platform_env.home()
+            rt_path = home / "runtime.json"
+            if rt_path.is_file():
+                d = json.loads(rt_path.read_text(encoding="utf-8"))
+                preferred = d.get("engine")
+            elif (home / "image.lock").is_file():
+                d = json.loads((home / "image.lock").read_text(encoding="utf-8"))
+                preferred = d.get("engine")
+        except Exception:
+            pass
     res: Dict[str, Any] = {"engine": None, "ready": False, "sg_wrap": False, "env": {}}
     docker_path = shutil.which("docker") if preferred in (None, "docker") else None
     podman_path = shutil.which("podman") if preferred in (None, "podman") else None

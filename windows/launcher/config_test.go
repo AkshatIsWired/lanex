@@ -3,7 +3,10 @@
 
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseApplianceConfig(t *testing.T) {
 	raw := []byte(`{"schema":2,"installId":"11111111-2222-3333-4444-555555555555","ownerSid":"S-1-5-21-1000-1000-1000-1001","distroName":"lanex-11111111","sourceSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`)
@@ -42,3 +45,22 @@ func TestMutexIsScopedToOwnerAndAppliance(t *testing.T) {
 		t.Fatal("different Windows users share a launcher mutex")
 	}
 }
+
+func TestNormalizeWindowsPath(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{`C:\Users\foo\appliance`, `C:\Users\foo\appliance`},
+		{`\\?\C:\Users\foo\appliance`, `C:\Users\foo\appliance`},
+		{`\\?\unc\server\share\path`, `\\server\share\path`},
+		{`\\.\C:\Users\foo\appliance`, `C:\Users\foo\appliance`},
+	}
+	for _, tc := range cases {
+		got := normalizeWindowsPath(tc.input)
+		if !strings.EqualFold(got, tc.expected) {
+			t.Errorf("normalizeWindowsPath(%q) = %q; want %q", tc.input, got, tc.expected)
+		}
+	}
+}
+

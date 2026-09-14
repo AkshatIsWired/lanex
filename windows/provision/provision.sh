@@ -202,10 +202,14 @@ dns_guard() {
         warn "LANEX_PROVISION_DNS is deprecated; preserving the current resolver instead of installing public DNS."
     fi
     probe_endpoint "Ubuntu archive" "https://archive.ubuntu.com/ubuntu/dists/noble/InRelease"
-    probe_endpoint "Docker repository" "https://download.docker.com/linux/ubuntu/dists/noble/InRelease"
+    if [ "$SELECTED_ENGINE" = "docker" ]; then
+        probe_endpoint "Docker repository" "https://download.docker.com/linux/ubuntu/dists/noble/InRelease"
+    fi
     probe_endpoint "Python package index" "https://pypi.org/simple/"
-    probe_endpoint "GHCR registry" "https://ghcr.io/v2/"
-    probe_endpoint "PDK release redirects" "https://github.com/fossi-foundation/ciel/releases/latest"
+    if [ "$SELECTED_ENGINE" != "none" ]; then
+        probe_endpoint "GHCR registry" "https://ghcr.io/v2/"
+        probe_endpoint "PDK release redirects" "https://github.com/fossi-foundation/ciel/releases/latest"
+    fi
 }
 
 # -------------------------------------------------------------- 2. wsl.conf --
@@ -384,11 +388,19 @@ docker_ce() {
 SELECTED_ENGINE="docker"
 select_engine() {
     local choices="${LANEX_SETUP_CHOICES:-}"
-    if [ -f "$choices" ] && command -v python3 >/dev/null 2>&1; then
-        SELECTED_ENGINE="$(python3 -c \
-            'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(d.get("choices", d).get("engine", "docker"))' \
-            "$choices")" \
-            || die "the saved container-engine choice is unreadable."
+    if [ -f "$choices" ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            SELECTED_ENGINE="$(python3 -c \
+                'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(d.get("choices", d).get("engine", "docker"))' \
+                "$choices")" \
+                || die "the saved container-engine choice is unreadable."
+        else
+            local parsed_engine
+            parsed_engine="$(grep -o '"engine"[[:space:]]*:[[:space:]]*"[^"]*"' "$choices" 2>/dev/null | head -n 1 | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/')"
+            if [ -n "$parsed_engine" ]; then
+                SELECTED_ENGINE="$parsed_engine"
+            fi
+        fi
     fi
     case "$SELECTED_ENGINE" in
         docker|podman) note "selected container engine: ${SELECTED_ENGINE}." ;;
@@ -474,6 +486,7 @@ install_lanex() {
     local source="${LANEX_FROM:-github}"
     local constraint=""
     mkdir -p "$payload_dir" || die "could not create the setup payload directory."
+    chmod 0755 "$payload_dir"
 
     if [ -n "$INSTALL_SH" ]; then
         [ -f "$INSTALL_SH" ] || die "the bundled LanEx installer is missing. Run Setup again."
@@ -488,7 +501,7 @@ install_lanex() {
             || die "could not stage the downloaded LanEx installer."
     fi
     bash -n "$installer" || die "the LanEx installer payload is invalid."
-    chmod 0644 "$installer"
+    chmod 0755 "$installer"
 
     if [ "$source" != "github" ] && [ "$source" != "pypi" ] && [ -f "$source" ]; then
         cp "$source" "$payload_dir/$(basename "$source")" \
@@ -503,6 +516,9 @@ install_lanex() {
             || die "could not stage the dependency lock."
         chmod 0644 "$constraint"
     fi
+
+    chmod -R a+rX "$payload_dir"
+    chown -R "$APP_USER:$APP_USER" "$payload_dir" 2>/dev/null || true
 
     prepare_update_rollback
     runuser -m -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
@@ -535,6 +551,7 @@ write_identity_marker() {
         "$LANEX_INSTALL_ID" "$LANEX_MANIFEST_HASH" "$LANEX_SOURCE_SHA" \
         > /etc/lanex/appliance.json \
         || die "could not record the appliance identity."
+    chmod 0644 /etc/lanex/appliance.json 2>/dev/null || true
 }
 
 # ----------------------------------------------------------------- 7. verify --
@@ -643,6 +660,10 @@ main() {
     fi
     recover_interrupted_dpkg
     check_cancel
+    select_engine
+    check_cancel
+    write_identity_marker
+    check_cancel
     dns_guard
     check_cancel
     wsl_conf
@@ -654,8 +675,6 @@ main() {
     base_packages
     check_cancel
     app_user
-    check_cancel
-    select_engine
     check_cancel
     case "$SELECTED_ENGINE" in
         docker) docker_ce ;;

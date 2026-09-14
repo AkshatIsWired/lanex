@@ -57,7 +57,18 @@ func healthyAt(url string) bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-	var health struct {
+	var envelope struct {
+		OK   *bool `json:"ok"`
+		Data struct {
+			Service    string `json:"service"`
+			Alive      bool   `json:"alive"`
+			InstanceID string `json:"instanceId"`
+			Source     struct {
+				SHA          string `json:"sha"`
+				ManifestHash string `json:"manifestHash"`
+			} `json:"source"`
+		} `json:"data"`
+		// Legacy flat fallback:
 		Service    string `json:"service"`
 		Alive      bool   `json:"alive"`
 		InstanceID string `json:"instanceId"`
@@ -67,17 +78,28 @@ func healthyAt(url string) bool {
 		} `json:"source"`
 	}
 	decoder := json.NewDecoder(io.LimitReader(resp.Body, 4096))
-	if err := decoder.Decode(&health); err != nil {
+	if err := decoder.Decode(&envelope); err != nil {
 		return false
 	}
 	var trailing any
 	if decoder.Decode(&trailing) != io.EOF {
 		return false
 	}
-	return health.Service == "lanex" && health.Alive &&
-		strings.EqualFold(health.InstanceID, activeConfig.InstallID) &&
-		strings.EqualFold(health.Source.SHA, activeConfig.SourceSHA) &&
-		strings.EqualFold(health.Source.ManifestHash, activeConfig.Manifest)
+
+	if envelope.OK != nil {
+		if !*envelope.OK {
+			return false
+		}
+		return envelope.Data.Service == "lanex" && envelope.Data.Alive &&
+			strings.EqualFold(envelope.Data.InstanceID, activeConfig.InstallID) &&
+			strings.EqualFold(envelope.Data.Source.SHA, activeConfig.SourceSHA) &&
+			strings.EqualFold(envelope.Data.Source.ManifestHash, activeConfig.Manifest)
+	}
+
+	return envelope.Service == "lanex" && envelope.Alive &&
+		strings.EqualFold(envelope.InstanceID, activeConfig.InstallID) &&
+		strings.EqualFold(envelope.Source.SHA, activeConfig.SourceSHA) &&
+		strings.EqualFold(envelope.Source.ManifestHash, activeConfig.Manifest)
 }
 
 // findRunningServer returns the port of a live LanEx server, if there is one.
@@ -108,8 +130,24 @@ var serverRecordPath = func() string {
 // to nothing, and a stale one (hard kill, no clean shutdown) is caught by the
 // health check the caller runs on the value.
 func serverJSONPort() (int, bool) {
-	raw, err := os.ReadFile(serverRecordPath())
-	if err != nil {
+	type readRes struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan readRes, 1)
+	p := serverRecordPath()
+	go func() {
+		d, e := os.ReadFile(p)
+		ch <- readRes{data: d, err: e}
+	}()
+	var raw []byte
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return 0, false
+		}
+		raw = res.data
+	case <-time.After(2 * time.Second):
 		return 0, false
 	}
 	var rec struct {

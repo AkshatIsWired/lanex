@@ -23,7 +23,8 @@ func TestHealthyAt(t *testing.T) {
 	activeConfig = applianceConfig{InstallID: "11111111-2222-3333-4444-555555555555",
 		SourceSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Manifest:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
-	valid := `{"service":"lanex","alive":true,"instanceId":"11111111-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`
+	realEnvelope := `{"ok":true,"data":{"service":"lanex","alive":true,"instanceId":"11111111-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"compat":{"ok":true,"version":"3.0.4"}}}`
+	legacyFlat := `{"service":"lanex","alive":true,"instanceId":"11111111-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`
 	cases := []struct {
 		name   string
 		status int
@@ -31,8 +32,13 @@ func TestHealthyAt(t *testing.T) {
 		want   bool
 	}{
 		// What routes.py's h_health actually replies.
-		{"owned lanex", 200, valid, true},
-		{"wrong instance", 200, `{"service":"lanex","alive":true,"instanceId":"99999999-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`, false},
+		{"real routes.py envelope", 200, realEnvelope, true},
+		{"legacy flat response", 200, legacyFlat, true},
+		{"envelope ok false", 200, `{"ok":false,"error":"internal error"}`, false},
+		{"envelope wrong instance", 200, `{"ok":true,"data":{"service":"lanex","alive":true,"instanceId":"99999999-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}`, false},
+		{"envelope wrong sha", 200, `{"ok":true,"data":{"service":"lanex","alive":true,"instanceId":"11111111-2222-3333-4444-555555555555","source":{"sha":"ffffffffffffffffffffffffffffffffffffffff","manifestHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}`, false},
+		{"envelope wrong manifest", 200, `{"ok":true,"data":{"service":"lanex","alive":true,"instanceId":"11111111-2222-3333-4444-555555555555","source":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestHash":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}}}`, false},
+		{"trailing json after envelope", 200, realEnvelope + `{"extra":1}`, false},
 		// A 200 from something else on 8765 must NOT be mistaken for LanEx —
 		// otherwise the launcher points its window at a stranger's dev server.
 		{"other server", 200, `{"service": "vite", "ok": true}`, false},
