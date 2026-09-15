@@ -323,7 +323,6 @@ var
   IdxGfNone, IdxGf180A, IdxGf180B, IdxGf180C, IdxGf180D: Integer;
   IdxIhp: Integer;
   IdxSkyHdll, IdxSkyLp, IdxSkyLs, IdxSkyMs, IdxSkyHs, IdxSkyReram: Integer;
-  IdxGfGp12, IdxGfGp9, IdxGfMcu7, IdxGfEfuse, IdxGfIo, IdxGfSram, IdxGfAlphaSmall, IdxGfAlphaLarge, IdxGfAlphaMisc: Integer;
   ChoicesJsonValue, ChoicesPathValue: String;
   EstimateDownloadMB, EstimateInstalledMB, RequiredAppMB, RequiredTempMB: Int64;
   ProgressPhase, ProgressPhaseCount: Integer;
@@ -550,7 +549,7 @@ begin
     '  [IO.File]::WriteAllText(''' + OutFile + ''', ($_.ToString() + [Environment]::NewLine + $_.ScriptStackTrace), $utf8NoBom);' + #13#10 +
     '  exit 1;' + #13#10 +
     '}' + #13#10, False);
-  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptFile + '"';
+  Params := '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + ScriptFile + '"';
   Result := Exec('powershell.exe', Params, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
   if FileExists(OutFile) and LoadStringFromFile(OutFile, Raw) then
     Output := Trim(StripNulls(String(Raw)));
@@ -912,18 +911,8 @@ begin
 
   if (CustomCheckListBox <> nil) and (GfVariant <> '') then
   begin
-    VariantLibs := '';
-    if CustomCheckListBox.Checked[IdxGfGp12] then AddJsonString(VariantLibs, 'gf180mcu_osu_sc_gp12t3v3');
-    if CustomCheckListBox.Checked[IdxGfGp9] then AddJsonString(VariantLibs, 'gf180mcu_osu_sc_gp9t3v3');
-    if CustomCheckListBox.Checked[IdxGfMcu7] then AddJsonString(VariantLibs, 'gf180mcu_as_sc_mcu7t3v3');
-    if CustomCheckListBox.Checked[IdxGfEfuse] then AddJsonString(VariantLibs, 'gf180mcu_re_efuse');
-    if CustomCheckListBox.Checked[IdxGfIo] then AddJsonString(VariantLibs, 'gf180mcu_ocd_io');
-    if CustomCheckListBox.Checked[IdxGfSram] then AddJsonString(VariantLibs, 'gf180mcu_ocd_ip_sram');
-    if CustomCheckListBox.Checked[IdxGfAlphaSmall] then AddJsonString(VariantLibs, 'gf180mcu_ocd_alpha_small');
-    if CustomCheckListBox.Checked[IdxGfAlphaLarge] then AddJsonString(VariantLibs, 'gf180mcu_ocd_alpha_large');
-    if CustomCheckListBox.Checked[IdxGfAlphaMisc] then AddJsonString(VariantLibs, 'gf180mcu_ocd_alpha_misc');
     if Libraries <> '' then Libraries := Libraries + ',';
-    Libraries := Libraries + '"' + GfVariant + '":[' + VariantLibs + ']';
+    Libraries := Libraries + '"' + GfVariant + '":[]';
   end;
 
   if (CustomCheckListBox <> nil) and CustomCheckListBox.Checked[IdxIhp] then
@@ -1477,17 +1466,6 @@ begin
   IdxSkyHs := CustomCheckListBox.AddCheckBox('sky130_fd_sc_hs', '', 0, True, True, False, True, nil);
   IdxSkyReram := CustomCheckListBox.AddCheckBox('sky130_fd_pr_reram (sky130B only)', '', 0, False, False, False, True, nil);
 
-  CustomCheckListBox.AddGroup('Advanced GF180 Libraries', '', 0, nil);
-  IdxGfGp12 := CustomCheckListBox.AddCheckBox('gf180mcu_osu_sc_gp12t3v3', '', 0, False, True, False, True, nil);
-  IdxGfGp9 := CustomCheckListBox.AddCheckBox('gf180mcu_osu_sc_gp9t3v3', '', 0, False, True, False, True, nil);
-  IdxGfMcu7 := CustomCheckListBox.AddCheckBox('gf180mcu_as_sc_mcu7t3v3', '', 0, False, True, False, True, nil);
-  IdxGfEfuse := CustomCheckListBox.AddCheckBox('gf180mcu_re_efuse', '', 0, False, True, False, True, nil);
-  IdxGfIo := CustomCheckListBox.AddCheckBox('gf180mcu_ocd_io', '', 0, False, True, False, True, nil);
-  IdxGfSram := CustomCheckListBox.AddCheckBox('gf180mcu_ocd_ip_sram', '', 0, False, True, False, True, nil);
-  IdxGfAlphaSmall := CustomCheckListBox.AddCheckBox('gf180mcu_ocd_alpha_small', '', 0, False, True, False, True, nil);
-  IdxGfAlphaLarge := CustomCheckListBox.AddCheckBox('gf180mcu_ocd_alpha_large', '', 0, False, True, False, True, nil);
-  IdxGfAlphaMisc := CustomCheckListBox.AddCheckBox('gf180mcu_ocd_alpha_misc', '', 0, False, True, False, True, nil);
-
   // Fast profile restoration without spawning PowerShell:
   SavedProfile := '';
   if FileExists(StateFile) then
@@ -1520,16 +1498,6 @@ begin
         CustomCheckListBox.Checked[IdxSkyMs] := ExtractJsonArrayContains(StateContent, 'sky130A', 'sky130_fd_sc_ms') or ExtractJsonArrayContains(StateContent, 'sky130B', 'sky130_fd_sc_ms');
         CustomCheckListBox.Checked[IdxSkyHs] := ExtractJsonArrayContains(StateContent, 'sky130A', 'sky130_fd_sc_hs') or ExtractJsonArrayContains(StateContent, 'sky130B', 'sky130_fd_sc_hs');
         CustomCheckListBox.Checked[IdxSkyReram] := ExtractJsonArrayContains(StateContent, 'sky130B', 'sky130_fd_pr_reram');
-
-        CustomCheckListBox.Checked[IdxGfGp12] := ExtractJsonArrayContains(StateContent, 'gf180mcuA', 'gf180mcu_osu_sc_gp12t3v3') or ExtractJsonArrayContains(StateContent, 'gf180mcuC', 'gf180mcu_osu_sc_gp12t3v3');
-        CustomCheckListBox.Checked[IdxGfGp9] := ExtractJsonArrayContains(StateContent, 'gf180mcuA', 'gf180mcu_osu_sc_gp9t3v3') or ExtractJsonArrayContains(StateContent, 'gf180mcuC', 'gf180mcu_osu_sc_gp9t3v3');
-        CustomCheckListBox.Checked[IdxGfMcu7] := ExtractJsonArrayContains(StateContent, 'gf180mcuA', 'gf180mcu_as_sc_mcu7t3v3') or ExtractJsonArrayContains(StateContent, 'gf180mcuC', 'gf180mcu_as_sc_mcu7t3v3');
-        CustomCheckListBox.Checked[IdxGfEfuse] := ExtractJsonArrayContains(StateContent, 'gf180mcuA', 'gf180mcu_re_efuse') or ExtractJsonArrayContains(StateContent, 'gf180mcuC', 'gf180mcu_re_efuse');
-        CustomCheckListBox.Checked[IdxGfIo] := ExtractJsonArrayContains(StateContent, 'gf180mcuA', 'gf180mcu_ocd_io') or ExtractJsonArrayContains(StateContent, 'gf180mcuC', 'gf180mcu_ocd_io');
-        CustomCheckListBox.Checked[IdxGfSram] := ExtractJsonArrayContains(StateContent, 'gf180mcuA', 'gf180mcu_ocd_ip_sram') or ExtractJsonArrayContains(StateContent, 'gf180mcuC', 'gf180mcu_ocd_ip_sram');
-        CustomCheckListBox.Checked[IdxGfAlphaSmall] := ExtractJsonArrayContains(StateContent, 'gf180mcuA', 'gf180mcu_ocd_alpha_small') or ExtractJsonArrayContains(StateContent, 'gf180mcuC', 'gf180mcu_ocd_alpha_small');
-        CustomCheckListBox.Checked[IdxGfAlphaLarge] := ExtractJsonArrayContains(StateContent, 'gf180mcuA', 'gf180mcu_ocd_alpha_large') or ExtractJsonArrayContains(StateContent, 'gf180mcuC', 'gf180mcu_ocd_alpha_large');
-        CustomCheckListBox.Checked[IdxGfAlphaMisc] := ExtractJsonArrayContains(StateContent, 'gf180mcuA', 'gf180mcu_ocd_alpha_misc') or ExtractJsonArrayContains(StateContent, 'gf180mcuC', 'gf180mcu_ocd_alpha_misc');
       end
       else
         ProfileRadioRecommended.Checked := True;
@@ -1902,7 +1870,7 @@ begin
     Result := False;
     Exit;
   end;
-  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'
+  Params := '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'
     + Worker + '" -Action EnableFeatures -ExpectedSelfSha256 {#SetupWorkerSha256}'
     + ' -OutputPath "' + OutputFile + '"';
   LogLine('$ elevated feature helper: Windows Subsystem for Linux + Virtual Machine Platform');
@@ -2823,7 +2791,7 @@ begin
     Exit;
 
   // Terminate any running LanEx launcher process for this specific installation
-  Exec('powershell.exe', '-NoProfile -Command "Get-Process -Name LanEx -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ''' + ExpandConstant('{app}') + '\*'' } | Stop-Process -Force"', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Exec('powershell.exe', '-NoProfile -WindowStyle Hidden -Command "Get-Process -Name LanEx -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ''' + ExpandConstant('{app}') + '\*'' } | Stop-Process -Force"', '', SW_HIDE, ewWaitUntilTerminated, Code);
 
   // Remove dynamically written launcher configuration
   DeleteFile(ExpandConstant('{app}\appliance.json'));

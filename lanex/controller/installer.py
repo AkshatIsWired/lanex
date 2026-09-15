@@ -2804,10 +2804,19 @@ def pull_image_sync(reference: str, expected_digest: str, *,
     argv = [engine, "pull", target]
     if resolved.get("sg_wrap"):
         argv = tools.sg_wrap_argv(argv)
-    result = _run_argv(argv, label=f"{engine} pull {expected_digest[:19]}…",
-                       key="container:image", timeout_s=4 * 3600)
-    if result.get("ok"):
-        record_image_digest(engine, target, sg_wrap=bool(resolved.get("sg_wrap")))
+    result: Dict[str, Any] = {"ok": False, "reason": "image pull failed"}
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        label = f"{engine} pull {expected_digest[:19]}…"
+        if attempt > 1:
+            label += f" (attempt {attempt}/{max_attempts})"
+        result = _run_argv(argv, label=label,
+                           key="container:image", timeout_s=4 * 3600)
+        if result.get("ok"):
+            record_image_digest(engine, target, sg_wrap=bool(resolved.get("sg_wrap")))
+            break
+        if attempt < max_attempts:
+            time.sleep(3.0)
     result.update({"engine": engine, "image": target})
     return result
 

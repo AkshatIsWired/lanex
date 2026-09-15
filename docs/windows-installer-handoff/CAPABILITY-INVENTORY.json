@@ -23,16 +23,7 @@
         "gf180mcu_fd_pr",
         "gf180mcu_fd_sc_mcu7t5v0",
         "gf180mcu_fd_sc_mcu9t5v0",
-        "gf180mcu_fd_ip_sram",
-        "gf180mcu_osu_sc_gp12t3v3",
-        "gf180mcu_osu_sc_gp9t3v3",
-        "gf180mcu_as_sc_mcu7t3v3",
-        "gf180mcu_re_efuse",
-        "gf180mcu_ocd_io",
-        "gf180mcu_ocd_ip_sram",
-        "gf180mcu_ocd_alpha_small",
-        "gf180mcu_ocd_alpha_large",
-        "gf180mcu_ocd_alpha_misc"
+        "gf180mcu_fd_ip_sram"
       ],
       "node": "180 nm",
       "recommended": false
@@ -46,7 +37,7 @@
         "gf180mcu_fd_sc_mcu9t5v0",
         "gf180mcu_fd_ip_sram"
       ],
-      "description": "GlobalFoundries 180 nm MCU open PDK. Variants A\u2013D differ in the available standard-cell / option set; D is ciel's default.",
+      "description": "GlobalFoundries 180 nm MCU open PDK. Variants A–D differ in the available standard-cell / option set; D is ciel's default.",
       "family": "gf180mcu",
       "foundry": "GlobalFoundries",
       "label": "gf180mcuB",
@@ -55,16 +46,7 @@
         "gf180mcu_fd_pr",
         "gf180mcu_fd_sc_mcu7t5v0",
         "gf180mcu_fd_sc_mcu9t5v0",
-        "gf180mcu_fd_ip_sram",
-        "gf180mcu_osu_sc_gp12t3v3",
-        "gf180mcu_osu_sc_gp9t3v3",
-        "gf180mcu_as_sc_mcu7t3v3",
-        "gf180mcu_re_efuse",
-        "gf180mcu_ocd_io",
-        "gf180mcu_ocd_ip_sram",
-        "gf180mcu_ocd_alpha_small",
-        "gf180mcu_ocd_alpha_large",
-        "gf180mcu_ocd_alpha_misc"
+        "gf180mcu_fd_ip_sram"
       ],
       "node": "180 nm",
       "recommended": false
@@ -78,7 +60,7 @@
         "gf180mcu_fd_sc_mcu9t5v0",
         "gf180mcu_fd_ip_sram"
       ],
-      "description": "GlobalFoundries 180 nm MCU open PDK. Variants A\u2013D differ in the available standard-cell / option set; D is ciel's default.",
+      "description": "GlobalFoundries 180 nm MCU open PDK. Variants A–D differ in the available standard-cell / option set; D is ciel's default.",
       "family": "gf180mcu",
       "foundry": "GlobalFoundries",
       "label": "gf180mcuC",
@@ -87,16 +69,7 @@
         "gf180mcu_fd_pr",
         "gf180mcu_fd_sc_mcu7t5v0",
         "gf180mcu_fd_sc_mcu9t5v0",
-        "gf180mcu_fd_ip_sram",
-        "gf180mcu_osu_sc_gp12t3v3",
-        "gf180mcu_osu_sc_gp9t3v3",
-        "gf180mcu_as_sc_mcu7t3v3",
-        "gf180mcu_re_efuse",
-        "gf180mcu_ocd_io",
-        "gf180mcu_ocd_ip_sram",
-        "gf180mcu_ocd_alpha_small",
-        "gf180mcu_ocd_alpha_large",
-        "gf180mcu_ocd_alpha_misc"
+        "gf180mcu_fd_ip_sram"
       ],
       "node": "180 nm",
       "recommended": false
@@ -110,7 +83,7 @@
         "gf180mcu_fd_sc_mcu9t5v0",
         "gf180mcu_fd_ip_sram"
       ],
-      "description": "GlobalFoundries 180 nm MCU open PDK. Variants A\u2013D differ in the available standard-cell / option set; D is ciel's default.",
+      "description": "GlobalFoundries 180 nm MCU open PDK. Variants A–D differ in the available standard-cell / option set; D is ciel's default.",
       "family": "gf180mcu",
       "foundry": "GlobalFoundries",
       "label": "gf180mcuD",
@@ -119,16 +92,7 @@
         "gf180mcu_fd_pr",
         "gf180mcu_fd_sc_mcu7t5v0",
         "gf180mcu_fd_sc_mcu9t5v0",
-        "gf180mcu_fd_ip_sram",
-        "gf180mcu_osu_sc_gp12t3v3",
-        "gf180mcu_osu_sc_gp9t3v3",
-        "gf180mcu_as_sc_mcu7t3v3",
-        "gf180mcu_re_efuse",
-        "gf180mcu_ocd_io",
-        "gf180mcu_ocd_ip_sram",
-        "gf180mcu_ocd_alpha_small",
-        "gf180mcu_ocd_alpha_large",
-        "gf180mcu_ocd_alpha_misc"
+        "gf180mcu_fd_ip_sram"
       ],
       "node": "180 nm",
       "recommended": true
@@ -160,9 +124,7 @@
         "sky130_fd_io",
         "sky130_fd_pr",
         "sky130_fd_sc_hd",
-        "sky130_fd_sc_hvl",
-        "sky130_ml_xx_hd",
-        "sky130_sram_macros"
+        "sky130_fd_sc_hvl"
       ],
       "description": "SkyWater 130 nm open PDK \u2014 the most widely used process for open-source tapeouts. Variant A is the default; variant B adds ReRAM/SONOS device models.",
       "family": "sky130",
@@ -171,15 +133,13 @@
       "libraries": [
         "sky130_fd_io",
         "sky130_fd_pr",
-        "sky130_ml_xx_hd",
         "sky130_fd_sc_hd",
         "sky130_fd_sc_hdll",
         "sky130_fd_sc_lp",
         "sky130_fd_sc_hvl",
         "sky130_fd_sc_ls",
         "sky130_fd_sc_ms",
-        "sky130_fd_sc_hs",
-        "sky130_sram_macros"
+        "sky130_fd_sc_hs"
       ],
       "node": "130 nm",
       "recommended": true
@@ -190,9 +150,7 @@
         "sky130_fd_io",
         "sky130_fd_pr",
         "sky130_fd_sc_hd",
-        "sky130_fd_sc_hvl",
-        "sky130_ml_xx_hd",
-        "sky130_sram_macros"
+        "sky130_fd_sc_hvl"
       ],
       "description": "SkyWater 130 nm open PDK \u2014 the most widely used process for open-source tapeouts. Variant A is the default; variant B adds ReRAM/SONOS device models.",
       "family": "sky130",
@@ -201,7 +159,6 @@
       "libraries": [
         "sky130_fd_io",
         "sky130_fd_pr",
-        "sky130_ml_xx_hd",
         "sky130_fd_sc_hd",
         "sky130_fd_sc_hdll",
         "sky130_fd_sc_lp",
@@ -209,7 +166,6 @@
         "sky130_fd_sc_ls",
         "sky130_fd_sc_ms",
         "sky130_fd_sc_hs",
-        "sky130_sram_macros",
         "sky130_fd_pr_reram"
       ],
       "node": "130 nm",
