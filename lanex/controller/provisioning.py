@@ -82,7 +82,7 @@ def load_plan(
             "engine": "docker",
             "image": True,
             "nativeTools": list(_NATIVE_DEFAULTS),
-            "pdks": ["sky130A"],
+            "pdks": ["sky130A", "gf180mcuD", "ihp-sg13g2"],
             "libraries": "all",
         }
     elif profile == "minimal":

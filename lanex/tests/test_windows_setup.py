@@ -70,6 +70,9 @@ def _manifest(path: Path, sha: str = "a" * 40, app_fp: str = "app-1") -> None:
             "gf180mcuD": {"family": "gf180mcu", "approx_gb": 1.8,
                            "libraries": ["gf180mcu_fd_sc_mcu7t5v0"],
                            "default_libraries": ["gf180mcu_fd_sc_mcu7t5v0"]},
+            "ihp-sg13g2": {"family": "ihp-sg13g2", "approx_gb": 1.5,
+                            "libraries": ["sg13g2_stdcell"],
+                            "default_libraries": ["sg13g2_stdcell"]},
         },
         "componentFingerprints": {"app": app_fp, "rootfs": "root-1"},
     }), encoding="utf-8")
@@ -428,7 +431,7 @@ def test_recommended_and_minimal_plans_are_canonical_and_honest(tmp_path: Path) 
     assert recommended["choices"] == {
         "schema": 1, "profile": "recommended", "engine": "docker", "image": True,
         "nativeTools": ["verilator", "iverilog", "graphviz", "gtkwave", "gds3d"],
-        "pdks": ["sky130A"], "libraries": "all",
+        "pdks": ["sky130A", "gf180mcuD", "ihp-sg13g2"], "libraries": "all",
     }
     assert recommended["estimates"]["downloadBytes"] > 6 * 1024**3
     assert recommended["estimates"]["volumes"]["tempRequiredBytes"] == 400_000_000

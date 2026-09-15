@@ -1011,6 +1011,7 @@ function CheckSelectionSpace(var Failure: String): Boolean;
 var
   AppFree, AppTotal, TempFree, TempTotal: Cardinal;
   AppNeed, TempNeed: Int64;
+  RootfsFileSize: Integer;
 begin
   Result := True;
   Failure := '';
@@ -1022,8 +1023,8 @@ begin
     TempNeed := 0;
     if AppNeed < 0 then AppNeed := 0;
   end
-  else if FileExists(RootfsPath) and
-     (CompareText(GetSHA256OfFile(RootfsPath), '{#RootfsSha256}') = 0) then
+  else if FileExists(RootfsPath) and FileSize(RootfsPath, RootfsFileSize) and
+     (RootfsFileSize >= 300 * 1024 * 1024) then
   begin
     AppNeed := AppNeed - {#RootfsSizeMB};
     TempNeed := 0;
@@ -1115,9 +1116,9 @@ var
 begin
   if (ProfileRadioRecommended <> nil) and ProfileRadioRecommended.Checked then
   begin
-    DownloadMB := 6800;
-    InstalledMB := 25000;
-    AppMB := 31500;
+    DownloadMB := 11200;
+    InstalledMB := 38100;
+    AppMB := 46000;
     TempMB := 0;
   end
   else if (ProfileRadioMinimal <> nil) and ProfileRadioMinimal.Checked then
@@ -1224,7 +1225,7 @@ begin
       'Recommended Profile Overview:'#13#10#13#10 +
       '• Container Engine: Docker CE'#13#10 +
       '• EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave, GDS3D'#13#10 +
-      '• Technology: SkyWater 130 nm PDK (sky130A) with standard digital cell libraries'#13#10 +
+      '• Technology: SkyWater 130 nm (sky130A), GlobalFoundries 180 nm (gf180mcuD), and IHP 130 nm BiCMOS (ihp-sg13g2)'#13#10 +
       '• Turnkey flow: Complete RTL-to-GDS flow ready out of the box.';
     ProfileDescLabel.Visible := True;
     CustomCheckListBox.Visible := False;
@@ -1359,7 +1360,7 @@ begin
   ProfileRadioRecommended.Top := ScaleY(2);
   ProfileRadioRecommended.Width := ConfigurePage.Surface.ClientWidth - ScaleX(8);
   ProfileRadioRecommended.Height := ScaleY(20);
-  ProfileRadioRecommended.Caption := '&Recommended — Docker, all supported tools, GDS3D, sky130A';
+  ProfileRadioRecommended.Caption := '&Recommended — Docker, all supported tools, GDS3D, recommended PDKs';
   ProfileRadioRecommended.Font.Style := [fsBold];
   ProfileRadioRecommended.OnClick := @OnProfileOptionChange;
 
@@ -2676,8 +2677,16 @@ begin
   end;
   if CurPageID = ConfigurePage.ID then
   begin
+    WizardForm.LicenseMemo.Visible := False;
+    ConfigurePage.Surface.BringToFront;
+    ConfigurePage.Surface.Repaint;
     WizardForm.NextButton.Caption := '&Install';
     UpdateEstimates;
+  end
+  else if CurPageID = wpLicense then
+  begin
+    WizardForm.LicenseMemo.Visible := True;
+    WizardForm.NextButton.Caption := SetupMessage(msgButtonNext);
   end
   else if CurPageID = wpFinished then
   begin

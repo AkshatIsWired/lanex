@@ -239,13 +239,15 @@ function ConvertTo-NormalizedChoices($Manifest, $RawChoices) {
         throw 'profile must be recommended, custom, or minimal.'
     }
     if ($profile -eq 'recommended') {
-        if ($null -eq $catalog.PSObject.Properties['sky130A']) {
-            throw 'The recommended sky130A PDK is absent from the build manifest.'
+        foreach ($requiredPdk in @('sky130A', 'gf180mcuD', 'ihp-sg13g2')) {
+            if ($null -eq $catalog.PSObject.Properties[$requiredPdk]) {
+                throw "The recommended $requiredPdk PDK is absent from the build manifest."
+            }
         }
         return [pscustomobject][ordered]@{
             schema = 1; profile = 'recommended'; engine = 'docker'; image = $true
             nativeTools = @('verilator', 'iverilog', 'graphviz', 'gtkwave', 'gds3d')
-            pdks = @('sky130A'); libraries = 'all'
+            pdks = @('sky130A', 'gf180mcuD', 'ihp-sg13g2'); libraries = 'all'
         }
     }
     if ($profile -eq 'minimal') {
