@@ -1710,7 +1710,8 @@ end;
 function InitializeDurableState: String;
 var
   Worker, Manifest, OperationName, Output, Snippet, SetupCopy,
-    StagedChoices, SourceCompanion, CachedCompanion, StateContent: String;
+    StagedChoices, SourceCompanion, CachedCompanion, StateContent,
+    ExistingManifestHash: String;
   RawState: AnsiString;
   HadState: Boolean;
 begin
@@ -1722,6 +1723,7 @@ begin
   ExtractTemporaryFile('{#LanexWheelFile}');
   Worker := ExpandConstant('{tmp}\setup.ps1');
   Manifest := ExpandConstant('{tmp}\build-manifest.json');
+  ManifestHashValue := Lowercase(GetSHA256OfFile(Manifest));
   StagedChoices := ExpandConstant('{tmp}\choices-state.json');
   if not SaveStringToFile(StagedChoices, ChoicesJsonValue, False) then
   begin
@@ -1740,7 +1742,10 @@ begin
     StateContent := '';
     if LoadStringFromFile(StateFile, RawState) then
       StateContent := String(RawState);
-    if ExtractJsonStringValue(StateContent, 'phase') = 'ready' then
+    ExistingManifestHash := Lowercase(ExtractJsonStringValue(StateContent, 'manifestHash'));
+    if (ExistingManifestHash <> '') and (CompareText(ExistingManifestHash, ManifestHashValue) <> 0) then
+      OperationName := 'update'
+    else if ExtractJsonStringValue(StateContent, 'phase') = 'ready' then
       OperationName := 'modify'
     else
       OperationName := 'resume';
@@ -2056,11 +2061,14 @@ end;
 // ProvisionDistro runs provision.sh inside the freshly imported distro.
 procedure RecordSetupOutcome(const Outcome, MessageText: String);
 var
-  Worker, Output, Snippet: String;
+  Worker, ManifestFile, Output, Snippet: String;
 begin
   Worker := ExpandConstant('{tmp}\setup.ps1');
+  ManifestFile := ExpandConstant('{tmp}\build-manifest.json');
   Snippet := '& ' + PSQuote(Worker) + ' -Action RecordOutcome -StatePath ' +
     PSQuote(StateFile) + ' -Outcome ' + Outcome + ' -OutcomeMessage ' + PSQuote(MessageText);
+  if FileExists(ManifestFile) then
+    Snippet := Snippet + ' -ManifestPath ' + PSQuote(ManifestFile);
   if not PowerShellCapture(Snippet, Output) then
     LogLine('WARNING: could not record setup outcome: ' + Output);
 end;

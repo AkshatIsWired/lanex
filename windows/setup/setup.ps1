@@ -1057,7 +1057,7 @@ function Initialize-State {
                 [string]$state.source.sha -ne [string]$manifest.source.sha)) {
             throw 'Repair cannot change build identity. Run the matching Setup or choose an explicit Update.'
         }
-        if ($Operation -eq 'update' -and [string]$state.manifestHash -ne $manifestHash) {
+        if (($Operation -eq 'update' -or [string]$state.manifestHash -ne $manifestHash) -and $Operation -ne 'repair') {
             if (-not $state.PSObject.Properties['previousBuild']) {
                 $snapshot = [pscustomobject][ordered]@{
                     manifestHash = [string]$state.manifestHash
@@ -1072,6 +1072,9 @@ function Initialize-State {
             Reset-ChangedComponents $state $manifest
             $state.manifestHash = $manifestHash
             $state.source = $manifest.source
+            if ($Operation -ne 'update') {
+                $Operation = 'update'
+            }
         }
         Add-OrSet $state 'currentInstallerSha256' $installerSha
         $state.operation = $Operation
@@ -1196,6 +1199,12 @@ function Set-SetupOutcome {
     $state.phase = $Outcome
     if ($Outcome -eq 'ready') {
         $state.failure = $null
+        if ($ManifestPath -and (Test-Path -LiteralPath $ManifestPath)) {
+            $manifest = Read-JsonFile $ManifestPath 'Build manifest'
+            $manifestHash = Get-Sha256 $ManifestPath
+            $state.manifestHash = $manifestHash
+            $state.source = $manifest.source
+        }
     } else {
         $state.failure = [pscustomobject][ordered]@{
             kind = $Outcome

@@ -190,6 +190,23 @@ def test_successful_update_commit_keeps_new_identity(tmp_path: Path) -> None:
     assert "previousBuild" not in committed
 
 
+def test_manifest_change_during_modify_or_resume_promotes_to_update(tmp_path: Path) -> None:
+    state, _, installer, _ = _initialize(tmp_path)
+    changed = tmp_path / "changed.json"
+    _manifest(changed, sha="c" * 40, app_fp="app-3")
+    updated = _run_setup("-Action", "InitializeState", "-StatePath", state,
+                         "-ManifestPath", changed, "-Operation", "modify",
+                         "-InstallerPath", installer, "-TestOwnerSid", OWNER)
+    assert updated["source"]["sha"] == "c" * 40
+    assert updated["operation"] == "update"
+    assert "previousBuild" in updated
+    _run_setup("-Action", "RecordOutcome", "-StatePath", state,
+               "-Outcome", "ready", "-ManifestPath", changed, "-TestOwnerSid", OWNER)
+    final_state = json.loads(state.read_text())
+    assert final_state["phase"] == "ready"
+    assert final_state["source"]["sha"] == "c" * 40
+
+
 def test_interrupted_atomic_write_preserves_previous_state(tmp_path: Path) -> None:
     state, manifest, installer, before = _initialize(tmp_path)
     old_bytes = state.read_bytes()

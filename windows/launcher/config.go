@@ -91,7 +91,8 @@ func validateOwnedReadyState(cfg applianceConfig, raw []byte, ownerSID string) e
 		!strings.EqualFold(state.Source.SHA, cfg.SourceSHA) ||
 		!strings.EqualFold(state.Appliance.Name, cfg.DistroName) ||
 		!registryIDPattern.MatchString(state.Appliance.RegistryID) || state.Appliance.BasePath == "" {
-		return fmt.Errorf("saved installer state does not match this owned launcher and appliance")
+		return fmt.Errorf("saved installer state does not match this owned launcher and appliance: manifest (%s != %s), source (%s != %s)",
+			state.ManifestHash, cfg.Manifest, state.Source.SHA, cfg.SourceSHA)
 	}
 	return nil
 }
