@@ -103,10 +103,14 @@ setup_privileges() {
 
 # --------------------------------------------------------------- preflight --
 net_check() {
+    local source="${LANEX_FROM:-github}"
+    if [ "$source" != "github" ] && [ "$source" != "pypi" ] && [ -e "$source" ]; then
+        return 0
+    fi
     local url="https://codeload.github.com/${REPO}/tar.gz/${REF}" out rc detail
     if command -v curl >/dev/null 2>&1; then
         out="$(mktemp)" || die "Could not create a temporary network diagnostic."
-        curl -fsSL -r 0-0 --connect-timeout 10 --max-time 25 --retry 2 \
+        curl -fsSL -I --connect-timeout 10 --max-time 15 --retry 2 \
             -o /dev/null "$url" 2>"$out"
         rc=$?
         if [ "$rc" -eq 0 ]; then rm -f "$out"; return 0; fi
