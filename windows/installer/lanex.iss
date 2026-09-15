@@ -314,6 +314,7 @@ var
   DesktopShortcutCheckbox: TNewCheckBox;
   ProgressContainer: TPanel;
   ProgressPhaseLabel: TLabel;
+  ProgressBar: TNewProgressBar;
   DistroBasePathValue: String;
   LiveLogMemo: TNewMemo;
   OpenLogButton, CopyLogButton, SaveLogButton: TNewButton;
@@ -409,14 +410,52 @@ begin
   end;
 end;
 
+function StripAnsi(const S: String): String;
+begin
+  Result := S;
+  StringChangeEx(Result, #27 + '[1m', '', True);
+  StringChangeEx(Result, #27 + '[0m', '', True);
+  StringChangeEx(Result, '[1m', '', True);
+  StringChangeEx(Result, '[0m', '', True);
+end;
+
+function PhasePercent(Number: Integer): Integer;
+begin
+  case Number of
+    1: Result := 15;
+    2: Result := 30;
+    3: Result := 45;
+    4: Result := 65;
+    5: Result := 75;
+    6: Result := 80;
+  else
+    Result := 0;
+  end;
+end;
+
 procedure RefreshProgressCaption;
 var
-  Caption: String;
+  Caption, PctStr: String;
+  Pct: Integer;
 begin
   if ProgressActivity = '' then Exit;
-  Caption := ProgressActivity;
+  Pct := 0;
+  if ProgressBar <> nil then Pct := ProgressBar.Position;
+  if Pct > 0 then PctStr := ' (' + IntToStr(Pct) + '%)' else PctStr := '';
+
+  if (ProgressPhase > 0) and (ProgressPhaseCount > 0) then
+    Caption := 'Phase ' + IntToStr(ProgressPhase) + ' of ' + IntToStr(ProgressPhaseCount) + ': ' + ProgressActivity + PctStr
+  else
+    Caption := ProgressActivity + PctStr;
+
   if ProgressStartedTick > 0 then
-    Caption := Caption + '  (' + ElapsedText + ')';
+    Caption := Caption + '  [Elapsed: ' + ElapsedText + ']';
+
+  if ProgressPhaseLabel <> nil then
+  begin
+    ProgressPhaseLabel.Caption := Caption;
+    ProgressPhaseLabel.Update;
+  end;
   if WizardForm <> nil then
   begin
     WizardForm.PreparingLabel.Caption := Caption;
@@ -441,12 +480,9 @@ begin
   ProgressPhase := Number;
   ProgressPhaseCount := Total;
   ProgressActivity := S;
+  if ProgressBar <> nil then
+    ProgressBar.Position := PhasePercent(Number);
   RefreshProgressCaption;
-  if ProgressPhaseLabel <> nil then
-  begin
-    ProgressPhaseLabel.Caption := 'Phase ' + IntToStr(Number) + ' of ' + IntToStr(Total) + ': ' + S;
-    ProgressPhaseLabel.Update;
-  end;
   AppendLiveLine('--- Phase ' + IntToStr(Number) + '/' + IntToStr(Total) + ': ' + S);
   LogLine('--- phase ' + IntToStr(Number) + '/' + IntToStr(Total) + ': ' + S);
 end;
@@ -455,11 +491,6 @@ procedure SetStatus(const S: String);
 begin
   ProgressActivity := S;
   RefreshProgressCaption;
-  if ProgressPhaseLabel <> nil then
-  begin
-    ProgressPhaseLabel.Caption := S;
-    ProgressPhaseLabel.Update;
-  end;
   AppendLiveLine('--- ' + S);
   LogLine('--- ' + S);
 end;
@@ -487,17 +518,51 @@ end;
 
 procedure CommandOutput(const S: String; const Error, FirstLine: Boolean);
 var
-  Line: String;
+  Line, Msg: String;
+  IsNoise: Boolean;
 begin
   Line := Trim(StripNulls(S));
   if Error then Line := 'Output reader error: ' + Line;
   if Line = '' then Exit;
   LogLine(Line);
-  AppendLiveLine(Line);
-  if (Pos('@@LANEX:', Line) = 1) and (ProgressMessage(Line) <> '') then
-    ProgressActivity := ProgressMessage(Line)
-  else
-    ProgressActivity := Copy(Line, 1, 140);
+
+  Line := StripAnsi(Line);
+
+  if Pos('@@LANEX:', Line) = 1 then
+  begin
+    Msg := ProgressMessage(Line);
+    if Msg <> '' then
+    begin
+      ProgressActivity := Msg;
+      AppendLiveLine('  * ' + Msg);
+      RefreshProgressCaption;
+    end;
+    Exit;
+  end;
+
+  IsNoise := (Pos('creating virtual environment', Line) > 0) or
+             (Pos('determining package name', Line) > 0) or
+             (Pos('installing lanex from spec', Line) > 0) or
+             (Pos('Processing triggers for', Line) > 0) or
+             (Pos('Setting up lib', Line) > 0) or
+             (Pos('Remainder of file ignored', Line) > 0) or
+             (Pos('Error processing line', Line) > 0);
+
+  if not IsNoise then
+  begin
+    AppendLiveLine(Line);
+    if (Pos('  *', Line) = 1) or (Pos('* Installing', Line) > 0) or (Pos('already verified:', Line) = 1) or (Pos('[OK]', Line) > 0) then
+    begin
+      ProgressActivity := Copy(Line, 1, 120);
+      if (ProgressBar <> nil) and (ProgressPhase = 6) and (ProgressBar.Position < 98) then
+        ProgressBar.Position := ProgressBar.Position + 2;
+    end
+    else if Pos('[active]', Line) > 0 then
+    begin
+      ProgressActivity := Copy(Line, 1, 120);
+    end;
+  end;
+
   RefreshProgressCaption;
 end;
 
@@ -1526,12 +1591,23 @@ begin
   ProgressPhaseLabel.Caption := 'Preparing environment...';
   ProgressPhaseLabel.Anchors := [akLeft, akTop, akRight];
 
+  ProgressBar := TNewProgressBar.Create(WizardForm);
+  ProgressBar.Parent := ProgressContainer;
+  ProgressBar.Left := ScaleX(0);
+  ProgressBar.Top := ScaleY(22);
+  ProgressBar.Width := ProgressContainer.ClientWidth;
+  ProgressBar.Height := ScaleY(16);
+  ProgressBar.Min := 0;
+  ProgressBar.Max := 100;
+  ProgressBar.Position := 0;
+  ProgressBar.Anchors := [akLeft, akTop, akRight];
+
   LiveLogMemo := TNewMemo.Create(WizardForm);
   LiveLogMemo.Parent := ProgressContainer;
   LiveLogMemo.Left := 0;
-  LiveLogMemo.Top := ScaleY(24);
+  LiveLogMemo.Top := ScaleY(42);
   LiveLogMemo.Width := ProgressContainer.ClientWidth;
-  LiveLogMemo.Height := ProgressContainer.ClientHeight - ScaleY(54);
+  LiveLogMemo.Height := ProgressContainer.ClientHeight - ScaleY(72);
   LiveLogMemo.ScrollBars := ssVertical;
   LiveLogMemo.ReadOnly := True;
   LiveLogMemo.Anchors := [akLeft, akTop, akRight, akBottom];
@@ -1754,37 +1830,56 @@ begin
       + 'The existing distribution was left untouched.';
     Exit;
   end;
-  if not PowerShellCapture(
+  if LoadStringFromFile(StateFile, RawState) then
+    StateContent := String(RawState)
+  else
+    StateContent := Output;
+
+  DistroNameValue := ExtractJsonStringValue(StateContent, 'name');
+  if DistroNameValue = '' then DistroNameValue := ExtractJsonStringValue(StateContent, 'appliance.name');
+  InstallIdValue := ExtractJsonStringValue(StateContent, 'installId');
+  OwnerSidValue := ExtractJsonStringValue(StateContent, 'ownerSid');
+  DistroBasePathValue := ExtractJsonStringValue(StateContent, 'basePath');
+  if DistroBasePathValue = '' then DistroBasePathValue := ExtractJsonStringValue(StateContent, 'appliance.basePath');
+
+  if DistroNameValue = '' then
+    PowerShellCapture(
       '(Get-Content -LiteralPath ' + PSQuote(StateFile)
-        + ' -Raw | ConvertFrom-Json).appliance.name', DistroNameValue) then
+        + ' -Raw | ConvertFrom-Json).appliance.name', DistroNameValue);
+  if InstallIdValue = '' then
+    PowerShellCapture(
+      '(Get-Content -LiteralPath ' + PSQuote(StateFile)
+        + ' -Raw | ConvertFrom-Json).installId', InstallIdValue);
+  if OwnerSidValue = '' then
+    PowerShellCapture(
+      '(Get-Content -LiteralPath ' + PSQuote(StateFile)
+        + ' -Raw | ConvertFrom-Json).ownerSid', OwnerSidValue);
+  if DistroBasePathValue = '' then
+    PowerShellCapture(
+      '(Get-Content -LiteralPath ' + PSQuote(StateFile)
+        + ' -Raw | ConvertFrom-Json).appliance.basePath', DistroBasePathValue);
+
+  DistroNameValue := Trim(StripNulls(DistroNameValue));
+  InstallIdValue := Trim(StripNulls(InstallIdValue));
+  OwnerSidValue := Trim(StripNulls(OwnerSidValue));
+  DistroBasePathValue := Trim(StripNulls(DistroBasePathValue));
+  if DistroBasePathValue = '' then
+    DistroBasePathValue := DistroDir;
+  if DistroNameValue = '' then
   begin
     Result := 'LanEx could not read the selected appliance name from setup state.';
     Exit;
   end;
-  if not PowerShellCapture(
-      '(Get-Content -LiteralPath ' + PSQuote(StateFile)
-        + ' -Raw | ConvertFrom-Json).installId', InstallIdValue) then
+  if InstallIdValue = '' then
   begin
     Result := 'LanEx could not read the install identity from setup state.';
     Exit;
   end;
-  if not PowerShellCapture(
-      '(Get-Content -LiteralPath ' + PSQuote(StateFile)
-        + ' -Raw | ConvertFrom-Json).ownerSid', OwnerSidValue) then
+  if OwnerSidValue = '' then
   begin
     Result := 'LanEx could not read the owner identity from setup state.';
     Exit;
   end;
-  DistroNameValue := Trim(StripNulls(DistroNameValue));
-  InstallIdValue := Trim(StripNulls(InstallIdValue));
-  OwnerSidValue := Trim(StripNulls(OwnerSidValue));
-  if not PowerShellCapture(
-      '(Get-Content -LiteralPath ' + PSQuote(StateFile)
-        + ' -Raw | ConvertFrom-Json).appliance.basePath', DistroBasePathValue) then
-    DistroBasePathValue := DistroDir;
-  DistroBasePathValue := Trim(StripNulls(DistroBasePathValue));
-  if DistroBasePathValue = '' then
-    DistroBasePathValue := DistroDir;
   ManifestHashValue := Lowercase(GetSHA256OfFile(Manifest));
 
   // Keep an immutable candidate copy and a manual continuation shortcut before
@@ -1903,6 +1998,8 @@ begin
 end;
 
 function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
+var
+  Pct: Integer;
 begin
   if ProgressMax > 0 then
   begin
@@ -1913,9 +2010,13 @@ begin
     // download runs long before — so a number in the label is the only honest
     // signal available here, and it is the difference between waiting and
     // wondering.
+    Pct := Integer(Progress * 100 div ProgressMax);
     SetPhase(2, 6, Format('Downloading the LanEx environment... %d%% of %d MB', [
-      Progress * 100 div ProgressMax, ProgressMax div 1048576]));
+      Pct, ProgressMax div 1048576]));
+    if ProgressBar <> nil then
+      ProgressBar.Position := 15 + (Pct * 15 div 100);
   end;
+  ProcessSystemMessages;
   Result := not CancelRequested;
 end;
 
@@ -2256,6 +2357,8 @@ begin
   if ChoicesJsonValue = '' then ChoicesJsonValue := '{"profile":"recommended"}';
   AppendLiveLine('=== LanEx Setup {#AppVersion} started ===');
   AppendLiveLine('Initializing environment and validating prerequisites...');
+  SetPhase(1, 6, 'Checking Windows, WSL, ownership, and selected disk space...');
+  ProcessSystemMessages;
   LogLine('');
   LogLine('=== LanEx Setup {#AppVersion} — ' + GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':')
     + ' (resume=' + ExpandConstant('{param:RESUME|0}') + ') ===');
@@ -2269,6 +2372,7 @@ begin
     AppendLiveLine('Error: ' + Result);
     Exit;
   end;
+  ProcessSystemMessages;
   if not PlanSelections('', StateFile, Output) then
   begin
     Result := 'LanEx could not revalidate the saved component choices.' + #13#10#13#10 + Output;
@@ -2285,7 +2389,7 @@ begin
       'Free space and run the same Setup again. Verified completed downloads and data are preserved.';
     Exit;
   end;
-  SetPhase(1, 6, 'Checking Windows, WSL, ownership, and selected disk space...');
+  ProcessSystemMessages;
 
   // Revalidate immediately before every machine-level or large operation. The
   // wizard may have been open for a while, and resume never trusts stale facts.
@@ -2502,7 +2606,10 @@ begin
   else
   begin
     LogLine('distro ' + DistroNameValue + ' already exists and is adopted; skipping import');
-    AppendLiveLine('Using existing LanEx environment (' + DistroNameValue + ').');
+    SetPhase(2, 6, 'Checking environment image (already present - verified)...');
+    AppendLiveLine('  [OK] Base appliance image verified.');
+    SetPhase(3, 6, 'Checking private LanEx environment (existing ''' + DistroNameValue + ''' verified)...');
+    AppendLiveLine('  [OK] Private LanEx environment (' + DistroNameValue + ') is ready.');
   end;
 
   // 5. A no-op Repair proves owner/build identity and runs the appliance
@@ -2584,6 +2691,9 @@ begin
     Exit;
   end;
   // NOTE: Rollback checkpoint is committed in CurStepChanged(ssPostInstall) ONLY after Windows files are verified!
+  if ProgressBar <> nil then
+    ProgressBar.Position := 100;
+  AppendLiveLine('  [OK] All selected tools, image, and PDKs installed and verified.');
   LogLine('appliance provisioning and strict finalization complete; Windows files will now be installed...');
   LogLine('=== provisioning complete ===');
 end;
@@ -2604,26 +2714,32 @@ begin
   if WizardSilent then Exit;
   if CurPageID = ConfigurePage.ID then
   begin
-    if ProfileRadioCustom.Checked and not ValidatePdkFamilies(Failure) then
-    begin
-      MsgBox(Failure, mbError, MB_OK);
-      Result := False;
-      Exit;
-    end;
-    if not PlanSelections(BuildChoicesJson, '', Failure) then
-    begin
-      MsgBox('Those selections cannot be installed:' + #13#10#13#10 + Failure,
-        mbError, MB_OK);
-      Result := False;
-      Exit;
-    end;
-    if not CheckSelectionSpace(Failure) then
-    begin
-      MsgBox(Failure + #13#10#13#10 +
-        'Completed verified downloads are reused. Free space, then click Install again.',
-        mbError, MB_OK);
-      Result := False;
-      Exit;
+    WizardForm.Cursor := crHourGlass;
+    try
+      ProcessSystemMessages;
+      if ProfileRadioCustom.Checked and not ValidatePdkFamilies(Failure) then
+      begin
+        MsgBox(Failure, mbError, MB_OK);
+        Result := False;
+        Exit;
+      end;
+      if not PlanSelections(BuildChoicesJson, '', Failure) then
+      begin
+        MsgBox('Those selections cannot be installed:' + #13#10#13#10 + Failure,
+          mbError, MB_OK);
+        Result := False;
+        Exit;
+      end;
+      if not CheckSelectionSpace(Failure) then
+      begin
+        MsgBox(Failure + #13#10#13#10 +
+          'Completed verified downloads are reused. Free space, then click Install again.',
+          mbError, MB_OK);
+        Result := False;
+        Exit;
+      end;
+    finally
+      WizardForm.Cursor := crDefault;
     end;
   end;
 end;
@@ -2642,6 +2758,11 @@ begin
   if ProgressContainer <> nil then
   begin
     ProgressContainer.Visible := (CurPageID = wpPreparing) or (CurPageID = wpInstalling);
+    if ProgressContainer.Visible then
+    begin
+      ProgressContainer.BringToFront;
+      ProgressContainer.Repaint;
+    end;
   end;
   if CurPageID = ConfigurePage.ID then
   begin
@@ -2668,6 +2789,7 @@ begin
   begin
     WizardForm.NextButton.Caption := SetupMessage(msgButtonNext);
   end;
+  ProcessSystemMessages;
 end;
 
 procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);

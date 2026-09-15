@@ -1231,13 +1231,36 @@ def _run_argv(argv: List[str], *, label: str, key: str,
         wd.daemon = True
         wd.start()
         out_lines: List[str] = []
+        stop_heartbeat = threading.Event()
+        start_tick = time.time()
+        last_line_tick = [start_tick]
+
+        def _heartbeat() -> None:
+            while not stop_heartbeat.wait(4.0):
+                if proc.poll() is not None:
+                    break
+                now = time.time()
+                if (now - last_line_tick[0]) >= 4.0:
+                    elapsed = int(now - start_tick)
+                    mins, secs = divmod(elapsed, 60)
+                    time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+                    _emit("installer_line", {
+                        "key": key,
+                        "line": f"  [active] operation in progress... ({time_str} elapsed)",
+                        "label": label,
+                    })
+
+        hb = threading.Thread(target=_heartbeat, daemon=True, name="installer_heartbeat")
+        hb.start()
         try:
             for line in proc.stdout:
                 line = line.rstrip()
+                last_line_tick[0] = time.time()
                 out_lines.append(line)
                 _emit("installer_line", {"key": key, "line": line, "label": label})
             proc.wait()
         finally:
+            stop_heartbeat.set()
             wd.cancel()
             _active_installs.pop(key, None)
 
@@ -2688,9 +2711,11 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
                 if not os.path.exists(pth):
                     with open(pth, "w", encoding="utf-8") as pf:
                         pf.write(
-                            "import httpx; getattr(httpx, 'Client', None) and "
-                            "getattr(httpx.Client.__init__, '__kwdefaults__', None) and "
-                            "httpx.Client.__init__.__kwdefaults__.__setitem__('timeout', httpx.Timeout(300.0, connect=60.0))\n"
+                            'import sys; exec("try:\\n import httpx\\n if hasattr(httpx, \'Client\') and '
+                            'hasattr(httpx.Client.__init__, \'__kwdefaults__\') and '
+                            'httpx.Client.__init__.__kwdefaults__ is not None:\\n  '
+                            'httpx.Client.__init__.__kwdefaults__[\'timeout\'] = httpx.Timeout(300.0, connect=60.0)\\n'
+                            'except Exception:\\n pass")\n'
                         )
         except Exception:
             pass

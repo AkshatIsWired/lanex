@@ -447,11 +447,13 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                     print(f"already verified: native:{key}", flush=True)
                     continue
                 announce(key, f"installing and verifying native tool {key}")
+                print(f"  * Installing native tool: {key}...", flush=True)
                 result = installer.install_tool(key)
                 drain()
                 if not result.get("ok"):
                     failures.append({"component": f"native:{key}", "result": result})
                     break
+                print(f"  [OK] Native tool ready: {key}", flush=True)
     finally:
         if previous_commit is None:
             os.environ.pop("LANEX_GDS3D_COMMIT", None)
@@ -463,12 +465,15 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
             print("already verified: container:image", flush=True)
         else:
             announce("container:image", "pulling and verifying the matched LibreLane image")
+            print(f"  * Pulling LibreLane container image ({image['reference']}) [~3.4 GB]...", flush=True)
             result = installer.pull_image_sync(
                 image["reference"], image["digest"], expected_engine=plan["engine"]
             )
             drain()
             if not result.get("ok"):
                 failures.append({"component": "container:image", "result": result})
+            else:
+                print("  [OK] LibreLane container image verified ready.", flush=True)
     if not failures:
         for selected in plan["pdks"]:
             if cancel_requested.is_set():
@@ -479,6 +484,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                 print(f"already verified: pdk:{selected['variant']}", flush=True)
                 continue
             announce(f"pdk:{selected['variant']}", f"installing and verifying {selected['variant']}")
+            print(f"  * Installing PDK: {selected['variant']} ({len(selected['libraries'])} libraries)...", flush=True)
             result = installer.install_pdk_sync(
                 selected["variant"],
                 selected["libraries"],
@@ -489,6 +495,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
             if not result.get("ok"):
                 failures.append({"component": f"pdk:{selected['variant']}", "result": result})
                 break
+            print(f"  [OK] PDK verified ready: {selected['variant']}", flush=True)
     if cancel_requested.is_set():
         report = {"schema": 1, "ready": False, "checks": initial["checks"]}
     else:

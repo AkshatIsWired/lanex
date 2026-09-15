@@ -357,7 +357,7 @@ attempt_install() {
     py_site="$("$LAUNCHER" -c "import sysconfig; print(sysconfig.get_path('purelib'))" 2>/dev/null || true)"
     if [ -d "$py_site" ]; then
         cat << 'EOFPTH' > "$py_site/lanex_timeout.pth" 2>/dev/null || true
-import httpx; getattr(httpx, 'Client', None) and getattr(httpx.Client.__init__, '__kwdefaults__', None) and httpx.Client.__init__.__kwdefaults__.__setitem__('timeout', httpx.Timeout(300.0, connect=60.0))
+import sys; exec("try:\n import httpx\n if hasattr(httpx, 'Client') and hasattr(httpx.Client.__init__, '__kwdefaults__') and httpx.Client.__init__.__kwdefaults__ is not None:\n  httpx.Client.__init__.__kwdefaults__['timeout'] = httpx.Timeout(300.0, connect=60.0)\nexcept Exception:\n pass")
 EOFPTH
     fi
     return "$rc"

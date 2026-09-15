@@ -536,6 +536,7 @@ install_lanex() {
     chmod -R a+rX "$payload_dir"
     chown -R "$APP_USER:$APP_USER" "$payload_dir" 2>/dev/null || true
 
+    rm -f "/home/${APP_USER}/.local/share/pipx/shared/lib/"*/site-packages/lanex_timeout.pth 2>/dev/null || true
     prepare_update_rollback
     runuser -m -u "$APP_USER" -- env HOME="/home/${APP_USER}" USER="$APP_USER" \
         LOGNAME="$APP_USER" PATH="/usr/local/bin:/usr/bin:/bin" \
@@ -546,11 +547,18 @@ install_lanex() {
    The log above ends with its own error message.
    Click Retry — this step is safe to repeat."; }
 
-    find "/home/${APP_USER}/.local" -type d -name "site-packages" 2>/dev/null | while IFS= read -r sp; do
+    find "/home/${APP_USER}/.local" -type d -name "site-packages" ! -path "*/pipx/shared/*" 2>/dev/null | while IFS= read -r sp; do
         cat << 'EOFPTH' > "$sp/lanex_timeout.pth"
-import httpx; getattr(httpx, 'Client', None) and getattr(httpx.Client.__init__, '__kwdefaults__', None) and httpx.Client.__init__.__kwdefaults__.__setitem__('timeout', httpx.Timeout(300.0, connect=60.0))
+import sys; exec("try:\n import httpx\n if hasattr(httpx, 'Client') and hasattr(httpx.Client.__init__, '__kwdefaults__') and httpx.Client.__init__.__kwdefaults__ is not None:\n  httpx.Client.__init__.__kwdefaults__['timeout'] = httpx.Timeout(300.0, connect=60.0)\nexcept Exception:\n pass")
 EOFPTH
         chown "$APP_USER:$APP_USER" "$sp/lanex_timeout.pth" 2>/dev/null || true
+    done
+
+    for tool in ciel librelane; do
+        if [ -x "/home/${APP_USER}/.local/share/pipx/venvs/lanex/bin/$tool" ]; then
+            ln -sf "/home/${APP_USER}/.local/share/pipx/venvs/lanex/bin/$tool" "/home/${APP_USER}/.local/bin/$tool" 2>/dev/null || true
+            chown -h "$APP_USER:$APP_USER" "/home/${APP_USER}/.local/bin/$tool" 2>/dev/null || true
+        fi
     done
 }
 
@@ -620,6 +628,13 @@ finalize() {
             note "waiting for systemd ($((attempt * 2))s)..."
         fi
         sleep 2
+    done
+    rm -f "/home/${APP_USER}/.local/share/pipx/shared/lib/"*/site-packages/lanex_timeout.pth 2>/dev/null || true
+    for tool in ciel librelane; do
+        if [ -x "/home/${APP_USER}/.local/share/pipx/venvs/lanex/bin/$tool" ]; then
+            ln -sf "/home/${APP_USER}/.local/share/pipx/venvs/lanex/bin/$tool" "/home/${APP_USER}/.local/bin/$tool" 2>/dev/null || true
+            chown -h "$APP_USER:$APP_USER" "/home/${APP_USER}/.local/bin/$tool" 2>/dev/null || true
+        fi
     done
     # The appliance user owns its home, Ciel store, image lock and GDS3D build.
     # Running the strict CLI as root would recreate the historical root-owned
