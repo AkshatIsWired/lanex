@@ -112,16 +112,29 @@ network_failure() {
 probe_endpoint() {
     local label="$1" url="$2" out rc code detail family family_code family_rc
     out="$(mktemp)" || die "could not create a temporary network diagnostic."
-    code="$(curl ${CURL_FAMILY:+$CURL_FAMILY} -sS -L -o /dev/null -w '%{http_code}' --connect-timeout 10 \
-        --max-time 25 --retry 2 --retry-delay 2 "$url" 2>"$out")"
+    # Use HEAD (-I) so connectivity checks never download multi-megabyte payloads
+    # (e.g. PyPI /simple/ is 46+ MB of HTML, which times out on standard connections).
+    code="$(curl ${CURL_FAMILY:+$CURL_FAMILY} -sS -I -L -o /dev/null -w '%{http_code}' --connect-timeout 10 \
+        --max-time 15 --retry 2 --retry-delay 2 "$url" 2>"$out")"
     rc=$?
+    case "$code" in
+        2??|3??|401|405) ;;
+        *)
+            if [ "$rc" -eq 0 ]; then
+                # Fallback to GET with a bounded 10KB byte range if HEAD returned an error code
+                code="$(curl ${CURL_FAMILY:+$CURL_FAMILY} -sS -L -r 0-10240 -o /dev/null -w '%{http_code}' --connect-timeout 10 \
+                    --max-time 25 --retry 2 --retry-delay 2 "$url" 2>"$out")"
+                rc=$?
+            fi
+            ;;
+    esac
     if [ "$rc" -ne 0 ]; then
         # Never echo proxy environment values or credential-bearing URLs.
         detail="$(tail -n 8 "$out" | sed -E \
             's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[redacted]@#g')"
         if [ -z "$CURL_FAMILY" ] && { [ "$rc" -eq 7 ] || [ "$rc" -eq 28 ]; }; then
             for family in -4 -6; do
-                family_code="$(curl "$family" -sS -L -o /dev/null -w '%{http_code}' \
+                family_code="$(curl "$family" -sS -I -L -o /dev/null -w '%{http_code}' \
                     --connect-timeout 8 --max-time 15 "$url" 2>/dev/null)"
                 family_rc=$?
                 case "$family_code" in 2??|3??|401|405) ;; *) family_rc=1 ;; esac
