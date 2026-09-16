@@ -41,13 +41,15 @@ supported installer target until its separate real-machine acceptance leg
 passes. This amd64 appliance is rejected on ARM64 even when Windows can emulate
 x64 apps.
 
-**What you get:** a Start-menu app called **LanEx**. The recommended profile
+**What you get:** a Start-menu app called **LanEx**. The **Recommended** profile
 installs Docker, the matched LibreLane image, Verilator, Icarus, Graphviz,
-GTKWave, GDS3D, and sky130A with all supported family libraries before Setup
-offers Launch. Custom setup lets you choose Docker or Podman, every supported
-PDK family/variant, and advanced libraries. Minimal deliberately leaves flow
-components for the Tools page. Setup does not claim success until every selected
-component passes its operational readiness check.
+GTKWave, GDS3D, and SKY130A with validated starter libraries before Setup
+offers Launch. The **Maximum** profile installs the full toolset and all supported
+PDKs (SKY130A, SKY130B, GF180MCUD, IHP SG13G2) with all published libraries.
+**Custom** setup lets you choose Docker or Podman, every supported PDK family/variant,
+and advanced libraries. **Minimal** deliberately leaves flow components for the Tools
+page. Setup does not claim success until every selected component passes its operational
+readiness check.
 
 > **"Windows protected your PC"?** Until the installer is code-signed, Windows
 > SmartScreen shows a blue warning for it (it warns about any new publisher, not
@@ -106,7 +108,7 @@ Use Inno Setup's `/SILENT` or `/VERYSILENT` with
 required because Inno Setup otherwise returns `0` after a successful install
 that needs a restart. LanEx-specific selection flags are:
 
-- `/PROFILE=recommended` (default) or `/PROFILE=minimal`.
+- `/PROFILE=recommended` (default), `/PROFILE=maximum`, or `/PROFILE=minimal`.
 - `/SELECTIONS=C:\path\lanex-selections.json` for custom choices. The JSON is
   validated against the exact bundled catalog; unknown tools, PDKs, libraries,
   or conflicting variants fail before WSL is changed.

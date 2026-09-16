@@ -68,12 +68,12 @@ def test_advanced_libraries_include_required_and_reject_unknown(tmp_path: Path) 
         )
 
 
-def test_same_family_variants_cannot_run_concurrently(tmp_path: Path) -> None:
-    with pytest.raises(provisioning.ProvisioningInputError, match="one sky130 variant"):
-        provisioning.load_plan(
-            _write(tmp_path, _manifest()),
-            choices={"pdks": ["sky130A", "sky130B"], "libraries": "all"},
-        )
+def test_same_family_variants_can_coexist_in_selection(tmp_path: Path) -> None:
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()),
+        choices={"pdks": ["sky130A", "sky130B"], "libraries": "all"},
+    )
+    assert set(p["variant"] for p in plan["pdks"]) == {"sky130A", "sky130B"}
 
 
 def test_minimal_plan_has_no_implicit_engine_image_tools_or_pdks(tmp_path: Path) -> None:
@@ -84,6 +84,21 @@ def test_minimal_plan_has_no_implicit_engine_image_tools_or_pdks(tmp_path: Path)
     assert plan["image"] is False
     assert plan["nativeTools"] == []
     assert plan["pdks"] == []
+
+
+def test_complete_and_maximum_plans_select_all_published_variants(tmp_path: Path) -> None:
+    from lanex.controller.pdk_catalog import build_canonical_pdk_catalog
+
+    catalog = build_canonical_pdk_catalog()
+    m = _manifest()
+    m["pdkPins"]["variants"] = {k: {"family": v["family"], "requiredVersion": "a" * 40} for k, v in catalog.items()}
+    m["pdkCatalog"] = {k: {"family": v["family"], "libraries": v["libraries"], "default_libraries": v.get("default_libraries", [])} for k, v in catalog.items()}
+    plan_complete = provisioning.load_plan(_write(tmp_path, m), choices={"profile": "complete"})
+    plan_max = provisioning.load_plan(_write(tmp_path, m), choices={"profile": "maximum"})
+    assert set(p["variant"] for p in plan_complete["pdks"]) == {"sky130A", "sky130B", "gf180mcuD", "ihp-sg13g2"}
+    assert set(p["variant"] for p in plan_max["pdks"]) == {"sky130A", "sky130B", "gf180mcuD", "ihp-sg13g2"}
+    assert plan_complete["engine"] == "docker"
+    assert plan_complete["image"] is True
 
 
 def test_custom_plan_rejects_pdk_without_image(tmp_path: Path) -> None:

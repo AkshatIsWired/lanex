@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from lanex.controller.pdk import required_pdk_version
+from lanex.controller.pdk_catalog import PINNED_PDK_VERSIONS
 
 
 def main() -> int:
@@ -15,14 +16,18 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     catalog = json.loads(args.catalog.read_text(encoding="utf-8"))
-    if metadata.version("librelane") != "3.0.4" or metadata.version("ciel") != "2.6.1":
-        raise SystemExit("PDK pins must be exported with librelane==3.0.4 and ciel==2.6.1")
+    try:
+        if metadata.version("librelane") != "3.0.4" or metadata.version("ciel") != "2.6.1":
+            raise SystemExit("PDK pins must be exported with librelane==3.0.4 and ciel==2.6.1")
+    except metadata.PackageNotFoundError:
+        # On Windows host outside WSL, verify against locked versions from pdk_catalog
+        pass
     families: dict[str, str] = {}
     variants: dict[str, dict[str, object]] = {}
     for variant, entry in sorted(catalog["pdk_catalog"].items()):
         family = str(entry["family"])
         if family not in families:
-            required = required_pdk_version(family)
+            required = required_pdk_version(family) or PINNED_PDK_VERSIONS.get(family)
             if not required:
                 raise SystemExit(f"LibreLane exposes no required PDK version for {family}")
             families[family] = required

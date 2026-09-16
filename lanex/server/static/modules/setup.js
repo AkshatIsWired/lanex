@@ -332,9 +332,12 @@ export async function populatePdkPicker() {
       o.textContent = p.name + (p.ready ? "" : " (no libs)");
       sel.appendChild(o);
     }
-    // Restore the previously-used PDK if it's still installed — saves the
-    // returning user re-picking PDK + SCL every session.
-    const wantPdk = safeStorage.get("ll.recentPdk", "");
+    // Restore the project PDK or previously-used PDK if it's still installed.
+    // Respect the project's explicit PDK before recent UI preferences.
+    const projectPdk = state.projectConfig?.PDK || state.config?.PDK || "";
+    const wantPdk = (projectPdk && Array.from(sel.options).some((o) => o.value === projectPdk))
+      ? projectPdk
+      : safeStorage.get("ll.recentPdk", "");
     if (wantPdk && Array.from(sel.options).some((o) => o.value === wantPdk)) {
       sel.value = wantPdk;
       await onPdkSelected();   // repopulates SCLs + restores the SCL + readiness

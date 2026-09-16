@@ -431,11 +431,30 @@ def test_recommended_and_minimal_plans_are_canonical_and_honest(tmp_path: Path) 
     assert recommended["choices"] == {
         "schema": 1, "profile": "recommended", "engine": "docker", "image": True,
         "nativeTools": ["verilator", "iverilog", "graphviz", "gtkwave", "gds3d"],
-        "pdks": ["sky130A", "gf180mcuD", "ihp-sg13g2"], "libraries": "all",
+        "pdks": ["sky130A"], "libraries": {"sky130A": ["sky130_fd_sc_hd"]},
     }
-    assert recommended["estimates"]["downloadBytes"] > 6 * 1024**3
+    assert recommended["estimates"]["downloadBytes"] > 3 * 1024**3
     assert recommended["estimates"]["volumes"]["tempRequiredBytes"] == 400_000_000
     assert "restarts" in recommended["estimates"]["notes"][1]
+
+    maximum = _run_setup(
+        "-Action", "PlanChoices", "-ManifestPath", manifest,
+        "-ChoicesJson", '{"profile":"maximum"}',
+    )
+    assert maximum["choices"]["profile"] == "maximum"
+    assert set(maximum["choices"]["pdks"]) == {"sky130A", "sky130B", "gf180mcuD", "ihp-sg13g2"}
+    assert set(maximum["choices"]["libraries"].keys()) == {"sky130A", "sky130B", "gf180mcuD", "ihp-sg13g2"}
+    assert "sky130_fd_sc_hd" in maximum["choices"]["libraries"]["sky130A"]
+    assert maximum["estimates"]["downloadBytes"] > recommended["estimates"]["downloadBytes"]
+
+    complete = _run_setup(
+        "-Action", "PlanChoices", "-ManifestPath", manifest,
+        "-ChoicesJson", '{"profile":"complete"}',
+    )
+    assert complete["choices"]["profile"] == "complete"
+    assert set(complete["choices"]["pdks"]) == {"sky130A", "sky130B", "gf180mcuD", "ihp-sg13g2"}
+    assert set(complete["choices"]["libraries"].keys()) == {"sky130A", "sky130B", "gf180mcuD", "ihp-sg13g2"}
+    assert complete["estimates"]["downloadBytes"] == maximum["estimates"]["downloadBytes"]
 
     minimal = _run_setup(
         "-Action", "PlanChoices", "-ManifestPath", manifest,
@@ -453,7 +472,7 @@ def test_recommended_and_minimal_plans_are_canonical_and_honest(tmp_path: Path) 
         ({"profile": "custom", "engine": "none", "image": True, "pdks": []},
          "requires Docker or Podman"),
         ({"profile": "custom", "engine": "docker", "image": True,
-          "pdks": ["sky130A", "sky130B"]}, "Select only one sky130 variant"),
+          "pdks": ["not-a-pdk"]}, "Unknown PDK variant"),
         ({"profile": "custom", "engine": "docker", "image": True,
           "pdks": ["sky130A"], "libraries": {"sky130A": ["not-a-library"]}},
          "Unknown library"),
@@ -469,6 +488,17 @@ def test_selection_plan_rejects_impossible_or_unbound_choices(
         "-ChoicesJson", json.dumps(choices), ok=False,
     )
     assert message in failed.stderr
+
+
+def test_selection_plan_accepts_multiple_variants_of_same_family(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    _manifest(manifest)
+    planned = _run_setup(
+        "-Action", "PlanChoices", "-ManifestPath", manifest,
+        "-ChoicesJson", json.dumps({"profile": "custom", "engine": "docker", "image": True,
+                                    "pdks": ["sky130A", "sky130B"]}),
+    )
+    assert set(planned["choices"]["pdks"]) == {"sky130A", "sky130B"}
 
 
 def test_selection_file_is_validated_and_normalized(tmp_path: Path) -> None:

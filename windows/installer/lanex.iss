@@ -305,8 +305,8 @@ var
   ComputerDisplayValue: String;
   FirmwareNoticeValue: Boolean;
   ConfigurePage: TWizardPage;
-  ProfileRadioRecommended, ProfileRadioCustom, ProfileRadioMinimal: TRadioButton;
-  ProfileDescLabel: TLabel;
+  ProfileRadioRecommended, ProfileRadioComplete, ProfileRadioCustom, ProfileRadioMinimal: TRadioButton;
+  ProfileDescLabel, SharedHelperLabel, ChangeChoicesLabel: TLabel;
   CustomCheckListBox: TNewCheckListBox;
   SummaryPanel: TPanel;
   SummaryDivider: TBevel;
@@ -319,11 +319,12 @@ var
   LiveLogMemo: TNewMemo;
   OpenLogButton, CopyLogButton, SaveLogButton: TNewButton;
   IdxDocker, IdxPodman: Integer;
-  IdxImage, IdxNative, IdxGds3d: Integer;
-  IdxSky130A, IdxSky130B, IdxSkyNone: Integer;
-  IdxGfNone, IdxGf180A, IdxGf180B, IdxGf180C, IdxGf180D: Integer;
+  IdxImage, IdxNative, IdxGds3d, IdxVerilator, IdxIverilog, IdxGraphviz: Integer;
+  IdxSky130A, IdxSky130B: Integer;
+  IdxGf180A, IdxGf180B, IdxGf180C, IdxGf180D: Integer;
   IdxIhp: Integer;
   IdxSkyHdll, IdxSkyLp, IdxSkyLs, IdxSkyMs, IdxSkyHs, IdxSkyReram: Integer;
+  IdxGfAsSc, IdxGfAlphaLg, IdxGfAlphaMisc, IdxGfAlphaSm, IdxGfOcdIo, IdxGfOsu12, IdxGfOsu9, IdxGfOcdSram, IdxGfEfuse: Integer;
   ChoicesJsonValue, ChoicesPathValue: String;
   EstimateDownloadMB, EstimateInstalledMB, RequiredAppMB, RequiredTempMB: Int64;
   ProgressPhase, ProgressPhaseCount: Integer;
@@ -920,11 +921,17 @@ end;
 
 function BuildChoicesJson: String;
 var
-  Native, Libraries, PdkList, SkyVariant, GfVariant, VariantLibs: String;
+  Native, Libraries, PdkList, SkyALibs, SkyBLibs, GfLibs: String;
 begin
   if (ProfileRadioRecommended <> nil) and ProfileRadioRecommended.Checked then
   begin
     Result := '{"profile":"recommended"}';
+    Exit;
+  end;
+
+  if (ProfileRadioComplete <> nil) and ProfileRadioComplete.Checked then
+  begin
+    Result := '{"profile":"complete"}';
     Exit;
   end;
 
@@ -935,61 +942,83 @@ begin
   end;
 
   Native := '';
-  if (CustomCheckListBox <> nil) and CustomCheckListBox.Checked[IdxNative] then
-  begin
-    AddJsonString(Native, 'verilator');
-    AddJsonString(Native, 'iverilog');
-    AddJsonString(Native, 'graphviz');
-    AddJsonString(Native, 'gtkwave');
-  end;
-  if (CustomCheckListBox <> nil) and CustomCheckListBox.Checked[IdxGds3d] then AddJsonString(Native, 'gds3d');
-
-  SkyVariant := '';
   if (CustomCheckListBox <> nil) then
   begin
-    if CustomCheckListBox.Checked[IdxSky130A] then SkyVariant := 'sky130A'
-    else if CustomCheckListBox.Checked[IdxSky130B] then SkyVariant := 'sky130B';
-  end;
-
-  GfVariant := '';
-  if (CustomCheckListBox <> nil) then
-  begin
-    if CustomCheckListBox.Checked[IdxGf180A] then GfVariant := 'gf180mcuA'
-    else if CustomCheckListBox.Checked[IdxGf180B] then GfVariant := 'gf180mcuB'
-    else if CustomCheckListBox.Checked[IdxGf180C] then GfVariant := 'gf180mcuC'
-    else if CustomCheckListBox.Checked[IdxGf180D] then GfVariant := 'gf180mcuD';
-  end;
-
-  Libraries := '';
-  if (CustomCheckListBox <> nil) and (SkyVariant <> '') then
-  begin
-    VariantLibs := '';
-    if CustomCheckListBox.Checked[IdxSkyHdll] then AddJsonString(VariantLibs, 'sky130_fd_sc_hdll');
-    if CustomCheckListBox.Checked[IdxSkyLp] then AddJsonString(VariantLibs, 'sky130_fd_sc_lp');
-    if CustomCheckListBox.Checked[IdxSkyLs] then AddJsonString(VariantLibs, 'sky130_fd_sc_ls');
-    if CustomCheckListBox.Checked[IdxSkyMs] then AddJsonString(VariantLibs, 'sky130_fd_sc_ms');
-    if CustomCheckListBox.Checked[IdxSkyHs] then AddJsonString(VariantLibs, 'sky130_fd_sc_hs');
-    if (SkyVariant = 'sky130B') and CustomCheckListBox.Checked[IdxSkyReram] then
-      AddJsonString(VariantLibs, 'sky130_fd_pr_reram');
-    Libraries := '"' + SkyVariant + '":[' + VariantLibs + ']';
-  end;
-
-  if (CustomCheckListBox <> nil) and (GfVariant <> '') then
-  begin
-    if Libraries <> '' then Libraries := Libraries + ',';
-    Libraries := Libraries + '"' + GfVariant + '":[]';
-  end;
-
-  if (CustomCheckListBox <> nil) and CustomCheckListBox.Checked[IdxIhp] then
-  begin
-    if Libraries <> '' then Libraries := Libraries + ',';
-    Libraries := Libraries + '"ihp-sg13g2":[]';
+    if CustomCheckListBox.Checked[IdxVerilator] then AddJsonString(Native, 'verilator');
+    if CustomCheckListBox.Checked[IdxIverilog] then
+    begin
+      AddJsonString(Native, 'iverilog');
+      AddJsonString(Native, 'gtkwave');
+    end;
+    if CustomCheckListBox.Checked[IdxGraphviz] then AddJsonString(Native, 'graphviz');
+    if CustomCheckListBox.Checked[IdxGds3d] then AddJsonString(Native, 'gds3d');
   end;
 
   PdkList := '';
-  if SkyVariant <> '' then AddJsonString(PdkList, SkyVariant);
-  if GfVariant <> '' then AddJsonString(PdkList, GfVariant);
-  if (CustomCheckListBox <> nil) and CustomCheckListBox.Checked[IdxIhp] then AddJsonString(PdkList, 'ihp-sg13g2');
+  SkyALibs := '';
+  SkyBLibs := '';
+  GfLibs := '';
+
+  if (CustomCheckListBox <> nil) then
+  begin
+    if CustomCheckListBox.Checked[IdxSky130A] then
+    begin
+      AddJsonString(PdkList, 'sky130A');
+      if CustomCheckListBox.Checked[IdxSkyHdll] then AddJsonString(SkyALibs, 'sky130_fd_sc_hdll');
+      if CustomCheckListBox.Checked[IdxSkyHs] then AddJsonString(SkyALibs, 'sky130_fd_sc_hs');
+      if CustomCheckListBox.Checked[IdxSkyLp] then AddJsonString(SkyALibs, 'sky130_fd_sc_lp');
+      if CustomCheckListBox.Checked[IdxSkyLs] then AddJsonString(SkyALibs, 'sky130_fd_sc_ls');
+      if CustomCheckListBox.Checked[IdxSkyMs] then AddJsonString(SkyALibs, 'sky130_fd_sc_ms');
+    end;
+
+    if CustomCheckListBox.Checked[IdxSky130B] then
+    begin
+      AddJsonString(PdkList, 'sky130B');
+      if CustomCheckListBox.Checked[IdxSkyHdll] then AddJsonString(SkyBLibs, 'sky130_fd_sc_hdll');
+      if CustomCheckListBox.Checked[IdxSkyHs] then AddJsonString(SkyBLibs, 'sky130_fd_sc_hs');
+      if CustomCheckListBox.Checked[IdxSkyLp] then AddJsonString(SkyBLibs, 'sky130_fd_sc_lp');
+      if CustomCheckListBox.Checked[IdxSkyLs] then AddJsonString(SkyBLibs, 'sky130_fd_sc_ls');
+      if CustomCheckListBox.Checked[IdxSkyMs] then AddJsonString(SkyBLibs, 'sky130_fd_sc_ms');
+      if CustomCheckListBox.Checked[IdxSkyReram] then AddJsonString(SkyBLibs, 'sky130_fd_pr_reram');
+    end;
+
+    if CustomCheckListBox.Checked[IdxGf180D] then
+    begin
+      AddJsonString(PdkList, 'gf180mcuD');
+      if CustomCheckListBox.Checked[IdxGfAsSc] then AddJsonString(GfLibs, 'gf180mcu_as_sc_mcu7t3v3');
+      if CustomCheckListBox.Checked[IdxGfOsu12] then AddJsonString(GfLibs, 'gf180mcu_osu_sc_gp12t3v3');
+      if CustomCheckListBox.Checked[IdxGfOsu9] then AddJsonString(GfLibs, 'gf180mcu_osu_sc_gp9t3v3');
+      if CustomCheckListBox.Checked[IdxGfOcdIo] then AddJsonString(GfLibs, 'gf180mcu_ocd_io');
+      if CustomCheckListBox.Checked[IdxGfAlphaLg] then AddJsonString(GfLibs, 'gf180mcu_ocd_alpha_large');
+      if CustomCheckListBox.Checked[IdxGfAlphaMisc] then AddJsonString(GfLibs, 'gf180mcu_ocd_alpha_misc');
+      if CustomCheckListBox.Checked[IdxGfAlphaSm] then AddJsonString(GfLibs, 'gf180mcu_ocd_alpha_small');
+    end;
+    if CustomCheckListBox.Checked[IdxGf180A] then AddJsonString(PdkList, 'gf180mcuA');
+    if CustomCheckListBox.Checked[IdxGf180B] then AddJsonString(PdkList, 'gf180mcuB');
+    if CustomCheckListBox.Checked[IdxGf180C] then AddJsonString(PdkList, 'gf180mcuC');
+
+    if CustomCheckListBox.Checked[IdxIhp] then
+    begin
+      AddJsonString(PdkList, 'ihp-sg13g2');
+    end;
+  end;
+
+  Libraries := '';
+  if SkyALibs <> '' then
+  begin
+    if Libraries <> '' then Libraries := Libraries + ',';
+    Libraries := Libraries + '"sky130A":[' + SkyALibs + ']';
+  end;
+  if SkyBLibs <> '' then
+  begin
+    if Libraries <> '' then Libraries := Libraries + ',';
+    Libraries := Libraries + '"sky130B":[' + SkyBLibs + ']';
+  end;
+  if GfLibs <> '' then
+  begin
+    if Libraries <> '' then Libraries := Libraries + ',';
+    Libraries := Libraries + '"gf180mcuD":[' + GfLibs + ']';
+  end;
 
   Result := '{"schema":1,"profile":"custom","engine":"';
   if (CustomCheckListBox <> nil) and CustomCheckListBox.Checked[IdxPodman] then Result := Result + 'podman'
@@ -1170,9 +1199,16 @@ var
 begin
   if (ProfileRadioRecommended <> nil) and ProfileRadioRecommended.Checked then
   begin
-    DownloadMB := 11200;
-    InstalledMB := 38100;
-    AppMB := 46000;
+    DownloadMB := 4200;
+    InstalledMB := 14036;
+    AppMB := 22500;
+    TempMB := 0;
+  end
+  else if (ProfileRadioComplete <> nil) and ProfileRadioComplete.Checked then
+  begin
+    DownloadMB := 7800;
+    InstalledMB := 36500;
+    AppMB := 42000;
     TempMB := 0;
   end
   else if (ProfileRadioMinimal <> nil) and ProfileRadioMinimal.Checked then
@@ -1188,7 +1224,9 @@ begin
     InstalledMB := 1332;
     TempMB := 0;
 
-    HasNative := (CustomCheckListBox <> nil) and CustomCheckListBox.Checked[IdxNative];
+    HasNative := (CustomCheckListBox <> nil) and
+      (CustomCheckListBox.Checked[IdxVerilator] or CustomCheckListBox.Checked[IdxIverilog] or
+       CustomCheckListBox.Checked[IdxGraphviz] or CustomCheckListBox.Checked[IdxGds3d]);
     if HasNative then
     begin
       DownloadMB := DownloadMB + 717;
@@ -1278,11 +1316,29 @@ begin
     ProfileDescLabel.Caption :=
       'Recommended Profile Overview:'#13#10#13#10 +
       '• Container Engine: Docker CE'#13#10 +
-      '• EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave, GDS3D'#13#10 +
-      '• Technology: SkyWater 130 nm (sky130A), GlobalFoundries 180 nm (gf180mcuD), and IHP 130 nm BiCMOS (ihp-sg13g2)'#13#10 +
-      '• Turnkey flow: Complete RTL-to-GDS flow ready out of the box.';
+      '• Flow & Visualization: Matched LibreLane container image, GDS3D'#13#10 +
+      '• Native EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave'#13#10 +
+      '• Technology: SkyWater 130 nm (sky130A) starter libraries'#13#10 +
+      '• Turnkey flow: Tools, viewers and SKY130A. Ready to design.'#13#10 +
+      '  (Docker, all supported tools, simulation, linting, waveforms, and layout).';
     ProfileDescLabel.Visible := True;
     CustomCheckListBox.Visible := False;
+    SharedHelperLabel.Visible := True;
+    ChangeChoicesLabel.Visible := True;
+  end
+  else if ProfileRadioComplete.Checked then
+  begin
+    ProfileDescLabel.Caption :=
+      'Complete Profile Overview:'#13#10#13#10 +
+      '• Container Engine: Docker CE'#13#10 +
+      '• Flow & Visualization: Matched LibreLane container image, GDS3D'#13#10 +
+      '• Native EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave'#13#10 +
+      '• Technology: SKY130A, SKY130B, gf180mcuD, and ihp-sg13g2 with all published libraries'#13#10 +
+      '• Complete flow: All supported tools and PDKs. Largest download.';
+    ProfileDescLabel.Visible := True;
+    CustomCheckListBox.Visible := False;
+    SharedHelperLabel.Visible := True;
+    ChangeChoicesLabel.Visible := True;
   end
   else if ProfileRadioMinimal.Checked then
   begin
@@ -1290,17 +1346,27 @@ begin
       'Minimal Profile Overview:'#13#10#13#10 +
       '• Installs the isolated LanEx application core and Python cockpit only.'#13#10 +
       '• Fastest installation with the smallest download and disk footprint.'#13#10 +
-      '• EDA tools, container engine, and PDKs can be installed later on demand from the Tools tab.';
+      '• LanEx application only; tools and PDKs can be installed later on demand.';
     ProfileDescLabel.Visible := True;
     CustomCheckListBox.Visible := False;
+    SharedHelperLabel.Visible := True;
+    ChangeChoicesLabel.Visible := True;
   end
   else
   begin
     ProfileDescLabel.Visible := False;
+    SharedHelperLabel.Visible := False;
+    ChangeChoicesLabel.Visible := False;
     CustomCheckListBox.Visible := True;
     CustomCheckListBox.BringToFront;
   end;
   UpdateEstimates;
+end;
+
+procedure OnChangeChoicesClick(Sender: TObject);
+begin
+  ProfileRadioCustom.Checked := True;
+  OnProfileOptionChange(nil);
 end;
 
 procedure OnCustomCheck(Sender: TObject);
@@ -1314,6 +1380,39 @@ begin
       CustomCheckListBox.Checked[IdxSkyReram] := False;
       CustomCheckListBox.ItemEnabled[IdxSkyReram] := False;
     end;
+
+    if CustomCheckListBox.Checked[IdxGf180D] then
+    begin
+      CustomCheckListBox.ItemEnabled[IdxGfAsSc] := True;
+      CustomCheckListBox.ItemEnabled[IdxGfOsu12] := True;
+      CustomCheckListBox.ItemEnabled[IdxGfOsu9] := True;
+      CustomCheckListBox.ItemEnabled[IdxGfOcdIo] := True;
+      CustomCheckListBox.ItemEnabled[IdxGfAlphaLg] := True;
+      CustomCheckListBox.ItemEnabled[IdxGfAlphaMisc] := True;
+      CustomCheckListBox.ItemEnabled[IdxGfAlphaSm] := True;
+    end
+    else
+    begin
+      CustomCheckListBox.Checked[IdxGfAsSc] := False;
+      CustomCheckListBox.ItemEnabled[IdxGfAsSc] := False;
+      CustomCheckListBox.Checked[IdxGfOsu12] := False;
+      CustomCheckListBox.ItemEnabled[IdxGfOsu12] := False;
+      CustomCheckListBox.Checked[IdxGfOsu9] := False;
+      CustomCheckListBox.ItemEnabled[IdxGfOsu9] := False;
+      CustomCheckListBox.Checked[IdxGfOcdIo] := False;
+      CustomCheckListBox.ItemEnabled[IdxGfOcdIo] := False;
+      CustomCheckListBox.Checked[IdxGfAlphaLg] := False;
+      CustomCheckListBox.ItemEnabled[IdxGfAlphaLg] := False;
+      CustomCheckListBox.Checked[IdxGfAlphaMisc] := False;
+      CustomCheckListBox.ItemEnabled[IdxGfAlphaMisc] := False;
+      CustomCheckListBox.Checked[IdxGfAlphaSm] := False;
+      CustomCheckListBox.ItemEnabled[IdxGfAlphaSm] := False;
+    end;
+
+    CustomCheckListBox.Checked[IdxGfOcdSram] := False;
+    CustomCheckListBox.ItemEnabled[IdxGfOcdSram] := False;
+    CustomCheckListBox.Checked[IdxGfEfuse] := False;
+    CustomCheckListBox.ItemEnabled[IdxGfEfuse] := False;
   end;
   UpdateEstimates;
 end;
@@ -1414,29 +1513,60 @@ begin
   ProfileRadioRecommended.Top := ScaleY(2);
   ProfileRadioRecommended.Width := ConfigurePage.Surface.ClientWidth - ScaleX(8);
   ProfileRadioRecommended.Height := ScaleY(20);
-  ProfileRadioRecommended.Caption := '&Recommended — Docker, all supported tools, GDS3D, recommended PDKs';
+  ProfileRadioRecommended.Caption := '&Recommended — Tools, viewers and SKY130A. Ready to design.';
   ProfileRadioRecommended.Font.Style := [fsBold];
   ProfileRadioRecommended.OnClick := @OnProfileOptionChange;
 
   ProfileRadioCustom := TRadioButton.Create(WizardForm);
   ProfileRadioCustom.Parent := ConfigurePage.Surface;
   ProfileRadioCustom.Left := ScaleX(4);
-  ProfileRadioCustom.Top := ScaleY(24);
+  ProfileRadioCustom.Top := ScaleY(22);
   ProfileRadioCustom.Width := ConfigurePage.Surface.ClientWidth - ScaleX(8);
   ProfileRadioCustom.Height := ScaleY(20);
-  ProfileRadioCustom.Caption := '&Custom — choose engine, tools, PDK variants and advanced libraries';
+  ProfileRadioCustom.Caption := '&Custom — Choose your tools and PDKs.';
   ProfileRadioCustom.Font.Style := [fsBold];
   ProfileRadioCustom.OnClick := @OnProfileOptionChange;
 
   ProfileRadioMinimal := TRadioButton.Create(WizardForm);
   ProfileRadioMinimal.Parent := ConfigurePage.Surface;
   ProfileRadioMinimal.Left := ScaleX(4);
-  ProfileRadioMinimal.Top := ScaleY(46);
+  ProfileRadioMinimal.Top := ScaleY(42);
   ProfileRadioMinimal.Width := ConfigurePage.Surface.ClientWidth - ScaleX(8);
   ProfileRadioMinimal.Height := ScaleY(20);
-  ProfileRadioMinimal.Caption := '&Minimal — LanEx application only; tools can be added later';
+  ProfileRadioMinimal.Caption := '&Minimal — Install LanEx now. Add tools and PDKs later.';
   ProfileRadioMinimal.Font.Style := [fsBold];
   ProfileRadioMinimal.OnClick := @OnProfileOptionChange;
+
+  ProfileRadioComplete := TRadioButton.Create(WizardForm);
+  ProfileRadioComplete.Parent := ConfigurePage.Surface;
+  ProfileRadioComplete.Left := ScaleX(4);
+  ProfileRadioComplete.Top := ScaleY(62);
+  ProfileRadioComplete.Width := ConfigurePage.Surface.ClientWidth - ScaleX(8);
+  ProfileRadioComplete.Height := ScaleY(20);
+  ProfileRadioComplete.Caption := '&Complete — All supported tools and PDKs. Largest download.';
+  ProfileRadioComplete.Font.Style := [fsBold];
+  ProfileRadioComplete.OnClick := @OnProfileOptionChange;
+
+  SharedHelperLabel := TLabel.Create(WizardForm);
+  SharedHelperLabel.Parent := ConfigurePage.Surface;
+  SharedHelperLabel.Left := ScaleX(8);
+  SharedHelperLabel.Top := ScaleY(84);
+  SharedHelperLabel.Width := ConfigurePage.Surface.ClientWidth - ScaleX(16);
+  SharedHelperLabel.Height := ScaleY(18);
+  SharedHelperLabel.Caption := 'You can add tools and PDKs later in LanEx -> Tools.';
+  SharedHelperLabel.Font.Style := [fsItalic];
+  SharedHelperLabel.Anchors := [akLeft, akTop, akRight];
+
+  ChangeChoicesLabel := TLabel.Create(WizardForm);
+  ChangeChoicesLabel.Parent := ConfigurePage.Surface;
+  ChangeChoicesLabel.Left := ScaleX(8);
+  ChangeChoicesLabel.Top := ScaleY(102);
+  ChangeChoicesLabel.Width := ScaleX(180);
+  ChangeChoicesLabel.Height := ScaleY(18);
+  ChangeChoicesLabel.Caption := 'Change tools or PDKs';
+  ChangeChoicesLabel.Font.Style := [fsUnderline];
+  ChangeChoicesLabel.Cursor := crHand;
+  ChangeChoicesLabel.OnClick := @OnChangeChoicesClick;
 
   // Fixed summary panel at the bottom of the page surface:
   SummaryPanel := TPanel.Create(WizardForm);
@@ -1486,9 +1616,9 @@ begin
   ProfileDescLabel := TLabel.Create(WizardForm);
   ProfileDescLabel.Parent := ConfigurePage.Surface;
   ProfileDescLabel.Left := ScaleX(8);
-  ProfileDescLabel.Top := ScaleY(72);
+  ProfileDescLabel.Top := ScaleY(122);
   ProfileDescLabel.Width := ConfigurePage.Surface.ClientWidth - ScaleX(16);
-  ProfileDescLabel.Height := SummaryPanel.Top - ScaleY(78);
+  ProfileDescLabel.Height := SummaryPanel.Top - ScaleY(126);
   ProfileDescLabel.AutoSize := False;
   ProfileDescLabel.WordWrap := True;
   ProfileDescLabel.Anchors := [akLeft, akTop, akRight, akBottom];
@@ -1496,9 +1626,9 @@ begin
   CustomCheckListBox := TNewCheckListBox.Create(WizardForm);
   CustomCheckListBox.Parent := ConfigurePage.Surface;
   CustomCheckListBox.Left := ScaleX(0);
-  CustomCheckListBox.Top := ScaleY(70);
+  CustomCheckListBox.Top := ScaleY(84);
   CustomCheckListBox.Width := ConfigurePage.Surface.ClientWidth;
-  CustomCheckListBox.Height := SummaryPanel.Top - ScaleY(76);
+  CustomCheckListBox.Height := SummaryPanel.Top - ScaleY(88);
   CustomCheckListBox.Anchors := [akLeft, akTop, akRight, akBottom];
   CustomCheckListBox.Visible := False;
   CustomCheckListBox.OnClickCheck := @OnCustomCheck;
@@ -1507,29 +1637,42 @@ begin
   IdxDocker := CustomCheckListBox.AddRadioButton('Docker CE (recommended)', '', 0, True, True, nil);
   IdxPodman := CustomCheckListBox.AddRadioButton('Podman', '', 0, False, True, nil);
 
-  CustomCheckListBox.AddGroup('Flow & Visualization Tools', '', 0, nil);
-  IdxImage := CustomCheckListBox.AddCheckBox('Matched LibreLane container image', '', 0, True, True, False, True, nil);
-  IdxNative := CustomCheckListBox.AddCheckBox('Simulation & report tools (Verilator, Icarus, Graphviz, GTKWave)', '', 0, True, True, False, True, nil);
-  IdxGds3d := CustomCheckListBox.AddCheckBox('GDS3D layout viewer and runtime support', '', 0, True, True, False, True, nil);
+  CustomCheckListBox.AddGroup('Tools — Flow & Visualization', '', 0, nil);
+  IdxImage := CustomCheckListBox.AddCheckBox('Chip design toolchain (matched LibreLane container image)', '', 0, True, True, False, True, nil);
+  IdxVerilator := CustomCheckListBox.AddCheckBox('Verilator (simulation and linting)', '', 0, True, True, False, True, nil);
+  IdxIverilog := CustomCheckListBox.AddCheckBox('Icarus Verilog & GTKWave (simulation and waveforms)', '', 0, True, True, False, True, nil);
+  IdxGraphviz := CustomCheckListBox.AddCheckBox('Graphviz (flow and report diagrams)', '', 0, True, True, False, True, nil);
+  IdxGds3d := CustomCheckListBox.AddCheckBox('GDS3D (3D layout viewer and runtime support)', '', 0, True, True, False, True, nil);
 
-  CustomCheckListBox.AddGroup('Process Design Kits (select one variant per family)', '', 0, nil);
-  IdxSky130A := CustomCheckListBox.AddRadioButton('sky130A — SkyWater 130 nm, ~2.5 GB (recommended)', '', 0, True, True, nil);
-  IdxSky130B := CustomCheckListBox.AddRadioButton('sky130B — SkyWater 130 nm with ReRAM/SONOS, ~2.5 GB', '', 0, False, True, nil);
-  IdxSkyNone := CustomCheckListBox.AddRadioButton('No SkyWater PDK', '', 0, False, True, nil);
-  IdxGfNone := CustomCheckListBox.AddRadioButton('No GF180 PDK', '', 0, True, True, nil);
-  IdxGf180A := CustomCheckListBox.AddRadioButton('gf180mcuA — GlobalFoundries 180 nm, ~1.8 GB', '', 0, False, True, nil);
-  IdxGf180B := CustomCheckListBox.AddRadioButton('gf180mcuB — GlobalFoundries 180 nm, ~1.8 GB', '', 0, False, True, nil);
-  IdxGf180C := CustomCheckListBox.AddRadioButton('gf180mcuC — GlobalFoundries 180 nm, ~1.8 GB', '', 0, False, True, nil);
-  IdxGf180D := CustomCheckListBox.AddRadioButton('gf180mcuD — GlobalFoundries 180 nm, ~1.8 GB', '', 0, False, True, nil);
-  IdxIhp := CustomCheckListBox.AddCheckBox('IHP SG13G2 — 130 nm SiGe BiCMOS, ~1.9 GB', '', 0, False, True, False, True, nil);
+  CustomCheckListBox.AddGroup('Process Design Kits — choose any (Hint: Not sure? Start with SKY130A)', '', 0, nil);
+  IdxSky130A := CustomCheckListBox.AddCheckBox('sky130A — SkyWater 130 nm default variant (recommended)', '', 0, True, True, False, True, nil);
+  IdxSky130B := CustomCheckListBox.AddCheckBox('sky130B — SkyWater 130 nm with ReRAM/SONOS', '', 0, False, True, False, True, nil);
+  IdxGf180D := CustomCheckListBox.AddCheckBox('gf180mcuD — GlobalFoundries 180 nm default variant', '', 0, False, True, False, True, nil);
+  IdxGf180A := CustomCheckListBox.AddCheckBox('gf180mcuA — GlobalFoundries 180 nm (unsupported for this flow)', '', 0, False, False, False, True, nil);
+  IdxGf180B := CustomCheckListBox.AddCheckBox('gf180mcuB — GlobalFoundries 180 nm (unsupported for this flow)', '', 0, False, False, False, True, nil);
+  IdxGf180C := CustomCheckListBox.AddCheckBox('gf180mcuC — GlobalFoundries 180 nm (legacy variant)', '', 0, False, True, False, True, nil);
+  IdxIhp := CustomCheckListBox.AddCheckBox('ihp-sg13g2 — 130 nm SiGe BiCMOS', '', 0, False, True, False, True, nil);
 
-  CustomCheckListBox.AddGroup('Advanced PDK libraries', '', 0, nil);
-  IdxSkyHdll := CustomCheckListBox.AddCheckBox('sky130_fd_sc_hdll', '', 0, True, True, False, True, nil);
-  IdxSkyLp := CustomCheckListBox.AddCheckBox('sky130_fd_sc_lp', '', 0, True, True, False, True, nil);
-  IdxSkyLs := CustomCheckListBox.AddCheckBox('sky130_fd_sc_ls', '', 0, True, True, False, True, nil);
-  IdxSkyMs := CustomCheckListBox.AddCheckBox('sky130_fd_sc_ms', '', 0, True, True, False, True, nil);
-  IdxSkyHs := CustomCheckListBox.AddCheckBox('sky130_fd_sc_hs', '', 0, True, True, False, True, nil);
-  IdxSkyReram := CustomCheckListBox.AddCheckBox('sky130_fd_pr_reram (sky130B only)', '', 0, False, False, False, True, nil);
+  CustomCheckListBox.AddGroup('Advanced PDK libraries (SKY130)', '', 0, nil);
+  IdxSkyHdll := CustomCheckListBox.AddCheckBox('sky130_fd_sc_hdll (high-density low-leakage standard cell)', '', 0, False, True, False, True, nil);
+  IdxSkyHs := CustomCheckListBox.AddCheckBox('sky130_fd_sc_hs (high-speed standard cell)', '', 0, False, True, False, True, nil);
+  IdxSkyLp := CustomCheckListBox.AddCheckBox('sky130_fd_sc_lp (low-power standard cell)', '', 0, False, True, False, True, nil);
+  IdxSkyLs := CustomCheckListBox.AddCheckBox('sky130_fd_sc_ls (low-speed standard cell)', '', 0, False, True, False, True, nil);
+  IdxSkyMs := CustomCheckListBox.AddCheckBox('sky130_fd_sc_ms (medium-speed standard cell)', '', 0, False, True, False, True, nil);
+  IdxSkyReram := CustomCheckListBox.AddCheckBox('sky130_fd_pr_reram (ReRAM primitives; sky130B only)', '', 0, False, False, False, True, nil);
+
+  CustomCheckListBox.AddGroup('Advanced PDK libraries (GF180)', '', 0, nil);
+  IdxGfAsSc := CustomCheckListBox.AddCheckBox('gf180mcu_as_sc_mcu7t3v3 (7-track standard cell)', '', 0, False, True, False, True, nil);
+  IdxGfOsu12 := CustomCheckListBox.AddCheckBox('gf180mcu_osu_sc_gp12t3v3 (OSU 12-track standard cell)', '', 0, False, True, False, True, nil);
+  IdxGfOsu9 := CustomCheckListBox.AddCheckBox('gf180mcu_osu_sc_gp9t3v3 (OSU 9-track standard cell)', '', 0, False, True, False, True, nil);
+  IdxGfOcdIo := CustomCheckListBox.AddCheckBox('gf180mcu_ocd_io (I/O cells)', '', 0, False, True, False, True, nil);
+  IdxGfAlphaLg := CustomCheckListBox.AddCheckBox('gf180mcu_ocd_alpha_large (large layout font utility)', '', 0, False, True, False, True, nil);
+  IdxGfAlphaMisc := CustomCheckListBox.AddCheckBox('gf180mcu_ocd_alpha_misc (misc layout graphics utility)', '', 0, False, True, False, True, nil);
+  IdxGfAlphaSm := CustomCheckListBox.AddCheckBox('gf180mcu_ocd_alpha_small (small layout font utility)', '', 0, False, True, False, True, nil);
+
+  CustomCheckListBox.AddGroup('Unavailable in this release (disabled)', '', 0, nil);
+  IdxGfOcdSram := CustomCheckListBox.AddCheckBox('gf180mcu_ocd_ip_sram (Not published for this release)', '', 0, False, False, False, False, nil);
+  IdxGfEfuse := CustomCheckListBox.AddCheckBox('gf180mcu_re_efuse (Not published for this release)', '', 0, False, False, False, False, nil);
 
   // Fast profile restoration without spawning PowerShell:
   SavedProfile := '';
@@ -1541,11 +1684,15 @@ begin
       SavedProfile := ExtractJsonStringValue(StateContent, 'profile');
       if SavedProfile = 'minimal' then
         ProfileRadioMinimal.Checked := True
+      else if (SavedProfile = 'complete') or (SavedProfile = 'maximum') then
+        ProfileRadioComplete.Checked := True
       else if SavedProfile = 'custom' then
       begin
         ProfileRadioCustom.Checked := True;
         CustomCheckListBox.Checked[IdxPodman] := (ExtractJsonStringValue(StateContent, 'engine') = 'podman');
-        CustomCheckListBox.Checked[IdxNative] := ExtractJsonArrayContains(StateContent, 'nativeTools', 'gtkwave');
+        CustomCheckListBox.Checked[IdxVerilator] := ExtractJsonArrayContains(StateContent, 'nativeTools', 'verilator');
+        CustomCheckListBox.Checked[IdxIverilog] := ExtractJsonArrayContains(StateContent, 'nativeTools', 'iverilog') or ExtractJsonArrayContains(StateContent, 'nativeTools', 'gtkwave');
+        CustomCheckListBox.Checked[IdxGraphviz] := ExtractJsonArrayContains(StateContent, 'nativeTools', 'graphviz');
         CustomCheckListBox.Checked[IdxGds3d] := ExtractJsonArrayContains(StateContent, 'nativeTools', 'gds3d');
         CustomCheckListBox.Checked[IdxImage] := ExtractJsonBoolValue(StateContent, 'image', True);
 
@@ -1558,11 +1705,19 @@ begin
         CustomCheckListBox.Checked[IdxIhp] := ExtractJsonArrayContains(StateContent, 'pdks', 'ihp-sg13g2');
 
         CustomCheckListBox.Checked[IdxSkyHdll] := ExtractJsonArrayContains(StateContent, 'sky130A', 'sky130_fd_sc_hdll') or ExtractJsonArrayContains(StateContent, 'sky130B', 'sky130_fd_sc_hdll');
+        CustomCheckListBox.Checked[IdxSkyHs] := ExtractJsonArrayContains(StateContent, 'sky130A', 'sky130_fd_sc_hs') or ExtractJsonArrayContains(StateContent, 'sky130B', 'sky130_fd_sc_hs');
         CustomCheckListBox.Checked[IdxSkyLp] := ExtractJsonArrayContains(StateContent, 'sky130A', 'sky130_fd_sc_lp') or ExtractJsonArrayContains(StateContent, 'sky130B', 'sky130_fd_sc_lp');
         CustomCheckListBox.Checked[IdxSkyLs] := ExtractJsonArrayContains(StateContent, 'sky130A', 'sky130_fd_sc_ls') or ExtractJsonArrayContains(StateContent, 'sky130B', 'sky130_fd_sc_ls');
         CustomCheckListBox.Checked[IdxSkyMs] := ExtractJsonArrayContains(StateContent, 'sky130A', 'sky130_fd_sc_ms') or ExtractJsonArrayContains(StateContent, 'sky130B', 'sky130_fd_sc_ms');
-        CustomCheckListBox.Checked[IdxSkyHs] := ExtractJsonArrayContains(StateContent, 'sky130A', 'sky130_fd_sc_hs') or ExtractJsonArrayContains(StateContent, 'sky130B', 'sky130_fd_sc_hs');
         CustomCheckListBox.Checked[IdxSkyReram] := ExtractJsonArrayContains(StateContent, 'sky130B', 'sky130_fd_pr_reram');
+
+        CustomCheckListBox.Checked[IdxGfAsSc] := ExtractJsonArrayContains(StateContent, 'gf180mcuD', 'gf180mcu_as_sc_mcu7t3v3');
+        CustomCheckListBox.Checked[IdxGfOsu12] := ExtractJsonArrayContains(StateContent, 'gf180mcuD', 'gf180mcu_osu_sc_gp12t3v3');
+        CustomCheckListBox.Checked[IdxGfOsu9] := ExtractJsonArrayContains(StateContent, 'gf180mcuD', 'gf180mcu_osu_sc_gp9t3v3');
+        CustomCheckListBox.Checked[IdxGfOcdIo] := ExtractJsonArrayContains(StateContent, 'gf180mcuD', 'gf180mcu_ocd_io');
+        CustomCheckListBox.Checked[IdxGfAlphaLg] := ExtractJsonArrayContains(StateContent, 'gf180mcuD', 'gf180mcu_ocd_alpha_large');
+        CustomCheckListBox.Checked[IdxGfAlphaMisc] := ExtractJsonArrayContains(StateContent, 'gf180mcuD', 'gf180mcu_ocd_alpha_misc');
+        CustomCheckListBox.Checked[IdxGfAlphaSm] := ExtractJsonArrayContains(StateContent, 'gf180mcuD', 'gf180mcu_ocd_alpha_small');
       end
       else
         ProfileRadioRecommended.Checked := True;
@@ -1733,11 +1888,11 @@ begin
     SilentProfile := Lowercase(ExpandConstant('{param:PROFILE|recommended}'));
     if ChoicesPathValue <> '' then
       Result := PlanSelections('', ChoicesPathValue, Failure)
-    else if (SilentProfile = 'recommended') or (SilentProfile = 'minimal') then
+    else if (SilentProfile = 'recommended') or (SilentProfile = 'complete') or (SilentProfile = 'maximum') or (SilentProfile = 'minimal') then
       Result := PlanSelections('{"profile":"' + SilentProfile + '"}', '', Failure)
     else
     begin
-      Failure := 'Silent /PROFILE must be recommended or minimal; use /SELECTIONS=<json file> for custom choices.';
+      Failure := 'Silent /PROFILE must be recommended, complete, or minimal; use /SELECTIONS=<json file> for custom choices.';
       Result := False;
     end;
     if Result then Result := CheckSelectionSpace(Failure);
@@ -2781,9 +2936,27 @@ begin
   begin
     WizardForm.NextButton.Caption := SetupMessage(msgButtonFinish);
     if not WslPending then
-      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10
-        + 'Your selected tools, container image, and PDK libraries were installed '
-        + 'and passed LanEx''s setup readiness checks.';
+    begin
+      if (ProfileRadioMinimal <> nil) and ProfileRadioMinimal.Checked then
+      begin
+        WizardForm.FinishedHeadingLabel.Caption := 'LanEx installed — add tools or a PDK to start designing';
+        WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10
+          + 'LanEx application core is installed. You can add flow tools and PDKs later in LanEx -> Tools.';
+      end
+      else if (ChoicesJsonValue <> '') and (Pos('"pdks":[]', ChoicesJsonValue) > 0) then
+      begin
+        WizardForm.FinishedHeadingLabel.Caption := 'LanEx installed — add tools or a PDK to start designing';
+        WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10
+          + 'LanEx and selected tools have been installed. Add a PDK in LanEx -> Tools before running a chip design.';
+      end
+      else
+      begin
+        WizardForm.FinishedHeadingLabel.Caption := 'Ready to design';
+        WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10
+          + 'Your selected tools, container image, and PDK libraries were installed '
+          + 'and passed LanEx''s setup readiness checks.';
+      end;
+    end;
   end
   else
   begin

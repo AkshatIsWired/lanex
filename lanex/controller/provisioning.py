@@ -74,22 +74,20 @@ def load_plan(
         raise ProvisioningInputError("saved selections must be an object")
 
     profile = choices.get("profile", "custom")
-    if profile not in ("recommended", "custom", "minimal"):
-        raise ProvisioningInputError("profile must be recommended, custom, or minimal")
+    if profile not in ("recommended", "complete", "maximum", "full", "custom", "minimal"):
+        raise ProvisioningInputError("profile must be recommended, complete, custom, minimal, or maximum")
     if profile == "recommended":
-        choices = {
-            "profile": "recommended",
-            "engine": "docker",
-            "image": True,
-            "nativeTools": list(_NATIVE_DEFAULTS),
-            "pdks": ["sky130A", "gf180mcuD", "ihp-sg13g2"],
-            "libraries": "all",
-        }
+        from .pdk_catalog import PRESET_EXPANSIONS
+
+        choices = dict(PRESET_EXPANSIONS["recommended"])
+    elif profile in ("complete", "maximum", "full"):
+        from .pdk_catalog import PRESET_EXPANSIONS
+
+        choices = dict(PRESET_EXPANSIONS["complete"])
     elif profile == "minimal":
-        choices = {
-            "profile": "minimal", "engine": "none", "image": False,
-            "nativeTools": [], "pdks": [], "libraries": {},
-        }
+        from .pdk_catalog import PRESET_EXPANSIONS
+
+        choices = dict(PRESET_EXPANSIONS["minimal"])
 
     selected = choices.get("pdks", ["sky130A"])
     if (
@@ -100,7 +98,6 @@ def load_plan(
     selected = list(dict.fromkeys(selected))
     library_choice = choices.get("libraries", "all")
     pdks: List[Dict[str, Any]] = []
-    seen_families: Dict[str, str] = {}
     for variant in selected:
         entry = catalog.get(variant)
         pin = pins.get(variant)
@@ -114,11 +111,6 @@ def load_plan(
             raise ProvisioningInputError(f"manifest pin is invalid for {variant}")
         if not isinstance(allowed, list) or not all(isinstance(x, str) for x in allowed):
             raise ProvisioningInputError(f"manifest libraries are invalid for {variant}")
-        if family in seen_families and seen_families[family] != variant:
-            raise ProvisioningInputError(
-                f"select only one {family} variant at a time ({seen_families[family]}, {variant})"
-            )
-        seen_families[family] = variant
         if library_choice == "all":
             libs = allowed
         elif isinstance(library_choice, dict):
@@ -475,27 +467,54 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
             else:
                 print("  [OK] LibreLane container image verified ready.", flush=True)
     if not failures:
+        family_groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
         for selected in plan["pdks"]:
+            f_key = (selected["family"], selected["version"])
+            family_groups.setdefault(f_key, []).append(selected)
+
+        for (family, version), variants in family_groups.items():
             if cancel_requested.is_set():
-                failures.append({"component": f"pdk:{selected['variant']}", "cancelled": True})
+                for v in variants:
+                    failures.append({"component": f"pdk:{v['variant']}", "cancelled": True})
                 break
-            keys = [f"pdk:{selected['variant']}:{lib}" for lib in selected["libraries"]]
-            if all(initial["checks"].get(key, {}).get("ready") for key in keys):
-                print(f"already verified: pdk:{selected['variant']}", flush=True)
+
+            all_ready = True
+            for v in variants:
+                keys = [f"pdk:{v['variant']}:{lib}" for lib in v["libraries"]]
+                if not all(initial["checks"].get(k, {}).get("ready") for k in keys):
+                    all_ready = False
+                    break
+            if all_ready:
+                for v in variants:
+                    print(f"already verified: pdk:{v['variant']}", flush=True)
                 continue
-            announce(f"pdk:{selected['variant']}", f"installing and verifying {selected['variant']}")
-            print(f"  * Installing PDK: {selected['variant']} ({len(selected['libraries'])} libraries)...", flush=True)
+
+            all_libs: List[str] = []
+            variant_libs_map: Dict[str, List[str]] = {}
+            for v in variants:
+                variant_libs_map[v["variant"]] = list(v["libraries"])
+                for lib in v["libraries"]:
+                    if lib not in all_libs:
+                        all_libs.append(lib)
+
+            var_names = ", ".join(v["variant"] for v in variants)
+            announce(f"pdk:{variants[0]['variant']}", f"installing and verifying {family} ({var_names})")
+            print(f"  * Installing PDK family: {family} for {var_names} ({len(all_libs)} unique libraries)...", flush=True)
+
             result = installer.install_pdk_sync(
-                selected["variant"],
-                selected["libraries"],
-                required_version=selected["version"],
+                variants[0]["variant"],
+                all_libs,
+                required_version=version,
                 strict=True,
+                variant_libraries=variant_libs_map,
             )
             drain()
             if not result.get("ok"):
-                failures.append({"component": f"pdk:{selected['variant']}", "result": result})
+                for v in variants:
+                    failures.append({"component": f"pdk:{v['variant']}", "result": result})
                 break
-            print(f"  [OK] PDK verified ready: {selected['variant']}", flush=True)
+            for v in variants:
+                print(f"  [OK] PDK verified ready: {v['variant']}", flush=True)
     if cancel_requested.is_set():
         report = {"schema": 1, "ready": False, "checks": initial["checks"]}
     else:

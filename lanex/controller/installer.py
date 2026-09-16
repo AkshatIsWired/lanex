@@ -2651,7 +2651,8 @@ _PDK_PERMANENT_FAILURES = (
 
 def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
                      required_version: Optional[str] = None,
-                     strict: bool = False) -> Dict[str, Any]:
+                     strict: bool = False,
+                     variant_libraries: Optional[Dict[str, List[str]]] = None) -> Dict[str, Any]:
     """Fetch, enable and verify one PDK before returning.
 
     This is the single completion contract used by Windows finalization and the
@@ -2758,11 +2759,19 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
             return {"ok": False, "reason": f"ciel enable failed for {family}",
                     "output": cleaned_en_out}
         failed_libraries: List[str] = []
-        for library in libraries or []:
-            ready = pdk_state.check_pdk_library_ready(
-                pdk, library, required_version=version)
-            if not (ready.get("ready") and ready.get("required_version") == version):
-                failed_libraries.append(library)
+        if variant_libraries:
+            for v_name, v_libs in variant_libraries.items():
+                for library in v_libs:
+                    ready = pdk_state.check_pdk_library_ready(
+                        v_name, library, required_version=version)
+                    if not (ready.get("ready") and ready.get("required_version") == version):
+                        failed_libraries.append(f"{v_name}/{library}")
+        else:
+            for library in libraries or []:
+                ready = pdk_state.check_pdk_library_ready(
+                    pdk, library, required_version=version)
+                if not (ready.get("ready") and ready.get("required_version") == version):
+                    failed_libraries.append(library)
         if failed_libraries:
             reason = "PDK installed but readiness failed for: " + ", ".join(failed_libraries)
             _emit("installer_error", {"key": key, "message": reason})
@@ -3396,8 +3405,8 @@ def uninstall_pdk(pdk: str) -> Dict[str, Any]:
             tried.append(f"ciel rm {version[:12]}… @ {home}: exit {result.get('rc', '?')}")
 
     if removed:
-        return {"ok": True, "method": "ciel rm", "key": pdk, "removed": removed, "tried": tried}
-    return {"ok": False, "tried": tried, "reason": "Could not remove PDK"}
+        return {"ok": True, "method": "ciel rm", "key": pdk, "family": family, "removed": removed, "tried": tried}
+    return {"ok": False, "key": pdk, "family": family, "tried": tried, "reason": "Could not remove PDK"}
 
 
 # ---- Legacy API (backward compat) ----

@@ -235,19 +235,44 @@ function ConvertTo-NormalizedChoices($Manifest, $RawChoices) {
     $catalog = $Manifest.pdkCatalog
     if ($null -eq $catalog) { throw 'Build manifest has no PDK catalog.' }
     $profile = [string](Get-ChoiceProperty $RawChoices 'profile' 'custom')
-    if ($profile -notin @('recommended', 'custom', 'minimal')) {
-        throw 'profile must be recommended, custom, or minimal.'
+    if ($profile -notin @('recommended', 'complete', 'maximum', 'full', 'custom', 'minimal')) {
+        throw 'profile must be recommended, complete, maximum, full, custom, or minimal.'
     }
     if ($profile -eq 'recommended') {
-        foreach ($requiredPdk in @('sky130A', 'gf180mcuD', 'ihp-sg13g2')) {
-            if ($null -eq $catalog.PSObject.Properties[$requiredPdk]) {
-                throw "The recommended $requiredPdk PDK is absent from the build manifest."
-            }
+        if ($null -eq $catalog.PSObject.Properties['sky130A']) {
+            throw 'The recommended sky130A PDK is absent from the build manifest.'
+        }
+        $skyEntry = $catalog.PSObject.Properties['sky130A'].Value
+        [string[]]$starterLibs = if ($null -ne $skyEntry.default_libraries) {
+            @($skyEntry.default_libraries | ForEach-Object { [string]$_ })
+        } else {
+            @('sky130_fd_io', 'sky130_fd_pr', 'sky130_fd_sc_hd', 'sky130_fd_sc_hvl', 'sky130_ml_xx_hd', 'sky130_sram_macros')
+        }
+        $recLibs = [pscustomobject][ordered]@{
+            'sky130A' = [string[]]$starterLibs
         }
         return [pscustomobject][ordered]@{
             schema = 1; profile = 'recommended'; engine = 'docker'; image = $true
             nativeTools = @('verilator', 'iverilog', 'graphviz', 'gtkwave', 'gds3d')
-            pdks = @('sky130A', 'gf180mcuD', 'ihp-sg13g2'); libraries = 'all'
+            pdks = @('sky130A'); libraries = $recLibs
+        }
+    }
+    if ($profile -in @('complete', 'maximum', 'full')) {
+        $resolvedProfile = if ($profile -eq 'full') { 'complete' } else { $profile }
+        $maxPdks = @('sky130A', 'sky130B', 'gf180mcuD', 'ihp-sg13g2')
+        $maxLibs = [pscustomobject][ordered]@{}
+        foreach ($requiredPdk in $maxPdks) {
+            if ($null -eq $catalog.PSObject.Properties[$requiredPdk]) {
+                throw "The $resolvedProfile $requiredPdk PDK is absent from the build manifest."
+            }
+            $pdkEntry = $catalog.PSObject.Properties[$requiredPdk].Value
+            [string[]]$libs = @($pdkEntry.libraries | ForEach-Object { [string]$_ })
+            Add-OrSet $maxLibs $requiredPdk ([string[]]$libs)
+        }
+        return [pscustomobject][ordered]@{
+            schema = 1; profile = $resolvedProfile; engine = 'docker'; image = $true
+            nativeTools = @('verilator', 'iverilog', 'graphviz', 'gtkwave', 'gds3d')
+            pdks = $maxPdks; libraries = $maxLibs
         }
     }
     if ($profile -eq 'minimal') {
@@ -284,16 +309,10 @@ function ConvertTo-NormalizedChoices($Manifest, $RawChoices) {
     }
     $selectedRaw = if ($null -eq $selectedProperty) { @('sky130A') } else { @($selectedProperty.Value) }
     $selected = @()
-    $families = @{}
     foreach ($variantValue in @($selectedRaw)) {
         $variant = [string]$variantValue
         $entry = $catalog.PSObject.Properties[$variant]
         if (-not $variant -or $null -eq $entry) { throw "Unknown PDK variant: $variant" }
-        $family = [string]$entry.Value.family
-        if ($families.ContainsKey($family) -and $families[$family] -ne $variant) {
-            throw "Select only one $family variant at a time ($($families[$family]), $variant)."
-        }
-        $families[$family] = $variant
         if ($selected -notcontains $variant) { $selected += $variant }
     }
     if (($image -or $selected.Count -gt 0) -and $engine -eq 'none') {
@@ -308,7 +327,12 @@ function ConvertTo-NormalizedChoices($Manifest, $RawChoices) {
         if ([string]$libraryRaw -ne 'all') {
             throw "libraries must be 'all' or an object keyed by selected PDK."
         }
-        $libraries = 'all'
+        $libraries = [pscustomobject][ordered]@{}
+        foreach ($variant in $selected) {
+            $entry = $catalog.PSObject.Properties[$variant].Value
+            $allowed = @($entry.libraries | ForEach-Object { [string]$_ })
+            Add-OrSet $libraries $variant ([string[]]$allowed)
+        }
     } else {
         if ($libraryRaw -isnot [System.Management.Automation.PSCustomObject]) {
             throw "libraries must be 'all' or an object keyed by selected PDK."
@@ -337,7 +361,7 @@ function ConvertTo-NormalizedChoices($Manifest, $RawChoices) {
                 }
                 if ($merged -notcontains $library) { $merged += $library }
             }
-            Add-OrSet $libraries $variant $merged
+            Add-OrSet $libraries $variant ([string[]]$merged)
         }
     }
     return [pscustomobject][ordered]@{
@@ -360,24 +384,33 @@ function Get-SelectionEstimate($Manifest, $Choices, $ExistingState = $null) {
     $imageInstalled = if ($Choices.image) { [int64]7524155924 } else { 0 }
     $pdkNetwork = [int64]0
     $pdkInstalled = [int64]0
-    $hasSky130 = $false
-    $hasGf180 = $false
-    $hasIhp = $false
-    foreach ($variant in @($Choices.pdks)) {
-        $pdkProp = $Manifest.pdkCatalog.PSObject.Properties[[string]$variant]
-        if ($null -ne $pdkProp) {
-            $approx = [double]$pdkProp.Value.approx_gb
-            $pdkNetwork += [int64]([math]::Ceiling($approx * $gib))
-            $fam = [string]$pdkProp.Value.family
-            if ($fam -eq 'sky130' -and -not $hasSky130) {
-                $hasSky130 = $true
-                $pdkInstalled += [int64]16500000000
-            } elseif ($fam -eq 'gf180mcu' -and -not $hasGf180) {
-                $hasGf180 = $true
-                $pdkInstalled += [int64](8.5 * $gib)
-            } elseif ($fam -eq 'ihp-sg13g2' -and -not $hasIhp) {
-                $hasIhp = $true
-                $pdkInstalled += [int64](4.0 * $gib)
+    $seenFamilies = @{}
+    $isStarterSky130 = ($Choices.profile -eq 'recommended') -or
+        ((@($Choices.pdks).Count -eq 1) -and (@($Choices.pdks) -contains 'sky130A') -and
+         ($Choices.libraries -is [System.Management.Automation.PSCustomObject]) -and
+         ($null -ne $Choices.libraries.PSObject.Properties['sky130A']) -and
+         (@($Choices.libraries.PSObject.Properties['sky130A'].Value).Count -le 6))
+
+    if ($isStarterSky130) {
+        $pdkNetwork = [int64](0.35 * $gib)
+        $pdkInstalled = [int64](4.0 * $gib)
+    } else {
+        foreach ($variant in @($Choices.pdks)) {
+            $pdkProp = $Manifest.pdkCatalog.PSObject.Properties[[string]$variant]
+            if ($null -ne $pdkProp) {
+                $fam = [string]$pdkProp.Value.family
+                if (-not $seenFamilies.ContainsKey($fam)) {
+                    $seenFamilies[$fam] = $true
+                    $approx = [double]$pdkProp.Value.approx_gb
+                    $pdkNetwork += [int64]([math]::Ceiling($approx * $gib))
+                    if ($fam -eq 'sky130') {
+                        $pdkInstalled += [int64]16500000000
+                    } elseif ($fam -eq 'gf180mcu') {
+                        $pdkInstalled += [int64](8.5 * $gib)
+                    } elseif ($fam -eq 'ihp-sg13g2') {
+                        $pdkInstalled += [int64](4.0 * $gib)
+                    }
+                }
             }
         }
     }

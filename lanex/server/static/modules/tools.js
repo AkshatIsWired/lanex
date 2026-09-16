@@ -659,8 +659,8 @@ function paint(info) {
       "<div style='display:flex;flex-wrap:wrap;gap:var(--s-4);margin-top:var(--s-3)'>" +
       Object.entries(catalog).map(([key, p]) => {
         const isInstalled = installed.has(key);
-        const recBadge = p.recommended
-          ? "<span class='pill pill-info' style='font-size:10px'><span class='d'>" + icon('star',{size:11}) + "</span><span class='text'>Recommended</span></span>"
+        const recBadge = (p.default_variant || p.recommended)
+          ? "<span class='pill pill-info' style='font-size:10px'><span class='d'>" + icon('star',{size:11}) + "</span><span class='text'>Default variant</span></span>"
           : "";
 
         // Library list comes from the backend (ciel's authoritative metadata).
@@ -669,15 +669,20 @@ function paint(info) {
         if (!state.installJobs["pdk:" + key]) {
           const allLibs = p.libraries || [];
           const defLibs = new Set(p.default_libraries || []);
+          const unavailable = new Set(p.unavailable_libraries || ["gf180mcu_ocd_ip_sram", "gf180mcu_re_efuse"]);
           if (allLibs.length > 0) {
              const cbHtml = allLibs.map((id) => {
                const req = defLibs.has(id);
-               return `<label style="display:flex;align-items:center;gap:4px;font-size:11px"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" ${req ? "checked" : ""}> ${fmt.escape(id)}${req ? " <span style=\"color:var(--text-muted);font-size:10px\">(default)</span>" : ""}</label>`;
+               const isUnavail = unavailable.has(id);
+               if (isUnavail) {
+                 return `<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);opacity:0.6"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" disabled> ${fmt.escape(id)} <span style="font-size:10px">(Not published for this release)</span></label>`;
+               }
+               return `<label style="display:flex;align-items:center;gap:4px;font-size:11px"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" ${req ? "checked" : ""}> ${fmt.escape(id)}${req ? " <span style=\"color:var(--text-muted);font-size:10px\">(starter)</span>" : ""}</label>`;
              }).join("");
              libsHtml = `<details style="margin-bottom:var(--s-2);font-size:12px"><summary style="cursor:pointer;color:var(--text-muted);margin-bottom:4px;user-select:none">Libraries (${allLibs.length})</summary>
                <div style="display:flex;gap:8px;margin-bottom:4px">
-                 <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}').forEach(cb => cb.checked = cb.defaultChecked)">Default set</button>
-                 <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}').forEach(cb => cb.checked = true)">All</button>
+                 <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}:not(:disabled)').forEach(cb => cb.checked = cb.defaultChecked)">Starter set</button>
+                 <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}:not(:disabled)').forEach(cb => cb.checked = true)">All supported</button>
                </div>
                <div style="display:flex;flex-direction:column;gap:2px;max-height:150px;overflow-y:auto;background:var(--bg-2);padding:4px;border-radius:4px">${cbHtml}</div></details>`;
           }
@@ -772,18 +777,28 @@ function paint(info) {
     drop.querySelectorAll(".pdk-uninstall-btn").forEach(btn => {
       btn.addEventListener("click", async () => {
         const pdk = btn.dataset.pdk;
-        if (!(await confirmDialog({ title: "Uninstall PDK", danger: true, confirmText: "Uninstall",
-          body: "Uninstall PDK " + pdk + "?" }))) return;
+        const family = (catalog[pdk] && catalog[pdk].family) || (pdk.startsWith("sky130") ? "sky130" : pdk.startsWith("gf180mcu") ? "gf180mcu" : pdk);
+        if (!(await confirmDialog({ title: "Uninstall PDK Family", danger: true, confirmText: "Uninstall",
+          body: "Uninstalling " + pdk + " will remove the " + family + " family and all installed variants of this PDK from disk. Continue?" }))) return;
         btn.textContent = "…";
         try {
           const result = await api.uninstallPdk(pdk);
           if (result.ok) {
             toast.show(`PDK ${pdk} uninstalled`, "info");
             renderLogs.append({ payload: { message: "✓ PDK " + pdk + " uninstalled via " + (result.method || "?") } });
-            // Optimistic: drop it from the installed set so the card flips now.
+            // Optimistic: drop all variants of the removed family so the cards flip now.
             if (state.tools?.pdk) {
-              state.tools.pdk.installed_pdks = (state.tools.pdk.installed_pdks || []).filter((x) => x !== pdk);
-              if (state.tools.pdk.installed_sizes_mb) delete state.tools.pdk.installed_sizes_mb[pdk];
+              const removedFamily = result.family || family;
+              state.tools.pdk.installed_pdks = (state.tools.pdk.installed_pdks || []).filter((x) => {
+                const xFam = (catalog[x] && catalog[x].family) || (x.startsWith("sky130") ? "sky130" : x.startsWith("gf180mcu") ? "gf180mcu" : x);
+                return xFam !== removedFamily;
+              });
+              if (state.tools.pdk.installed_sizes_mb) {
+                for (const k of Object.keys(state.tools.pdk.installed_sizes_mb)) {
+                  const kFam = (catalog[k] && catalog[k].family) || (k.startsWith("sky130") ? "sky130" : k.startsWith("gf180mcu") ? "gf180mcu" : k);
+                  if (kFam === removedFamily) delete state.tools.pdk.installed_sizes_mb[k];
+                }
+              }
             }
             if (state.tools) paint(state.tools);
             // Keep the Setup tab honest too — its picker re-fetches /api/pdks.

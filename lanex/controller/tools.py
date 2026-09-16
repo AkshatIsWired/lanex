@@ -333,26 +333,55 @@ def _family_registry() -> Dict[str, Any]:
 
 
 def build_pdk_catalog() -> Dict[str, Dict[str, Any]]:
-    """Build the per-variant PDK catalog from ciel's authoritative metadata."""
+    """Build the per-variant PDK catalog with verified release metadata."""
+    from .pdk_catalog import (
+        build_canonical_pdk_catalog,
+        UNAVAILABLE_LIBRARIES,
+    )
+
+    canonical = build_canonical_pdk_catalog()
     catalog: Dict[str, Dict[str, Any]] = {}
-    for fam_name, fam in _family_registry().items():
+    fam_registry = _family_registry()
+    for variant, entry in canonical.items():
+        fam_name = entry["family"]
         facts = _FAMILY_FACTS.get(fam_name, {})
-        variants = list(getattr(fam, "variants", []) or [fam_name])
-        default_variant = getattr(fam, "default_variant", None)
-        libraries = list(getattr(fam, "all_libraries", []) or [])
-        default_includes = list(getattr(fam, "default_includes", []) or [])
-        for variant in variants:
-            catalog[variant] = {
-                "label": variant,
-                "family": fam_name,
-                "foundry": facts.get("foundry", ""),
-                "node": facts.get("node", ""),
-                "description": facts.get("description", ""),
-                "recommended": variant == default_variant,
-                "libraries": libraries,
-                "default_libraries": default_includes,
-                "approx_gb": facts.get("approx_gb"),
-            }
+        catalog[variant] = {
+            "label": entry.get("label", variant),
+            "family": fam_name,
+            "foundry": entry.get("foundry") or facts.get("foundry", ""),
+            "node": entry.get("node") or facts.get("node", ""),
+            "description": entry.get("description") or facts.get("description", ""),
+            "default_variant": entry.get("default_variant", False),
+            "recommended": entry.get("default_variant", False),  # backward compatibility alias
+            "supported": entry.get("supported", True),
+            "libraries": list(entry.get("libraries", [])),
+            "default_libraries": list(entry.get("default_libraries", [])),
+            "approx_gb": entry.get("approx_gb", facts.get("approx_gb")),
+        }
+        if "unavailable_libraries" in entry:
+            catalog[variant]["unavailable_libraries"] = dict(entry["unavailable_libraries"])
+    for fam_name, fam in fam_registry.items():
+        if fam_name not in {"sky130", "gf180mcu", "ihp-sg13g2"}:
+            facts = _FAMILY_FACTS.get(fam_name, {})
+            variants = list(getattr(fam, "variants", []) or [fam_name])
+            default_variant = getattr(fam, "default_variant", None)
+            libraries = list(getattr(fam, "all_libraries", []) or [])
+            default_includes = list(getattr(fam, "default_includes", []) or [])
+            for variant in variants:
+                if variant not in catalog:
+                    catalog[variant] = {
+                        "label": variant,
+                        "family": fam_name,
+                        "foundry": facts.get("foundry", ""),
+                        "node": facts.get("node", ""),
+                        "description": facts.get("description", ""),
+                        "default_variant": variant == default_variant,
+                        "recommended": variant == default_variant,
+                        "supported": True,
+                        "libraries": libraries,
+                        "default_libraries": default_includes,
+                        "approx_gb": facts.get("approx_gb"),
+                    }
     return catalog
 
 
