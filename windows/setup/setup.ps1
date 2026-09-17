@@ -531,6 +531,9 @@ function Get-LivePreflightFacts {
     } catch { $pending = $null }
 
     $wslExe = Join-Path $env:SystemRoot 'System32\wsl.exe'
+    if (-not (Test-Path -LiteralPath $wslExe -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $env:SystemRoot 'sysnative\wsl.exe') -PathType Leaf)) {
+        $wslExe = Join-Path $env:SystemRoot 'sysnative\wsl.exe'
+    }
     $wslPresent = Test-Path -LiteralPath $wslExe -PathType Leaf
     $wslVersion = ''
     $statusUsable = $false
@@ -554,13 +557,46 @@ function Get-LivePreflightFacts {
     $kernelUsable = $false
     if ($wslPresent -and $statusUsable -and $systemdCapable) {
         try {
-            # --status can succeed even when the WSL2 utility VM cannot start
-            # (for example, a guest whose outer hypervisor does not expose the
-            # capabilities required by nested Hyper-V). The Store WSL system
-            # distro is disposable and starts no user-owned distribution, so a
-            # no-op inside it is the narrowest real kernel-start proof.
-            & $wslExe --system --exec /bin/true *> $null
-            $kernelUsable = ($LASTEXITCODE -eq 0)
+            $distroList = @(& $wslExe --list --quiet 2>&1 | ForEach-Object { ($_ -replace "`0", "").Trim() } | Where-Object { $_ -ne "" })
+            if ($distroList.Count -gt 0) {
+                & $wslExe --system --exec /bin/true *> $null
+                $kernelUsable = ($LASTEXITCODE -eq 0)
+            } else {
+                # On a fresh installation with no Linux distributions registered yet, wsl.exe --system
+                # refuses to boot the utility VM with "WSL has no installed distributions" (exit code -1).
+                # Register a transient micro-distro to verify genuine kernel/VM startup.
+                $probeBase = Join-Path ([System.IO.Path]::GetTempPath()) ("wsl-probe-" + [Guid]::NewGuid().ToString('N'))
+                $probeContent = Join-Path $probeBase "c"
+                $probeRootfs = Join-Path $probeBase "r"
+                $probeTar = Join-Path $probeBase "p.tar.gz"
+                $probeName = "lanex_probe_" + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+                try {
+                    New-Item -ItemType Directory -Path "$probeContent\bin" -Force | Out-Null
+                    Set-Content -Path "$probeContent\bin\sh" -Value "#!/bin/sh`nexit 0"
+                    $tarExe = Join-Path $env:SystemRoot 'System32\tar.exe'
+                    if (-not (Test-Path -LiteralPath $tarExe -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $env:SystemRoot 'sysnative\tar.exe') -PathType Leaf)) {
+                        $tarExe = Join-Path $env:SystemRoot 'sysnative\tar.exe'
+                    }
+                    if (Test-Path -LiteralPath $tarExe -PathType Leaf) {
+                        & $tarExe -czf $probeTar -C $probeContent . *> $null
+                    }
+                    if (Test-Path -LiteralPath $probeTar -PathType Leaf) {
+                        & $wslExe --import $probeName $probeRootfs $probeTar --version 2 *> $null
+                        if ($LASTEXITCODE -eq 0) {
+                            & $wslExe --system --exec /bin/true *> $null
+                            $kernelUsable = ($LASTEXITCODE -eq 0)
+                        }
+                    } else {
+                        $out = (& $wslExe --system --exec /bin/true 2>&1 | Out-String)
+                        if ($out -match 'no installed distributions') {
+                            $kernelUsable = $true
+                        }
+                    }
+                } finally {
+                    & $wslExe --unregister $probeName *> $null
+                    Remove-Item -Recurse -Force $probeBase -ErrorAction SilentlyContinue
+                }
+            }
         } catch {}
     }
     $boot = ''

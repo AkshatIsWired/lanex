@@ -616,7 +616,9 @@ begin
     '  exit 1;' + #13#10 +
     '}' + #13#10, False);
   Params := '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + ScriptFile + '"';
-  Result := Exec('powershell.exe', Params, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+  Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+  if not Result then
+    Result := Exec('powershell.exe', Params, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
   if FileExists(OutFile) and LoadStringFromFile(OutFile, Raw) then
     Output := Trim(StripNulls(String(Raw)));
   DeleteFile(ScriptFile);
