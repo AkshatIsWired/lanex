@@ -284,6 +284,27 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
             image_check.get("ready") and image_digest in image_check.get("detail", "")
         )
         if image_check["ready"]:
+            probe_bins = list(
+                dict.fromkeys(
+                    [
+                        *(t["key"] for t in tools.EDA_TOOLS if t.get("in_image")),
+                        "librelane",
+                        "yosys",
+                        "openroad",
+                        "klayout",
+                        "magic",
+                        "netgen",
+                        "verilator",
+                        "iverilog",
+                    ]
+                )
+            )
+            check_script = (
+                "missing=''; for b in "
+                + " ".join(probe_bins)
+                + "; do command -v \"$b\" >/dev/null 2>&1 || missing=\"$missing $b\"; done; "
+                "if [ -n \"$missing\" ]; then echo \"MISSING:$missing\"; exit 1; fi"
+            )
             run = [
                 engine,
                 "run",
@@ -292,13 +313,20 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
                 "--entrypoint",
                 "sh",
                 image_target,
-                "-lc",
-                "command -v yosys >/dev/null && yosys -V >/dev/null",
+                "-c",
+                check_script,
             ]
             if resolved.get("sg_wrap"):
                 run = tools.sg_wrap_argv(run)
             image_check["toolProbe"] = _command_probe(run, timeout=120.0)
-            image_check["ready"] = bool(image_check["toolProbe"].get("ready"))
+            detail = image_check["toolProbe"].get("detail", "")
+            missing_bins = []
+            if "MISSING:" in detail:
+                missing_bins = [b for b in detail.split("MISSING:", 1)[1].strip().split() if b]
+            image_check["missingBinaries"] = missing_bins
+            if missing_bins:
+                image_check.setdefault("missing", []).extend(missing_bins)
+            image_check["ready"] = bool(image_check["toolProbe"].get("ready") and not missing_bins)
         else:
             image_check["toolProbe"] = {"ready": False, "skipped": "image not present"}
     else:

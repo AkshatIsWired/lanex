@@ -259,6 +259,69 @@ def test_readiness_is_strict_if_any_selected_requirement_fails(
     assert report["checks"]["container:image"]["toolProbe"]["ready"] is False
 
 
+def test_readiness_strict_container_image_binary_probe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lanex.controller import container_run, pdk, tools
+
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()),
+        choices={
+            "pdks": ["sky130A"],
+            "libraries": {"sky130A": []},
+            "nativeTools": [],
+            "engine": "docker",
+        },
+    )
+    monkeypatch.setattr(
+        provisioning.importlib.metadata,
+        "version",
+        lambda name: {"librelane": "3.0.4", "ciel": "2.6.1"}[name],
+    )
+    monkeypatch.setattr(tools, "resolve_engine", lambda *args: {"ready": True, "engine": "docker"})
+    monkeypatch.setattr(container_run, "image_ref", lambda: "example/image:3.0.4")
+    monkeypatch.setattr(
+        pdk,
+        "check_pdk_library_ready",
+        lambda *a, **k: {"ready": True, "required_version": "a" * 40},
+    )
+
+    # Case 1: Probe reports missing binaries inside the container
+    def probe_missing(argv, timeout=30):
+        if "context" in argv:
+            return {"ready": True, "detail": "unix:///var/run/docker.sock"}
+        if "inspect" in argv:
+            return {"ready": True, "detail": "sha256:" + "d" * 64}
+        if "run" in argv:
+            return {"ready": False, "rc": 1, "detail": "MISSING:openroad klayout magic"}
+        return {"ready": True}
+
+    monkeypatch.setattr(provisioning, "_command_probe", probe_missing)
+    report = provisioning.readiness_report(plan)
+    assert report["ready"] is False
+    img_check = report["checks"]["container:image"]
+    assert img_check["ready"] is False
+    assert img_check["missingBinaries"] == ["openroad", "klayout", "magic"]
+    assert "openroad" in img_check["missing"]
+
+    # Case 2: Probe finds all binaries successfully
+    def probe_ok(argv, timeout=30):
+        if "context" in argv:
+            return {"ready": True, "detail": "unix:///var/run/docker.sock"}
+        if "inspect" in argv:
+            return {"ready": True, "detail": "sha256:" + "d" * 64}
+        if "run" in argv:
+            return {"ready": True, "rc": 0, "detail": ""}
+        return {"ready": True}
+
+    monkeypatch.setattr(provisioning, "_command_probe", probe_ok)
+    report_ok = provisioning.readiness_report(plan)
+    img_ok = report_ok["checks"]["container:image"]
+    assert img_ok["ready"] is True
+    assert img_ok["missingBinaries"] == []
+
+
+
 def test_readiness_names_missing_gds_daemon_image_and_library(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
