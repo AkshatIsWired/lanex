@@ -8,26 +8,59 @@ import { confirmDialog } from "./dialog.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 
+export function normalizeUnavailableLibraries(value) {
+  if (Array.isArray(value)) {
+    return Object.fromEntries(
+      value.map((id) => [String(id), "Not published for this release"]),
+    );
+  }
+  if (value && typeof value === "object") return { ...value };
+  return {};
+}
+
+async function loadPdkRoot() {
+  const input = document.getElementById("pdk-root-input");
+  if (!input) return;
+  try {
+    const rootInfo = await api.getPdkRoot();
+    if (rootInfo && rootInfo.ok && rootInfo.pdk_root) {
+      input.value = rootInfo.pdk_root;
+    }
+  } catch (ex) {
+    console.warn("Failed to load PDK root:", ex);
+  }
+}
+
 export async function renderTools(fresh) {
   const root = document.getElementById("tools-grid");
   if (!root) return;
   wireJump(document.getElementById("sec-tools"));   // static section-jump nav (§6.6)
+
+  // Fetch/populate PDK root independently so a separate section cannot leave it blank
+  loadPdkRoot();
+
+  let info;
   try {
     // fresh=true (the Recheck button) bypasses the server's 8s status caches —
     // a probe cached moments before the user fixed the engine reads as broken.
-    const info = await api.tools(fresh);
+    info = await api.tools(fresh);
     state.tools = info;
-    paint(info);
-    const rootInfo = await api.getPdkRoot();
-    if (rootInfo.ok && document.getElementById("pdk-root-input")) {
-      document.getElementById("pdk-root-input").value = rootInfo.pdk_root;
-    }
   } catch (ex) {
+    // Only API probe failures display "Tool probe failed" and use host-only fallback
     renderDesktopViewers(null);
     root.innerHTML =
       "<div class='empty'><span class='ico'>" + icon('alert',{size:40}) + "</span><h3>Tool probe failed</h3><p>" + fmt.escape(ex.message) + "</p></div>";
+    return;
+  }
+
+  try {
+    await paint(info);
+  } catch (ex) {
+    console.error("Tools page render error:", ex);
   }
 }
+
+let _desktopViewersSeq = 0;
 
 // Desktop layout viewers (KLayout / Magic): status only. Both ship in the
 // LibreLane container image; the Layout tab launches whichever are installed on
@@ -39,11 +72,13 @@ export async function renderTools(fresh) {
 // read "not found" while plainly working. So fall back to the same
 // `in_container` + image-pulled facts the tool grid uses (`info` from
 // `api.tools()`; null when that probe failed, host-only then).
-async function renderDesktopViewers(info) {
+export async function renderDesktopViewers(info) {
+  const seq = ++_desktopViewersSeq;
   const root = document.getElementById("desktop-viewers");
   if (!root) return;
   let tools = [];
   try { tools = (await api.desktopTools()).tools || []; } catch (_e) {}
+  if (seq !== _desktopViewersSeq) return;
   const byKey = Object.fromEntries(tools.map((t) => [t.key, t]));
   const cont = (info && info.container) || {};
   const contReady = !!(cont.ready && cont.image_present);
@@ -70,6 +105,7 @@ async function renderDesktopViewers(info) {
 // package needs sudo, the user is prompted for a password in the launch
 // terminal (handled globally by app.js's installer_info banner).
 async function renderRecommendedTools(info) {
+  if (typeof document === "undefined" || !document) return;
   const root = document.getElementById("recommended-tools");
   if (!root) return;
   const byKey = Object.fromEntries((info.tools || []).map((t) => [t.key, t]));
@@ -77,6 +113,7 @@ async function renderRecommendedTools(info) {
   try {
     desktop = Object.fromEntries(((await api.desktopTools()).tools || []).map((t) => [t.key, t]));
   } catch (_e) {}
+  if (typeof document === "undefined" || !document) return;
   const gds3d = desktop.gds3d;
 
   const probeCard = (t) => {
@@ -143,7 +180,7 @@ async function renderRecommendedTools(info) {
       } catch (ex) { toast.show(key + " remove error: " + (ex.message || ex), "error"); }
       renderTools();
     }));
-  document.getElementById("btn-install-gds3d")?.addEventListener("click", async (e) => {
+  root.querySelector("#btn-install-gds3d")?.addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true; btn.textContent = "Building GDS3D… (see Install logs)";
     try {
@@ -156,7 +193,7 @@ async function renderRecommendedTools(info) {
     }
     btn.disabled = false; btn.textContent = "Build & install GDS3D";
   });
-  document.getElementById("btn-remove-gds3d")?.addEventListener("click", async () => {
+  root.querySelector("#btn-remove-gds3d")?.addEventListener("click", async () => {
     if (!(await confirmDialog({ title: "Remove GDS3D", danger: true, confirmText: "Remove",
       body: "Remove the GDS3D binary? You can rebuild it any time from this tab." }))) return;
     try {
@@ -181,23 +218,25 @@ async function renderRecommendedTools(info) {
 }
 
 // Wire PDK_ROOT save button once
-document.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("btn-save-pdk-root")?.addEventListener("click", async () => {
-    const val = document.getElementById("pdk-root-input").value.trim();
-    if (!val) return;
-    try {
-      const res = await api.setPdkRoot(val);
-      if (res.ok) {
-        toast.show("PDK Directory updated to " + res.pdk_root, "success");
-        renderTools();
-      } else {
-        toast.show("Failed to update PDK directory", "error");
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("btn-save-pdk-root")?.addEventListener("click", async () => {
+      const val = document.getElementById("pdk-root-input").value.trim();
+      if (!val) return;
+      try {
+        const res = await api.setPdkRoot(val);
+        if (res.ok) {
+          toast.show("PDK Directory updated to " + res.pdk_root, "success");
+          renderTools();
+        } else {
+          toast.show("Failed to update PDK directory", "error");
+        }
+      } catch (ex) {
+        toast.show("Error: " + ex.message, "error");
       }
-    } catch (ex) {
-      toast.show("Error: " + ex.message, "error");
-    }
+    });
   });
-});
+}
 
 function sizeStr(mb, { approx = false } = {}) {
   if (mb == null) return "";
@@ -571,18 +610,16 @@ const RECOMMENDED_KEYS = new Set(["iverilog", "graphviz", "gtkwave"]);
 // run context (matches controller/container_tools._CONTAINER_TOOLS).
 const CONTAINER_LAUNCHABLE = new Set(["magic", "klayout", "openroad", "netgen"]);
 
-function paint(info) {
-  paintRuntimeCard(info.container);
-  renderDesktopViewers(info);
-  renderRecommendedTools(info);
+export function paintLocalToolsGrid(info) {
   const root = document.getElementById("tools-grid");
+  if (!root) return;
   root.innerHTML = "";
   // "In container" is only a usable fact once an engine is ready AND the image
   // is actually pulled — a flag without those would promise a tool that a click
   // can't deliver.
-  const cont = info.container || {};
+  const cont = (info && info.container) || {};
   const contReady = !!(cont.ready && cont.image_present);
-  for (const t of info.tools) {
+  for (const t of (info.tools || [])) {
     if (RECOMMENDED_KEYS.has(t.key)) continue;
     const inCont = !!(t.in_container && contReady);
     const card = document.createElement("div");
@@ -640,181 +677,234 @@ function paint(info) {
       }
       b.disabled = false;
     }));
-  paintToolBar(info);
+}
 
-  // PDK store — catalog cards + one-click install
+export function renderPdkStore(info) {
   const drop = document.getElementById("pdk-store-row");
-  if (drop) {
-    const installed = new Set(info.pdk.installed_pdks || []);
-    const catalog = info.pdk_catalog || {};
-    const cielMissing = !info.pdk.ciel_installed;
-    drop.innerHTML =
-      "<div class='picker-row' style='flex-wrap:wrap'>" +
-      (cielMissing
-        ? "<span class='pill pill-fail'><span class='d'></span><span class='text'>ciel missing</span></span>" +
-          "<button class='btn btn-ghost' id='install-ciel-btn'>Install ciel</button>"
-        : "<span class='pill pill-pass'><span class='d'></span><span class='text'>ciel ready</span></span>") +
-      "<span class='hint' style='margin-left:var(--s-3)'>PDKs are large downloads — open <em>Libraries</em> to fetch only the cell libraries you need. ciel resolves the exact version + size.</span>" +
-      "</div>" +
-      "<div style='display:flex;flex-wrap:wrap;gap:var(--s-4);margin-top:var(--s-3)'>" +
-      Object.entries(catalog).map(([key, p]) => {
-        const isInstalled = installed.has(key);
-        const recBadge = (p.default_variant || p.recommended)
-          ? "<span class='pill pill-info' style='font-size:10px'><span class='d'>" + icon('star',{size:11}) + "</span><span class='text'>Default variant</span></span>"
-          : "";
+  if (!drop) return;
+  const pdkInfo = (info && info.pdk) || {};
+  const installed = new Set(pdkInfo.installed_pdks || []);
+  const catalog = (info && info.pdk_catalog) || {};
+  const cielMissing = !pdkInfo.ciel_installed;
+  drop.innerHTML =
+    "<div class='picker-row' style='flex-wrap:wrap'>" +
+    (cielMissing
+      ? "<span class='pill pill-fail'><span class='d'></span><span class='text'>ciel missing</span></span>" +
+        "<button class='btn btn-ghost' id='install-ciel-btn'>Install ciel</button>"
+      : "<span class='pill pill-pass'><span class='d'></span><span class='text'>ciel ready</span></span>") +
+    "<span class='hint' style='margin-left:var(--s-3)'>PDKs are large downloads — open <em>Libraries</em> to fetch only the cell libraries you need. ciel resolves the exact version + size.</span>" +
+    "</div>" +
+    "<div style='display:flex;flex-wrap:wrap;gap:var(--s-4);margin-top:var(--s-3)'>" +
+    Object.entries(catalog).map(([key, p]) => {
+      const isInstalled = installed.has(key);
+      const recBadge = (p.default_variant || p.recommended)
+        ? "<span class='pill pill-info' style='font-size:10px'><span class='d'>" + icon('star',{size:11}) + "</span><span class='text'>Default variant</span></span>"
+        : "";
 
-        // Library list comes from the backend (ciel's authoritative metadata).
-        // Libraries in `default_libraries` are pre-checked; the rest are opt-in.
-        let libsHtml = "";
-        if (!state.installJobs["pdk:" + key]) {
-          const allLibs = p.libraries || [];
-          const defLibs = new Set(p.default_libraries || []);
-          const unavailable = new Set(p.unavailable_libraries || ["gf180mcu_ocd_ip_sram", "gf180mcu_re_efuse"]);
-          if (allLibs.length > 0) {
-             const cbHtml = allLibs.map((id) => {
-               const req = defLibs.has(id);
-               const isUnavail = unavailable.has(id);
-               if (isUnavail) {
-                 return `<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);opacity:0.6"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" disabled> ${fmt.escape(id)} <span style="font-size:10px">(Not published for this release)</span></label>`;
-               }
-               return `<label style="display:flex;align-items:center;gap:4px;font-size:11px"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" ${req ? "checked" : ""}> ${fmt.escape(id)}${req ? " <span style=\"color:var(--text-muted);font-size:10px\">(starter)</span>" : ""}</label>`;
-             }).join("");
-             libsHtml = `<details style="margin-bottom:var(--s-2);font-size:12px"><summary style="cursor:pointer;color:var(--text-muted);margin-bottom:4px;user-select:none">Libraries (${allLibs.length})</summary>
-               <div style="display:flex;gap:8px;margin-bottom:4px">
-                 <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}:not(:disabled)').forEach(cb => cb.checked = cb.defaultChecked)">Starter set</button>
-                 <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}:not(:disabled)').forEach(cb => cb.checked = true)">All supported</button>
-               </div>
-               <div style="display:flex;flex-direction:column;gap:2px;max-height:150px;overflow-y:auto;background:var(--bg-2);padding:4px;border-radius:4px">${cbHtml}</div></details>`;
-          }
-        }
-
-        const measured = (info.pdk.installed_sizes_mb || {})[key];
-        const sizeFact = isInstalled && measured != null
-          ? sizeStr(measured) + " on disk"
-          : (p.approx_gb != null ? "~" + p.approx_gb + " GB download" : "");
-        const facts = [p.foundry, p.node, sizeFact].filter(Boolean).map(fmt.escape).join(" · ");
-        return (
-          "<div class='tool-card' style='flex:0 0 auto;width:320px;padding:var(--s-4);position:relative'>" +
-          "<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--s-2)'>" +
-          "<strong>" + fmt.escape(p.label || key) + "</strong>" +
-          recBadge +
-          "</div>" +
-          "<div style='font-size:var(--t-xs);color:var(--text-muted);margin-bottom:var(--s-2)'>" +
-          facts +
-          "</div>" +
-          "<div class='what' style='margin-bottom:var(--s-2)'>" + fmt.escape(p.description || "") + "</div>" +
-          libsHtml +
-          "<div class='meta' style='display:flex;align-items:center;gap:var(--s-2);flex-wrap:wrap'>" +
-          (state.installJobs["pdk:" + key]
-            ? "<button class='btn btn-primary' disabled style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3)'>installing…</button>" +
-              "<button class='btn btn-warn pdk-cancel-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3);margin-left:var(--s-1)'>Cancel</button>"
-            : isInstalled
-              ? "<span class='pill pill-pass' style='font-size:10px;margin-right:var(--s-2)'><span class='d'></span><span class='text'>installed</span></span>" +
-                "<button class='btn btn-warn pdk-uninstall-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3)' title='Uninstall " + key + "'>Delete</button>" +
-                "<button class='btn btn-primary pdk-install-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3);margin-left:var(--s-1)' title='Install additional libraries'>Update</button>"
-              : p.note
-                ? "<span class='muted' style='font-size:10px'>" + fmt.escape(p.note) + "</span>"
-                : "<button class='btn btn-primary pdk-install-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3)'>Install</button>") +
-          "</div>" +
-          "</div>"
-        );
-      }).join("") +
-      "</div>";
-    // Wire PDK install buttons
-    drop.querySelectorAll(".pdk-install-btn").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        const pdk = btn.dataset.pdk;
-        
-        const cbList = drop.querySelectorAll(".lib-cb-" + pdk);
-        let libraries = null;
-        if (cbList.length > 0) {
-           libraries = [];
-           cbList.forEach(cb => { if(cb.checked) libraries.push(cb.value); });
-        }
-        
-        state.installJobs["pdk:" + pdk] = true;
-        renderTools();
-        try {
-          const result = await api.installCiel(pdk, libraries);
-          if (result.ok) {
-            if (result.in_progress) {
-              toast.show(`PDK ${pdk} is already downloading — no second download started.`, "info");
-            } else {
-              toast.show(`PDK ${pdk} installation started... Check logs.`, "info");
-              renderLogs.append({ payload: { message: "→ PDK " + pdk + " installation started in background." } });
+      // Library list comes from the backend (ciel's authoritative metadata).
+      // Libraries in `default_libraries` are pre-checked; the rest are opt-in.
+      let libsHtml = "";
+      if (!state.installJobs["pdk:" + key]) {
+        const unavailableReasons = normalizeUnavailableLibraries(p.unavailable_libraries);
+        const unavailable = new Set(Object.keys(unavailableReasons));
+        const allLibs = [...new Set([
+          ...(Array.isArray(p.libraries) ? p.libraries : []),
+          ...Object.keys(unavailableReasons),
+        ])];
+        const defLibs = new Set(Array.isArray(p.default_libraries) ? p.default_libraries : []);
+        if (allLibs.length > 0) {
+          const cbHtml = allLibs.map((id) => {
+            const req = defLibs.has(id);
+            const isUnavail = unavailable.has(id);
+            if (isUnavail) {
+              const reason = unavailableReasons[id] || "Not published for this release";
+              return `<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);opacity:0.6"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" disabled> ${fmt.escape(id)} <span style="font-size:10px">(${fmt.escape(reason)})</span></label>`;
             }
+            return `<label style="display:flex;align-items:center;gap:4px;font-size:11px"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" ${req ? "checked" : ""}> ${fmt.escape(id)}${req ? " <span style=\"color:var(--text-muted);font-size:10px\">(starter)</span>" : ""}</label>`;
+          }).join("");
+          libsHtml = `<details style="margin-bottom:var(--s-2);font-size:12px"><summary style="cursor:pointer;color:var(--text-muted);margin-bottom:4px;user-select:none">Libraries (${allLibs.length})</summary>
+            <div style="display:flex;gap:8px;margin-bottom:4px">
+              <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}:not(:disabled)').forEach(cb => cb.checked = cb.defaultChecked)">Starter set</button>
+              <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}:not(:disabled)').forEach(cb => cb.checked = true)">All supported</button>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:2px;max-height:150px;overflow-y:auto;background:var(--bg-2);padding:4px;border-radius:4px">${cbHtml}</div></details>`;
+        }
+      }
+
+      const measured = (pdkInfo.installed_sizes_mb || {})[key];
+      const sizeFact = isInstalled && measured != null
+        ? sizeStr(measured) + " on disk"
+        : (p.approx_gb != null ? "~" + p.approx_gb + " GB download" : "");
+      const facts = [p.foundry, p.node, sizeFact].filter(Boolean).map(fmt.escape).join(" · ");
+      return (
+        "<div class='tool-card' style='flex:0 0 auto;width:320px;padding:var(--s-4);position:relative'>" +
+        "<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--s-2)'>" +
+        "<strong>" + fmt.escape(p.label || key) + "</strong>" +
+        recBadge +
+        "</div>" +
+        "<div style='font-size:var(--t-xs);color:var(--text-muted);margin-bottom:var(--s-2)'>" +
+        facts +
+        "</div>" +
+        "<div class='what' style='margin-bottom:var(--s-2)'>" + fmt.escape(p.description || "") + "</div>" +
+        libsHtml +
+        "<div class='meta' style='display:flex;align-items:center;gap:var(--s-2);flex-wrap:wrap'>" +
+        (state.installJobs["pdk:" + key]
+          ? "<button class='btn btn-primary' disabled style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3)'>installing…</button>" +
+            "<button class='btn btn-warn pdk-cancel-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3);margin-left:var(--s-1)'>Cancel</button>"
+          : isInstalled
+            ? "<span class='pill pill-pass' style='font-size:10px;margin-right:var(--s-2)'><span class='d'></span><span class='text'>installed</span></span>" +
+              "<button class='btn btn-warn pdk-uninstall-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3)' title='Uninstall " + key + "'>Delete</button>" +
+              "<button class='btn btn-primary pdk-install-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3);margin-left:var(--s-1)' title='Install additional libraries'>Update</button>"
+            : p.note
+              ? "<span class='muted' style='font-size:10px'>" + fmt.escape(p.note) + "</span>"
+              : "<button class='btn btn-primary pdk-install-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3)'>Install</button>") +
+        "</div>" +
+        "</div>"
+      );
+    }).join("") +
+    "</div>";
+
+  // Wire PDK install buttons
+  drop.querySelectorAll(".pdk-install-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const pdk = btn.dataset.pdk;
+      const cbList = drop.querySelectorAll(".lib-cb-" + pdk);
+      let libraries = null;
+      if (cbList.length > 0) {
+        libraries = [];
+        cbList.forEach(cb => { if (cb.checked) libraries.push(cb.value); });
+      }
+      state.installJobs["pdk:" + pdk] = true;
+      renderTools();
+      try {
+        const result = await api.installCiel(pdk, libraries);
+        if (result.ok) {
+          if (result.in_progress) {
+            toast.show(`PDK ${pdk} is already downloading — no second download started.`, "info");
           } else {
-            delete state.installJobs["pdk:" + pdk];
-            const msg = "✗ PDK " + pdk + " failed — rc=" + (result.rc ?? "?") + " " + (result.reason || "");
-            toast.show(`PDK ${pdk} install failed: ${result.reason || ""}`, "error");
-            renderLogs.append({ payload: { message: msg, level: "ERROR" } });
-            renderTools();
+            toast.show(`PDK ${pdk} installation started... Check logs.`, "info");
+            renderLogs.append({ payload: { message: "→ PDK " + pdk + " installation started in background." } });
           }
-        } catch (ex) {
+        } else {
           delete state.installJobs["pdk:" + pdk];
-          toast.show(`PDK ${pdk} install error: ${ex.message}`, "error");
-          renderLogs.append({ payload: { message: "✗ PDK " + pdk + " error: " + ex.message, level: "ERROR" } });
+          const msg = "✗ PDK " + pdk + " failed — rc=" + (result.rc ?? "?") + " " + (result.reason || "");
+          toast.show(`PDK ${pdk} install failed: ${result.reason || ""}`, "error");
+          renderLogs.append({ payload: { message: msg, level: "ERROR" } });
           renderTools();
         }
-      });
-    });
-    drop.querySelectorAll(".pdk-cancel-btn").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        const pdk = btn.dataset.pdk;
-        try {
-          const res = await api.cancelInstall("pdk:" + pdk);
-          if (res.ok) {
-            toast.show("Installation cancelled.", "info");
-          }
-        } catch (e) {}
+      } catch (ex) {
         delete state.installJobs["pdk:" + pdk];
+        toast.show(`PDK ${pdk} install error: ${ex.message}`, "error");
+        renderLogs.append({ payload: { message: "✗ PDK " + pdk + " error: " + ex.message, level: "ERROR" } });
         renderTools();
-      });
+      }
     });
-    document.getElementById("install-ciel-btn")?.addEventListener("click", () =>
-      installByKey("ciel"),
-    );
-    drop.querySelectorAll(".pdk-uninstall-btn").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        const pdk = btn.dataset.pdk;
-        const family = (catalog[pdk] && catalog[pdk].family) || (pdk.startsWith("sky130") ? "sky130" : pdk.startsWith("gf180mcu") ? "gf180mcu" : pdk);
-        if (!(await confirmDialog({ title: "Uninstall PDK Family", danger: true, confirmText: "Uninstall",
-          body: "Uninstalling " + pdk + " will remove the " + family + " family and all installed variants of this PDK from disk. Continue?" }))) return;
-        btn.textContent = "…";
-        try {
-          const result = await api.uninstallPdk(pdk);
-          if (result.ok) {
-            toast.show(`PDK ${pdk} uninstalled`, "info");
-            renderLogs.append({ payload: { message: "✓ PDK " + pdk + " uninstalled via " + (result.method || "?") } });
-            // Optimistic: drop all variants of the removed family so the cards flip now.
-            if (state.tools?.pdk) {
-              const removedFamily = result.family || family;
-              state.tools.pdk.installed_pdks = (state.tools.pdk.installed_pdks || []).filter((x) => {
-                const xFam = (catalog[x] && catalog[x].family) || (x.startsWith("sky130") ? "sky130" : x.startsWith("gf180mcu") ? "gf180mcu" : x);
-                return xFam !== removedFamily;
-              });
-              if (state.tools.pdk.installed_sizes_mb) {
-                for (const k of Object.keys(state.tools.pdk.installed_sizes_mb)) {
-                  const kFam = (catalog[k] && catalog[k].family) || (k.startsWith("sky130") ? "sky130" : k.startsWith("gf180mcu") ? "gf180mcu" : k);
-                  if (kFam === removedFamily) delete state.tools.pdk.installed_sizes_mb[k];
-                }
+  });
+  drop.querySelectorAll(".pdk-cancel-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const pdk = btn.dataset.pdk;
+      try {
+        const res = await api.cancelInstall("pdk:" + pdk);
+        if (res.ok) {
+          toast.show("Installation cancelled.", "info");
+        }
+      } catch (e) {}
+      delete state.installJobs["pdk:" + pdk];
+      renderTools();
+    });
+  });
+  document.getElementById("install-ciel-btn")?.addEventListener("click", () =>
+    installByKey("ciel"),
+  );
+  drop.querySelectorAll(".pdk-uninstall-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const pdk = btn.dataset.pdk;
+      const family = (catalog[pdk] && catalog[pdk].family) || (pdk.startsWith("sky130") ? "sky130" : pdk.startsWith("gf180mcu") ? "gf180mcu" : pdk);
+      if (!(await confirmDialog({ title: "Uninstall PDK Family", danger: true, confirmText: "Uninstall",
+        body: "Uninstalling " + pdk + " will remove the " + family + " family and all installed variants of this PDK from disk. Continue?" }))) return;
+      btn.textContent = "…";
+      try {
+        const result = await api.uninstallPdk(pdk);
+        if (result.ok) {
+          toast.show(`PDK ${pdk} uninstalled`, "info");
+          renderLogs.append({ payload: { message: "✓ PDK " + pdk + " uninstalled via " + (result.method || "?") } });
+          // Optimistic: drop all variants of the removed family so the cards flip now.
+          if (state.tools?.pdk) {
+            const removedFamily = result.family || family;
+            state.tools.pdk.installed_pdks = (state.tools.pdk.installed_pdks || []).filter((x) => {
+              const xFam = (catalog[x] && catalog[x].family) || (x.startsWith("sky130") ? "sky130" : x.startsWith("gf180mcu") ? "gf180mcu" : x);
+              return xFam !== removedFamily;
+            });
+            if (state.tools.pdk.installed_sizes_mb) {
+              for (const k of Object.keys(state.tools.pdk.installed_sizes_mb)) {
+                const kFam = (catalog[k] && catalog[k].family) || (k.startsWith("sky130") ? "sky130" : k.startsWith("gf180mcu") ? "gf180mcu" : k);
+                if (kFam === removedFamily) delete state.tools.pdk.installed_sizes_mb[k];
               }
             }
-            if (state.tools) paint(state.tools);
-            // Keep the Setup tab honest too — its picker re-fetches /api/pdks.
-            import("./setup.js").then((m) => m.populatePdkPicker && m.populatePdkPicker()).catch(() => {});
-          } else {
-            toast.show(`PDK ${pdk} uninstall failed`, "error");
-            renderLogs.append({ payload: { message: "✗ PDK " + pdk + " uninstall failed: " + (result.reason || "unknown"), level: "ERROR" } });
           }
-        } catch (ex) {
-          toast.show(`PDK ${pdk} uninstall error: ${ex.message}`, "error");
-          renderLogs.append({ payload: { message: "✗ PDK " + pdk + " uninstall error: " + ex.message, level: "ERROR" } });
+          if (state.tools) paint(state.tools);
+          // Keep the Setup tab honest too — its picker re-fetches /api/pdks.
+          import("./setup.js").then((m) => m.populatePdkPicker && m.populatePdkPicker()).catch(() => {});
+        } else {
+          toast.show(`PDK ${pdk} uninstall failed`, "error");
+          renderLogs.append({ payload: { message: "✗ PDK " + pdk + " uninstall failed: " + (result.reason || "unknown"), level: "ERROR" } });
         }
-        renderTools();
-      });
+      } catch (ex) {
+        toast.show(`PDK ${pdk} uninstall error: ${ex.message}`, "error");
+        renderLogs.append({ payload: { message: "✗ PDK " + pdk + " uninstall error: " + ex.message, level: "ERROR" } });
+      }
+      renderTools();
     });
+  });
+}
+
+export async function paint(info) {
+  try {
+    paintRuntimeCard(info.container);
+  } catch (ex) {
+    console.error("Runtime card render failure:", ex);
   }
+
+  try {
+    await renderDesktopViewers(info);
+  } catch (ex) {
+    console.error("Desktop viewers render failure:", ex);
+  }
+
+  try {
+    await renderRecommendedTools(info);
+  } catch (ex) {
+    console.error("Recommended tools render failure:", ex);
+  }
+
+  try {
+    paintLocalToolsGrid(info);
+  } catch (ex) {
+    console.error("Local tools grid render failure:", ex);
+    const root = typeof document !== "undefined" ? document.getElementById("tools-grid") : null;
+    if (root) {
+      root.innerHTML =
+        "<div class='empty'><span class='ico'>" + icon('alert',{size:40}) + "</span><h3>Local tools render failed</h3><p>" + fmt.escape(ex.message || String(ex)) + "</p></div>";
+    }
+  }
+
+  try {
+    paintToolBar(info);
+  } catch (ex) {
+    console.error("Tool bar render failure:", ex);
+  }
+
+  try {
+    renderPdkStore(info);
+  } catch (ex) {
+    console.error("PDK store render failure:", ex);
+    const drop = typeof document !== "undefined" ? document.getElementById("pdk-store-row") : null;
+    if (drop) {
+      drop.innerHTML =
+        "<div class='empty' style='padding:var(--s-4)'><span class='ico'>" + icon('alert',{size:32}) + "</span><h3>PDK store render failed</h3><p>" + fmt.escape(ex.message || String(ex)) + "</p></div>";
+    }
+  }
+
   wireInstallButtons();
   wireUninstallButtons();
 }
