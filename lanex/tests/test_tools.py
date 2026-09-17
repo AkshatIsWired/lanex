@@ -231,3 +231,27 @@ def test_openroad_install_returns_guidance_not_fake_command():
         return
     assert "guidance" in res and res["guidance"]
     assert "yowasp-openroad" not in (res.get("reason", "") + res.get("guidance", ""))
+
+
+def test_pdk_catalog_gf180_unavailable_libraries_contract():
+    import json
+    from lanex.controller.pdk_catalog import build_canonical_pdk_catalog
+    from lanex.controller.tools import build_pdk_catalog
+
+    for cat in (build_canonical_pdk_catalog(), build_pdk_catalog()):
+        gf = cat.get("gf180mcuD")
+        assert gf is not None, "gf180mcuD variant missing from catalog"
+        unavail = gf.get("unavailable_libraries")
+        assert isinstance(unavail, dict), f"unavailable_libraries must be dict mapping, got {type(unavail)}"
+        assert len(unavail) > 0, "unavailable_libraries should not be empty"
+        for lib_id, reason in unavail.items():
+            assert isinstance(lib_id, str) and lib_id, "library id must be a non-empty string"
+            assert isinstance(reason, str) and reason, "unavailable reason must be a non-empty string"
+        # Must survive JSON serialization roundtrip preserving object structure
+        dumped = json.dumps(cat)
+        loaded = json.loads(dumped)
+        assert loaded["gf180mcuD"]["unavailable_libraries"] == unavail
+        # Published and unavailable IDs must be disjoint
+        pub_libs = set(gf.get("libraries") or [])
+        assert pub_libs.isdisjoint(set(unavail.keys())), "published and unavailable library IDs must be disjoint"
+

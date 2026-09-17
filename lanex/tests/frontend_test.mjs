@@ -18,21 +18,37 @@
 
 import assert from "node:assert/strict";
 import { readFileSync, appendFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MOD = resolve(HERE, "..", "server", "static", "modules");
+const toUrl = (p) => pathToFileURL(p).href;
 
-const { fmt } = await import(resolve(MOD, "api.js"));
-const { csvCell } = await import(resolve(MOD, "csvutil.js"));
-const { clampZoom, fitChrome } = await import(resolve(MOD, "zoom.js"));
+const { api, fmt } = await import(toUrl(resolve(MOD, "api.js")));
+const { csvCell } = await import(toUrl(resolve(MOD, "csvutil.js")));
+const { clampZoom, fitChrome } = await import(toUrl(resolve(MOD, "zoom.js")));
+const toolsModule = await import(toUrl(resolve(MOD, "tools.js")));
+const { normalizeUnavailableLibraries } = toolsModule;
 
 let passed = 0;
 const results = [];
 function check(name, fn) {
   try {
     fn();
+    passed += 1;
+    results.push({ name, ok: true, msg: "" });
+    console.log(`  ok   ${name}`);
+  } catch (e) {
+    results.push({ name, ok: false, msg: String(e.message || e) });
+    console.error(`  FAIL ${name}: ${e.message}`);
+    process.exitCode = 1;
+  }
+}
+
+async function checkAsync(name, fn) {
+  try {
+    await fn();
     passed += 1;
     results.push({ name, ok: true, msg: "" });
     console.log(`  ok   ${name}`);
@@ -216,7 +232,7 @@ check("tools: engine-not-usable card is platform-aware with a Start action", () 
 // The in-browser canvas viewer parses it here — so the canvas viewer, the
 // GTKWave handoff, and the CI reference parser all read ONE fixture and must
 // agree on both the signal list and the VALUES.
-const { parseVCD } = await import(resolve(MOD, "ide", "vcd.js"));
+const { parseVCD } = await import(toUrl(resolve(MOD, "ide", "vcd.js")));
 const GOLDEN_VCD = readFileSync(
   resolve(HERE, "goldens", "sim_run", "dump.vcd"), "utf8");
 
@@ -291,7 +307,7 @@ check("display fidelity: all 300+ real run metrics render faithfully", () => {
 // are pure (charts.js), so run them on the golden run's real values and require
 // exact passthrough into the series data. A unit conversion or key typo that
 // would plot wrong numbers fails here.
-const charts = await import(resolve(MOD, "charts.js"));
+const charts = await import(toUrl(resolve(MOD, "charts.js")));
 check("charts.js: golden run values reach the chart series unchanged", () => {
   const raw = readFileSync(resolve(HERE, "goldens", "display_run", "metrics.json"), "utf8");
   const tokened = raw.replace(/([:\[,]\s*)(-?Infinity|NaN)(\s*[,}\]])/g, '$1"$2"$3');
@@ -327,7 +343,7 @@ check("charts.js: golden run values reach the chart series unchanged", () => {
 // ------------------------------------------------ provenance line highlight
 // The provenance dialog's whole promise is "THIS line is where the value came
 // from" — so the highlight must land on exactly the requested line, escaped.
-const { renderFileText } = await import(resolve(MOD, "fileview.js"));
+const { renderFileText } = await import(toUrl(resolve(MOD, "fileview.js")));
 check("fileview: the provenance highlight lands on exactly the requested line", () => {
   // Minimal DOM stub: enough for renderFileText's innerHTML writes + queries.
   const el = () => ({
@@ -385,7 +401,7 @@ check("fileview: the provenance highlight lands on exactly the requested line", 
 // spm scenario that motivated it — FP_CORE_UTIL: 45 inside pdk::sky130* while
 // LibreLane's default chip says 50 — must yield a chip that names the scope
 // and declares it conditional, never claiming the scoped value applies.
-const prov = await import(resolve(MOD, "provenance.js"));
+const prov = await import(toUrl(resolve(MOD, "provenance.js")));
 check("provenance.js: config chips state scope + conditionality faithfully", () => {
   const scoped = prov.configChipSpec(
     { line: 6, text: "  FP_CORE_UTIL: 45", value: "45",
@@ -411,7 +427,7 @@ check("provenance.js: config chips state scope + conditionality faithfully", () 
 // _assemble_overrides exactly: PDK/STD_CELL_LIBRARY split out as flow
 // options, every other override beats the config file, and a config var
 // with no override applies as written. Fed the user's real scenario.
-const fs = await import(resolve(MOD, "finalsettings.js"));
+const fs = await import(toUrl(resolve(MOD, "finalsettings.js")));
 check("finalsettings: overrides vs config vs defaults classified faithfully", () => {
   const map = {
     ok: true, rel: "config.yaml",
@@ -520,7 +536,7 @@ check("finalsettings: source labels state the same story in both tables", () => 
 // designs each with a run named "baseline" must render as TWO distinct columns
 // keyed by the unique run_dir — not collapse onto one column showing only one
 // design's numbers. buildCols is the frontend half of that fix.
-const cmp = await import(resolve(MOD, "compare.js"));
+const cmp = await import(toUrl(resolve(MOD, "compare.js")));
 check("compare: same-named runs from different designs get distinct columns", () => {
   const runs = [
     { col: "/w/spm/runs/baseline", tag: "baseline", design: "spm" },
@@ -690,6 +706,184 @@ check("utilization%: the server and chart formulas agree to the digit", () => {
   }
   // Absent fraction → no gauge invented.
   assert.equal(charts.utilizationOption({}), null);
+});
+
+// ------------------------------------------------ tools: normalizeUnavailableLibraries contract
+check("tools: normalizeUnavailableLibraries normalizes object, array, and nil inputs safely", () => {
+  // Canonical object from live API
+  const liveObj = {
+    gf180mcu_ocd_ip_sram: "Not published for this release",
+    gf180mcu_re_efuse: "Not published for this release",
+  };
+  const normObj = normalizeUnavailableLibraries(liveObj);
+  assert.equal(typeof normObj, "object");
+  assert.equal(normObj.gf180mcu_ocd_ip_sram, "Not published for this release");
+  assert.equal(normObj.gf180mcu_re_efuse, "Not published for this release");
+  assert.equal(Object.keys(normObj).length, 2);
+
+  // Legacy array input
+  const legacyArr = ["gf180mcu_ocd_ip_sram", "gf180mcu_re_efuse"];
+  const normArr = normalizeUnavailableLibraries(legacyArr);
+  assert.equal(normArr.gf180mcu_ocd_ip_sram, "Not published for this release");
+  assert.equal(normArr.gf180mcu_re_efuse, "Not published for this release");
+  assert.equal(Object.keys(normArr).length, 2);
+
+  // Null, undefined, empty
+  assert.deepEqual(normalizeUnavailableLibraries(null), {});
+  assert.deepEqual(normalizeUnavailableLibraries(undefined), {});
+  assert.deepEqual(normalizeUnavailableLibraries({}), {});
+});
+
+// ------------------------------------------------ tools: full fixture render and section isolation
+await checkAsync("tools: full fixture renders 10 tools, 7 PDK cards, 14 GF180 libs, container viewers, and isolates errors", async () => {
+  const fullFixture = {
+    platform: "linux",
+    container: {
+      ready: true,
+      image_present: true,
+      engine: "docker",
+      image: "ghcr.io/librelane/librelane:3.0.4@sha256:eab07a50fa9ae481f631d904bd9fbaa99752c587fdbddb7c8cf2ac04208eecd9",
+      docker: { available: true, usable: true, version: "29.8.1" },
+    },
+    tools: [
+      { key: "python", label: "Python", category: "core", installed: true, path: "/usr/bin/python3", version: "3.12.3" },
+      { key: "pip", label: "pip", category: "core", installed: true, path: "/usr/bin/pip", version: "24.0" },
+      { key: "librelane", label: "LibreLane", category: "core", installed: true, in_container: true, path: "/home/lanex/.local/bin/librelane", version: "3.0.4" },
+      { key: "yosys", label: "Yosys", category: "eda", installed: false, in_container: true },
+      { key: "openroad", label: "OpenROAD", category: "eda", installed: false, in_container: true },
+      { key: "klayout", label: "KLayout", category: "eda", installed: false, in_container: true },
+      { key: "magic", label: "Magic", category: "eda", installed: false, in_container: true },
+      { key: "netgen", label: "Netgen", category: "eda", installed: false, in_container: true },
+      { key: "verilator", label: "Verilator", category: "eda", installed: true, in_container: true, path: "/usr/bin/verilator", version: "5.020" },
+      { key: "ciel", label: "ciel", category: "eda", installed: true, path: "/home/lanex/.local/bin/ciel", version: "2.6.1" },
+      { key: "iverilog", label: "Icarus Verilog", category: "extra", installed: true, path: "/usr/bin/iverilog", version: "12.0" },
+      { key: "graphviz", label: "Graphviz", category: "extra", installed: true, path: "/usr/bin/dot", version: "2.43.0" },
+      { key: "gtkwave", label: "GTKWave", category: "extra", installed: true, path: "/usr/bin/gtkwave", version: "3.3.116" },
+    ],
+    pdk: {
+      ciel_installed: true,
+      pdk_root: "/home/lanex/.ciel",
+      installed_pdks: ["sky130A", "sky130B", "gf180mcuA", "gf180mcuB", "gf180mcuC", "gf180mcuD", "ihp-sg13g2"],
+      installed_sizes_mb: { sky130A: 2500, sky130B: 2500, gf180mcuA: 1800, gf180mcuB: 1800, gf180mcuC: 1800, gf180mcuD: 1800, "ihp-sg13g2": 1900 },
+    },
+    pdk_catalog: {
+      sky130A: { label: "sky130A", family: "sky130", default_variant: true, supported: true, libraries: ["sky130_fd_io", "sky130_fd_pr", "sky130_fd_sc_hd"], default_libraries: ["sky130_fd_io"] },
+      sky130B: { label: "sky130B", family: "sky130", default_variant: false, supported: true, libraries: ["sky130_fd_io", "sky130_fd_pr"], default_libraries: ["sky130_fd_io"] },
+      gf180mcuD: {
+        label: "gf180mcuD",
+        family: "gf180mcu",
+        default_variant: true,
+        supported: true,
+        libraries: [
+          "gf180mcu_as_sc_mcu7t3v3", "gf180mcu_fd_io", "gf180mcu_fd_ip_sram", "gf180mcu_fd_pr",
+          "gf180mcu_fd_sc_mcu7t5v0", "gf180mcu_fd_sc_mcu9t5v0", "gf180mcu_ocd_alpha_large",
+          "gf180mcu_ocd_alpha_misc", "gf180mcu_ocd_alpha_small", "gf180mcu_ocd_io",
+          "gf180mcu_osu_sc_gp12t3v3", "gf180mcu_osu_sc_gp9t3v3"
+        ],
+        default_libraries: ["gf180mcu_fd_io", "gf180mcu_fd_pr"],
+        unavailable_libraries: {
+          gf180mcu_ocd_ip_sram: "Not published for this release",
+          gf180mcu_re_efuse: "Not published for this release",
+        },
+      },
+      "ihp-sg13g2": { label: "ihp-sg13g2", family: "ihp-sg13g2", default_variant: true, supported: true, libraries: ["sg13g2_io", "sg13g2_pr"], default_libraries: ["sg13g2_io"] },
+      gf180mcuA: { label: "gf180mcuA", family: "gf180mcu", default_variant: false, supported: false, libraries: ["gf180mcu_fd_io"], default_libraries: ["gf180mcu_fd_io"] },
+      gf180mcuB: { label: "gf180mcuB", family: "gf180mcu", default_variant: false, supported: false, libraries: ["gf180mcu_fd_io"], default_libraries: ["gf180mcu_fd_io"] },
+      gf180mcuC: { label: "gf180mcuC", family: "gf180mcu", default_variant: false, supported: false, libraries: ["gf180mcu_fd_io"], default_libraries: ["gf180mcu_fd_io"] },
+    },
+  };
+
+  class DomElement {
+    constructor(tag = "div") {
+      this.tagName = tag;
+      this._html = "";
+      this.dataset = {};
+      this.className = "";
+      this.children = [];
+      this.listeners = {};
+      this.classList = {
+        add: (...cs) => cs.forEach((c) => { this.className += " " + c; }),
+        remove: (...cs) => cs.forEach((c) => { this.className = this.className.replace(c, "").trim(); }),
+        contains: (c) => this.className.includes(c),
+      };
+    }
+    set innerHTML(v) { this._html = v; this.children = []; }
+    get innerHTML() { return this._html; }
+    appendChild(c) { this.children.push(c); }
+    addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); }
+    querySelectorAll() { return []; }
+    querySelector() { return null; }
+  }
+
+  const els = {
+    "tools-grid": new DomElement(),
+    "sec-tools": new DomElement(),
+    "desktop-viewers": new DomElement(),
+    "recommended-tools": new DomElement(),
+    "runtime-card": new DomElement(),
+    "pdk-store-row": new DomElement(),
+    "pdk-root-input": new DomElement(),
+    "tool-bar": new DomElement(),
+  };
+
+  const oldDoc = globalThis.document;
+  globalThis.document = {
+    getElementById: (id) => els[id] || (els[id] = new DomElement()),
+    createElement: (tag) => new DomElement(tag),
+    querySelectorAll: () => [],
+    addEventListener: () => {},
+  };
+
+  const origDesktopTools = api.desktopTools;
+  api.desktopTools = async () => ({
+    tools: [
+      { key: "klayout", available: false },
+      { key: "magic", available: false },
+      { key: "gds3d", available: true },
+    ],
+  });
+
+  try {
+    // 1. Paint local tools grid
+    toolsModule.paintLocalToolsGrid(fullFixture);
+    const gridEl = els["tools-grid"];
+    assert.equal(gridEl.children.length, 10, `expected 10 local tool cards, got ${gridEl.children.length}`);
+    const toolKeys = gridEl.children.map((c) => c.dataset.key);
+    assert.deepEqual(toolKeys, [
+      "python", "pip", "librelane", "yosys", "openroad", "klayout", "magic", "netgen", "verilator", "ciel"
+    ]);
+
+    // 2. Render PDK store with canonical object-shaped unavailable_libraries
+    toolsModule.renderPdkStore(fullFixture);
+    const pdkHtml = els["pdk-store-row"].innerHTML;
+    for (const v of ["sky130A", "sky130B", "gf180mcuA", "gf180mcuB", "gf180mcuC", "gf180mcuD", "ihp-sg13g2"]) {
+      assert.ok(pdkHtml.includes(v), `pdk variant ${v} missing from PDK store`);
+    }
+    // gf180mcuD discloses 14 total libraries (12 published + 2 unavailable)
+    assert.ok(pdkHtml.includes("Libraries (14)"), "gf180mcuD must disclose 14 total libraries");
+    assert.ok(pdkHtml.includes("gf180mcu_ocd_ip_sram"), "unavailable lib 1 missing");
+    assert.ok(pdkHtml.includes("gf180mcu_re_efuse"), "unavailable lib 2 missing");
+    assert.ok(pdkHtml.includes("(Not published for this release)"), "reason text missing");
+
+    // 3. Render desktop viewers with container fallback
+    await toolsModule.renderDesktopViewers(fullFixture);
+    const viewersHtml = els["desktop-viewers"].innerHTML;
+    assert.ok(viewersHtml.includes("in container image"), "desktop viewers must show in container image");
+    assert.ok(!viewersHtml.includes("not found"), "desktop viewers must not show not found when image is present");
+
+    // 4. Overall paint handles full fixture without error
+    await toolsModule.paint(fullFixture);
+    assert.ok(!els["tools-grid"].innerHTML.includes("Tool probe failed"), "paint produced Tool probe failed");
+
+    // 5. Error isolation: even if PDK store throws, local tools and viewers remain uncorrupted
+    const corruptFixture = { ...fullFixture, pdk_catalog: null };
+    await toolsModule.paint(corruptFixture);
+    assert.ok(!els["tools-grid"].innerHTML.includes("Tool probe failed"), "corrupt PDK catalog must not mark local tools as failed");
+    assert.ok(els["tools-grid"].children.length > 0, "local tool cards must survive PDK failure");
+  } finally {
+    api.desktopTools = origDesktopTools;
+    globalThis.document = oldDoc;
+  }
 });
 
 console.log(`\nfrontend_test: ${passed} checks passed` +
