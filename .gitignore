@@ -51,3 +51,4 @@ windows/installer/Output/
 /build/
 windows/setup/build-manifest.json
 windows/setup/pdk-pins.json
+installer-workspace/
