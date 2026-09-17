@@ -56,14 +56,25 @@ def main() -> int:
     print(f"[*] Using wheel: {wheel_path.name} ({sha256_file(wheel_path)})")
 
     # 3. Build Go launcher
-    launcher_exe = REPO_ROOT / "windows" / "launcher" / "LanEx.exe"
+    launcher_dir = REPO_ROOT / "windows" / "launcher"
+    launcher_exe = launcher_dir / "LanEx.exe"
     print("[*] Compiling Windows launcher LanEx.exe...")
-    wsl_go_cmd = "cd /mnt/c/Users/itsva/lanex/windows/launcher && GOOS=windows GOARCH=amd64 go build -buildvcs=false -o LanEx.exe ."
-    go_distro = "Ubuntu"
-    chk = subprocess.run(["wsl.exe", "-d", go_distro, "-u", "root", "--", "which", "go"], capture_output=True)
-    if chk.returncode != 0:
-        go_distro = "lanex"
-    run_cmd(["wsl.exe", "-d", go_distro, "-u", "root", "--", "bash", "-c", wsl_go_cmd])
+    go_bin = shutil.which("go") or shutil.which("go.exe")
+    if not go_bin:
+        for candidate in [
+            Path(r"C:\Users\itsva\lanex\installer-workspace\work\tools\go\bin\go.exe"),
+            REPO_ROOT / "installer-workspace" / "work" / "tools" / "go" / "bin" / "go.exe",
+        ]:
+            if candidate.exists():
+                go_bin = str(candidate)
+                break
+    if go_bin:
+        run_cmd([go_bin, "build", "-buildvcs=false", "-o", "LanEx.exe", "."], cwd=launcher_dir)
+    else:
+        go_distro = "Ubuntu-24.04"
+        wsl_dir = str(launcher_dir).replace("\\", "/").replace("C:", "/mnt/c")
+        wsl_go_cmd = f"cd '{wsl_dir}' && GOOS=windows GOARCH=amd64 go build -buildvcs=false -o LanEx.exe ."
+        run_cmd(["wsl.exe", "-d", go_distro, "-u", "root", "--", "bash", "-c", wsl_go_cmd])
     if not launcher_exe.exists():
         raise SystemExit("LanEx.exe failed to build")
     print(f"[*] Built LanEx.exe: {sha256_file(launcher_exe)}")
@@ -71,6 +82,13 @@ def main() -> int:
     # 4. Generate build-manifest.json
     print("[*] Generating build-manifest.json...")
     manifest_path = REPO_ROOT / "windows" / "setup" / "build-manifest.json"
+    pdk_pins_path = REPO_ROOT / "windows" / "setup" / "pdk-pins.json"
+    if not pdk_pins_path.exists():
+        print("[*] Generating pdk-pins.json via export_pdk_pins.py in WSL lanex...")
+        wsl_cat = str(REPO_ROOT / "docs" / "windows-installer-handoff" / "CAPABILITY-INVENTORY.json").replace("\\", "/").replace("C:", "/mnt/c")
+        wsl_out = str(pdk_pins_path).replace("\\", "/").replace("C:", "/mnt/c")
+        wsl_script = str(REPO_ROOT / "windows" / "setup" / "export_pdk_pins.py").replace("\\", "/").replace("C:", "/mnt/c")
+        run_cmd(["wsl.exe", "-d", "lanex", "-u", "root", "--", "/home/lanex/.local/share/pipx/venvs/lanex/bin/python", wsl_script, "--catalog", wsl_cat, "--output", wsl_out])
     manifest_cmd = [
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
         f"""
@@ -103,9 +121,14 @@ def main() -> int:
 
     # 5. Compile Inno Setup
     print("[*] Compiling Inno Setup LanEx-Setup.exe...")
-    iscc_path = Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe")
-    if not iscc_path.exists():
-        raise SystemExit(f"ISCC not found at {iscc_path}")
+    iscc_candidates = [
+        Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+        Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe")),
+        Path(r"C:\Users\itsva\AppData\Local\Programs\Inno Setup 6\ISCC.exe"),
+    ]
+    iscc_path = next((p for p in iscc_candidates if p.exists()), None)
+    if not iscc_path:
+        raise SystemExit(f"ISCC not found in standard locations: {iscc_candidates}")
 
     worker_hash = sha256_file(REPO_ROOT / "windows" / "setup" / "setup.ps1")
     inno_cmd = [
