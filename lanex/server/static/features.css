@@ -567,6 +567,7 @@
    topbar that made it oversized, so these overrides — scoped to .topbar-run
    ONLY, never .btn-cta — put it back to a normal single-row toolbar button that
    lines up with the icon buttons/pills beside it. */
+.btn.btn-cta.topbar-run,
 .topbar-run {
   flex-direction: row;
   align-items: center;

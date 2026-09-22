@@ -530,8 +530,6 @@ html.zc4 .topbar { padding-left: var(--s-2); padding-right: var(--s-2); gap: var
 html.zc4 .zoom-ctl { gap: 0; }
 html.zc4 .pill { padding: 4px 6px; }
 html.zc4 #btn-run-global > span { display: none; }        /* icon-only Run */
-html.zc4 .side-tab .label { display: none; }              /* icon-only rail */
-html.zc4 .side-tab { justify-content: center; }
 
 /* Mode / engine switches use the shared .seg component (B16). The active +
    disabled markers keep the class names runmode.js/setup.js already toggle. */
@@ -738,7 +736,7 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 }
 .section { display: none; }
 .section.section-active { display: block; }
-#tab-setup {
+#sec-setup {
   max-width: 1280px;
   margin: 0;
   padding-bottom: 80px;

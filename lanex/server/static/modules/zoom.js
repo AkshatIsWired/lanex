@@ -27,12 +27,9 @@ export function clampZoom(v) {
 // there's room again. .zc1/.zc2 in styles.css define what each stage hides.
 function chromeOverflows() {
   const tb = document.querySelector(".topbar");
-  const rail = document.querySelector(".side-tabs");
   // +3px guards against sub-pixel rounding jitter causing a false overflow (which
   // would compact — hide a label/button — while there's really still room).
-  const tbOver = !!tb && tb.scrollWidth > tb.clientWidth + 3;
-  const railOver = !!rail && rail.scrollHeight > rail.clientHeight + 3;
-  return tbOver || railOver;
+  return !!tb && tb.scrollWidth > tb.clientWidth + 3;
 }
 
 // Escalate compaction until the chrome fits (0 = full; 1 = redundant labels;
