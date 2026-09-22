@@ -124,21 +124,49 @@ export function setupZoom() {
   const moreBtn = document.getElementById("topbar-more");
   const extra = document.getElementById("topbar-extra");
   if (moreBtn && extra) {
-    const closeMenu = () => {
+    const closeMenu = (returnFocus = false) => {
+      const wasInside = extra.contains(document.activeElement);
       extra.classList.remove("tb-open");
       moreBtn.setAttribute("aria-expanded", "false");
+      if ((returnFocus || wasInside) && typeof moreBtn.focus === "function") {
+        moreBtn.focus();
+      }
+    };
+    const focusFirst = () => {
+      const items = extra.querySelectorAll('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])');
+      if (items.length) items[0].focus();
     };
     moreBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       const open = extra.classList.toggle("tb-open");
       moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) {
+        requestAnimationFrame(focusFirst);
+      }
     });
     // Picking an item, clicking outside, or Escape closes the menu.
-    extra.addEventListener("click", closeMenu);
-    document.addEventListener("click", (e) => {
-      if (!extra.contains(e.target) && !moreBtn.contains(e.target)) closeMenu();
+    extra.addEventListener("click", () => closeMenu(false));
+    extra.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const items = Array.from(extra.querySelectorAll('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'));
+        if (!items.length) return;
+        const curIdx = items.indexOf(document.activeElement);
+        let nextIdx;
+        if (e.key === "ArrowDown") {
+          nextIdx = curIdx < items.length - 1 ? curIdx + 1 : 0;
+        } else {
+          nextIdx = curIdx > 0 ? curIdx - 1 : items.length - 1;
+        }
+        items[nextIdx]?.focus();
+      }
     });
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
+    document.addEventListener("click", (e) => {
+      if (!extra.contains(e.target) && !moreBtn.contains(e.target)) closeMenu(false);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && extra.classList.contains("tb-open")) closeMenu(true);
+    });
   }
   scheduleFit();
 }

@@ -32,7 +32,7 @@
 
   /* text */
   --text: #c2cee0;
-  --text-muted: #7e8ea7;
+  --text-muted: #8c9cb6;
   --text-strong: #f2f7ff;
   --text-disabled: #46556b;
 
@@ -60,17 +60,19 @@
   --pass-soft: rgba(54, 211, 153, 0.16);
   --warn: #c98a14;
   --warn-soft: rgba(242, 193, 78, 0.16);
-  --fail: #e5484d;
-  --fail-soft: rgba(229, 72, 77, 0.16);
+  --fail: #dc2626;
+  --fail-soft: rgba(220, 38, 38, 0.16);
   --pending: #6d7d94;
   --info: #2f6fe0;
   --info-soft: rgba(77, 163, 255, 0.16);
 
   /* Phase 5 semantic tokens (no widget hardcodes literals). */
   --on-accent: #ffffff;       /* text/icon on an accent fill; also white diagram backdrop */
+  --on-accent-soft: #7bb1ff;  /* high contrast text on accent-soft */
   --on-status: #ffffff;       /* text/icon on a status fill */
   --on-warn: #000;            /* text/icon on an amber/warn fill (white fails contrast) */
   --on-pass: #000;            /* text/icon on a green/pass fill (black is the AA choice) */
+  --on-fail: #ffffff;         /* text/icon on fail fill */
   --canvas: #ffffff;          /* layout/diagram image backdrop (GDS renders assume white) */
   --canvas-dark: #000;        /* deliberately dark backdrop for light-on-dark GDS thumbnails */
   --focus: var(--met1);
@@ -179,6 +181,8 @@ body.theme-light {
   --accent-3: #143e8c;
   --accent-soft: rgba(31, 95, 208, 0.10);
   --accent-glow: rgba(31, 95, 208, 0.28);
+  --on-accent-soft: #1047a9;
+  --on-fail: #ffffff;
 
   --pass: #128a59;
   --pass-soft: rgba(18, 138, 89, 0.10);
@@ -210,6 +214,18 @@ body.theme-light .topbar, body.theme-light .card, body.theme-light .hero {
 
 /* ---------- reset ---------- */
 *, *::before, *::after { box-sizing: border-box; }
+/* Screen reader only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 html, body { margin: 0; padding: 0; }
 button { font: inherit; cursor: pointer; }
 input, textarea, select { font: inherit; color: inherit; }
@@ -507,8 +523,8 @@ html.zc3 #design-pill, html.zc3 #pdk-pill { padding: 5px 8px; max-width: none; }
 /* --- Stage 4 (most compact): drop the wordmark, shrink the icon buttons,
    icon-only Run, icon-only rail. --- */
 html.zc4 .brand-text { display: none; }
-html.zc4 .iconbtn { width: 26px; height: 26px; }
-html.zc4 .zoom-pct { height: 26px; min-width: 34px; padding: 0 3px; font-size: 10.5px; }
+html.zc4 .iconbtn { width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
+html.zc4 .zoom-pct { height: 32px; min-width: 36px; padding: 0 4px; font-size: 11px; }
 html.zc4 .topbar-right { gap: 3px; }
 html.zc4 .topbar { padding-left: var(--s-2); padding-right: var(--s-2); gap: var(--s-1); }
 html.zc4 .zoom-ctl { gap: 0; }
@@ -521,7 +537,7 @@ html.zc4 .side-tab { justify-content: center; }
    disabled markers keep the class names runmode.js/setup.js already toggle. */
 .mode-seg .seg-btn, .engine-seg .seg-btn { display: inline-flex; align-items: center; gap: var(--s-2); white-space: nowrap; }
 .mode-seg .seg-btn:hover, .engine-seg .seg-btn:hover { color: var(--text); }
-.seg-btn.mode-btn-active, .seg-btn.engine-btn-active { background: var(--accent-soft); color: var(--accent); }
+.seg-btn.mode-btn-active, .seg-btn.engine-btn-active { background: var(--accent-soft); color: var(--on-accent-soft); }
 .seg-btn.mode-btn-disabled, .seg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .mode-ico { display: inline-flex; align-items: center; }
 
@@ -718,6 +734,7 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
   background: var(--bg);
   overflow: auto;
   padding: var(--s-5) var(--s-5);
+  scroll-padding-top: 130px;
 }
 .section { display: none; }
 .section.section-active { display: block; }
@@ -915,6 +932,9 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .section-h2 { margin-top: var(--s-5); }
 
 .picker.picker-ready { border-left: 3px solid var(--pass); }
+.picker, .card, .config-anchor, [data-jump-target] {
+  scroll-margin-top: 130px;
+}
 .picker {
   background:
     linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
@@ -948,6 +968,15 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
   display: flex;
   gap: var(--s-2);
   align-items: center;
+}
+.picker-row select {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+}
+.picker-row #pdk-readiness {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .picker-actions {
   display: flex; gap: var(--s-2);
@@ -1529,11 +1558,32 @@ select {
 }
 @media (max-width: 720px) {
   #app { grid-template-rows: 56px 1fr 32px; grid-template-columns: 64px 1fr; grid-template-areas: "topbar topbar" "side work" "status status"; }
+  .topbar { grid-template-columns: auto 1fr; }
+  .brand-text { display: none; }
+  .topbar-center { display: none; }
+  #design-pill .text, #pdk-pill .text { display: none; }
+  #design-pill, #pdk-pill { padding: 5px 8px; max-width: none; }
   /* Rail too narrow for group labels here — the gap still separates the groups. */
   .rail-label { display: none; }
-  /* Don't hide the right-side controls (theme / palette / help / tools) — they
-     become inaccessible. Let them scroll horizontally instead. */
-  .topbar-right { display: flex; overflow-x: auto; min-width: 0; -webkit-overflow-scrolling: touch; }
+  .topbar-right { display: flex; min-width: 0; gap: 4px; justify-content: flex-end; }
+  #topbar-more { display: inline-flex; }
+  .topbar-extra {
+    position: absolute; top: calc(100% + 6px); right: 8px;
+    flex-direction: column; align-items: stretch; gap: 2px;
+    min-width: 190px; padding: 6px; display: none;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+    z-index: var(--z-chrome);
+  }
+  .topbar-extra.tb-open { display: flex; }
+  .topbar-extra .iconbtn {
+    width: 100%; height: 34px; justify-content: flex-start;
+    gap: 10px; padding: 0 10px; border-color: transparent;
+  }
+  .topbar-extra .iconbtn::after {
+    content: attr(aria-label); font-size: 12.5px; color: var(--text); white-space: nowrap;
+  }
+  .topbar-extra .iconbtn:hover { border-color: var(--accent); }
   .brand-sub { display: none; }
 }
 
@@ -1549,7 +1599,7 @@ select {
   .rail-label { margin-bottom: 0; }
   .side-tab { padding: 7px 6px; }
   .side-tab .ico { font-size: 18px; }
-  .side-tab .label { font-size: 10px; }
+  .side-tab .label { font-size: 11.5px; }
 }
 @media (max-height: 760px) {
   .rail-label { display: none; }
@@ -1586,8 +1636,10 @@ select {
 .filesel-row .ext { font-size: 10px; padding: 1px 6px; border-radius: var(--r-pill); background: var(--surface-3); color: var(--text); margin-left: var(--s-2); }
 .filesel-row.dir { background: var(--surface-3); }
 .filesel-row.dir .name { color: var(--accent); }
+button.filesel-row { width: 100%; text-align: left; font: inherit; color: inherit; }
 .fs-roots-pill { background: var(--surface-3); border: 1px solid var(--border); padding: 6px 12px; border-radius: var(--r-sm); cursor: pointer; font-family: var(--mono); font-size: var(--t-xs); color: var(--text); }
 .fs-roots-pill:hover { border-color: var(--accent); color: var(--accent); }
+button.fs-roots-pill { font: inherit; color: inherit; }
 
 /* ---------- config nav ---------- */
 .config-nav {
@@ -1616,7 +1668,7 @@ select {
 }
 .config-nav .nav-chip:hover { border-color: var(--accent); color: var(--text); }
 .config-nav .nav-chip.nav-active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-.config-anchor { scroll-margin-top: 70px; }
+.config-anchor { scroll-margin-top: 130px; }
 
 /* ---------- empty state messages ---------- */
 .empty {
@@ -1690,10 +1742,19 @@ h3 { font-size: var(--t-md); font-weight: 600; color: var(--text-strong); margin
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
-    animation-duration: 0.001ms !important;
+    animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
+  }
+  .section.section-active {
+    animation: none !important;
+  }
+  .pulse, .anim-pulse, [class*="pulse"] {
+    animation: none !important;
+  }
+  * {
+    transition-duration: 0.05s !important;
+    transform: none !important;
   }
 }
 

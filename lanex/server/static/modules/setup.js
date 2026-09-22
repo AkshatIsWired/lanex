@@ -479,7 +479,44 @@ export function paintRunning(running) {
   }
 }
 
-function showOnboarding() {
-  const overlay = document.getElementById("onboard");
-  overlay.hidden = false;
+export async function showOnboarding() {
+  const { customDialog } = await import("./dialog.js");
+  const html =
+    "<div class='onboard-guide'>" +
+    "<p class='hint' style='margin-top:0;font-size:var(--t-md);line-height:1.5;'>" +
+    "LanEx takes your Verilog RTL all the way to GDSII layout. Follow these 3 steps to complete your first silicon hardening:" +
+    "</p>" +
+    "<ol class='steps-3' style='display:grid;gap:var(--s-3);margin:var(--s-4) 0;padding:0;list-style:none;'>" +
+    "<li style='background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s-3);'>" +
+    "<strong style='color:var(--text-strong);display:block;margin-bottom:4px;'>1. Pick your HDL folder</strong>" +
+    "<span style='color:var(--text-muted);font-size:var(--t-sm);'>Point LanEx to a directory with <code>.v</code> and <code>.sdc</code> files. Or load the built-in SPM multiplier example.</span>" +
+    "</li>" +
+    "<li style='background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s-3);'>" +
+    "<strong style='color:var(--text-strong);display:block;margin-bottom:4px;'>2. Confirm PDK &amp; standard cells</strong>" +
+    "<span style='color:var(--text-muted);font-size:var(--t-sm);'>Choose SkyWater 130nm or GlobalFoundries 180nm. Preflight checks readiness automatically.</span>" +
+    "</li>" +
+    "<li style='background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s-3);'>" +
+    "<strong style='color:var(--text-strong);display:block;margin-bottom:4px;'>3. Press Run</strong>" +
+    "<span style='color:var(--text-muted);font-size:var(--t-sm);'>Watch synthesis, floorplanning, placement, and routing run to tapeout. Output lands in <code>runs/&lt;tag&gt;/final/gds</code>.</span>" +
+    "</li>" +
+    "</ol>" +
+    "</div>";
+  const res = await customDialog({
+    title: "Welcome to LanEx — Open Silicon in 3 Steps",
+    bodyHtml: html,
+    buttons: [
+      { label: "Load SPM Example", value: "spm", cls: "btn-primary" },
+      { label: "Browse Folder…", value: "browse", cls: "btn-ghost" },
+      { label: "Close", value: "close", cls: "btn-ghost" },
+    ],
+    wide: false,
+  });
+  if (res === "spm") {
+    await onLoadSpmExample();
+  } else if (res === "browse") {
+    document.getElementById("btn-browse-folder")?.click();
+  } else {
+    document.getElementById("design-dir-input")?.focus();
+  }
 }
+

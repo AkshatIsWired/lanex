@@ -41,13 +41,25 @@ function place(target) {
   const z = zoomFactor();
   const r = target.getBoundingClientRect();
   const tr = t.getBoundingClientRect();
-  const rl = r.left / z, rt = r.top / z, rb = r.bottom / z, rw = r.width / z;
+  const rl = r.left / z, rt = r.top / z, rb = r.bottom / z, rw = r.width / z, rh = r.height / z;
   const tw = tr.width / z, th = tr.height / z;
-  let top = rt - th - 8;                   // prefer above (all in CSS space)
-  let below = false;
-  if (top < 4) { top = rb + 8; below = true; }   // flip below when clipped
-  let left = rl + rw / 2 - tw / 2;
-  left = Math.max(6, Math.min(left, window.innerWidth - tw - 6));
+  const vw = window.innerWidth / z;
+  const vh = window.innerHeight / z;
+
+  const isRail = !!target.closest(".side-tabs");
+  let top, left, below = false;
+
+  if (isRail) {
+    // Rail: place to the right of the tab, vertically centered, clamped away from topbar
+    left = rl + rw + 10;
+    top = Math.max(60, Math.min(rt + (rh / 2) - (th / 2), vh - th - 8));
+  } else {
+    top = rt - th - 8;                   // prefer above (all in CSS space)
+    if (top < 4) { top = rb + 8; below = true; }   // flip below when clipped
+    left = rl + rw / 2 - tw / 2;
+    left = Math.max(6, Math.min(left, vw - tw - 6));
+  }
+
   t.style.top = Math.round(top) + "px";
   t.style.left = Math.round(left) + "px";
   t.classList.toggle("tip-below", below);

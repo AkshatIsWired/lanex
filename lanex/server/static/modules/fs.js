@@ -50,7 +50,10 @@ function _fsKeydown(e) {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }
 
+let _lastFsTrigger = null;
+
 async function openModal() {
+  _lastFsTrigger = document.activeElement;
   const modal = document.getElementById("fs-modal");
   modal.hidden = false;
   document.addEventListener("keydown", _fsKeydown);
@@ -64,6 +67,9 @@ function closeModal() {
   const modal = document.getElementById("fs-modal");
   modal.hidden = true;
   document.removeEventListener("keydown", _fsKeydown);
+  if (_lastFsTrigger && typeof _lastFsTrigger.focus === "function") {
+    _lastFsTrigger.focus();
+  }
 }
 
 async function defaultSeed() {
@@ -82,7 +88,8 @@ async function loadRoots() {
   try {
     const r = await api.fsRoots();
     for (const x of r.roots || []) {
-      const b = document.createElement("div");
+      const b = document.createElement("button");
+      b.type = "button";
       b.className = "fs-roots-pill";
       b.textContent = x.label;
       b.title = x.path;
@@ -126,7 +133,8 @@ function paintList(entries) {
     return;
   }
   for (const e of entries) {
-    const row = document.createElement("div");
+    const row = document.createElement(e.is_dir ? "button" : "div");
+    if (e.is_dir) row.type = "button";
     row.className = "filesel-row" + (e.is_dir ? " dir" : "");
     const safe = fmt.escape(e.name);
     row.innerHTML =

@@ -174,14 +174,32 @@ function groupFor(name, v) {
 }
 
 let _searchTerm = "";
+let _constraintsDirty = true;
+
+function isConstraintsOpen() {
+  const card = document.getElementById("cfg-card");
+  return !!(card && card.open);
+}
+
+function ensurePainted() {
+  if (_constraintsDirty || !document.getElementById("vars-form")?.hasChildNodes()) {
+    paint();
+  }
+}
 
 export function renderConfig() {
   const root = document.getElementById("vars-form");
   if (!root) return;
   const search = document.getElementById("var-search");
+  let searchTimer = null;
   search?.addEventListener("input", () => {
-    _searchTerm = search.value.toUpperCase();
-    paint();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      _searchTerm = search.value.toUpperCase();
+      const card = document.getElementById("cfg-card");
+      if (card && !card.open) card.open = true;
+      paint();
+    }, 150);
   });
   document.querySelectorAll(".chip-clickable").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -213,7 +231,11 @@ export function renderConfig() {
       if (p.reset) state.varsValues = {};
       for (const [k, v] of Object.entries(p.values)) state.varsValues[k] = String(v);
       syncReportToggles();
-      paint();
+      if (isConstraintsOpen()) {
+        paint();
+      } else {
+        _constraintsDirty = true;
+      }
       renderOverridesSummary();
     });
   });
@@ -249,9 +271,18 @@ export function renderConfig() {
       renderOverridesSummary();
     });
   }
+  const card = document.getElementById("cfg-card");
+  if (card && !card._lazyWired) {
+    card._lazyWired = true;
+    card.addEventListener("toggle", () => {
+      if (card.open) ensurePainted();
+    });
+  }
   syncReportToggles();
-  paint();
   renderOverridesSummary();
+  if (isConstraintsOpen()) {
+    paint();
+  }
 }
 
 // ---- User-defined presets (localStorage, per-browser) ---------------------
@@ -264,7 +295,11 @@ function applyOverrideSet(values, { reset = true } = {}) {
   if (reset) state.varsValues = {};
   for (const [k, v] of Object.entries(values || {})) state.varsValues[k] = (typeof v === "boolean") ? v : String(v);
   syncReportToggles();
-  paint();
+  if (isConstraintsOpen()) {
+    paint();
+  } else {
+    _constraintsDirty = true;
+  }
   renderOverridesSummary();
 }
 function paintUserPresets() {
@@ -552,8 +587,9 @@ function jumpToSection(id, navChip) {
 // Used by the Setup jump bar's milestone rail, which lives above the card.
 function openConstraintsAndJump(id) {
   const card = document.getElementById("cfg-card");
-  if (card && !card.open) {
-    card.open = true;
+  if (card) {
+    if (!card.open) card.open = true;
+    ensurePainted();
     // Let the <details> lay out before scrolling to the now-visible section.
     requestAnimationFrame(() => jumpToSection(id, null));
   } else {
@@ -566,6 +602,8 @@ function buildRow(v) {
   row.className = "var-row";
   row.dataset.var = v.name;
   const id = "var-" + v.name;
+  const labelId = "lbl-" + v.name;
+  const descId = "desc-" + v.name;
   // B4: show LibreLane's own default for every field so a pre-filled value is
   // never mistaken for something the user typed. Empty default => explicit
   // "no default" (required / PDK-derived), which is itself information.
@@ -574,15 +612,15 @@ function buildRow(v) {
     ? "<span class='vdefault' title='LibreLane default'>default: " + fmt.escape(defStr) + "</span>"
     : "<span class='vdefault vdefault-none' title='No LibreLane default (required, or derived from the PDK/flow)'>no default</span>";
   row.innerHTML =
-    "<div class='vname'>" +
+    "<div class='vname' id='" + cssEscape(labelId) + "'>" +
     "<span class='name'>" + fmt.escape(v.name) + "</span>" +
     (v.type ? "<span class='type'>" + fmt.escape(v.type) + "</span>" : "") +
     (v.pdk ? "<span class='flag'>PDK</span>" : "") +
     (v.units ? "<span class='units'>" + fmt.escape(v.units) + "</span>" : "") +
     defaultChip +
     "</div>" +
-    "<div class='vdesc'>" + fmt.escape(v.description || "") + "</div>" +
-    inputFor(v, id) +
+    "<div class='vdesc' id='" + cssEscape(descId) + "'>" + fmt.escape(v.description || "") + "</div>" +
+    inputFor(v, id, labelId, descId) +
     "<button type='button' class='var-reset' title='Reset to LibreLane default' aria-label='Reset " +
       fmt.escape(v.name) + " to default'>↺</button>";
   const input = row.querySelector("#" + cssEscape(id));
@@ -620,12 +658,13 @@ function buildRow(v) {
   return row;
 }
 
-function inputFor(v, id) {
+function inputFor(v, id, labelId, descId) {
   const cur = state.varsValues[v.name] !== undefined ? state.varsValues[v.name] : v.default;
   const str = cur === null || cur === undefined ? "" : String(cur);
+  const aria = " aria-labelledby='" + cssEscape(labelId) + "' aria-describedby='" + cssEscape(descId) + "'";
   if (v.type === "bool" || v.type === "Boolean") {
     return (
-      "<select id='" + id + "'>" +
+      "<select id='" + id + "'" + aria + ">" +
       "<option value='true'" + (str === "true" ? " selected" : "") + ">true</option>" +
       "<option value='false'" + (str === "false" ? " selected" : "") + ">false</option>" +
       "</select>"
@@ -641,9 +680,9 @@ function inputFor(v, id) {
     const opts = v.choices
       .map((s) => "<option value='" + fmt.escape(s) + "'" + (str === String(s) ? " selected" : "") + ">" + fmt.escape(s) + "</option>")
       .join("");
-    return "<select id='" + id + "'>" + blank + opts + "</select>";
+    return "<select id='" + id + "'" + aria + ">" + blank + opts + "</select>";
   }
-  return "<input type='text' id='" + id + "' value='" + fmt.escape(str) + "' />";
+  return "<input type='text' id='" + id + "'" + aria + " value='" + fmt.escape(str) + "' />";
 }
 
 function cssEscape(s) {

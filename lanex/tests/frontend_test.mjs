@@ -886,6 +886,63 @@ await checkAsync("tools: full fixture renders 10 tools, 7 PDK cards, 14 GF180 li
   }
 });
 
+// ------------------------------------------------ ui-polish verification
+check("ui-polish: onboarding modal, accessible labels, lazy constraints, and keyboard elements", () => {
+  const STATIC = resolve(HERE, "..", "server", "static");
+  const indexHtml = readFileSync(resolve(STATIC, "index.html"), "utf8");
+  const setupJs = readFileSync(resolve(MOD, "setup.js"), "utf8");
+  const configJs = readFileSync(resolve(MOD, "config.js"), "utf8");
+  const helpJs = readFileSync(resolve(MOD, "help.js"), "utf8");
+  const fsJs = readFileSync(resolve(MOD, "fs.js"), "utf8");
+  const paletteJs = readFileSync(resolve(MOD, "palette.js"), "utf8");
+  const zoomJs = readFileSync(resolve(MOD, "zoom.js"), "utf8");
+  const tooltipJs = readFileSync(resolve(MOD, "tooltip.js"), "utf8");
+  const stylesCss = readFileSync(resolve(STATIC, "styles.css"), "utf8");
+
+  // 1. Onboarding modal: uses customDialog, no missing #onboard query
+  assert.doesNotMatch(setupJs, /document\.getElementById\("onboard"\)/, "setup.js still queries removed #onboard element");
+  assert.match(setupJs, /customDialog/, "setup.js must use customDialog for onboarding");
+  assert.match(setupJs, /Load SPM Example/, "onboarding modal must offer SPM Example action");
+  assert.match(setupJs, /Browse Folder…/, "onboarding modal must offer Browse Folder action");
+
+  // 2. Index HTML accessibility:
+  assert.match(indexHtml, /id="btn-run-global"[^>]*aria-label="Run flow"/, "Run global button missing accessible aria-label");
+  assert.match(indexHtml, /class="side-tab side-tab-active"[^>]*aria-label="Setup"/, "Setup side-tab missing aria-label");
+  assert.match(indexHtml, /<label[^>]*for="design-dir-input"[^>]*class="sr-only"/, "design-dir-input missing label");
+  assert.match(indexHtml, /<label[^>]*for="pdk-select"[^>]*class="sr-only"/, "pdk-select missing label");
+  assert.match(indexHtml, /<label[^>]*for="scl-select"[^>]*class="sr-only"/, "scl-select missing label");
+
+  // 3. Hero boundary: hero ends before setup-design picker
+  const heroEnd = indexHtml.indexOf('id="hero"');
+  const designPicker = indexHtml.indexOf('id="setup-design"');
+  assert.ok(heroEnd < designPicker, "Hero does not contain setup-design");
+  assert.ok(indexHtml.includes('<!-- Design picker -->'), "Design picker comment preserved");
+
+  // 4. Config.js: lazy rendering of constraints & ARIA relationships
+  assert.match(configJs, /_constraintsDirty|ensurePainted/, "config.js must track lazy render state");
+  assert.match(configJs, /aria-labelledby/, "config.js must link rows with aria-labelledby");
+  assert.match(configJs, /aria-describedby/, "config.js must link rows with aria-describedby");
+
+  // 5. Help.js: accessible pills and dialog focus
+  assert.match(helpJs, /aria-hidden", "true"/, "help pills must be aria-hidden in side-tabs");
+  assert.match(helpJs, /role='dialog' aria-modal='true' aria-labelledby='help-dlg-title'/, "help dialog missing modal attributes");
+
+  // 6. FS.js: native buttons for roots and directories
+  assert.match(fsJs, /createElement\("button"\);\s*b\.type\s*=\s*"button";\s*b\.className\s*=\s*"fs-roots-pill"/, "roots must be button elements");
+  assert.match(fsJs, /createElement\(e\.is_dir \? "button" : "div"\)/, "directories must be button elements");
+
+  // 7. Palette.js & Zoom.js: combobox role and More menu return focus
+  assert.match(paletteJs, /role="combobox"/, "palette input missing combobox role");
+  assert.match(paletteJs, /role="listbox"/, "palette listbox missing listbox role");
+  assert.match(zoomJs, /moreBtn\.setAttribute\("aria-expanded"/, "More menu must manage aria-expanded");
+
+  // 8. Tooltip & Styles:
+  assert.match(tooltipJs, /isRail/, "tooltip.js must position side rail tooltips to the right");
+  assert.match(stylesCss, /--on-accent-soft:\s*#7bb1ff;/, "styles.css missing --on-accent-soft token");
+  assert.match(stylesCss, /scroll-margin-top:\s*130px;/, "styles.css missing scroll-margin-top for jump targets");
+  assert.match(stylesCss, /\.sr-only\s*\{/, "styles.css missing .sr-only utility class");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

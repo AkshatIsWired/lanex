@@ -207,11 +207,7 @@ const CATALOG = {
 function openHelp(key) {
   const def = CATALOG[key];
   const title = def ? def.title : key;
-  // Built on the shared `.dlg-backdrop`/`.dlg` overlay (fixed, centered, blurred
-  // backdrop). The old `.onboard` classes were deleted with the onboarding tour
-  // in round 39, so this dialog had no CSS and rendered as a plain block at the
-  // bottom of <body> \u2014 you had to scroll to see/close it. `.dlg-*` is guaranteed
-  // present (folder browser, presets, etc. use it).
+  const lastFocused = document.activeElement;
   const body =
     (def ? "<p><strong>Goal:</strong> " + def.goal + "</p>" : "") +
     (def && def.how && def.how.length
@@ -229,24 +225,53 @@ function openHelp(key) {
   const back = document.createElement("div");
   back.className = "dlg-backdrop";
   back.innerHTML =
-    "<div class='dlg' style='max-width:680px' role='dialog' aria-modal='true'>" +
+    "<div class='dlg' style='max-width:680px' role='dialog' aria-modal='true' aria-labelledby='help-dlg-title'>" +
     "<div class='dlg-head' style='display:flex;align-items:center;justify-content:space-between;gap:var(--s-3)'>" +
-    "<span>" + title + "</span>" +
+    "<span id='help-dlg-title'>" + title + "</span>" +
     "<button class='iconbtn dlg-x' aria-label='Close' style='margin:-4px -6px'>\u00d7</button></div>" +
     "<div class='dlg-body'>" + body + "</div>" +
     "</div>";
+
+  const closeBtn = back.querySelector(".dlg-x");
+  const dlg = back.querySelector(".dlg");
+
   function close() {
     back.remove();
     document.removeEventListener("keydown", onKey);
+    if (lastFocused && typeof lastFocused.focus === "function") {
+      lastFocused.focus();
+    }
   }
+
   function onKey(e) {
-    if (e.key === "Escape") close();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+      return;
+    }
+    if (e.key === "Tab") {
+      const focusables = dlg.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
   }
+
   back.addEventListener("click", (e) => {
     if (e.target === back || e.target.closest(".dlg-x")) close();
   });
   document.addEventListener("keydown", onKey);
   document.body.appendChild(back);
+  if (closeBtn) {
+    closeBtn.focus();
+  }
 }
 
 export const help = {
@@ -261,6 +286,15 @@ export const help = {
         openHelp(pill.dataset.help);
       }
     });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        const pill = e.target.closest("[data-help]");
+        if (pill) {
+          e.preventDefault();
+          openHelp(pill.dataset.help);
+        }
+      }
+    });
     // Side-tab help icons (rendered dynamically).
     setInterval(() => {
       document.querySelectorAll(".side-tab").forEach((tab) => {
@@ -270,6 +304,8 @@ export const help = {
           span.dataset.help = tab.dataset.tab;
           span.textContent = "?";
           span.title = "What does this tab do?";
+          span.setAttribute("aria-hidden", "true");
+          span.setAttribute("tabindex", "-1");
           tab.appendChild(span);
         }
       });

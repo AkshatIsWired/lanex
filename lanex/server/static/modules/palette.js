@@ -46,6 +46,8 @@ function actions() {
   ];
 }
 
+let _lastPaletteTrigger = null;
+
 function score(q, text) {
   // Lightweight subsequence fuzzy score; -1 = no match.
   q = q.toLowerCase();
@@ -65,9 +67,9 @@ function build() {
   _el.hidden = true;
   _el.innerHTML =
     '<div class="cmdk-backdrop"></div>' +
-    '<div class="cmdk-panel" role="dialog" aria-label="Command palette">' +
-    '<input class="cmdk-input" type="text" placeholder="Type a command…  (Esc to close)" autocomplete="off" spellcheck="false"/>' +
-    '<div class="cmdk-list" role="listbox"></div>' +
+    '<div class="cmdk-panel" role="dialog" aria-modal="true" aria-label="Command palette">' +
+    '<input class="cmdk-input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="cmdk-listbox" aria-label="Search commands" placeholder="Type a command…  (Esc to close)" autocomplete="off" spellcheck="false"/>' +
+    '<div class="cmdk-list" id="cmdk-listbox" role="listbox" aria-label="Commands"></div>' +
     '<div class="cmdk-foot"><kbd>↑</kbd><kbd>↓</kbd> navigate · <kbd>↵</kbd> run · <kbd>esc</kbd> close</div>' +
     "</div>";
   document.body.appendChild(_el);
@@ -76,6 +78,12 @@ function build() {
   _el.querySelector(".cmdk-backdrop").addEventListener("click", close);
   _input.addEventListener("input", () => { _sel = 0; refresh(); });
   _input.addEventListener("keydown", onKey);
+  _el.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+    }
+  });
 }
 
 function onKey(e) {
@@ -99,17 +107,22 @@ function paint() {
   _list.innerHTML = _filtered
     .map(
       (a, i) =>
-        '<div class="cmdk-item' + (i === _sel ? " cmdk-item-sel" : "") + '" data-i="' + i + '">' +
+        '<div class="cmdk-item' + (i === _sel ? " cmdk-item-sel" : "") + '" role="option" id="cmdk-opt-' + i + '" aria-selected="' + (i === _sel ? "true" : "false") + '" data-i="' + i + '">' +
         '<span class="cmdk-ico">' + a.icon + "</span>" +
         '<span class="cmdk-title">' + a.title + "</span>" +
         '<span class="cmdk-hint">' + a.hint + "</span>" +
         "</div>",
     )
-    .join("") || '<div class="cmdk-empty">No matching command</div>';
+    .join("") || '<div class="cmdk-empty" role="status">No matching command</div>';
   _list.querySelectorAll(".cmdk-item").forEach((el) => {
     el.addEventListener("click", () => { _sel = +el.dataset.i; runSel(); });
     el.addEventListener("mousemove", () => { _sel = +el.dataset.i; paint(); });
   });
+  if (_filtered.length > 0 && _sel >= 0 && _sel < _filtered.length) {
+    _input.setAttribute("aria-activedescendant", "cmdk-opt-" + _sel);
+  } else {
+    _input.removeAttribute("aria-activedescendant");
+  }
   const sel = _list.querySelector(".cmdk-item-sel");
   if (sel) sel.scrollIntoView({ block: "nearest" });
 }
@@ -122,6 +135,7 @@ function runSel() {
 }
 
 export function openPalette() {
+  _lastPaletteTrigger = document.activeElement;
   if (!_el) build();
   _items = actions();
   _input.value = "";
@@ -132,7 +146,12 @@ export function openPalette() {
 }
 
 export function close() {
-  if (_el) _el.hidden = true;
+  if (_el) {
+    _el.hidden = true;
+    if (_lastPaletteTrigger && typeof _lastPaletteTrigger.focus === "function") {
+      _lastPaletteTrigger.focus();
+    }
+  }
 }
 
 export function setupPalette() {
