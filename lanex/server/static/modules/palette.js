@@ -6,7 +6,8 @@
 import { activate } from "./tabs.js";
 import { toggleTheme } from "./theme.js";
 import { toggleDensity } from "./density.js";
-import { toggleRunMode, getRunMode } from "./runmode.js";
+import { toggleRunMode, setRunMode, getRunMode } from "./runmode.js";
+import { setFlowMode } from "./setup.js";
 import { icon } from "./icons.js";
 
 let _el = null;
@@ -28,16 +29,28 @@ function tab(name) {
 function actions() {
   return [
     { id: "go-setup", title: "Go to Setup", hint: "tab", icon: icon("folder"), run: () => tab("setup") },
+    { id: "go-ide", title: "Go to RTL IDE", hint: "tab", icon: icon("code"), run: () => tab("ide") },
+    { id: "go-cells", title: "Go to Cells & Macros", hint: "tab", icon: icon("grid"), run: () => tab("cells") },
     { id: "go-pipeline", title: "Go to Pipeline", hint: "tab", icon: icon("flow"), run: () => tab("pipeline") },
     { id: "go-runs", title: "Go to Runs", hint: "tab", icon: icon("clock"), run: () => tab("runs") },
+    { id: "go-dse", title: "Go to DSE (Exploration)", hint: "tab", icon: icon("chart"), run: () => tab("dse") },
     { id: "go-preview", title: "Go to Preview", hint: "tab", icon: icon("image"), run: () => tab("preview") },
-    { id: "go-tools", title: "Go to Tools", hint: "tab", icon: icon("tools"), run: () => tab("tools") },
     { id: "go-analytics", title: "Go to Analytics", hint: "tab", icon: icon("chart"), run: () => tab("analytics") },
+    { id: "go-verify", title: "Go to Verify (Tape-out checks)", hint: "tab", icon: icon("check"), run: () => tab("verify") },
+    { id: "go-layout", title: "Go to Layout (2D/3D)", hint: "tab", icon: icon("box"), run: () => tab("layout") },
+    { id: "go-tools", title: "Go to Tools", hint: "tab", icon: icon("tools"), run: () => tab("tools") },
+    { id: "go-manual", title: "Go to Manual commands", hint: "tab", icon: icon("terminal"), run: () => tab("manual") },
+
+    { id: "mode-auto", title: "Full Auto mode (run end-to-end)", hint: "mode", icon: icon("play"), run: () => setFlowMode("auto") },
+    { id: "mode-semi", title: "Step-by-step mode (pause per step)", hint: "mode", icon: icon("step"), run: () => setFlowMode("semi") },
+    { id: "engine-container", title: "Use container engine (Docker/Podman)", hint: "engine", icon: icon("box"), run: () => setRunMode("container") },
+    { id: "engine-local", title: "Use local tools engine (host EDA tools)", hint: "engine", icon: icon("tools"), run: () => setRunMode("local") },
+    { id: "runmode", title: "Switch run engine (Container / Local)", hint: "engine", icon: icon("refresh"), run: () => toggleRunMode() },
+
     { id: "run", title: "Run flow", hint: "action", icon: icon("play"), run: () => click("btn-run") },
     { id: "stop", title: "Stop the run", hint: "action", icon: icon("stop"), run: () => click("btn-cancel") },
     { id: "resume", title: "Resume / next step", hint: "action", icon: icon("play"), run: () => click("btn-resume") },
     { id: "preflight", title: "Check my setup (preflight)", hint: "action", icon: icon("check"), run: () => click("btn-preflight") },
-    { id: "runmode", title: "Switch run engine (Container / Local tools)", hint: "action", icon: icon("refresh"), run: () => toggleRunMode() },
     { id: "spm", title: "Load the SPM example", hint: "action", icon: icon("plus"), run: () => click("btn-load-spm") },
     { id: "theme", title: "Toggle dark / light theme", hint: "view", icon: icon("moon"), run: () => toggleTheme() },
     { id: "density", title: "Toggle compact density", hint: "view", icon: icon("grid"), run: () => toggleDensity() },
@@ -86,11 +99,38 @@ function build() {
   });
 }
 
+function updateSelection() {
+  const items = _list.querySelectorAll(".cmdk-item");
+  items.forEach((item, i) => {
+    const isSel = i === _sel;
+    item.classList.toggle("cmdk-item-sel", isSel);
+    item.setAttribute("aria-selected", isSel ? "true" : "false");
+  });
+  if (_filtered.length > 0 && _sel >= 0 && _sel < _filtered.length) {
+    _input.setAttribute("aria-activedescendant", "cmdk-opt-" + _sel);
+  } else {
+    _input.removeAttribute("aria-activedescendant");
+  }
+  const sel = _list.querySelector(".cmdk-item-sel");
+  if (sel) sel.scrollIntoView({ block: "nearest" });
+}
+
 function onKey(e) {
-  if (e.key === "ArrowDown") { _sel = Math.min(_sel + 1, _filtered.length - 1); paint(); e.preventDefault(); }
-  else if (e.key === "ArrowUp") { _sel = Math.max(_sel - 1, 0); paint(); e.preventDefault(); }
-  else if (e.key === "Enter") { runSel(); e.preventDefault(); }
-  else if (e.key === "Escape") { close(); e.preventDefault(); }
+  if (e.key === "ArrowDown") {
+    _sel = Math.min(_sel + 1, _filtered.length - 1);
+    updateSelection();
+    e.preventDefault();
+  } else if (e.key === "ArrowUp") {
+    _sel = Math.max(_sel - 1, 0);
+    updateSelection();
+    e.preventDefault();
+  } else if (e.key === "Enter") {
+    runSel();
+    e.preventDefault();
+  } else if (e.key === "Escape") {
+    close();
+    e.preventDefault();
+  }
 }
 
 function refresh() {
@@ -116,15 +156,15 @@ function paint() {
     .join("") || '<div class="cmdk-empty" role="status">No matching command</div>';
   _list.querySelectorAll(".cmdk-item").forEach((el) => {
     el.addEventListener("click", () => { _sel = +el.dataset.i; runSel(); });
-    el.addEventListener("mousemove", () => { _sel = +el.dataset.i; paint(); });
+    el.addEventListener("mousemove", () => {
+      const idx = +el.dataset.i;
+      if (_sel !== idx) {
+        _sel = idx;
+        updateSelection();
+      }
+    });
   });
-  if (_filtered.length > 0 && _sel >= 0 && _sel < _filtered.length) {
-    _input.setAttribute("aria-activedescendant", "cmdk-opt-" + _sel);
-  } else {
-    _input.removeAttribute("aria-activedescendant");
-  }
-  const sel = _list.querySelector(".cmdk-item-sel");
-  if (sel) sel.scrollIntoView({ block: "nearest" });
+  updateSelection();
 }
 
 function runSel() {

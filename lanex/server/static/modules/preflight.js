@@ -33,10 +33,10 @@ function row(state, label, detail, actionHtml) {
 export async function renderPreflight() {
   const root = document.getElementById("preflight");
   if (!root) return null;
-  root.innerHTML = "<div class='muted'>checking…</div>";
+  root.innerHTML = "<div class='muted'>checking this setup…</div>";
   let pf;
   try {
-    pf = await api.preflight(state.selectedPdk, state.selectedScl, state.runMode);
+    pf = await api.preflight(state.selectedPdk, state.selectedScl, state.runMode, state.selectedFiles);
   } catch (ex) {
     root.innerHTML = "<div class='pf-row pf-row-bad'><span class='pf-bad'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></span><span class='pf-label'>Check failed</span><span class='pf-detail'>" + fmt.escape(ex.message) + "</span></div>";
     return null;
@@ -54,28 +54,33 @@ export async function renderPreflight() {
   const cfgNote = d.config_note
     ? " · <span class='pf-note-warn'>" + fmt.escape(d.config_note) + "</span>"
     : "";
+  const synthCount = d.synthesis_source_count != null ? d.synthesis_source_count : (d.source_count || 0);
+  const srcCountText = synthCount + " synthesis source file(s)";
   html += row(
     d.ok ? "ok" : "bad",
     "Design + config",
     d.ok
-      ? (d.config_file || "config") + " · " + (d.source_count || 0) + " source file(s)" + cfgNote
-      : (d.dir ? "config / sources missing" : "no folder loaded"),
+      ? (d.config_file || "config") + " · " + srcCountText + cfgNote
+      : (d.dir ? (synthCount === 0 ? "0 synthesis sources selected" : "config / sources missing") : "no folder loaded"),
     d.ok ? "" : "<button class='btn btn-ghost pf-act' data-act='design'>Pick folder</button>",
   );
   // A PDK that LibreLane can fetch on its own (online, just not local yet) is a
   // warning, not a blocker — so don't show a hard ✗ while the banner says "All set".
-  const pdkWillDownload = !p.ready && p.note;
+  const isUnsupported = p.supported === false;
+  const pdkWillDownload = !p.ready && !isUnsupported && p.note;
   const pdkState = p.ready ? "ok" : pdkWillDownload ? "warn" : "bad";
   const pdkDetail = p.ready
     ? p.pdk + (p.scl ? " / " + p.scl : "")
-    : pdkWillDownload
-      ? fmt.escape(p.note)
-      : p.pdk ? "not installed" : "none selected";
+    : isUnsupported
+      ? (p.pdk ? p.pdk + " (unsupported by LibreLane flow)" : "unsupported PDK")
+      : pdkWillDownload
+        ? fmt.escape(p.note)
+        : p.pdk ? "not installed" : "none selected";
   html += row(
     pdkState,
     "PDK + standard cells",
     pdkDetail,
-    p.ready || pdkWillDownload ? "" : "<button class='btn btn-ghost pf-act' data-act='tools'>Install PDK</button>",
+    p.ready || pdkWillDownload ? "" : "<button class='btn btn-ghost pf-act' data-act='tools'>" + (isUnsupported ? "View in Tools" : "Install PDK") + "</button>",
   );
   // Engine row — container mode needs only Docker/Podman; local mode needs the
   // six native EDA tools.
@@ -125,5 +130,6 @@ export async function renderPreflight() {
       }
     });
   });
+  document.dispatchEvent(new CustomEvent("lanex:preflight-done", { detail: pf }));
   return pf;
 }

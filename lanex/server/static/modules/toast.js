@@ -57,6 +57,8 @@ export const toast = {
     close.addEventListener("click", dismiss);
     el.addEventListener("mouseenter", () => { if (timer) clearTimeout(timer); });
     el.addEventListener("mouseleave", arm);
+    el.addEventListener("focusin", () => { if (timer) clearTimeout(timer); });
+    el.addEventListener("focusout", arm);
     arm();
     return dismiss;
   },

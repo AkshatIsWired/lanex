@@ -4,7 +4,7 @@
 
 /* ---- Toasts (bottom-right; class-styled, dismissable) --------------------- */
 .toast-host {
-  position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: var(--z-toast);
+  position: fixed; right: var(--s-4); bottom: calc(36px + var(--s-3)); z-index: var(--z-toast);
   display: flex; flex-direction: column; gap: var(--s-2);
   max-width: min(380px, calc(92vw / var(--ll-zoom, 1)));
 }
@@ -30,9 +30,14 @@
 .toast-error .toast-ico   { color: var(--fail); }
 .toast-info .toast-ico    { color: var(--accent); }
 .toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.toast-close { flex: none; background: none; border: 0; cursor: pointer;
-  color: var(--text-muted); padding: 0; display: inline-flex; line-height: 1; }
-.toast-close:hover { color: var(--text-strong); }
+.toast-close {
+  flex: none; background: none; border: 0; cursor: pointer;
+  color: var(--text-muted); padding: 4px; margin: -4px -4px -4px var(--s-1);
+  min-width: 28px; min-height: 28px; display: inline-flex;
+  align-items: center; justify-content: center;
+  border-radius: var(--r-sm); line-height: 1;
+}
+.toast-close:hover { color: var(--text-strong); background: var(--surface-3); }
 
 /* ---- E4.3 timing compare Δ ------------------------------------------------ */
 .tp-pos { color: var(--pass); }

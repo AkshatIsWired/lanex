@@ -93,7 +93,11 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except Exception as ex:
+            if not self._is_conn_error(ex):
+                raise
 
     def _send_text(self, text: str, status: int = 200, content_type: str = "text/plain; charset=utf-8") -> None:
         body = text.encode("utf-8")
@@ -103,8 +107,13 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except Exception as ex:
+            if not self._is_conn_error(ex):
+                raise
 
     def _send_bytes(self, blob: bytes, status: int = 200, content_type: str = "application/octet-stream") -> None:
         self.send_response(status)
@@ -112,7 +121,11 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(blob)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(blob)
+        try:
+            self.wfile.write(blob)
+        except Exception as ex:
+            if not self._is_conn_error(ex):
+                raise
 
     def _send_404(self) -> None:
         self._send_text("Not found", 404)
@@ -445,6 +458,7 @@ def find_free_port(preferred: int = 8765, *, host: str = "127.0.0.1", retries: i
         port = preferred + delta
         with socket.socket(_addr_family(host), socket.SOCK_STREAM) as s:
             try:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind((host, port))
             except OSError as ex:
                 last_exc = ex

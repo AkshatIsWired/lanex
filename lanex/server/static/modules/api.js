@@ -64,12 +64,17 @@ export const api = {
       "&scl=" + encodeURIComponent(scl) +
       "&run_mode=" + encodeURIComponent(runMode || "container"),
     ),
-  preflight: (pdk, scl, runMode) =>
-    _fetch(
+  preflight: (pdk, scl, runMode, sources) => {
+    let url =
       "/api/preflight?pdk=" + encodeURIComponent(pdk || "") +
       "&scl=" + encodeURIComponent(scl || "") +
-      "&run_mode=" + encodeURIComponent(runMode || "container"),
-    ),
+      "&run_mode=" + encodeURIComponent(runMode || "container");
+    if (sources !== undefined && sources !== null) {
+      const s = Array.isArray(sources) ? (sources.length ? sources.join(",") : "__NONE__") : String(sources);
+      url += "&sources=" + encodeURIComponent(s);
+    }
+    return _fetch(url);
+  },
   metricsCatalog: () => _fetch("/api/metrics-catalog"),
   containerPull: () => _fetch("/api/container/pull", { method: "POST", body: "{}" }),
   enableDockerGroup: () => _fetch("/api/container/enable-docker-group", { method: "POST", body: "{}" }),

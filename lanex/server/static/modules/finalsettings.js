@@ -101,14 +101,14 @@ export function buildCumulativeModel(payloadOverrides, map, variables) {
 // differently.
 export function sourceLabel(row, configRel) {
   switch (row.source) {
-    case "override": return "Setup parameter (runtime override; supersedes configuration file)";
+    case "override": return "your Setup change (sent as an override — beats the file)";
     case "picker": return "your Setup picker (flow option)";
     case "config": {
       const rel = configRel || "your config";
       return rel + " line " + (row.config_line || row.line) +
-        (row.scoped ? " (" + (row.scope || "scoped") + ": applied only if the run PDK/SCL matches)" : "");
+        (row.scoped ? " (" + (row.scope || "scoped") + " — applied only if the run's PDK/SCL matches)" : "");
     }
-    case "pdk": return "PDK-provided: set by PDK definition files; verified in resolved.json after run";
+    case "pdk": return "PDK-provided — set by PDK definition files; verified in resolved.json after run";
     case "default": return "LibreLane default";
     case "unset": return "Not explicitly set pre-run; resolved by the flow engine or left unset";
     default: return row.source || "";

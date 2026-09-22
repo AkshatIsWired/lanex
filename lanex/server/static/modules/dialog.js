@@ -18,17 +18,21 @@ function _host() {
   return h;
 }
 
+let _dlgSeq = 0;
+
 function _open({ title, bodyHtml, buttons, onMount }) {
   return new Promise((resolve) => {
     const host = _host();
     const prevFocus = document.activeElement;
+    const titleId = "dlg-title-" + (++_dlgSeq);
     const back = document.createElement("div");
     back.className = "dlg-backdrop";
     back.setAttribute("role", "dialog");
     back.setAttribute("aria-modal", "true");
+    back.setAttribute("aria-labelledby", titleId);
     back.innerHTML =
       "<div class='dlg' role='document'>" +
-      "<div class='dlg-head'>" + (title || "") + "</div>" +
+      "<h2 class='dlg-head' id='" + titleId + "'>" + (title || "") + "</h2>" +
       "<div class='dlg-body'>" + (bodyHtml || "") + "</div>" +
       "<div class='dlg-actions'></div>" +
       "</div>";
@@ -156,10 +160,11 @@ export async function checklistDialog({ title = "", body = "", items = [], confi
 
 export async function promptDialog({ title = "", label = "", defaultValue = "" } = {}) {
   let inputEl = null;
+  const inputId = "dlg-prompt-input-" + (++_dlgSeq);
   const v = await _open({
     title: _esc(title),
-    bodyHtml: (label ? "<label class='dlg-label'>" + _esc(label) + "</label>" : "") +
-      "<input class='dlg-input' type='text' value='" + _esc(defaultValue) + "'/>",
+    bodyHtml: (label ? "<label class='dlg-label' for='" + inputId + "'>" + _esc(label) + "</label>" : "") +
+      "<input id='" + inputId + "' class='dlg-input' type='text' value='" + _esc(defaultValue) + "'/>",
     buttons: [
       { label: "Cancel", value: null, cls: "btn-ghost" },
       { label: "OK", value: "__OK__", cls: "btn-primary" },
@@ -179,11 +184,12 @@ export async function promptDialog({ title = "", label = "", defaultValue = "" }
 // Destructive confirm that requires typing an exact phrase (e.g. the run tag).
 export async function confirmTyped({ title = "Confirm", body = "", phrase = "", confirmText = "Delete" } = {}) {
   let inputEl = null, confirmBtn = null;
+  const inputId = "dlg-confirm-input-" + (++_dlgSeq);
   const v = await _open({
     title: _esc(title),
     bodyHtml: (body ? "<p>" + _esc(body) + "</p>" : "") +
-      "<label class='dlg-label'>Type <code>" + _esc(phrase) + "</code> to confirm:</label>" +
-      "<input class='dlg-input' type='text' autocomplete='off'/>",
+      "<label class='dlg-label' for='" + inputId + "'>Type <code>" + _esc(phrase) + "</code> to confirm:</label>" +
+      "<input id='" + inputId + "' class='dlg-input' type='text' autocomplete='off'/>",
     buttons: [
       { label: "Cancel", value: false, cls: "btn-ghost" },
       { label: confirmText, value: "__GO__", cls: "btn-warn" },

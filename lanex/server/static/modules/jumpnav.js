@@ -28,6 +28,8 @@ export function wireJump(container) {
       // <details> targets won't scroll their content into view unless open.
       if (t.tagName === "DETAILS") t.open = true;
       t.scrollIntoView({ behavior: "smooth", block: "start" });
+      nav.querySelectorAll("[data-jump]").forEach((c) =>
+        c.classList.toggle("is-current", c.dataset.jump === b.dataset.jump));
     }
   });
   wireScrollSpy(nav);
@@ -50,6 +52,18 @@ export function wireScrollSpy(nav, scrollRoot) {
   const compute = () => {
     raf = 0;
     if (nav.offsetParent === null) return;     // nav's tab isn't visible — skip
+
+    // If we have scrolled to the bottom of the container, highlight the last visible target section
+    if (root && root.scrollHeight - root.scrollTop <= root.clientHeight + 20) {
+      for (let i = chips.length - 1; i >= 0; i--) {
+        const t = document.getElementById(chips[i].dataset.jump);
+        if (t && t.offsetParent !== null) {
+          setCurrent(chips[i].dataset.jump);
+          return;
+        }
+      }
+    }
+
     // The line just below the sticky nav; the section crossing it is "current".
     const base = (root ? root.getBoundingClientRect().top : 0) +
       (nav.getBoundingClientRect().height || 0) + 8;

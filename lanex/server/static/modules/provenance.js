@@ -34,9 +34,9 @@ export function configChipSpec(entry, rel) {
   const title =
     (scoped
       ? "Set in " + rel + " line " + entry.line + " inside a " + (entry.scope || "scoped") +
-        " section. Applies only when the run's PDK/SCL matches that section."
+        " section — it applies only when the run's PDK/SCL matches that section."
       : "Set in " + rel + " line " + entry.line +
-        "; used when no override is present (an override supersedes it).") +
+        " — this is what an untouched field uses (an override supersedes it).") +
     (entry.others ? " The file has " + entry.others + " more entr" +
       (entry.others === 1 ? "y" : "ies") + " for this variable." : "") +
     " Click to open the file at that line.";

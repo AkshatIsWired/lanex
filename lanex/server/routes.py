@@ -801,6 +801,14 @@ def h_preflight(handler: Any) -> None:
     scl = _query_param(handler.path, "scl")
     run_mode = "container" if _query_param(handler.path, "run_mode") == "container" else "local"
     design_dir = _get_active_design_dir()
+    sources_param = _query_param(handler.path, "sources")
+
+    custom_sources: Optional[List[str]] = None
+    if sources_param is not None:
+        if sources_param == "__NONE__":
+            custom_sources = []
+        else:
+            custom_sources = [s.strip() for s in sources_param.split(",") if s.strip()]
 
     blockers: List[str] = []
 
@@ -822,6 +830,7 @@ def h_preflight(handler: Any) -> None:
     config_file = None
     config_note = None
     source_count = 0
+    synth_count = 0
     if design_ok:
         # Same resolver run-start uses, so the preflight names the config that
         # will ACTUALLY run (these once disagreed — N6).
@@ -830,22 +839,35 @@ def h_preflight(handler: Any) -> None:
         config_note = _multi_config_warning(design_dir)
         try:
             srcs = fsbrowser.walk_sources(design_dir)
-            source_count = len(srcs.get("sources", [])) if srcs.get("ok") else 0
+            synth_srcs = srcs.get("synthesis_sources", srcs.get("sources", [])) if srcs.get("ok") else []
+            if custom_sources is not None:
+                selected_synth = [s for s in custom_sources if not fsbrowser.is_testbench_path(s)]
+                source_count = len(custom_sources)
+                synth_count = len(selected_synth)
+            else:
+                source_count = len(synth_srcs)
+                synth_count = len(synth_srcs)
         except Exception:
             source_count = 0
+            synth_count = 0
     if not design_ok:
         blockers.append("Pick a design folder (or click ‘Use the SPM example’).")
     elif not config_file:
         blockers.append("No config.yaml/json found in the design folder.")
+    elif custom_sources is not None and len(custom_sources) == 0:
+        blockers.append("No synthesis source files selected. Select at least one HDL source file.")
+    elif synth_count == 0:
+        blockers.append("No synthesis source files found (testbenches are excluded from synthesis).")
     elif source_count == 0:
         blockers.append("No Verilog (.v/.sv) sources found in the design folder.")
 
     design_block = {
-        "ok": bool(design_ok and config_file and source_count),
+        "ok": bool(design_ok and config_file and synth_count > 0),
         "dir": design_dir,
         "config_file": config_file,
         "config_note": config_note,
         "source_count": source_count,
+        "synthesis_source_count": synth_count,
     }
 
     # 2) PDK readiness (mode-aware: container needs the exact pinned version in
@@ -858,11 +880,9 @@ def h_preflight(handler: Any) -> None:
     pdk_block["scl"] = scl
     if not pdk_block.get("ready"):
         miss = ", ".join(pdk_block.get("missing") or ["select a PDK + standard-cell library"])
-        # If the only thing missing is a download the engine can do on its own
-        # AND the release host is reachable, don't hard-block — it'll fetch on
-        # the run. Offline + missing stays a real blocker (the run would die
-        # mid-flight with a network traceback otherwise).
-        if pdk_block.get("needs_download") and pdk_block.get("network_available"):
+        if pdk_block.get("supported") is False:
+            blockers.append(f"PDK {pdk} is not supported by LibreLane: {miss}.")
+        elif pdk_block.get("needs_download") and pdk_block.get("network_available"):
             pdk_block["note"] = (
                 "Required PDK isn't local yet; LibreLane will download it on the first run "
                 "(needs network, one-time)."

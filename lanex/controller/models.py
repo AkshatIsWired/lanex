@@ -164,6 +164,7 @@ class PDK:
     variants: List[Tuple[str, str]]  # [(variant_label, scl_id), ...]
     ready: bool
     missing: List[str] = field(default_factory=list)
+    supported: bool = True
 
 
 @dataclass(frozen=True)

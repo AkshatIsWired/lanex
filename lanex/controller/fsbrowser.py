@@ -93,6 +93,25 @@ def list_dir(path: str) -> Dict[str, Any]:
     }
 
 
+import fnmatch
+import re
+
+_TB_RX = re.compile(r"(^|[_\W])(tb|testbench|test|sim|stim|tester)([_\W]|$)", re.I)
+
+
+def is_testbench_path(relpath: str) -> bool:
+    """Check if a relative path looks like a simulation testbench."""
+    norm = relpath.replace("\\", "/").lower()
+    name = Path(norm).name
+    parts = norm.split("/")
+    if any(p in {"verify", "test", "tests", "tb", "sim", "simulation"} for p in parts[:-1]):
+        return True
+    if any(fnmatch.fnmatch(name, pat) for pat in ("*_tb.*", "tb_*.*", "*_test.*", "*testbench*.*")):
+        return True
+    stem = Path(name).stem
+    return bool(_TB_RX.search(stem))
+
+
 def walk_sources(
     design_dir: str,
     *,
@@ -123,13 +142,16 @@ def walk_sources(
                     size = fp.stat().st_size
                 except OSError:
                     size = 0
+                rel = fp.relative_to(p).as_posix()
+                is_tb = is_testbench_path(rel)
                 hits.append(
                     {
                         "name": f,
-                        "relpath": str(fp.relative_to(p)),
+                        "relpath": rel,
                         "abspath": str(fp),
                         "ext": ext,
                         "size": size,
+                        "is_testbench": is_tb,
                     }
                 )
     # Also include any *.mem/hex files separately so users can map them
@@ -137,10 +159,14 @@ def walk_sources(
     memory_exts = {".mem", ".hex", ".bin"}
     memories = [h for h in hits if h["ext"] in memory_exts]
     sources = [h for h in hits if h["ext"] not in memory_exts]
+    synthesis_sources = [s for s in sources if not s.get("is_testbench")]
+    testbenches = [s for s in sources if s.get("is_testbench")]
     return {
         "ok": True,
         "design_dir": str(p),
         "sources": sources,
+        "synthesis_sources": synthesis_sources,
+        "testbenches": testbenches,
         "memories": memories,
         "total": len(sources) + len(memories),
     }

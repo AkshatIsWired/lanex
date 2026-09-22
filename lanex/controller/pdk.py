@@ -114,6 +114,8 @@ def list_pdks() -> List[Dict[str, Any]]:
     SCLs are discovered by inspecting each pdk/<pdk>/libs.ref/ subdir.
     """
     out: List[Dict[str, Any]] = []
+    from .pdk_catalog import build_canonical_pdk_catalog
+    canonical = build_canonical_pdk_catalog()
     for root in _candidate_pdk_roots():
         try:
             for child in sorted(root.iterdir()):
@@ -127,6 +129,8 @@ def list_pdks() -> List[Dict[str, Any]]:
                 # is almost certainly noise, so don't surface it as a PDK.
                 if not (child / "libs.ref").is_dir():
                     continue
+                cat_entry = canonical.get(child.name, {})
+                is_supported = cat_entry.get("supported", True)
                 out.append(
                     to_json(
                         PDK(
@@ -135,6 +139,7 @@ def list_pdks() -> List[Dict[str, Any]]:
                             variants=scl_tuples,
                             ready=bool(scl_tuples),
                             missing=[] if scl_tuples else ["libs.ref/<scl>"],
+                            supported=is_supported,
                         )
                     )
                 )
@@ -483,10 +488,29 @@ def check_pdk_ready(
     The returned ``pdk_root`` is the value to hand LibreLane so it mounts/uses
     the store that genuinely holds the required files.
     """
+    family, variant = _resolve_family(pdk)
+    variant = variant or pdk
+
+    from .pdk_catalog import build_canonical_pdk_catalog
+    canonical = build_canonical_pdk_catalog()
+    cat_entry = canonical.get(variant) or canonical.get(pdk) or {}
     roots = _candidate_pdk_roots()
+
+    if cat_entry and cat_entry.get("supported") is False:
+        return {
+            "ready": False,
+            "supported": False,
+            "where": [str(r) for r in roots] if roots else [],
+            "pdk_root": str(roots[0]) if roots else None,
+            "needs_download": False,
+            "missing": [f"{variant} is not supported by the LibreLane flow"],
+            "remediation": f"{variant} is installed but unsupported by LibreLane. Select a supported PDK (like gf180mcuD or sky130A) or inspect it in Tools.",
+        }
+
     if not roots:
         return {
             "ready": False,
+            "supported": cat_entry.get("supported", True),
             "where": [],
             "pdk_root": None,
             "needs_download": True,
@@ -496,6 +520,7 @@ def check_pdk_ready(
     if not scl:
         return {
             "ready": False,
+            "supported": cat_entry.get("supported", True),
             "where": [str(r) for r in roots],
             "pdk_root": str(roots[0]),
             "needs_download": False,
@@ -503,12 +528,12 @@ def check_pdk_ready(
             "remediation": "Choose a standard cell library (e.g. sky130_fd_sc_hd).",
         }
 
-    family, variant = _resolve_family(pdk)
-    variant = variant or pdk
-
     if run_mode == "container":
-        return _check_container_ready(variant, scl, family, roots)
-    return _check_local_ready(variant, scl, roots)
+        res = _check_container_ready(variant, scl, family, roots)
+    else:
+        res = _check_local_ready(variant, scl, roots)
+    res["supported"] = cat_entry.get("supported", True)
+    return res
 
 
 def check_pdk_library_ready(pdk: str, library: str, *,

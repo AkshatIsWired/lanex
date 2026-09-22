@@ -46,11 +46,11 @@
       <!-- Mode switch -->
       <span class="inst-label switch-label">Mode</span>
       <div class="seg mode-seg" role="group" aria-label="Run mode">
-        <button class="seg-btn mode-btn mode-btn-active" data-mode="auto" aria-label="Full Auto" data-tip="Run every step end-to-end and produce a GDS.">
+        <button class="seg-btn mode-btn mode-btn-active" data-mode="auto" aria-pressed="true" aria-label="Full Auto" data-tip="Run every step end-to-end and produce a GDS.">
           <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg></span>
           <span>Full Auto</span>
         </button>
-        <button class="seg-btn mode-btn" data-mode="semi" aria-label="Step-by-step" data-tip="Pick the next step yourself; inspect each result before continuing.">
+        <button class="seg-btn mode-btn" data-mode="semi" aria-pressed="false" aria-label="Step-by-step" data-tip="Pick the next step yourself; inspect each result before continuing.">
           <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5v14M16 5l-6 7 6 7"/></svg></span>
           <span>Step-by-step</span>
         </button>
@@ -58,11 +58,11 @@
       <!-- Run engine switch -->
       <span class="inst-label switch-label">Engine</span>
       <div class="seg engine-seg" role="group" aria-label="Run engine">
-        <button class="seg-btn engine-btn engine-btn-active" data-runmode="container" aria-label="Container engine" data-tip="Recommended: run inside LibreLane's container image. Every EDA tool included — host only needs Docker or Podman.">
+        <button class="seg-btn engine-btn engine-btn-active" data-runmode="container" aria-pressed="true" aria-label="Container engine" data-tip="Recommended: run inside LibreLane's container image. Every EDA tool included — host only needs Docker or Podman.">
           <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2l9 5v10l-9 5-9-5V7zM3 7l9 5 9-5M12 12v10"/></svg></span>
           <span>Container</span>
         </button>
-        <button class="seg-btn engine-btn" data-runmode="local" aria-label="Local tools engine" data-tip="Run against native EDA tools already installed on this machine.">
+        <button class="seg-btn engine-btn" data-runmode="local" aria-pressed="false" aria-label="Local tools engine" data-tip="Run against native EDA tools already installed on this machine.">
           <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3M5 5h14v14H5zM9 9h6v6H9z"/></svg></span>
           <span>Local tools</span>
         </button>
@@ -231,9 +231,9 @@
             </aside>
           </div>
           <ol class="steps-3" id="onboard-checklist">
-            <li data-ck="design"><span class="ck-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0"/></svg></span><strong>1. Pick your HDL folder.</strong> A folder with your <code>.v</code> (and ideally <code>.sdc</code>) files.</li>
-            <li data-ck="pdk"><span class="ck-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0"/></svg></span><strong>2. Confirm the PDK is installed.</strong> If not, the Tools tab installs it for you.</li>
-            <li data-ck="run"><span class="ck-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0"/></svg></span><strong>3. Press Run.</strong> Watch each stage light up green. The GDS lands in <code>runs/<tag>/final/gds</code>.</li>
+            <li data-ck="design"><span class="ck-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0"/></svg></span><strong>Pick your HDL folder.</strong> A folder with your <code>.v</code> (and ideally <code>.sdc</code>) files.</li>
+            <li data-ck="pdk"><span class="ck-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0"/></svg></span><strong>Confirm the PDK is installed.</strong> If not, the Tools tab installs it for you.</li>
+            <li data-ck="run"><span class="ck-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0"/></svg></span><strong>Press Run.</strong> Watch each stage light up green. The GDS lands in <code>runs/<tag>/final/gds</code>.</li>
           </ol>
         </div>
       </div>
@@ -279,10 +279,16 @@
         <h2><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3M5 5h14v14H5zM9 9h6v6H9z"/></svg>Process + standard-cell library</h2>
         <p class="hint">Pick the silicon recipe your design will be hardened against. Most beginners use <strong>sky130A</strong> with <code>sky130_fd_sc_hd</code>.</p>
         <div class="picker-row">
-          <label for="pdk-select" class="sr-only">Process Design Kit (PDK)</label>
-          <select id="pdk-select"></select>
-          <label for="scl-select" class="sr-only">Standard Cell Library (SCL)</label>
-          <select id="scl-select"></select>
+          <div class="picker-field-group">
+            <label for="pdk-select" class="sr-only">Process Design Kit (PDK)</label>
+            <label for="pdk-select" class="picker-field-label">Process (PDK)</label>
+            <select id="pdk-select"></select>
+          </div>
+          <div class="picker-field-group">
+            <label for="scl-select" class="sr-only">Standard Cell Library (SCL)</label>
+            <label for="scl-select" class="picker-field-label">Cell library (SCL)</label>
+            <select id="scl-select"></select>
+          </div>
           <span id="pdk-readiness" class="pill pill-pending">checking…</span>
         </div>
       </div>
@@ -298,6 +304,34 @@
       <div class="run-name-row">
         <label for="run-name-input">Run name <span class="hint">(optional; names this run directory under <code>runs/</code>)</span></label>
         <input type="text" id="run-name-input" placeholder="e.g. spm-area-sweep-1" autocomplete="off"/>
+      </div>
+      <div class="setup-run-settings" id="setup-run-settings">
+        <div class="setting-group">
+          <span class="setting-label">Flow Mode</span>
+          <div class="seg mode-seg" role="group" aria-label="Run mode">
+            <button class="seg-btn mode-btn mode-btn-active" data-mode="auto" aria-pressed="true" aria-label="Full Auto" data-tip="Run every step end-to-end and produce a GDS.">
+              <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg></span>
+              <span>Full Auto</span>
+            </button>
+            <button class="seg-btn mode-btn" data-mode="semi" aria-pressed="false" aria-label="Step-by-step" data-tip="Pick the next step yourself; inspect each result before continuing.">
+              <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5v14M16 5l-6 7 6 7"/></svg></span>
+              <span>Step-by-step</span>
+            </button>
+          </div>
+        </div>
+        <div class="setting-group">
+          <span class="setting-label">Run Engine</span>
+          <div class="seg engine-seg" role="group" aria-label="Run engine">
+            <button class="seg-btn engine-btn engine-btn-active" data-runmode="container" aria-pressed="true" aria-label="Container engine" data-tip="Recommended: run inside LibreLane's container image. Every EDA tool included — host only needs Docker or Podman.">
+              <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2l9 5v10l-9 5-9-5V7zM3 7l9 5 9-5M12 12v10"/></svg></span>
+              <span>Container</span>
+            </button>
+            <button class="seg-btn engine-btn" data-runmode="local" aria-pressed="false" aria-label="Local tools engine" data-tip="Run against native EDA tools already installed on this machine.">
+              <span class="mode-ico"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3M5 5h14v14H5zM9 9h6v6H9z"/></svg></span>
+              <span>Local tools</span>
+            </button>
+          </div>
+        </div>
       </div>
       <div class="cta" id="setup-run">
         <button class="btn btn-cta" id="btn-run">

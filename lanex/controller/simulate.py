@@ -172,7 +172,7 @@ def find_testbenches(design_dir: str | Path) -> List[str]:
 
     def add(p: Path) -> None:
         try:
-            rel = str(p.relative_to(base))
+            rel = p.relative_to(base).as_posix()
         except ValueError:
             return
         if "runs/" in rel or rel.startswith("runs"):

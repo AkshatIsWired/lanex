@@ -175,6 +175,22 @@ function groupFor(name, v) {
 
 let _searchTerm = "";
 let _constraintsDirty = true;
+let _selectedCategory = "common";
+
+const COMMON_KEYS = new Set([
+  "FP_CORE_UTIL",
+  "PL_TARGET_DENSITY_PCT",
+  "SYNTH_STRATEGY",
+  "CLOCK_PERIOD",
+  "DIODE_ON_PORTS",
+  "SYNTH_MAX_FANOUT",
+  "FP_ASPECT_RATIO",
+  "RUN_KLAYOUT",
+  "RUN_MAGIC",
+  "RUN_DRC",
+  "RUN_LVS",
+  "SYNTH_SHOW",
+]);
 
 function isConstraintsOpen() {
   const card = document.getElementById("cfg-card");
@@ -184,6 +200,7 @@ function isConstraintsOpen() {
 function ensurePainted() {
   if (_constraintsDirty || !document.getElementById("vars-form")?.hasChildNodes()) {
     paint();
+    _constraintsDirty = false;
   }
 }
 
@@ -488,57 +505,139 @@ function paint() {
   if (!nav) return;
   nav.innerHTML = "";
   root.innerHTML = "";
-  // Mirror the same category milestones into the Setup jump bar's second tier
-  // (revealed when the Constraints card is open — see setup.js).
+  // Mirror category milestones into the Setup jump bar's second tier
   const subnav = document.getElementById("setup-jump-config");
   if (subnav) subnav.innerHTML = "";
 
   const buckets = new Map(STAGE_GROUPS.map((g) => [g.id, []]));
   const sorted = [...state.variables].sort((a, b) => a.name.localeCompare(b.name));
   for (const v of sorted) {
-    if (_searchTerm && !v.name.toUpperCase().includes(_searchTerm) && !(v.description || "").toUpperCase().includes(_searchTerm))
-      continue;
     buckets.get(groupFor(v.name, v)).push(v);
   }
-  for (const [stageId, vs] of buckets) {
-    if (!vs.length) continue;
-    const def = STAGE_GROUPS.find((g) => g.id === stageId);
-    const heading = document.createElement("h3");
-    heading.id = "cfg-section-" + stageId;
-    heading.className = "config-anchor";
-    heading.textContent = def.name + " · " + vs.length;
-    if (def.description) {
-      const sub = document.createElement("div");
-      sub.className = "hint";
-      sub.style.marginBottom = "var(--s-3)";
-      sub.textContent = def.description;
-      root.appendChild(heading);
-      root.appendChild(sub);
-    } else {
-      root.appendChild(heading);
-    }
+
+  // Common overrides: key design knobs plus any currently overridden variables
+  const commonVars = sorted.filter((v) =>
+    COMMON_KEYS.has(v.name) || (state.varsValues && state.varsValues[v.name] !== undefined && state.varsValues[v.name] !== "")
+  );
+
+  // 1. Common overrides category chip
+  const commonChip = document.createElement("button");
+  commonChip.className = "nav-chip" + (_selectedCategory === "common" && !_searchTerm ? " nav-active" : "");
+  commonChip.type = "button";
+  commonChip.textContent = "Common (" + commonVars.length + ")";
+  commonChip.addEventListener("click", () => {
+    _selectedCategory = "common";
+    _searchTerm = "";
+    const search = document.getElementById("var-search");
+    if (search) search.value = "";
+    paint();
+  });
+  nav.appendChild(commonChip);
+
+  // 2. STAGE_GROUPS category chips
+  for (const group of STAGE_GROUPS) {
+    const count = buckets.get(group.id)?.length || 0;
+    if (!count) continue;
     const navChip = document.createElement("button");
-    navChip.className = "nav-chip";
+    navChip.className = "nav-chip" + (_selectedCategory === group.id && !_searchTerm ? " nav-active" : "");
     navChip.type = "button";
-    navChip.textContent = def.name + " (" + vs.length + ")";
-    navChip.addEventListener("click", () => jumpToSection(stageId, navChip));
+    navChip.textContent = group.name + " (" + count + ")";
+    navChip.addEventListener("click", () => {
+      _selectedCategory = group.id;
+      _searchTerm = "";
+      const search = document.getElementById("var-search");
+      if (search) search.value = "";
+      paint();
+    });
     nav.appendChild(navChip);
+
     if (subnav) {
       const c2 = document.createElement("button");
       c2.className = "chip chip-clickable";
       c2.type = "button";
-      c2.textContent = def.name + " (" + vs.length + ")";
-      // From the top-of-page milestone rail: make sure the Constraints card is
-      // open, then scroll to that category.
-      c2.addEventListener("click", () => openConstraintsAndJump(stageId));
+      c2.textContent = group.name + " (" + count + ")";
+      c2.addEventListener("click", () => openConstraintsAndJump(group.id));
       subnav.appendChild(c2);
     }
-    const grid = document.createElement("div");
-    grid.className = "vars-form";
-    for (const v of vs) grid.appendChild(buildRow(v));
-    root.appendChild(grid);
   }
+
+  // 3. "All" category chip
+  const allChip = document.createElement("button");
+  allChip.className = "nav-chip" + (_selectedCategory === "all" && !_searchTerm ? " nav-active" : "");
+  allChip.type = "button";
+  allChip.textContent = "All (" + sorted.length + ")";
+  allChip.addEventListener("click", () => {
+    _selectedCategory = "all";
+    _searchTerm = "";
+    const search = document.getElementById("var-search");
+    if (search) search.value = "";
+    paint();
+  });
+  nav.appendChild(allChip);
+
+  // Render form rows
+  if (_searchTerm) {
+    let totalMatches = 0;
+    for (const [stageId, vs] of buckets) {
+      const matched = vs.filter((v) =>
+        v.name.toUpperCase().includes(_searchTerm) || (v.description || "").toUpperCase().includes(_searchTerm)
+      );
+      if (!matched.length) continue;
+      totalMatches += matched.length;
+      const def = STAGE_GROUPS.find((g) => g.id === stageId);
+      renderGroupSection(root, stageId, def.name, def.description, matched);
+    }
+    if (totalMatches === 0) {
+      const empty = document.createElement("div");
+      empty.className = "hint";
+      empty.style.padding = "var(--s-4) 0";
+      empty.textContent = "No constraint variables match '" + _searchTerm + "'. Try a different search term or pick a category above.";
+      root.appendChild(empty);
+    }
+  } else if (_selectedCategory === "common") {
+    renderGroupSection(
+      root,
+      "common",
+      "Common Overrides",
+      "The most frequently tuned flow controls (utilization, density, clock, strategy), plus any active overrides.",
+      commonVars
+    );
+  } else if (_selectedCategory === "all") {
+    for (const [stageId, vs] of buckets) {
+      if (!vs.length) continue;
+      const def = STAGE_GROUPS.find((g) => g.id === stageId);
+      renderGroupSection(root, stageId, def.name, def.description, vs);
+    }
+  } else {
+    const def = STAGE_GROUPS.find((g) => g.id === _selectedCategory);
+    const vs = buckets.get(_selectedCategory) || [];
+    if (def && vs.length) {
+      renderGroupSection(root, def.id, def.name, def.description, vs);
+    }
+  }
+
   annotateConfigLines(root);
+}
+
+function renderGroupSection(root, stageId, name, description, vs) {
+  const heading = document.createElement("h3");
+  heading.id = "cfg-section-" + stageId;
+  heading.className = "config-anchor";
+  heading.textContent = name + " · " + vs.length;
+  root.appendChild(heading);
+
+  if (description) {
+    const sub = document.createElement("div");
+    sub.className = "hint";
+    sub.style.marginBottom = "var(--s-3)";
+    sub.textContent = description;
+    root.appendChild(sub);
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "vars-form";
+  for (const v of vs) grid.appendChild(buildRow(v));
+  root.appendChild(grid);
 }
 
 // ---- the "your config" tier -------------------------------------------
@@ -575,26 +674,23 @@ async function annotateConfigLines(root) {
   });
 }
 
-function jumpToSection(id, navChip) {
+function jumpToSection(id) {
+  _selectedCategory = id;
+  _searchTerm = "";
+  const search = document.getElementById("var-search");
+  if (search) search.value = "";
+  paint();
   const target = document.getElementById("cfg-section-" + id);
-  if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "start" });
-  document.querySelectorAll(".config-nav .nav-chip").forEach((c) => c.classList.remove("nav-active"));
-  if (navChip) navChip.classList.add("nav-active");
+  if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // Open the (collapsed-by-default) Constraints card, then jump to a category.
 // Used by the Setup jump bar's milestone rail, which lives above the card.
 function openConstraintsAndJump(id) {
   const card = document.getElementById("cfg-card");
-  if (card) {
-    if (!card.open) card.open = true;
-    ensurePainted();
-    // Let the <details> lay out before scrolling to the now-visible section.
-    requestAnimationFrame(() => jumpToSection(id, null));
-  } else {
-    jumpToSection(id, null);
-  }
+  if (card && !card.open) card.open = true;
+  ensurePainted();
+  requestAnimationFrame(() => jumpToSection(id));
 }
 
 function buildRow(v) {

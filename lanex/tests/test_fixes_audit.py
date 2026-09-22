@@ -316,3 +316,38 @@ def test_runtimings_record_and_estimate(tmp_path, monkeypatch):
     assert runtimings.estimate_remaining(["Totally.Unknown.Step"]) is None
     # Unknown step but with an observed average → uses the average.
     assert runtimings.estimate_remaining(["Totally.Unknown.Step"], observed=[10.0]) == pytest.approx(10.0)
+
+
+# --------------------------------------------------------------------------
+# Audit P1-01: Testbench separation from synthesis sources
+# --------------------------------------------------------------------------
+
+def test_source_picker_separates_testbenches(tmp_path):
+    from lanex.controller import fsbrowser
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "alu.v").write_text("// alu")
+    (tmp_path / "src" / "alu_tb.v").write_text("// tb")
+    (tmp_path / "verify").mkdir()
+    (tmp_path / "verify" / "sim_top.sv").write_text("// sim")
+
+    res = fsbrowser.walk_sources(str(tmp_path))
+    assert res["ok"] is True
+    synth_names = [s["relpath"] for s in res["synthesis_sources"]]
+    tb_names = [s["relpath"] for s in res["testbenches"]]
+    assert "src/alu.v" in synth_names
+    assert "src/alu_tb.v" in tb_names
+    assert "verify/sim_top.sv" in tb_names
+
+
+# --------------------------------------------------------------------------
+# Audit P1-02: PDK flow support flag & check_pdk_ready blocker for gf180mcuA/B/C
+# --------------------------------------------------------------------------
+
+def test_unsupported_pdk_ready_check():
+    from lanex.controller import pdk
+    res = pdk.check_pdk_ready("gf180mcuA", scl="gf180mcu_fd_sc_mcu7t5v0")
+    assert res["ready"] is False
+    assert res["supported"] is False
+    assert any("supported" in m.lower() for m in res["missing"])
+    assert "remediation" in res and "unsupported" in res["remediation"].lower()
+

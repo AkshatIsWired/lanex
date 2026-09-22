@@ -464,7 +464,7 @@ function paintRuntimeCard(container) {
       hint = "<p class='hint'><strong>Recommended:</strong> click <em>Start Docker daemon</em> (runs <code>sudo systemctl enable --now docker</code>, prompting for credentials if required), or install rootless <strong>Podman</strong>.</p>";
     root.innerHTML =
       "<div class='tool-card installed-missing'>" +
-      "<div class='row1'><span class='name'>Container engine installed but not currently active</span>" +
+      "<div class='row1'><span class='name'>Container engine installed — not usable yet</span>" +
       "<span class='dot-missing' title='not usable'></span></div>" +
       "<div class='what'>An engine is installed but not reachable yet:</div>" +
       "<pre class='code' style='white-space:pre-wrap'>" + fmt.escape(c.daemon_msg || "engine not reachable") + "</pre>" +

@@ -6,6 +6,8 @@ import { icon } from "./icons.js";
 
 let _curPath = "";
 const _checked = new Set();
+let _userCleared = false;
+const _seenFiles = new Set();
 
 export function setupFolderBrowser() {
   document.getElementById("btn-browse-folder")?.addEventListener("click", openModal);
@@ -19,13 +21,17 @@ export function setupFolderBrowser() {
   });
 
   document.getElementById("btn-filesel-all")?.addEventListener("click", () => {
+    _userCleared = false;
     _checked.clear();
-    for (const s of state.designSources) _checked.add(s.abspath);
+    for (const s of state.designSources) {
+      if (!s.is_testbench) _checked.add(s.abspath);
+    }
     for (const m of state.designMemories) _checked.add(m.abspath);
     renderFileSelector();
     commitSelection();
   });
   document.getElementById("btn-filesel-none")?.addEventListener("click", () => {
+    _userCleared = true;
     _checked.clear();
     renderFileSelector();
     commitSelection();
@@ -176,24 +182,42 @@ export async function loadFilesFor(designDir, opts = {}) {
   try {
     const r = await api.walkSources(designDir);
     if (!r.ok) return;
-    state.designSources = r.sources;
-    state.designMemories = r.memories;
+    state.designSources = r.sources || [];
+    state.designMemories = r.memories || [];
     document.getElementById("filesel-card").hidden = !show;
-    // By default, all checked; preserve any user deselection.
-    const keep = new Set();
-    for (const s of state.designSources) if (_checked.has(s.abspath)) keep.add(s.abspath);
-    for (const m of state.designMemories) if (_checked.has(m.abspath)) keep.add(m.abspath);
-    _checked.clear();
-    for (const s of state.designSources) _checked.add(s.abspath);
-    for (const m of state.designMemories) _checked.add(m.abspath);
-    // keep preserves the old user choice
-    _checked.clear();
-    for (const x of keep) _checked.add(x);
-    if (!_checked.size) {
-      // Default: every file checked + first memory file checked.
-      for (const s of state.designSources) _checked.add(s.abspath);
+
+    if (_userCleared) {
+      _checked.clear();
+    } else if (!_seenFiles.size) {
+      _checked.clear();
+      for (const s of state.designSources) {
+        if (!s.is_testbench) _checked.add(s.abspath);
+      }
       for (const m of state.designMemories) _checked.add(m.abspath);
+    } else {
+      // Preserve existing selections, and auto-select newly discovered candidate synthesis files
+      for (const s of state.designSources) {
+        if (!_seenFiles.has(s.abspath) && !s.is_testbench) {
+          _checked.add(s.abspath);
+        }
+      }
+      for (const m of state.designMemories) {
+        if (!_seenFiles.has(m.abspath)) {
+          _checked.add(m.abspath);
+        }
+      }
+      const existing = new Set([
+        ...state.designSources.map((s) => s.abspath),
+        ...state.designMemories.map((m) => m.abspath),
+      ]);
+      for (const p of Array.from(_checked)) {
+        if (!existing.has(p)) _checked.delete(p);
+      }
     }
+
+    for (const s of state.designSources) _seenFiles.add(s.abspath);
+    for (const m of state.designMemories) _seenFiles.add(m.abspath);
+
     renderFileSelector();
     commitSelection();
   } catch (_e) {
@@ -209,18 +233,32 @@ function renderFileSelector() {
   root.innerHTML = "";
   if (state.designSources.length === 0 && state.designMemories.length === 0) {
     root.innerHTML = "<div class='empty'><span class='ico'>" + icon('folderOpen',{size:40}) + "</span><h3>No HDL files detected</h3><p>Try a different folder or place <code>.v</code> files inside it.</p></div>";
-    document.getElementById("filesel-count").textContent = "0 files";
+    const cnt = document.getElementById("filesel-count");
+    if (cnt) cnt.textContent = "0 files";
     return;
   }
-  // Sources group
-  if (state.designSources.length) {
+  const synthSources = state.designSources.filter((s) => !s.is_testbench);
+  const tbSources = state.designSources.filter((s) => s.is_testbench);
+
+  // Synthesis Sources group
+  if (synthSources.length) {
     const heading = document.createElement("div");
     heading.className = "muted";
     heading.style.cssText = "padding:8px 10px;font-family:var(--mono);font-size:var(--t-xs);color:var(--text-muted);letter-spacing:0.04em;text-transform:uppercase;";
-    heading.textContent = "Sources (" + state.designSources.length + ")";
+    heading.textContent = "Synthesis Sources (" + synthSources.length + ")";
     root.appendChild(heading);
-    for (const s of state.designSources) root.appendChild(makeRow(s, "RTL"));
+    for (const s of synthSources) root.appendChild(makeRow(s, "RTL"));
   }
+  // Testbenches group (separate from synthesis)
+  if (tbSources.length) {
+    const heading = document.createElement("div");
+    heading.className = "muted";
+    heading.style.cssText = "padding:8px 10px;font-family:var(--mono);font-size:var(--t-xs);color:var(--text-muted);letter-spacing:0.04em;text-transform:uppercase;";
+    heading.textContent = "Simulation / Testbenches (" + tbSources.length + " · excluded from synthesis)";
+    root.appendChild(heading);
+    for (const s of tbSources) root.appendChild(makeRow(s, "SIM"));
+  }
+  // Memory files group
   if (state.designMemories.length) {
     const heading = document.createElement("div");
     heading.className = "muted";
@@ -229,8 +267,11 @@ function renderFileSelector() {
     root.appendChild(heading);
     for (const m of state.designMemories) root.appendChild(makeRow(m, "MEM"));
   }
-  document.getElementById("filesel-count").textContent =
-    _checked.size + " of " + (state.designSources.length + state.designMemories.length) + " selected";
+  const countEl = document.getElementById("filesel-count");
+  if (countEl) {
+    countEl.textContent =
+      _checked.size + " of " + (state.designSources.length + state.designMemories.length) + " selected";
+  }
 }
 
 function makeRow(item, kind) {
@@ -242,8 +283,13 @@ function makeRow(item, kind) {
   cb.checked = _checked.has(item.abspath);
   cb.style.cursor = "pointer";
   cb.addEventListener("change", () => {
-    if (cb.checked) _checked.add(item.abspath);
-    else _checked.delete(item.abspath);
+    if (cb.checked) {
+      _userCleared = false;
+      _checked.add(item.abspath);
+    } else {
+      _checked.delete(item.abspath);
+      if (_checked.size === 0) _userCleared = true;
+    }
     renderFileSelector();
     commitSelection();
   });
@@ -276,4 +322,7 @@ function commitSelection() {
     .map((x) => x.trim())
     .filter(Boolean);
   state.extrasFiles = extras;
+  document.dispatchEvent(new CustomEvent("lanex:sources-changed", {
+    detail: { count: _checked.size, files: state.selectedFiles }
+  }));
 }

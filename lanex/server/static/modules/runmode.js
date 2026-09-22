@@ -23,6 +23,7 @@ export function setRunMode(mode) {
   state.runMode = m;
   try { localStorage.setItem(KEY, m); } catch (_e) {}
   paint();
+  document.dispatchEvent(new CustomEvent("lanex:runmode-changed", { detail: { mode: m } }));
 }
 
 export function toggleRunMode() {
@@ -31,9 +32,11 @@ export function toggleRunMode() {
 
 function paint() {
   const m = getRunMode();
-  document.querySelectorAll(".engine-btn").forEach((b) =>
-    b.classList.toggle("engine-btn-active", b.dataset.runmode === m),
-  );
+  document.querySelectorAll(".engine-btn").forEach((b) => {
+    const isActive = b.dataset.runmode === m;
+    b.classList.toggle("engine-btn-active", isActive);
+    b.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
   // Step-by-step is available in both modes now. In container mode it costs a
   // container start per step, so note that in the tooltip but keep it enabled.
   const semi = document.querySelector('.mode-btn[data-mode="semi"]');

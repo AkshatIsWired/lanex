@@ -6,7 +6,7 @@ import { fmt } from "./api.js";
 import { renderConfig } from "./config.js";
 import { setupFolderBrowser, loadFilesFor } from "./fs.js";
 import { toast } from "./toast.js";
-import { renderPreflight } from "./preflight.js";
+import { renderPreflight, lastPreflight } from "./preflight.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 
@@ -116,12 +116,31 @@ export function setupSetup() {
   }
 
   document.querySelectorAll(".mode-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".mode-btn").forEach((b) =>
-        b.classList.toggle("mode-btn-active", b === btn),
-      );
-      state.mode = btn.dataset.mode;
-    });
+    btn.addEventListener("click", () => setFlowMode(btn.dataset.mode));
+  });
+  setFlowMode(state.mode || "auto");
+
+  // Invalidate and recompute preflight on engine or source changes
+  document.addEventListener("lanex:runmode-changed", async () => {
+    await renderPreflight();
+    paintRunButton();
+  });
+  document.addEventListener("lanex:sources-changed", async () => {
+    await renderPreflight();
+    paintRunButton();
+  });
+  document.addEventListener("lanex:preflight-done", () => {
+    paintRunButton();
+  });
+}
+
+export function setFlowMode(mode) {
+  const m = mode === "semi" ? "semi" : "auto";
+  state.mode = m;
+  document.querySelectorAll(".mode-btn").forEach((b) => {
+    const isActive = b.dataset.mode === m;
+    b.classList.toggle("mode-btn-active", isActive);
+    b.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
 }
 
@@ -174,13 +193,18 @@ export async function adoptDesignDir(designDir, opts = {}) {
   try { state.runs = await api.runs(designDir); } catch (_e) { state.runs = []; }
   // Default the run selection to the most recent run so run-scoped views
   // (Preview/Analytics/Verify/Layout) have something selected without the user
-  // first clicking Open on the Runs tab.
   if (state.runs && state.runs.length &&
       !state.runs.some((r) => r.tag === state.selectedRunTag)) {
     state.selectedRunTag = state.runs[0].tag;
   }
   renderRuns();
   renderPreview();
+  const btnSet = document.getElementById("btn-set-design");
+  if (btnSet) {
+    btnSet.classList.remove("btn-primary");
+    btnSet.classList.add("btn-ghost");
+    btnSet.textContent = "Loaded";
+  }
   paintRunButton();
   renderPreflight();
   // Offer to auto-generate a config when the folder has sources but no config.
@@ -303,6 +327,8 @@ async function refreshPdkReadiness() {
     const r = await api.pdkReady(state.selectedPdk, state.selectedScl, state.runMode);
     if (r.ready) {
       paintPdkPill("PDK ready", "pill-pass");
+    } else if (r.supported === false) {
+      paintPdkPill("PDK: unsupported target", "pill-fail");
     } else if (r.needs_download && r.network_available) {
       paintPdkPill("PDK: will download on first run", "pill-warn");
     } else {
@@ -311,13 +337,15 @@ async function refreshPdkReadiness() {
   } catch (_e) {
     paintPdkPill("PDK: check failed", "pill-fail");
   }
-  renderPreflight();
+  await renderPreflight();
+  paintRunButton();
 }
 
 export async function populatePdkPicker() {
   try {
     const pdks = await api.pdks();
     const sel = document.getElementById("pdk-select");
+    if (!sel) return;
     sel.innerHTML = "";
     sel.appendChild((() => {
       const o = document.createElement("option");
@@ -325,12 +353,34 @@ export async function populatePdkPicker() {
       o.textContent = "Select a PDK";
       return o;
     })());
-    for (const p of pdks) {
-      const o = document.createElement("option");
-      o.value = p.name;
-      o.textContent = p.name + (p.ready ? "" : " (no libs)");
-      sel.appendChild(o);
+
+    const supportedPdks = pdks.filter((p) => p.supported !== false);
+    const unsupportedPdks = pdks.filter((p) => p.supported === false);
+
+    if (supportedPdks.length) {
+      const g1 = document.createElement("optgroup");
+      g1.label = "Supported PDKs";
+      for (const p of supportedPdks) {
+        const o = document.createElement("option");
+        o.value = p.name;
+        o.textContent = p.name + (p.ready ? "" : " (no libs)");
+        g1.appendChild(o);
+      }
+      sel.appendChild(g1);
     }
+
+    if (unsupportedPdks.length) {
+      const g2 = document.createElement("optgroup");
+      g2.label = "Installed (Unsupported by LibreLane flow)";
+      for (const p of unsupportedPdks) {
+        const o = document.createElement("option");
+        o.value = p.name;
+        o.textContent = p.name + " (unsupported flow target)";
+        g2.appendChild(o);
+      }
+      sel.appendChild(g2);
+    }
+
     // Restore the project PDK or previously-used PDK if it's still installed.
     // Respect the project's explicit PDK before recent UI preferences.
     const projectPdk = state.projectConfig?.PDK || state.config?.PDK || "";
@@ -340,6 +390,9 @@ export async function populatePdkPicker() {
     if (wantPdk && Array.from(sel.options).some((o) => o.value === wantPdk)) {
       sel.value = wantPdk;
       await onPdkSelected();   // repopulates SCLs + restores the SCL + readiness
+    } else if (supportedPdks.length) {
+      sel.value = supportedPdks[0].name;
+      await onPdkSelected();
     } else if (pdks.length) {
       paintPdkPill("PDK: pick one", "pill-warn");
     } else {
@@ -355,9 +408,37 @@ export function paintRunButton() {
   const g = document.getElementById("btn-run-global");
   // Don't fight paintRunning while a run is live (the global button is "Stop").
   const running = state.status && state.status.running;
-  if (g && !running) g.disabled = !state.designDir;
+  const pf = lastPreflight();
+  const isReady = !!(state.designDir && pf && pf.ready);
+  const canRun = !!state.designDir;
+
+  if (g && !running) {
+    g.disabled = !canRun;
+    g.classList.toggle("topbar-run-ready", isReady);
+    g.title = isReady
+      ? "Start the flow, or stop a running one, from any tab"
+      : !state.designDir
+        ? "Load a design folder first"
+        : "Preflight has issues: " + ((pf?.blockers || []).join("; ") || "check setup");
+  }
   if (!b) return;
-  b.disabled = !state.designDir;
+
+  b.disabled = !canRun;
+  b.classList.toggle("btn-cta-ready", isReady);
+  b.classList.toggle("btn-cta-unready", !isReady);
+
+  const hintEl = b.querySelector(".hint");
+  if (!state.designDir) {
+    b.title = "Pick or load a design folder first";
+    if (hintEl) hintEl.textContent = "Pick or load a design folder first.";
+  } else if (!isReady) {
+    const blk = (pf?.blockers || []).join("; ");
+    b.title = blk ? "Cannot run yet: " + blk : "Checking setup readiness…";
+    if (hintEl) hintEl.textContent = blk ? "Not ready: " + blk : "Checking prerequisites…";
+  } else {
+    b.title = "All checks passed. Ready to run flow.";
+    if (hintEl) hintEl.textContent = "Compiles your HDL → GDSII. Takes 5–60 minutes.";
+  }
 }
 
 async function onRunClick() {
@@ -481,36 +562,48 @@ export async function showOnboarding() {
   const { customDialog } = await import("./dialog.js");
   const html =
     "<div class='onboard-guide'>" +
-    "<p class='hint' style='margin-top:0;font-size:var(--t-md);line-height:1.5;'>" +
-    "LanEx takes your Verilog RTL all the way to GDSII layout. Follow these 3 steps to complete your first silicon hardening:" +
+    "<p style='margin-top:0;font-size:var(--t-md);color:var(--text);line-height:1.5;'>" +
+    "Navigate your first silicon hardening flow with these interactive steps:" +
     "</p>" +
-    "<ol class='steps-3' style='display:grid;gap:var(--s-3);margin:var(--s-4) 0;padding:0;list-style:none;'>" +
-    "<li style='background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s-3);'>" +
-    "<strong style='color:var(--text-strong);display:block;margin-bottom:4px;'>1. Pick your HDL folder</strong>" +
-    "<span style='color:var(--text-muted);font-size:var(--t-sm);'>Point LanEx to a directory with <code>.v</code> and <code>.sdc</code> files. Or load the built-in SPM multiplier example.</span>" +
-    "</li>" +
-    "<li style='background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s-3);'>" +
-    "<strong style='color:var(--text-strong);display:block;margin-bottom:4px;'>2. Confirm PDK &amp; standard cells</strong>" +
-    "<span style='color:var(--text-muted);font-size:var(--t-sm);'>Choose SkyWater 130nm or GlobalFoundries 180nm. Preflight checks readiness automatically.</span>" +
-    "</li>" +
-    "<li style='background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s-3);'>" +
-    "<strong style='color:var(--text-strong);display:block;margin-bottom:4px;'>3. Press Run</strong>" +
-    "<span style='color:var(--text-muted);font-size:var(--t-sm);'>Watch synthesis, floorplanning, placement, and routing run to tapeout. Output lands in <code>runs/&lt;tag&gt;/final/gds</code>.</span>" +
-    "</li>" +
-    "</ol>" +
+    "<div style='display:grid;gap:var(--s-3);margin:var(--s-4) 0;'>" +
+    "<div style='background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s-3);display:flex;align-items:center;justify-content:space-between;gap:var(--s-3);'>" +
+    "<div><strong style='color:var(--text-strong);display:block;'>1. Design HDL Folder</strong><span style='color:var(--text-muted);font-size:var(--t-sm);'>Load the built-in SPM multiplier or browse your Verilog folder.</span></div>" +
+    "<button class='btn btn-ghost btn-sm' id='ob-act-spm'>Use SPM</button>" +
+    "</div>" +
+    "<div style='background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s-3);display:flex;align-items:center;justify-content:space-between;gap:var(--s-3);'>" +
+    "<div><strong style='color:var(--text-strong);display:block;'>2. Process &amp; Cell Library (PDK)</strong><span style='color:var(--text-muted);font-size:var(--t-sm);'>Select SkyWater 130nm or GlobalFoundries 180nm.</span></div>" +
+    "<button class='btn btn-ghost btn-sm' id='ob-act-pdk'>Jump to PDK</button>" +
+    "</div>" +
+    "<div style='background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);padding:var(--s-3);display:flex;align-items:center;justify-content:space-between;gap:var(--s-3);'>" +
+    "<div><strong style='color:var(--text-strong);display:block;'>3. Preflight &amp; Run</strong><span style='color:var(--text-muted);font-size:var(--t-sm);'>Verify tools, PDK, and sources before launching synthesis.</span></div>" +
+    "<button class='btn btn-ghost btn-sm' id='ob-act-pf'>Check setup</button>" +
+    "</div>" +
+    "</div>" +
     "</div>";
+
   const res = await customDialog({
-    title: "Welcome to LanEx: 3-Step Flow Guide",
+    title: "Guided Tour: RTL to GDSII Flow",
     bodyHtml: html,
     buttons: [
       { label: "Load SPM Example", value: "spm", cls: "btn-primary" },
       { label: "Browse Folder…", value: "browse", cls: "btn-ghost" },
       { label: "Close", value: "close", cls: "btn-ghost" },
     ],
-    wide: false,
+    onMount: (back, close) => {
+      back.querySelector("#ob-act-spm")?.addEventListener("click", () => close("spm"));
+      back.querySelector("#ob-act-pdk")?.addEventListener("click", () => close("pdk"));
+      back.querySelector("#ob-act-pf")?.addEventListener("click", () => close("preflight"));
+    },
   });
+
   if (res === "spm") {
     await onLoadSpmExample();
+  } else if (res === "pdk") {
+    document.getElementById("setup-pdk")?.scrollIntoView({ behavior: "smooth" });
+    document.getElementById("pdk-select")?.focus();
+  } else if (res === "preflight") {
+    document.getElementById("setup-preflight")?.scrollIntoView({ behavior: "smooth" });
+    renderPreflight();
   } else if (res === "browse") {
     document.getElementById("btn-browse-folder")?.click();
   } else {
