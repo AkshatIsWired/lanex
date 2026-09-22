@@ -88,15 +88,15 @@ export async function renderDesktopViewers(info) {
       return "<span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span>";
     const t = byToolKey[key];
     if (t && t.in_container && contReady)
-      return "<span class='pill pill-pass' title='Ships in the pulled LibreLane image — the Layout tab launches it from there'><span class='d'></span><span class='text'>in container image</span></span>";
+      return "<span class='pill pill-pass' title='Included in the LibreLane container image. The Layout tab launches it directly.'><span class='d'></span><span class='text'>in container image</span></span>";
     return "<span class='pill pill-warn'><span class='d'></span><span class='text'>not found</span></span>";
   };
   root.innerHTML =
     "<div class='card'><div class='card-body'>" +
     "<div class='tool-row'><strong>KLayout</strong> " + badge("klayout") +
-    " <span class='hint'>2D layout — bundled in the container image; or install from klayout.de.</span></div>" +
+    " <span class='hint'>2D layout: bundled in the container image, or installable from klayout.de.</span></div>" +
     "<div class='tool-row'><strong>Magic</strong> " + badge("magic") +
-    " <span class='hint'>2D layout/DRC — bundled in the container image. The GUI launches it with the PDK's <code>.magicrc</code> so layers render.</span></div>" +
+    " <span class='hint'>2D layout and DRC: bundled in the container image, launched with the PDK's <code>.magicrc</code> for correct layer rendering.</span></div>" +
     "</div></div>";
 }
 
@@ -151,12 +151,12 @@ async function renderRecommendedTools(info) {
       : "<button class='btn btn-primary' id='btn-install-gds3d'>Build &amp; install GDS3D</button>") +
     "</div>" +
     "<details style='margin-top:var(--s-2);font-size:12px'><summary style='cursor:pointer;color:var(--text-muted)'>Manual build (if the one-click build can't run)</summary>" +
-    "<p class='hint'>GDS3D has no package release; you build the small OpenGL binary once. <strong>Build &amp; install does this for you</strong>, compiler and X11/OpenGL headers included — these steps are only for a machine where it can't (no apt, or no way to gain root).</p>" +
+    "<p class='hint'>GDS3D has no pre-packaged distribution; the OpenGL binary is compiled once locally. <strong>Build &amp; install handles this automatically</strong>. The manual commands below are provided for environments without standard package managers or root access.</p>" +
     "<pre class='code'>sudo apt-get install -y git build-essential libx11-dev libxmu-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev freeglut3-dev\n" +
     "git clone https://github.com/trilomix/GDS3D\n" +
     "cd GDS3D/linux &amp;&amp; make\n" +
     "sudo cp GDS3D /usr/local/bin/gds3d</pre>" +
-    "<p class='hint'>Fedora/RHEL: <code>sudo dnf install -y libX11-devel mesa-libGL-devel mesa-libGLU-devel freeglut-devel gcc-c++ make git</code>. Arch: <code>sudo pacman -S --needed libx11 mesa glu freeglut base-devel git</code>. macOS: the repo's <code>mac/</code> dir has no Makefile — the one-click install uses the prebuilt <code>mac/GDS3D.app</code> it ships (Intel binary; Apple Silicon needs Rosetta 2: <code>softwareupdate --install-rosetta</code>). Windows: download the prebuilt binary from the GDS3D site, then reopen this tab.</p>" +
+    "<p class='hint'>Fedora/RHEL: <code>sudo dnf install -y libX11-devel mesa-libGL-devel mesa-libGLU-devel freeglut-devel gcc-c++ make git</code>. Arch: <code>sudo pacman -S --needed libx11 mesa glu freeglut base-devel git</code>. macOS: the repository's <code>mac/</code> directory has no Makefile; the automated install uses the prebuilt <code>mac/GDS3D.app</code> (Intel binary; Apple Silicon needs Rosetta 2: <code>softwareupdate --install-rosetta</code>). Windows: download the prebuilt binary from the GDS3D site, then reopen this tab.</p>" +
     "</details></div>";
 
   root.innerHTML =
@@ -185,9 +185,9 @@ async function renderRecommendedTools(info) {
     btn.disabled = true; btn.textContent = "Building GDS3D… (see Install logs)";
     try {
       const r = await api.installTool("gds3d");
-      if (r && r.in_progress) toast.show("GDS3D build already running — see Install logs.", "info");
+      if (r && r.in_progress) toast.show("GDS3D compilation already in progress. Check Install logs.", "info");
       else if (r && r.ok === false) toast.show(r.guidance || r.error || "Build couldn't start — use the manual steps.", "warn");
-      else toast.show("GDS3D build started — watch Install logs; the Layout tab picks it up when done.", "success");
+      else toast.show("GDS3D build started. Progress is reported in Install logs.", "success");
     } catch (ex) {
       toast.show("Could not start GDS3D build: " + (ex.message || ex), "error");
     }
@@ -277,7 +277,7 @@ function pullProgressHtml() {
     fmt.escape(_pull.last || "starting…") +
     "</pre>" +
     "<div style='display:flex;align-items:center;gap:var(--s-3)'>" +
-    "<p class='hint' style='margin:0;flex:1'>~3 GB, downloaded once. Large layers stream silently — the timer above is your sign it's still working. You can leave this tab.</p>" +
+    "<p class='hint' style='margin:0;flex:1'>Approximately 3 GB, downloaded once. Large layers stream sequentially; the timer indicates active download progress.</p>" +
     "<button class='btn btn-ghost' id='runtime-pull-cancel' style='font-size:11px;padding:2px 8px' " +
     "title='Stops the download. Already-fetched layers stay cached, so a retry resumes.'>Cancel</button>" +
     "</div>" +
@@ -296,7 +296,7 @@ function _pullTicker() {
     if (note) {
       const idle = Math.round((Date.now() - _pull.lastAt) / 1000);
       note.textContent = idle >= 6 && !_pull.done
-        ? "Still downloading… a large layer has been streaming for " + idle + "s with no per-layer update — this is normal."
+        ? "Still downloading: a large layer has been streaming for " + idle + "s without per-layer progress events. This is expected behavior."
         : "";
     }
   }, 1000);
@@ -321,7 +321,7 @@ function resumePullUI() {
   _pull.active = true;
   _pull.start = Date.now();
   _pull.lastAt = Date.now();
-  _pull.last = "re-attached to the running pull — waiting for the next status line…";
+  _pull.last = "Re-attached to running pull, waiting for status updates…";
   _pull.done = false;
   _pullTicker();
 }
@@ -360,7 +360,7 @@ export function finishPull(rc) {
   _pull.active = false;
   clearInterval(_pull.timer);
   if (wasCancelled) { renderTools(); return; }   // the cancel click already toasted
-  if (rc === 0) toast.show("Image pulled — Container mode is ready.", "success");
+  if (rc === 0) toast.show("Image download complete. Container mode is ready.", "success");
   else toast.show("Image pull failed (rc=" + rc + "). See Live Logs.", "error");
   renderTools();   // re-probe → image_present / daemon state refresh
 }
@@ -403,7 +403,7 @@ function paintRuntimeCard(container) {
 
   if (c.ready) {
     // A usable engine exists (Docker, Podman, or Docker via group activation).
-    const engineLabel = c.sg_wrap ? "Docker (group-activated — no logout needed)" : c.engine;
+    const engineLabel = c.sg_wrap ? "Docker (group permissions active)" : c.engine;
     const imgSize = c.image_present
       ? sizeStr(c.image_size_mb)
       : sizeStr(c.image_approx_mb, { approx: true });
@@ -424,7 +424,7 @@ function paintRuntimeCard(container) {
       "<div class='what'>All EDA tools are available via the LibreLane image (version-matched). No native tool installs needed — just keep the <strong>Container</strong> run engine selected.</div>" +
       (verBad
         ? "<div class='hint' style='color:var(--warn)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l10 18H2zM12 10v5M12 18h.01'/></svg> " + fmt.escape(c.engine) + " " + fmt.escape(c.version) +
-          " is older than LibreLane's recommended " + fmt.escape(c.min_version) + " — consider upgrading.</div>"
+          " is older than LibreLane's recommended " + fmt.escape(c.min_version) + "; upgrading is recommended.</div>"
         : (c.version ? "<div class='hint'>" + fmt.escape(c.version) + "</div>" : "")) +
       "<div class='meta' style='display:flex;align-items:center;gap:var(--s-2);flex-wrap:wrap'>" +
       "<span style='font-family:monospace;font-size:var(--t-xs)'>" + fmt.escape(c.image || "") + "</span>" +
@@ -457,14 +457,14 @@ function paintRuntimeCard(container) {
     actions += "<button class='btn btn-ghost' id='btn-runtime-recheck'>Recheck</button>";
     let hint;
     if (mac)
-      hint = "<p class='hint'><strong>Easiest fix:</strong> click <em>Start Docker Desktop</em> — on macOS the docker daemon only runs while the Docker Desktop app is open (on its first launch, approve Docker's own prompts in its window; the very first start can take a minute or two). For podman, <em>Start podman machine</em> boots its Linux VM. LanEx waits and continues automatically.</p>";
+      hint = "<p class='hint'><strong>Recommended:</strong> click <em>Start Docker Desktop</em>. On macOS, the Docker daemon runs while Docker Desktop is active. For Podman, <em>Start podman machine</em> boots its Linux virtual machine.</p>";
     else if (canEnable)
-      hint = "<p class='hint'><strong>Easiest fix:</strong> click <em>Enable Docker for my user</em> — it adds you to the <code>docker</code> group and the GUI activates it immediately (via <code>sg</code>), so <strong>no logout is needed</strong>. Or switch to rootless Podman.</p>";
+      hint = "<p class='hint'><strong>Recommended:</strong> click <em>Enable Docker for my user</em> to add your user to the <code>docker</code> group, applying permissions immediately. Or switch to rootless Podman.</p>";
     else
-      hint = "<p class='hint'><strong>Easiest fix:</strong> click <em>Start Docker daemon</em> (runs <code>sudo systemctl enable --now docker</code> — the password prompt appears in the terminal you launched LanEx from), or install rootless <strong>Podman</strong> (works immediately). If the daemon runs but refuses permission: <code>sudo usermod -aG docker $USER</code>, then a new login or re-open the GUI.</p>";
+      hint = "<p class='hint'><strong>Recommended:</strong> click <em>Start Docker daemon</em> (runs <code>sudo systemctl enable --now docker</code>, prompting for credentials if required), or install rootless <strong>Podman</strong>.</p>";
     root.innerHTML =
       "<div class='tool-card installed-missing'>" +
-      "<div class='row1'><span class='name'>Container engine installed — not usable yet</span>" +
+      "<div class='row1'><span class='name'>Container engine installed but not currently active</span>" +
       "<span class='dot-missing' title='not usable'></span></div>" +
       "<div class='what'>An engine is installed but not reachable yet:</div>" +
       "<pre class='code' style='white-space:pre-wrap'>" + fmt.escape(c.daemon_msg || "engine not reachable") + "</pre>" +
@@ -479,7 +479,7 @@ function paintRuntimeCard(container) {
       "<div class='tool-card installed-missing'>" +
       "<div class='row1'><span class='name'>No container engine found</span>" +
       "<span class='dot-missing' title='missing'></span></div>" +
-      "<div class='what'>Install <strong>Podman</strong> (recommended — rootless, works immediately) or <strong>Docker</strong>. One install gives you every EDA tool through the LibreLane image, on every platform LibreLane supports. The image is " +
+      "<div class='what'>Install <strong>Podman</strong> (recommended: rootless, runs immediately) or <strong>Docker</strong>. One install gives you every EDA tool through the LibreLane image, on every platform LibreLane supports. The image is " +
       sizeStr(c.image_approx_mb || 3000, { approx: true }) + ".</div>" +
       "<div class='meta' style='display:flex;gap:var(--s-2);flex-wrap:wrap;align-items:center'>" +
       "<button class='btn btn-primary' id='btn-install-podman'>Install Podman</button>" +
@@ -497,7 +497,7 @@ function paintRuntimeCard(container) {
     toast.show("Adding you to the docker group (needs sudo)…", "info");
     try {
       const r = await api.enableDockerGroup();
-      if (r.ok) toast.show(r.message || "Done — Docker enabled.", "success");
+      if (r.ok) toast.show(r.message || "Docker enabled successfully.", "success");
       else { toast.show(r.reason || "Could not enable Docker", "error"); if (r.guidance) renderLogs.append({ payload: { message: "ℹ " + r.guidance } }); }
     } catch (ex) {
       toast.show("Failed: " + ex.message, "error");
@@ -510,7 +510,7 @@ function paintRuntimeCard(container) {
       if (res.ok) {
         startPullUI();
         if (res.in_progress)
-          toast.show("Already pulling — re-attaching to the running download (no second download).", "info");
+          toast.show("Image pull in progress. Re-attaching to download stream.", "info");
         else
           renderLogs.append({ payload: { message: "→ pulling container image " + (res.image || "") } });
       } else {
@@ -525,7 +525,7 @@ function paintRuntimeCard(container) {
     _pull.cancelledByUser = true;
     try {
       const r = await api.cancelInstall("container:image");
-      toast.show(r && r.ok ? "Image pull cancelled — fetched layers stay cached, a retry resumes." : "Nothing to cancel.", "info");
+      toast.show(r && r.ok ? "Image pull cancelled. Downloaded layers remain cached." : "Nothing to cancel.", "info");
     } catch (ex) {
       toast.show("Cancel failed: " + (ex.message || ex), "error");
     }
@@ -550,7 +550,7 @@ function paintRuntimeCard(container) {
 async function startEngineAction(engine) {
   const b = document.getElementById("btn-start-" + engine);
   if (b) { b.disabled = true; b.textContent = "starting…"; }
-  toast.show("Starting " + engine + " — progress in the Install logs.", "info");
+  toast.show("Starting " + engine + ". Progress is reported in Install logs.", "info");
   try {
     const r = await api.startEngine(engine);
     if (r.status === "started" || r.in_progress) return;
@@ -564,7 +564,7 @@ async function startEngineAction(engine) {
 
 async function installEngine(key) {
   document.querySelectorAll("[id^=btn-install-], .engine-install").forEach((b) => { b.disabled = true; });
-  toast.show("Installing " + key + " — runs a system package command; watch Live Logs.", "info");
+  toast.show("Installing " + key + " via package manager; watch Live Logs.", "info");
   try {
     const result = await api.installTool(key);
     if (result.status === "started") {
@@ -593,7 +593,7 @@ async function removeEngine(key) {
       toast.show(key + " removed via " + (r.method || "?"), "info");
       renderLogs.append({ payload: { message: "✓ " + key + " removed" } });
     } else {
-      toast.show(key + " removal failed — " + (r.reason || ""), "error");
+      toast.show(key + " removal failed: " + (r.reason || ""), "error");
       renderLogs.append({ payload: { message: "✗ " + key + " removal: " + (r.reason || ""), level: "ERROR" } });
     }
   } catch (ex) {
@@ -692,7 +692,7 @@ export function renderPdkStore(info) {
       ? "<span class='pill pill-fail'><span class='d'></span><span class='text'>ciel missing</span></span>" +
         "<button class='btn btn-ghost' id='install-ciel-btn'>Install ciel</button>"
       : "<span class='pill pill-pass'><span class='d'></span><span class='text'>ciel ready</span></span>") +
-    "<span class='hint' style='margin-left:var(--s-3)'>PDKs are large downloads — open <em>Libraries</em> to fetch only the cell libraries you need. ciel resolves the exact version + size.</span>" +
+    "<span class='hint' style='margin-left:var(--s-3)'>PDK archives are large. Open <em>Libraries</em> to download only the cell libraries required for your design.</span>" +
     "</div>" +
     "<div style='display:flex;flex-wrap:wrap;gap:var(--s-4);margin-top:var(--s-3)'>" +
     Object.entries(catalog).map(([key, p]) => {
@@ -780,14 +780,14 @@ export function renderPdkStore(info) {
         const result = await api.installCiel(pdk, libraries);
         if (result.ok) {
           if (result.in_progress) {
-            toast.show(`PDK ${pdk} is already downloading — no second download started.`, "info");
+            toast.show(`PDK ${pdk} is already downloading.`, "info");
           } else {
             toast.show(`PDK ${pdk} installation started... Check logs.`, "info");
             renderLogs.append({ payload: { message: "→ PDK " + pdk + " installation started in background." } });
           }
         } else {
           delete state.installJobs["pdk:" + pdk];
-          const msg = "✗ PDK " + pdk + " failed — rc=" + (result.rc ?? "?") + " " + (result.reason || "");
+          const msg = "✗ PDK " + pdk + " failed: rc=" + (result.rc ?? "?") + " " + (result.reason || "");
           toast.show(`PDK ${pdk} install failed: ${result.reason || ""}`, "error");
           renderLogs.append({ payload: { message: msg, level: "ERROR" } });
           renderTools();
@@ -930,11 +930,11 @@ function buttonHtml(t, { inContainer = false } = {}) {
   if (t.container_only) {
     if (inContainer) {
       return "<div class='muted' style='font-size:var(--t-xs);line-height:1.4'>" +
-        "No host package — this tool runs from the container image (already pulled). " +
+        "No host package required; this tool runs from the container image. " +
         "<span title='" + fmt.escape(t.install_recipe || "") + "'>(advanced local install: conda/Nix)</span></div>";
     }
     return "<div class='muted' style='font-size:var(--t-xs);line-height:1.4'>" +
-      "No host package — get it via the <strong>container image</strong>: switch the top-bar engine to " +
+      "No host package available; run via the <strong>container image</strong>: switch the top-bar engine to " +
       "<em>Container</em> and click <em>Pull image</em>. " +
       "<span title='" + fmt.escape(t.install_recipe || "") + "'>(advanced: conda/Nix)</span></div>";
   }
@@ -988,7 +988,7 @@ function wireUninstallButtons() {
 // event for async installs (the POST returns {status:"started"} right away).
 function handleInstallOutcome(key, result) {
   if (result.in_progress) {
-    toast.show(`${key} is already installing — no second download started.`, "info");
+    toast.show(`${key} is already installing.`, "info");
     return;
   }
   if (result.cancelled) {
@@ -1008,7 +1008,7 @@ function handleInstallOutcome(key, result) {
     });
   } else if (result.needs_sudo) {
     // sudo can't prompt from the GUI — show the exact command to run.
-    toast.show(`${key} needs sudo — run the shown command in a terminal.`, "warn");
+    toast.show(`${key} requires elevated privileges; run the command below in a terminal.`, "warn");
     renderLogs.append({ payload: { message: result.guidance || ("Run with sudo: " + key), level: "WARN" } });
   } else {
     // Surface the actionable guidance (e.g. "use conda/Nix/container"), not
@@ -1017,7 +1017,7 @@ function handleInstallOutcome(key, result) {
     toast.show(`Can't auto-install ${key}: ${why}`, "error");
     const tried = (result.tried || []).join("; ");
     renderLogs.append({
-      payload: { message: "✗ " + key + " install failed — " + why + (tried ? " [" + tried + "]" : ""), level: "ERROR" },
+      payload: { message: "✗ " + key + " install failed: " + why + (tried ? " [" + tried + "]" : ""), level: "ERROR" },
     });
   }
 }
@@ -1061,7 +1061,7 @@ async function chainImagePull() {
       const res = await api.containerPull();
       if (res.ok) {
         startPullUI();
-        renderLogs.append({ payload: { message: "→ engine ready — pulling container image " + (res.image || "") } });
+        renderLogs.append({ payload: { message: "→ engine ready; pulling container image " + (res.image || "") } });
       }
     }
   } catch (_e) {
@@ -1073,7 +1073,7 @@ async function installByKey(key) {
   try {
     const result = await api.installTool(key);
     if (result.status === "started") {
-      toast.show(`${key} install started — watch Install logs; this tab updates when it finishes.`, "info");
+      toast.show(`${key} install started. Progress is reported in Install logs; this tab updates upon completion.`, "info");
       return;
     }
     handleInstallOutcome(key, result);
