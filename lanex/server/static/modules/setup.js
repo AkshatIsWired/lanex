@@ -196,8 +196,7 @@ async function onLoadSpmExample() {
     const input = document.getElementById("design-dir-input");
     if (input) input.value = res.design_dir;
     await adoptDesignDir(res.design_dir);
-    toast.show("SPM example copied to its own folder (" + fmt.shortPath(res.design_dir) +
-      ") — press Run to harden it end-to-end.", "success");
+    toast.show("SPM example copied to " + fmt.shortPath(res.design_dir) + ". Click Run flow to begin hardening.", "success");
   } catch (ex) {
     toast.show("Could not copy the SPM example: " + ex.message, "error");
   }
@@ -323,7 +322,7 @@ export async function populatePdkPicker() {
     sel.appendChild((() => {
       const o = document.createElement("option");
       o.value = "";
-      o.textContent = "— pick a PDK —";
+      o.textContent = "Select a PDK";
       return o;
     })());
     for (const p of pdks) {
@@ -378,7 +377,7 @@ async function onRunClick() {
         confirmText: "Run anyway", danger: true,
       });
       if (!go) {
-        toast.show("Run cancelled — see the ‘Ready to run?’ checklist.", "warn");
+        toast.show("Run cancelled. Review the 'Ready to run?' checklist for details.", "warn");
         return;
       }
     }
@@ -396,8 +395,7 @@ async function onRunClick() {
     // ran. Compare the previewed config hash to the one the run actually used.
     if (state.previewedConfigHash && res.config_hash &&
         res.config_hash !== state.previewedConfigHash) {
-      toast.show("Heads up: the config file changed after you previewed the final " +
-        "settings — this run used the current file, not the preview.", "warn");
+      toast.show("The configuration file changed after your preview. Flow execution used the updated file on disk.", "warn");
     }
     state.previewedConfigHash = null;
     paintRunning(true);
