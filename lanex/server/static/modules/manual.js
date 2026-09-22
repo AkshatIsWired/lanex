@@ -56,7 +56,7 @@ async function revealCli() {
       b.addEventListener("click", () => {
         navigator.clipboard?.writeText(b.dataset.cmd).then(
           () => toast.show("Copied", "success"),
-          () => toast.show("Copy failed — select and copy manually", "warn"));
+          () => toast.show("Copy failed. Select and copy the text manually.", "warn"));
       }));
   } catch (ex) {
     box.innerHTML = "<p class='pill pill-fail'>" + fmt.escape(ex.message) + "</p>";

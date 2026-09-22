@@ -37,7 +37,7 @@ function drawHist(hist, unit) {
   }
   if (!chart) { el.innerHTML = ""; chart = window.echarts.init(el); }
   el.setAttribute("role", "img");
-  el.setAttribute("aria-label", "Timing slack histogram — the worst endpoints are listed in the table below.");
+  el.setAttribute("aria-label", "Timing slack histogram; critical endpoints are listed in the table below.");
   const theme = chartTheme();
   const pal = chartPalette();
   chart.setOption({
@@ -162,7 +162,7 @@ function populateCompareSelect(currentTag) {
   if (!sel) return;
   const runs = (state.runs || []).filter((r) => r.tag !== currentTag);
   if (_compareTag && !runs.some((r) => r.tag === _compareTag)) _compareTag = "";
-  sel.innerHTML = "<option value=''>— none —</option>" +
+  sel.innerHTML = "<option value=''>None</option>" +
     runs.map((r) => "<option value='" + fmt.escape(r.tag) + "'" +
       (r.tag === _compareTag ? " selected" : "") + ">" + fmt.escape(r.tag) + "</option>").join("");
 }
@@ -183,7 +183,7 @@ async function renderTimingCompare() {
     return;
   }
   if (!other || !other.ok) {
-    out.innerHTML = "<p class='muted'>No " + _kind + " timing report for “" + fmt.escape(_compareTag) + "”.</p>";
+    out.innerHTML = "<p class='muted'>No " + _kind + " timing report found for " + fmt.escape(_compareTag) + ".</p>";
     return;
   }
   const otherByEp = {};
@@ -197,7 +197,7 @@ async function renderTimingCompare() {
   }
   joined.sort((x, y) => Math.abs(y.d) - Math.abs(x.d));
   const unit = other.unit || "ns";
-  const head = "<h4 style='margin:var(--s-4) 0 var(--s-2)'>Δ vs “" + fmt.escape(_compareTag) + "” (" + fmt.escape(_kind) + ")</h4>";
+  const head = "<h4 style='margin:var(--s-4) 0 var(--s-2)'>Δ vs " + fmt.escape(_compareTag) + " (" + fmt.escape(_kind) + ")</h4>";
   if (!joined.length) {
     out.innerHTML = head + "<p class='muted'>No endpoints in common between these two runs for this analysis.</p>";
     return;
@@ -210,9 +210,9 @@ async function renderTimingCompare() {
   out.innerHTML = head +
     "<p class='muted'>" + joined.length + " endpoint(s) in common, sorted by |Δ slack|" +
     (top.length < joined.length ? " (top " + top.length + " shown)" : "") +
-    ". Positive Δ = this run has more slack than “" + fmt.escape(_compareTag) + "”.</p>" +
-    "<table class='cmp-table'><thead><tr><th>Endpoint</th><th>this</th><th>“" +
-    fmt.escape(_compareTag) + "”</th><th>Δ slack (" + fmt.escape(unit) + ")</th></tr></thead><tbody>" + rows + "</tbody></table>";
+    ". Positive Δ indicates this run has more slack than " + fmt.escape(_compareTag) + ".</p>" +
+    "<table class='cmp-table'><thead><tr><th>Endpoint</th><th>this</th><th>" +
+    fmt.escape(_compareTag) + "</th><th>Δ slack (" + fmt.escape(unit) + ")</th></tr></thead><tbody>" + rows + "</tbody></table>";
 }
 
 function wireOnce() {

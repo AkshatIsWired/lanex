@@ -39,7 +39,7 @@ export async function renderCustomMacros() {
   if (!root) return;
   document.getElementById("btn-custom-macro-help")?.addEventListener("click", showMacroHelp, { once: true });
   if (!state.designDir) {
-    root.innerHTML = "<p class='muted'>Load a design folder first (Setup tab) — custom macros are stored per design.</p>";
+    root.innerHTML = "<p class='muted'>Select a design directory in Setup first. Custom macros are stored per design.</p>";
     return;
   }
   let macros = [];
@@ -54,7 +54,7 @@ export async function renderCustomMacros() {
   // let the user open exactly that file and see what was added.
   const overlayBtn = macros.length
     ? "<p class='hint'>These reach the flow through <code>.gui-macros.json</code> in your design folder, " +
-      "passed to LibreLane as a second config file — your own config.json is never edited. " +
+      "passed to LibreLane as a secondary config file (your design config is never edited). " +
       "<button class='btn btn-ghost' id='mc-view-overlay'>View the overlay file</button></p>"
     : "";
   const list = macros.length
@@ -97,7 +97,7 @@ export async function renderCustomMacros() {
     let t;
     try { t = await api.readText(abs); } catch (ex) { toast.show("Could not read the overlay: " + (ex.message || ex), "error"); return; }
     if (!t || t.ok === false) {
-      toast.show((t && t.error) || "No overlay file yet — it is written when a run starts with macros enabled.", "warn", 6000);
+      toast.show((t && t.error) || "No overlay file generated yet; it is written when launching a run with macros enabled.", "warn", 6000);
       return;
     }
     await customDialog({
@@ -202,7 +202,7 @@ function showMacroHelp() {
   backdrop.className = "smodal-backdrop";
   backdrop.innerHTML =
     "<div class='smodal cc-help-modal'>" +
-    "<div class='smodal-head'><span class='smodal-title'>Custom macros — how it works</span>" +
+    "<div class='smodal-head'><span class='smodal-title'>Custom macros: how it works</span>" +
     "<span class='smodal-spacer'></span><button class='btn btn-ghost' id='mc-help-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "<div class='smodal-log cc-help'>" + HELP_HTML + "</div></div>";
   document.body.appendChild(backdrop);
@@ -217,21 +217,20 @@ function showMacroHelp() {
 const HELP_HTML = `
 <h3>Cell vs. macro</h3>
 <p>A <strong>custom cell</strong> is a leaf gate that lives in the standard-cell rows (fixed row height,
-on the placement grid). A <strong>macro</strong> is a <em>pre-hardened block</em> — an SRAM, a register file,
-a PLL, an analog IP, or a sub-design you hardened separately — that drops into the floorplan as a fixed
-black box and is routed around. They use different LibreLane variables, so they live in separate panels here.</p>
+on the placement grid). A <strong>macro</strong> is a <em>pre-hardened block</em> (such as an SRAM, register file,
+PLL, analog IP block, or hierarchical sub-module) that drops into the floorplan as a fixed
+boundary and is routed around. Macros use dedicated LibreLane parameters and are managed separately from standard cells.</p>
 
 <h3>The views a macro needs</h3>
 <ul>
-  <li><strong>GDS</strong> — the real polygons, merged into the final chip layout. <em>Required.</em></li>
-  <li><strong>LEF</strong> — the abstract: pin locations, obstructions, the block outline. Needed by placement &amp; routing. <em>Required.</em></li>
-  <li><strong>Liberty <code>.lib</code></strong> — timing. Lets synthesis black-box the macro and lets STA time
-      through it. Without it the block may be black-boxed with no timing.</li>
-  <li><strong>Netlist (<code>.v</code>)</strong> — a gate-level netlist of the macro, for power and hierarchical STA.</li>
-  <li><strong>SPEF</strong> — extracted parasitics, for SPEF-based hierarchical timing.</li>
-  <li><strong>SPICE</strong> — device netlist, for LVS signoff.</li>
+  <li><strong>GDS</strong>: physical mask polygons merged into the final chip layout. <em>Required.</em></li>
+  <li><strong>LEF</strong>: abstract boundary definition (pin locations, obstructions, and outline). Required for placement and routing. <em>Required.</em></li>
+  <li><strong>Liberty <code>.lib</code></strong>: timing models for STA and synthesis black-boxing. Without it, the block is black-boxed without timing constraints.</li>
+  <li><strong>Netlist (<code>.v</code>)</strong>: gate-level netlist of the macro for power analysis and hierarchical STA.</li>
+  <li><strong>SPEF</strong>: extracted parasitics for hierarchical timing.</li>
+  <li><strong>SPICE</strong>: transistor netlist for LVS verification.</li>
 </ul>
-<p>LibreLane carries all of this in one variable — <code>MACROS</code> — a dictionary keyed by the macro's
+<p>LibreLane bundles these definitions into the <code>MACROS</code> dictionary, keyed by the macro's
 <em>module name</em>. See {py:class}<code>librelane.config.Macro</code>.</p>
 
 <h3>Instances &amp; placement</h3>
@@ -246,17 +245,17 @@ the macro placer position it automatically.</p>
   <li>Enter the macro's <strong>module name</strong> (must match the module you instantiate).</li>
   <li>Add one <strong>instance</strong> row per instantiation; set X/Y + orientation, or leave blank for auto-place.</li>
   <li>Upload at least the <strong>GDS</strong> and <strong>LEF</strong>. Add <strong>LIB</strong> so the tools can time it.</li>
-  <li>Save. Toggle <strong>Use</strong> per run. Start a run from Setup — the macro is inserted automatically.</li>
+  <li>Save. Toggle <strong>Use</strong> per run. When you start a run from Setup, the macro is inserted automatically.</li>
 </ol>
 
 <h3>Important notes</h3>
 <ul>
-  <li>This is <strong>per-run, GUI-managed</strong>. Your <code>config.json</code> is never modified — the macro is added
+  <li>This is <strong>per-run, GUI-managed</strong>. Your <code>config.json</code> is never modified; the macro configuration is passed
       through a small <code>.gui-macros.json</code> overlay config the GUI hands to the flow. Files live in
       <code>macros/&lt;name&gt;/</code> in your design folder.</li>
   <li>The macro's <strong>LEF must agree with its GDS</strong> (same pins/outline) or routing/LVS will fail.</li>
-  <li>Remember to also <strong>instantiate</strong> the macro module in your RTL — this feature provides the views &amp;
-      placement; it does not add the instance to your netlist.</li>
+  <li>Remember to also <strong>instantiate</strong> the macro module in your RTL. This feature supplies layout views &amp;
+      placement parameters; it does not modify your RTL netlist.</li>
   <li>Power: most macros need their power pins tied into the grid. If your macro has its own power pins you may also
       need <code>PDN_MACRO_CONNECTIONS</code> in your config; this panel wires the views and placement.</li>
 </ul>`;

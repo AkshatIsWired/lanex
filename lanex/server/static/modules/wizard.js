@@ -63,7 +63,7 @@ function renderStep2(body, tpl) {
   const pdkOpts = (state.pdks || []).map((p) =>
     "<option value='" + fmt.escape(p.name) + "'>" + fmt.escape(p.name) + "</option>").join("");
   body.innerHTML =
-    "<h3>2 · Target — " + fmt.escape(tpl.title) + "</h3>" +
+    "<h3>2 · Target: " + fmt.escape(tpl.title) + "</h3>" +
     "<label class='wiz-field'>Destination folder (absolute path)" +
     "<input id='wiz-dest' type='text' placeholder='/path/to/" + fmt.escape(tpl.name) + "' /></label>" +
     "<label class='wiz-field'>Top module<input id='wiz-top' type='text' value='" + fmt.escape(tpl.top) + "' /></label>" +
@@ -96,7 +96,7 @@ async function doCreate(body, tpl) {
       clock_period: isNaN(clk) ? null : clk,
     });
     overlay().hidden = true;
-    toast.show("Project created — loading it now.", "success");
+    toast.show("Project created. Loading design now.", "success");
     const setup = await import("./setup.js");
     const input = document.getElementById("design-dir-input");
     if (input) input.value = res.design_dir;

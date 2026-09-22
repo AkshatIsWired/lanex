@@ -242,7 +242,7 @@ async function renderCompareCharts(host, data, cols) {
     const name = um ? label.slice(0, um.index).trim() : label;
     const chart = window.echarts.init(el, chartTheme(), { renderer: "canvas" });
     el.setAttribute("role", "img");
-    el.setAttribute("aria-label", name + " compared across the selected runs — the same values are in the comparison tables above.");
+    el.setAttribute("aria-label", name + " comparison across selected runs, matching the values in the comparison tables above.");
     chart.setOption({
       backgroundColor: "transparent",
       title: { text: name, subtext: k, left: "center", textStyle: { fontSize: 13, fontWeight: 600 }, subtextStyle: { fontSize: 9 } },

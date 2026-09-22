@@ -31,7 +31,7 @@ async function _fetch(path, init) {
   } catch (e) {
     if (timer) clearTimeout(timer);
     if (e && e.name === "AbortError") {
-      const err = new Error("request timed out — is the server still running?");
+      const err = new Error("Request timed out. Please check if the server is still running.");
       err.status = 0;
       throw err;
     }
@@ -341,7 +341,7 @@ function _connIndicator(ok) {
   el = document.createElement("div");
   el.id = "sse-conn-chip";
   el.setAttribute("role", "status");
-  el.textContent = "Connection to the LanEx server lost — reconnecting…";
+  el.textContent = "Connection to the LanEx server lost. Reconnecting…";
   el.style.cssText =
     "position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9999;" +
     "background:var(--danger,#b23b3b);color:#fff;padding:6px 14px;border-radius:999px;" +

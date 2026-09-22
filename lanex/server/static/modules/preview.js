@@ -43,7 +43,7 @@ async function renderOutputs(tag) {
     return;
   }
   if (!outs.length) {
-    root.innerHTML = "<div class='muted'>No final outputs found — this run may not have completed.</div>";
+    root.innerHTML = "<div class='muted'>No final outputs found. This run may not have completed.</div>";
     return;
   }
   // Group by category, preserving the backend's order.
@@ -68,8 +68,8 @@ async function renderOutputs(tag) {
           "<div class='out-meta'><div class='out-label'>" + fmt.escape(o.label) + "</div>" +
           "<div class='out-sub'>" + sub + " · " + fmtBytes(o.size) + "</div></div>" +
           "<div class='out-actions'>" +
-          "<a class='btn btn-ghost' href='" + url + "' target='_blank' rel='noopener' download='" + fmt.escape(o.name) + "'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Download</a>" +
-          "<button class='btn btn-ghost out-reveal' data-path='" + fmt.escape(o.path) + "'>" + icon('folderOpen',{size:13}) + " Reveal</button>" +
+          "<a class='btn btn-ghost' href='" + url + "' target='_blank' rel='noopener'>" + icon('eye',{size:13}) + " View</a>" +
+          fileActionsHtml(tag, o.path) +
           "</div></div>"
         );
       }).join("") +
@@ -135,7 +135,7 @@ function syncTagDropdown() {
   const sel = document.getElementById("view-tag");
   const oldVal = sel.value || _currentTag;
   const runs = _previewRuns.length ? _previewRuns : (state.runs || []);
-  sel.innerHTML = "<option value=''>— pick a run —</option>" + runOptionsHtml(runs, oldVal, fmt.escape);
+  sel.innerHTML = "<option value=''>Select a run</option>" + runOptionsHtml(runs, oldVal, fmt.escape);
   if (oldVal && _runIndex[oldVal]) sel.value = oldVal;
 }
 
@@ -151,7 +151,7 @@ function syncFormatDropdown() {
       seen.add(df.id);
       const o = document.createElement("option");
       o.value = df.id;
-      o.textContent = df.id + " — " + df.full_name;
+      o.textContent = df.id + " (" + df.full_name + ")";
       sel.appendChild(o);
     }
   }
@@ -236,8 +236,8 @@ async function renderDiagrams(tag, ep) {
   if (ep !== undefined && ep !== _epoch) return;   // superseded by a newer refresh
   if (!diags.length) {
     root.innerHTML =
-      "<div class='muted'>No synthesis diagrams in this run. Enable <code>SYNTH_SHOW</code> on the " +
-      "Config tab, then re-run — Yosys will emit a design-hierarchy and a gate-level schematic.</div>";
+      "<div class='muted'>No synthesis diagrams found for this run. Enable <code>SYNTH_SHOW</code> on the " +
+      "Config tab and run the flow again to generate hierarchy and gate-level schematics.</div>";
     return;
   }
   root.innerHTML = "";
@@ -259,7 +259,7 @@ async function renderDiagrams(tag, ep) {
     // Big gate-level schematics are render-on-demand: auto-rendering one can
     // freeze the browser (and used to OOM the host's dot). Show a button.
     if (d.large) {
-      body.textContent = "Large diagram — rendering may be slow.";
+      body.textContent = "Large diagram; rendering may take extra time.";
       const go = document.createElement("button");
       go.className = "btn btn-ghost";
       go.textContent = "Render anyway";
@@ -319,9 +319,9 @@ async function doRenderDot(tag, d, body, actions, force) {
       gv.disabled = true; gv.textContent = "Installing graphviz… (see Install logs)";
       try {
         const r = await api.installTool("graphviz");
-        if (r && r.in_progress) toast.show("graphviz install already running — see Install logs.", "info");
+        if (r && r.in_progress) toast.show("Graphviz installation in progress. See Install logs.", "info");
         else if (r && r.ok === false) toast.show(r.guidance || r.reason || "Couldn't install graphviz automatically.", "warn");
-        else { toast.show("graphviz installing — retry the render when it finishes.", "success"); }
+        else { toast.show("Installing Graphviz. Retry rendering once installation finishes.", "success"); }
       } catch (ex) {
         toast.show("Could not start graphviz install: " + (ex.message || ex), "error");
       }

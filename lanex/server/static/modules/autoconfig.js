@@ -61,8 +61,8 @@ export async function openAutoConfigModal(designDir) {
   const notes = (meta.notes || []).map((n) => "<li>" + fmt.escape(n) + "</li>").join("");
   const detected =
     "<dl class='ac-detected'>" +
-    "<div><dt>Top module</dt><dd>" + fmt.escape(meta.top || "— not found —") + "</dd></div>" +
-    "<div><dt>Clock port</dt><dd>" + fmt.escape(meta.clock_port || "— none (combinational?) —") + "</dd></div>" +
+    "<div><dt>Top module</dt><dd>" + fmt.escape(meta.top || "(not found)") + "</dd></div>" +
+    "<div><dt>Clock port</dt><dd>" + fmt.escape(meta.clock_port || "(none detected; combinational?)") + "</dd></div>" +
     "<div><dt>Sources</dt><dd>" + (meta.verilog_count || 0) + " Verilog" +
       (meta.vhdl_count ? ", " + meta.vhdl_count + " VHDL" : "") + "</dd></div>" +
     (meta.top_candidates && meta.top_candidates.length > 1
@@ -125,14 +125,14 @@ export async function openAutoConfigModal(designDir) {
       const out = await api.writeConfig(designDir, parsed, format, false);
       close();
       toast.show("Wrote " + (out.path ? out.path.split(/[/\\]/).pop() : "config") +
-        " — press Run to harden the design.", "success");
+        ". Click Run flow to begin hardening.", "success");
       // Re-adopt the design so the missing-config banner clears and run unlocks.
       const { adoptDesignDir } = await import("./setup.js");
       await adoptDesignDir(designDir, { explicit: true });
     } catch (ex) {
       errEl.hidden = false;
       errEl.textContent = ex.message + (ex.status === 400 && /exists/.test(ex.message)
-        ? " (a config already exists — close this and edit it in the IDE instead)" : "");
+        ? " (a configuration file already exists; edit it directly in the IDE)" : "");
     }
   });
 }

@@ -291,7 +291,7 @@ function renderDiagnostics(diags) {
     ? diags.map((d) =>
         "<div class='ide-diag ide-diag-" + d.severity + "' data-line='" + d.line +
         "' data-file='" + fmt.escape(d.file) + "'>" +
-        fmt.escape(d.file) + ":" + d.line + " — " + fmt.escape(d.msg) + "</div>").join("")
+        fmt.escape(d.file) + ":" + d.line + ": " + fmt.escape(d.msg) + "</div>").join("")
     : "<p class='muted'>No lint messages.</p>";
   host.querySelectorAll(".ide-diag").forEach((el) =>
     el.addEventListener("click", () => {
@@ -344,14 +344,14 @@ function armSimSafety() {
   _simSafety = setTimeout(() => {
     if (!document.getElementById("ide-sim")?.disabled) return;
     setSimBusy(false);
-    note("No result received — the simulator may have wedged. Try again, or Stop and check the log.", true);
+    note("No result received. The simulation process may be unresponsive. Try again or check the logs.", true);
   }, SIM_SAFETY_MS);
 }
 function armLintSafety() {
   clearTimeout(_lintSafety);
   _lintSafety = setTimeout(() => {
     setLintBusy(false);
-    note("No lint result received — the linter may have wedged. Try again.", true);
+    note("No lint result received. The linter may be unresponsive. Please try again.", true);
   }, LINT_SAFETY_MS);
 }
 
@@ -409,8 +409,8 @@ function onEvent(ev) {
     clearTimeout(_lintSafety);
     setLintBusy(false);
     if (ev.timed_out)
-      note("Lint hit the time limit and was stopped — on WSL a Windows Verilator on the "
-           + "PATH can hang; install the Linux build from Tools.", true);
+      note("Lint exceeded the time limit and was stopped. If running on WSL with Windows Verilator on PATH, "
+           + "install the Linux binary from Tools.", true);
     applyLint(ev.diagnostics);
   }
   else if (ev.type === "sim_done") {
@@ -420,16 +420,16 @@ function onEvent(ev) {
     else if (ev.vcd) {
       loadWaveform(ev.vcd, ev.partial);
       if (ev.timed_out)
-        note("Sim hit the time limit (free-running clock / no $finish) — showing the "
-             + "partial waveform. Add $finish to the testbench for a full run.", true);
+        note("Simulation reached the time limit (free-running clock without $finish). Displaying "
+             + "partial waveform. Add $finish to your testbench for a complete run.", true);
     }
     else if (ev.timed_out)
-      note("Simulation hit the time limit and produced no waveform — add $finish to the "
-           + "testbench (a free-running clock with no $finish never ends).", true);
+      note("Simulation reached the time limit with no waveform generated. Add $finish to your "
+           + "testbench so the simulation can terminate.", true);
     else if (ev.ok)
-      note("Simulation ran but produced no waveform — check the testbench has "
-           + "$dumpfile/$dumpvars and that the top is the testbench module (not the DUT).", true);
-    else note("Simulation finished with errors — see the log below.", true);
+      note("Simulation ran but produced no waveform. Verify the testbench invokes "
+           + "$dumpfile and $dumpvars, and that top is set to the testbench module.", true);
+    else note("Simulation finished with errors. Review the log below for details.", true);
   }
 }
 
@@ -440,7 +440,7 @@ function onEvent(ev) {
 // streams to the Install logs / log drawer).
 async function openInGtkwave() {
   const path = state.lastWavePath;
-  if (!path) { note("Run a simulation first — no waveform to open.", true); return; }
+  if (!path) { note("Run a simulation first. No waveform available to open.", true); return; }
   try {
     const r = await api.openWave(path);
     if (r && r.ok) {
@@ -451,13 +451,13 @@ async function openInGtkwave() {
     if (r && r.need === "gtkwave") {
       if (state.gtkwaveInstallArmed) {
         state.gtkwaveInstallArmed = false;
-        note("Installing GTKWave — watch the install logs, then click GTKWave again.");
+        note("Installing GTKWave. Monitor the install logs, then click GTKWave again when complete.");
         const ir = await api.installTool("gtkwave");
-        if (ir && ir.in_progress) note("A GTKWave install is already running — watch the install logs.");
-        else if (ir && ir.ok === false) note(ir.guidance || ir.reason || "Couldn't install GTKWave automatically — see the Tools tab.", true);
+        if (ir && ir.in_progress) note("GTKWave installation in progress. Monitor the install logs for updates.");
+        else if (ir && ir.ok === false) note(ir.guidance || ir.reason || "Could not install GTKWave automatically. See the Tools tab for manual setup.", true);
       } else {
         state.gtkwaveInstallArmed = true;
-        note((r.error || "GTKWave isn't installed.") + " Click GTKWave again to install it now.", true);
+        note((r.error || "GTKWave is not installed.") + " Click GTKWave again to install it now.", true);
       }
       return;
     }
@@ -497,7 +497,7 @@ async function loadWaveform(vcdRel, partial) {
 }
 
 function exportWavePng() {
-  if (!state.wave || !state.wave.vcd) { note("Run a simulation first — no waveform to export.", true); return; }
+  if (!state.wave || !state.wave.vcd) { note("Run a simulation first. No waveform available to export.", true); return; }
   const url = state.wave.toPNG();
   if (!url) { note("Could not export the waveform image.", true); return; }
   const a = document.createElement("a");
@@ -510,7 +510,7 @@ function exportWavePng() {
 }
 
 function exportWaveCsv() {
-  if (!state.wave || !state.wave.vcd) { note("Run a simulation first — no waveform to export.", true); return; }
+  if (!state.wave || !state.wave.vcd) { note("Run a simulation first. No waveform available to export.", true); return; }
   const csv = vcdToCSV(state.wave.vcd, state.wave.visible, state.wave.radix);
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);

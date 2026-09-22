@@ -1,5 +1,5 @@
 {
-  "name": "LanEx — RTL to GDSII cockpit",
+  "name": "LanEx: RTL to GDSII cockpit",
   "short_name": "LanEx",
   "description": "A cockpit for the LibreLane RTL-to-GDSII chip flow.",
   "id": "/landing",

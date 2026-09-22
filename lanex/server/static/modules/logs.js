@@ -131,7 +131,7 @@ export const renderLogs = {
   markStep(stepId, label) {
     if (!stepId) return;
     if (!started) started = true;
-    const name = label && label !== stepId ? stepId + " — " + label : stepId;
+    const name = label && label !== stepId ? stepId + ": " + label : stepId;
     buf.push({ level: "STEP", step: stepId, msg: "──────── ▶ " + name + " ────────" });
     schedule();
   },
