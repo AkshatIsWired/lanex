@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>LanEx — Design chips. Not command lines.</title>
-  <meta name="description" content="LanEx is a cockpit & IDE built on LibreLane, the open-source RTL-to-GDSII chip flow. One click from Verilog to GDSII — design chips without living in a terminal." />
-  <meta property="og:title" content="LanEx — Design chips. Not command lines." />
-  <meta property="og:description" content="A cockpit & IDE built on LibreLane, the open-source RTL→GDSII flow. Focus on the design, not the tools." />
+  <title>LanEx: Open-source ASIC cockpit and IDE</title>
+  <meta name="description" content="LanEx is a cockpit and IDE built on LibreLane for open-source RTL-to-GDSII chip design. Run the complete flow with direct access to every EDA tool report." />
+  <meta property="og:title" content="LanEx: Open-source ASIC cockpit and IDE" />
+  <meta property="og:description" content="A cockpit and IDE built on LibreLane for the open-source RTL-to-GDSII flow." />
   <meta property="og:image" content="https://raw.githubusercontent.com/AkshatIsWired/lanex/main/docs/social-preview.png" />
   <meta property="og:image:type" content="image/png" />
   <meta name="twitter:card" content="summary_large_image" />
-  <!-- Fonts are bundled with LanEx (offline / air-gap safe) — no CDN. -->
+  <!-- Fonts are bundled with LanEx for offline and air-gapped use without external CDNs. -->
   <link rel="stylesheet" href="/static/fonts.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <link rel="manifest" href="/static/manifest.json" />
@@ -91,12 +91,12 @@
           <a class="hero-badge badge-ll" href="https://github.com/librelane/librelane" target="_blank" rel="noopener">BUILT ON LIBRELANE</a>
         </div>
         <h1 class="reveal">
-          Design chips.<br />
-          <span class="gradient-text">Not command lines.</span>
+          Physical design,<br />
+          <span class="gradient-text">straight to silicon.</span>
         </h1>
         <p class="hero-sub reveal">
           A cockpit &amp; IDE for LibreLane, the open-source RTL&nbsp;→&nbsp;GDSII chip flow.
-          <strong>One click from Verilog to GDSII — every number straight from the tools.</strong>
+          <strong>Execute from Verilog to GDSII with exact metrics reported directly from EDA tools.</strong>
         </p>
         <div class="hero-cta reveal">
           <a class="btn btn-primary btn-lg" href="/" data-launch>Enter the cockpit
@@ -109,11 +109,11 @@
       <div class="hero-metrics reveal">
         <div class="hm-item">
           <span class="hm-num"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="var(--c-m1)" stroke-width="2" stroke-linecap="round"><path d="M12 2v20M2 12h20"/></svg></span>
-          <span class="hm-label">One-line install — any Linux, macOS, or WSL2</span>
+          <span class="hm-label">One-line setup across Linux, macOS, and WSL2</span>
         </div>
         <div class="hm-item">
           <span class="hm-num"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="var(--c-m3)" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg></span>
-          <span class="hm-label">RTL → GDSII in one click. No terminal needed.</span>
+          <span class="hm-label">RTL to GDSII execution with automated step sequencing</span>
         </div>
         <div class="hm-item">
           <span class="hm-num"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="var(--c-m2)" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
@@ -129,20 +129,17 @@
         <div class="about-grid">
           <div class="about-copy reveal">
             <p class="eyebrow">INTUITIVE CHIP DESIGN</p>
-            <h2>Your design should dictate the tools,<br /><em>not the other way around.</em></h2>
+            <h2>Keep focus on the silicon architecture,<br /><em>with an interface built for the flow.</em></h2>
             <p class="lede">
-              LibreLane is powerful — but terminal-first. You hand-write configs, learn 80-step flows,
-              install a compatible toolchain, and read raw logs to figure out why a run failed.
+              LibreLane provides a capable open-source ASIC flow, though operating it directly requires managing complex YAML configurations, tracking multi-stage steps in text consoles, and parsing raw log files to diagnose failures.
             </p>
             <p class="lede">
-              <strong>LanEx changes that.</strong> It puts a reactive, honest GUI on top of the entire
-              RTL→GDSII flow. Every metric comes straight from the tools — unmodified, unfiltered.
-              LanEx just makes them <em>seeable</em>.
+              <strong>LanEx introduces a visual interface</strong> for the entire RTL-to-GDSII pipeline. Every reported metric, timing slack calculation, and DRC summary is read directly from tool output files without alteration.
             </p>
             <div class="about-tagline">
-              <span class="at-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg> Figure it out <em>yourself</em></span>
-              <span class="at-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg> Runs the flow for real</span>
-              <span class="at-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg> Zero third-party deps</span>
+              <span class="at-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg> Interactive flow inspection</span>
+              <span class="at-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg> Full pipeline execution</span>
+              <span class="at-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg> Zero external dependencies</span>
             </div>
           </div>
           <div class="about-visual reveal">
@@ -165,57 +162,57 @@
       <div class="section-inner">
         <div class="section-head reveal">
           <p class="eyebrow">THE COCKPIT</p>
-          <h2>A cockpit, not a wrapper.</h2>
-          <p class="lede">Everything up to tape-out happens in one cockpit — the flow's own tools do the work, LanEx does the watching.</p>
+          <h2>An integrated ASIC cockpit.</h2>
+          <p class="lede">Manage the entire path toward tape-out in a unified interface, coordinating toolchain execution while parsing live logs and signoff metrics.</p>
         </div>
         <div class="feat-grid">
           <article class="feat-card reveal" style="--hue:var(--c-m1)">
             <div class="feat-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 12h4l3-8 4 16 3-8h6"/></svg></div>
             <h3>Live Pipeline</h3>
-            <p>Every flow step with real status, streamed over SSE as it happens. Failures point at the exact log line — not at a shrug.</p>
+            <p>Track every step with live status streaming over SSE. Step failures jump directly to the relevant log lines and diagnostic error messages.</p>
           </article>
           <article class="feat-card reveal" style="--hue:var(--c-m3)">
             <div class="feat-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4h16v16H4z"/><path d="M4 10h16M10 4v16"/></svg></div>
             <h3>RTL IDE</h3>
-            <p>Edit Verilog/SystemVerilog with syntax highlighting. Lint with Verilator, simulate with Icarus. Built-in VCD waveform viewer.</p>
+            <p>Edit Verilog and SystemVerilog with syntax highlighting. Run lint checks with Verilator and simulate testbenches using the embedded waveform viewer.</p>
           </article>
           <article class="feat-card reveal" style="--hue:var(--c-m2)">
             <div class="feat-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 18l-6-6 6-6M15 6l6 6-6 6"/></svg></div>
             <h3>Verification Center</h3>
-            <p>DRC / LVS / antenna / timing roll-up by signoff stage. Honest 3-state verdict — never flashes green for an incomplete run.</p>
+            <p>Consolidated signoff summaries for DRC, LVS, antenna checks, and STA timing. Stage verdicts reflect actual run metrics without masking incomplete data.</p>
           </article>
           <article class="feat-card reveal" style="--hue:var(--c-mt)">
             <div class="feat-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3 3.7-3.7z"/></svg></div>
             <h3>Analytics &amp; DSE</h3>
-            <p>Metric trends, run comparison, and design-space sweeps. See the trade-off curve, not a folder of logs.</p>
+            <p>Plot metric trends across iterations, compare configuration deltas between runs, and evaluate parameter trade-offs on Pareto charts.</p>
           </article>
           <article class="feat-card reveal" style="--hue:var(--c-poly)">
             <div class="feat-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z"/><path d="M3.3 7l8.7 5 8.7-5M12 22V12"/></svg></div>
-            <h3>Real Layout Viewers</h3>
-            <p>Open actual GDSII in KLayout, Magic, GDS3D, or OpenROAD GUI — launched with the right environment, in the container or on your host.</p>
+            <h3>Layout Viewers</h3>
+            <p>Inspect GDSII and DEF layouts using KLayout, Magic, GDS3D, or OpenROAD GUI, launched directly with the appropriate PDK layer definitions.</p>
           </article>
           <article class="feat-card reveal" style="--hue:var(--c-pass)">
             <div class="feat-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M8 12l2 2 4-4"/></svg></div>
-            <h3>One-Click Toolchain</h3>
-            <p>Pulls the version-matched LibreLane container image for you — or plugs into the toolchain you already have. No Docker yet? It installs that too.</p>
+            <h3>Toolchain Manager</h3>
+            <p>Downloads the version-matched LibreLane container image automatically, or integrates with an existing local toolchain and container runtime.</p>
           </article>
         </div>
         <div class="feat-extra reveal">
           <div class="feat-extra-item">
             <span class="feat-extra-ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v18M16 3v18M3 8h5M3 16h5M16 8h5M16 16h5"/></svg></span>
-            <span><strong>Compare &amp; Explore</strong> — Diff any two runs, config and results. Sweep parameters with DSE.</span>
+            <span><strong>Compare &amp; Explore:</strong> Compare configuration and metric differences between runs, and sweep parameters with DSE.</span>
           </div>
           <div class="feat-extra-item">
             <span class="feat-extra-ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16v16H4z"/><path d="M4 10h16M10 4v16"/></svg></span>
-            <span><strong>Cells &amp; Macros</strong> — Browse PDK standard-cell library; insert custom cells and hard macros.</span>
+            <span><strong>Cells &amp; Macros:</strong> Inspect standard-cell properties, swap cell variants, and integrate hardened macro blocks.</span>
           </div>
           <div class="feat-extra-item">
             <span class="feat-extra-ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20V10M18 20V4M6 20v-4"/></svg></span>
-            <span><strong>Run History</strong> — Browse, pin, import, export, bundle, diff, and reproduce past runs.</span>
+            <span><strong>Run History:</strong> Filter, pin, export, bundle, and reproduce previous flow runs with persistent metadata.</span>
           </div>
           <div class="feat-extra-item">
             <span class="feat-extra-ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg></span>
-            <span><strong>Auto-Config</strong> — Point LanEx at a bare Verilog folder and it drafts a working LibreLane config: top module, clock, sources.</span>
+            <span><strong>Auto-Config:</strong> Scan source directories to infer top-level modules, clock periods, and file associations for initial configurations.</span>
           </div>
         </div>
       </div>
@@ -231,25 +228,25 @@
         <div class="about-grid">
           <div class="about-copy reveal">
             <h3>Visualizing your layout</h3>
-            <p class="lede">LanEx ships with out-of-the-box support for the industry's best layout viewers. Launch them directly from the cockpit. Whether you need standard 2D GDSII inspection, advanced DRV debugging, or stunning 3D visualization, the environment is automatically configured.</p>
+            <p class="lede">LanEx launches external layout tools configured with matching PDK techfiles and layer properties. Inspect 2D GDSII structures, review detailed DRC markers, examine placed DEF components, or visualize layer stacks in 3D.</p>
             <ul class="fe-pill-list">
-              <li class="fe-pill"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--c-m1)" stroke-width="2" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z"/></svg> <strong>KLayout:</strong> The gold standard for fast, robust GDSII/OASIS viewing.</li>
-              <li class="fe-pill"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--c-m2)" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg> <strong>Magic:</strong> Integrated DRC checking and parasitic extraction.</li>
-              <li class="fe-pill"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--c-m3)" stroke-width="2" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg> <strong>OpenROAD GUI:</strong> Inspect DEF/LEF routing, CTS, and placement directly.</li>
-              <li class="fe-pill"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--c-poly)" stroke-width="2" aria-hidden="true"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/></svg> <strong>GDS3D:</strong> Fly through your chip's metal layers in hardware-accelerated 3D.</li>
+              <li class="fe-pill"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--c-m1)" stroke-width="2" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z"/></svg> <strong>KLayout:</strong> Fast 2D GDSII and OASIS mask viewer with layer hierarchy inspection.</li>
+              <li class="fe-pill"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--c-m2)" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg> <strong>Magic:</strong> Interactive VLSI layout tool with real-time DRC checking and extraction.</li>
+              <li class="fe-pill"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--c-m3)" stroke-width="2" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg> <strong>OpenROAD GUI:</strong> Interactive viewer for floorplanning, placement rows, CTS trees, and routing tracks.</li>
+              <li class="fe-pill"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--c-poly)" stroke-width="2" aria-hidden="true"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/></svg> <strong>GDS3D:</strong> Hardware-accelerated 3D viewer rendering multi-layer metal stacks and vias.</li>
             </ul>
           </div>
           <div class="about-copy reveal fe-card-glass">
             <h3>Custom Cells &amp; Macros</h3>
-            <p class="lede" style="margin-bottom: 24px;">Don't let standard-cell libraries limit your architecture. LanEx exposes a first-class interface for integrating custom IP blocks.</p>
+            <p class="lede" style="margin-bottom: 24px;">Incorporate specialized IP blocks and cell variations into the physical synthesis flow without modifying base configuration files.</p>
             <div class="fe-card-stack">
               <div class="fe-card fe-card-cyan">
                 <h4>Hard Macros</h4>
-                <p style="margin: 0; font-size: 13.5px; color: var(--text-muted);">Instantiate pre-hardened SRAMs, analog IP, or external PHYs. Drop in the LEF and GDS files, map the ports, and LibreLane routes to them automatically.</p>
+                <p style="margin: 0; font-size: 13.5px; color: var(--text-muted);">Instantiate pre-hardened SRAMs, analog IP, or external PHYs. Supply the LEF and GDS files, specify pin locations, and LibreLane routes interconnect automatically.</p>
               </div>
               <div class="fe-card fe-card-teal">
                 <h4>Custom Cells</h4>
-                <p style="margin: 0; font-size: 13.5px; color: var(--text-muted);">Need a specialized clock-gater or an optimized delay cell? Add custom liberty (.lib) definitions and layout geometries alongside the stock PDK.</p>
+                <p style="margin: 0; font-size: 13.5px; color: var(--text-muted);">Include custom clock-gating cells, specialized delay cells, or hand-crafted logic gates by supplying Liberty timing definitions and physical LEF layouts alongside the PDK.</p>
               </div>
             </div>
           </div>
@@ -262,15 +259,15 @@
       <div class="section-inner">
         <div class="section-head reveal">
           <p class="eyebrow">FIVE CLICKS TO SILICON</p>
-          <h2>Figure it out yourself.<br /><em>With tools that don't get in the way.</em></h2>
-          <p class="lede">LanEx never hides what it runs. Click "Reveal CLI" and see the exact librelane command. Every number is byte-faithful passthrough from the EDA tools.</p>
+          <h2>Clear flow execution.<br /><em>From source RTL to final GDSII.</em></h2>
+          <p class="lede">Every underlying invocation is fully transparent. Use the CLI panel to inspect the exact commands executed, with metrics reported directly from tool outputs.</p>
         </div>
         <div class="steps">
           <div class="step reveal">
             <div class="step-num">01</div>
             <div class="step-content">
               <h3>Pick your design</h3>
-              <p>Point LanEx at your HDL folder, or use the built-in SPM example. Auto-detect config from your source files.</p>
+              <p>Point LanEx at your HDL directory, or load the built-in SPM multiplier design. Auto-detection extracts top modules and clock ports.</p>
             </div>
           </div>
           <div class="step-connector"><span></span></div>
@@ -278,7 +275,7 @@
             <div class="step-num">02</div>
             <div class="step-content">
               <h3>Confirm your PDK</h3>
-              <p>Select your process design kit and standard-cell library. LanEx detects what's installed and highlights what's missing.</p>
+              <p>Select your process design kit and standard-cell library. LanEx detects local installations and indicates any missing libraries.</p>
             </div>
           </div>
           <div class="step-connector"><span></span></div>
@@ -286,7 +283,7 @@
             <div class="step-num">03</div>
             <div class="step-content">
               <h3>Choose your mode</h3>
-              <p>Full Auto runs the whole flow. Step-by-step lets you inspect results after each stage. Your choice.</p>
+              <p>Run the entire flow end-to-end automatically, or use Step-by-step mode to pause and review stage outputs between steps.</p>
             </div>
           </div>
           <div class="step-connector"><span></span></div>
@@ -294,7 +291,7 @@
             <div class="step-num">04</div>
             <div class="step-content">
               <h3>Press Run</h3>
-              <p>Watch the pipeline light up in real time — synthesis, floorplan, placement, CTS, routing, tape-out. Live logs, live metrics.</p>
+              <p>Monitor pipeline progress in real time across synthesis, floorplanning, placement, clock tree synthesis, routing, and tape-out.</p>
             </div>
           </div>
           <div class="step-connector"><span></span></div>
@@ -302,7 +299,7 @@
             <div class="step-num">05</div>
             <div class="step-content">
               <h3>See your chip</h3>
-              <p>Preview the GDSII inline. Open in KLayout, Magic, or GDS3D. Verify DRC/LVS. Compare runs. Ship it.</p>
+              <p>Inspect generated GDSII files, verify DRC and LVS reports, review timing slack margins, and compare results across runs.</p>
             </div>
           </div>
         </div>
@@ -315,7 +312,7 @@
         <div class="section-head reveal">
           <p class="eyebrow">INSTALL</p>
           <h2>One cockpit.<br /><em>Every platform.</em></h2>
-          <p class="lede">Thin Python package — the EDA toolchain stays in the official LibreLane image or your existing install. Python ≥ 3.10 required. Windows via WSL2.</p>
+          <p class="lede">Packaged as a lightweight Python application. Heavy EDA tools execute inside the official container image or via an existing local installation. Python ≥ 3.10 required. Windows supported via WSL2.</p>
         </div>
         <div class="install-grid">
           <!-- One-line Debian/Ubuntu/WSL2 -->
@@ -324,9 +321,9 @@
               <div class="install-ico">
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 2v20M2 12h20"/></svg>
               </div>
-              <h3>Easiest · Any OS</h3>
+              <h3>Universal script (Linux, macOS, WSL2)</h3>
             </div>
-            <p>One command works on any Linux, WSL2, or macOS. Dependencies, LanEx, and toolchain set up. Re-run to upgrade.</p>
+            <p>Installs LanEx and prerequisites on Linux, WSL2, or macOS. Re-run the command at any time to update to the latest release.</p>
             <div class="cmd">
               <pre><code>curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
 lanex</code></pre>
@@ -341,7 +338,7 @@ lanex</code></pre>
               </div>
               <h3>macOS (Manual)</h3>
             </div>
-            <p>Python ≥ 3.10 required. Container engine recommended — the heavy tools run in the Docker/Podman image.</p>
+            <p>Requires Python ≥ 3.10. A container engine is recommended to execute EDA tools inside the managed container image.</p>
             <div class="cmd">
               <pre><code>brew install pipx
 pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
@@ -358,7 +355,7 @@ lanex</code></pre>
               </div>
               <h3>Fedora / Arch (Manual)</h3>
             </div>
-            <p>pipx + Mesa GL drivers. Works on Fedora, Arch, CentOS Stream, RHEL derivatives, and similar.</p>
+            <p>pipx with Mesa GL drivers. Tested on Fedora, Arch Linux, CentOS Stream, and related distributions.</p>
             <div class="cmd">
               <pre><code>sudo dnf install -y pipx git mesa-dri-drivers xorg-x11-fonts-misc
 pipx ensurepath; export PATH="$HOME/.local/bin:$PATH"
@@ -375,7 +372,7 @@ lanex</code></pre>
               </div>
               <h3>Existing LibreLane env</h3>
             </div>
-            <p>Already run LibreLane in a venv or conda env? Activate it, then plain pip install — LanEx shares the environment and sees your toolchain.</p>
+            <p>If LibreLane is already installed in an active virtualenv or Conda environment, install LanEx directly to utilize your existing toolchain.</p>
             <div class="cmd">
               <pre><code>git clone https://github.com/AkshatIsWired/lanex && cd lanex
 pip install .
@@ -385,9 +382,7 @@ lanex</code></pre>
           </article>
         </div>
         <p class="install-note reveal">
-          Need Arch? <code>sudo pacman -S --needed python-pipx git mesa</code> then same pipx flow as Fedora.
-          Docker/Podman optional — LanEx installs one from the in-app <strong>Tools</strong> tab if you skip it.
-          After any install, open the cockpit and use the <strong>Tools → Install the toolchain</strong> card to pull the version-matched LibreLane image in one click.
+          For Arch Linux, install dependencies with <code>sudo pacman -S --needed python-pipx git mesa</code>, then proceed with the pipx installation. If Docker or Podman is not already installed, the in-app Tools tab provides guided installation. After setup, pull the version-matched LibreLane image directly from the Tools tab.
         </p>
       </div>
     </section>
@@ -413,7 +408,7 @@ lanex</code></pre>
                 <span class="sc-chip" style="--sc:var(--c-m1)">Runs</span>
               </div>
             </div>
-            <p>9 tabs in the cockpit side rail — every stage of the flow has its own instrument panel.</p>
+            <p>Nine dedicated views organize each phase of physical design and verification.</p>
           </div>
           <div class="showcase-item">
             <div class="showcase-fake-window">
@@ -431,7 +426,7 @@ lanex</code></pre>
                 <div style="width:80%;height:2px;border-radius:1px;background:var(--border);overflow:hidden;margin-top:4px"><div style="width:60%;height:100%;background:linear-gradient(90deg,var(--c-m1),var(--c-m3));border-radius:1px"></div></div>
               </div>
             </div>
-            <p>Live pipeline with per-step status streamed over SSE. Every failure points at the exact log line.</p>
+            <p>Real-time pipeline monitoring with per-step status streaming over SSE and direct links to error logs.</p>
           </div>
         </div>
       </div>
@@ -448,10 +443,10 @@ lanex</code></pre>
         <a class="btn btn-primary btn-xl" href="/" data-launch>Enter the cockpit
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </a>
-        <p class="finale-note">Lands on the Setup tab — pick a design and go.</p>
+        <p class="finale-note">Opens directly to the Setup tab to select a design and begin.</p>
         <label class="skip-row">
           <input type="checkbox" id="skip-next" />
-          <span>Skip this screen next time — open the cockpit directly</span>
+          <span>Skip this screen next time and open the cockpit directly</span>
         </label>
       </div>
     </section>
@@ -464,7 +459,7 @@ lanex</code></pre>
         <img src="/static/vendor/lanex-mark-light.png" alt="" class="logo-light" width="18" height="18" />
         <span>LanEx</span>
       </div>
-      <p class="footer-lede">Independent open-source project, Apache-2.0. Built on <a href="https://github.com/librelane/librelane" target="_blank" rel="noopener">LibreLane</a> — not affiliated with or endorsed by its maintainers.</p>
+      <p class="footer-lede">Independent open-source project under Apache-2.0. Built on <a href="https://github.com/librelane/librelane" target="_blank" rel="noopener">LibreLane</a>; not affiliated with or endorsed by LibreLane maintainers.</p>
       <p class="footer-lede">LanEx is a viewer, not a sign-off tool; lithography, dicing and packaging happen at a foundry, after the GDSII handoff.</p>
       <nav class="footer-nav">
         <a href="https://github.com/AkshatIsWired/lanex" target="_blank" rel="noopener">GitHub</a>
