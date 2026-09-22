@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>LanEx — RTL to GDSII cockpit</title>
+  <title>LanEx: RTL to GDSII cockpit</title>
   <meta name="description" content="A cockpit for LibreLane." />
   <link rel="stylesheet" href="/static/fonts.css" />
   <link rel="stylesheet" href="/static/styles.css" />
@@ -213,21 +213,20 @@
               <p class="section-eyebrow">open-silicon flow · sky130 · gf180mcu</p>
               <h1>Take Verilog <span class="hl">all the way to silicon.</span></h1>
               <p class="hero-sub">
-                LibreLane is the open-source implementation flow used to harden projects on
+                LibreLane is the open-source implementation flow used to harden designs on
                 <strong>Skywater 130&nbsp;nm</strong>, <strong>GF 180&nbsp;nm MCU</strong>, and other
-                open processes. This cockpit gives you a step-by-step runbook —
-                no terminal needed.
+                supported PDKs. This cockpit provides a guided, step-by-step flow environment.
               </p>
             </div>
             <!-- Signature: the chip's process-layer stack, built bottom-up like the flow. -->
             <aside class="layer-stack" aria-hidden="true">
-              <div class="ls-layer" style="--lc:var(--met5);--lsw:90%" title="metal5 — top metal & power routing"><span class="ls-bar"></span><span class="ls-tag">met5</span></div>
-              <div class="ls-layer" style="--lc:var(--met4);--lsw:82%" title="metal4 — routing"><span class="ls-bar"></span><span class="ls-tag">met4</span></div>
-              <div class="ls-layer" style="--lc:var(--met3);--lsw:74%" title="metal3 — routing"><span class="ls-bar"></span><span class="ls-tag">met3</span></div>
-              <div class="ls-layer" style="--lc:var(--met2);--lsw:66%" title="metal2 — routing"><span class="ls-bar"></span><span class="ls-tag">met2</span></div>
-              <div class="ls-layer" style="--lc:var(--met1);--lsw:58%" title="metal1 — interconnect"><span class="ls-bar"></span><span class="ls-tag">met1</span></div>
-              <div class="ls-layer" style="--lc:var(--li);--lsw:46%" title="local interconnect — placement"><span class="ls-bar"></span><span class="ls-tag">li1</span></div>
-              <div class="ls-layer" style="--lc:var(--poly);--lsw:36%" title="poly — standard cells & synthesis"><span class="ls-bar"></span><span class="ls-tag">poly</span></div>
+              <div class="ls-layer" style="--lc:var(--met5);--lsw:90%" title="metal5: top metal and power routing"><span class="ls-bar"></span><span class="ls-tag">met5</span></div>
+              <div class="ls-layer" style="--lc:var(--met4);--lsw:82%" title="metal4: routing layer"><span class="ls-bar"></span><span class="ls-tag">met4</span></div>
+              <div class="ls-layer" style="--lc:var(--met3);--lsw:74%" title="metal3: routing layer"><span class="ls-bar"></span><span class="ls-tag">met3</span></div>
+              <div class="ls-layer" style="--lc:var(--met2);--lsw:66%" title="metal2: routing layer"><span class="ls-bar"></span><span class="ls-tag">met2</span></div>
+              <div class="ls-layer" style="--lc:var(--met1);--lsw:58%" title="metal1: interconnect layer"><span class="ls-bar"></span><span class="ls-tag">met1</span></div>
+              <div class="ls-layer" style="--lc:var(--li);--lsw:46%" title="local interconnect: placement layer"><span class="ls-bar"></span><span class="ls-tag">li1</span></div>
+              <div class="ls-layer" style="--lc:var(--poly);--lsw:36%" title="poly: polysilicon gates and standard cells"><span class="ls-bar"></span><span class="ls-tag">poly</span></div>
               <div class="ls-sub">substrate · 130&nbsp;nm</div>
             </aside>
           </div>
@@ -291,13 +290,13 @@
       <!-- Preflight readiness checklist -->
       <div class="picker" id="setup-preflight">
         <h2><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>Ready to run? <button class="btn btn-ghost btn-sm" id="btn-preflight"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Re-check</button></h2>
-        <p class="hint">A quick check that everything a run needs is in place — design, config, PDK and the EDA tools — so you don't hit a surprise half-way through.</p>
+        <p class="hint">Validates that all flow prerequisites are met: design source files, configuration parameters, target PDK, and required EDA toolchains.</p>
         <div id="preflight" class="preflight"></div>
       </div>
 
       <!-- Mode + Run -->
       <div class="run-name-row">
-        <label for="run-name-input">Run name <span class="hint">optional — labels this run's folder under <code>runs/</code></span></label>
+        <label for="run-name-input">Run name <span class="hint">(optional; names this run directory under <code>runs/</code>)</span></label>
         <input type="text" id="run-name-input" placeholder="e.g. spm-area-sweep-1" autocomplete="off"/>
       </div>
       <div class="cta" id="setup-run">
@@ -319,7 +318,7 @@
           <!-- Quick reports/diagram toggles (the most-asked-for knobs, surfaced). -->
           <div class="reports-row">
             <strong>Reports &amp; diagrams</strong>
-            <label class="report-toggle" title="Yosys emits design-hierarchy + gate-level .dot schematics — they render on the Preview tab.">
+            <label class="report-toggle" title="Instructs Yosys to emit hierarchy and gate-level dot schematics for viewing on the Preview tab.">
               <input type="checkbox" id="cfg-synth-show"/> Generate Yosys synthesis diagrams (<code>SYNTH_SHOW</code>)
             </label>
           </div>
@@ -328,7 +327,7 @@
           <div class="preset-row">
             <span class="lbl">Preset:</span>
             <button class="chip chip-clickable" data-preset="default">Default</button>
-            <button class="chip chip-clickable" data-preset="lowpower" title="Optimises area (SYNTH_STRATEGY AREA 2, denser floorplan). Smaller area tends to lower dynamic power via shorter wires — LibreLane has no direct power-driven synthesis strategy.">Area-lean</button>
+            <button class="chip chip-clickable" data-preset="lowpower" title="Optimizes layout area (SYNTH_STRATEGY AREA 2 with denser core utilization). Smaller silicon area reduces dynamic wire capacitance; LibreLane has no explicit power-driven synthesis mode.">Area-lean</button>
             <button class="chip chip-clickable" data-preset="perfpush">Performance</button>
             <button class="chip chip-clickable" data-preset="antenna">Antenna-hardened</button>
             <button class="chip chip-clickable" data-preset="minimalarea">Minimum area</button>
@@ -348,11 +347,11 @@
       <details class="card" id="setup-help">
         <summary><strong>Quick help</strong><span class="hint">What is RTL? GDSII? PDK?</span></summary>
         <div class="card-body help-prose">
-          <p><strong>RTL</strong> — your design in Verilog. The behavioral description of what the chip should compute.</p>
-          <p><strong>GDSII</strong> — the layout of physical shapes on silicon. What the fab actually reads.</p>
-          <p><strong>PDK</strong> — Process Design Kit: the foundry's rules for routing, layers, cell library.</p>
-          <p><strong>SCL</strong> — Standard Cell Library: pre-built AND/OR/FF cells the synthesiser picks from.</p>
-          <p><strong>The flow</strong>: RTL → <em>synthesis</em> → netlist → <em>place</em> → DEF → <em>route</em> → DEF → <em>DRC/LVS</em> → GDSII.</p>
+          <p><strong>RTL:</strong> Verilog or SystemVerilog hardware description specifying chip registers and logic.</p>
+          <p><strong>GDSII:</strong> Stream format specifying physical mask geometries for foundry fabrication.</p>
+          <p><strong>PDK:</strong> Process Design Kit specifying foundry design rules, layer definitions, and device models.</p>
+          <p><strong>SCL:</strong> Standard Cell Library providing characterized logic gates (AND, OR, flip-flops) mapped during synthesis.</p>
+          <p><strong>The flow:</strong> RTL → <em>synthesis</em> → netlist → <em>place</em> → DEF → <em>route</em> → DEF → <em>DRC/LVS</em> → GDSII.</p>
           <p class="muted">Press <kbd>?</kbd> at any time for the shortcut list.</p>
         </div>
       </details>
@@ -443,7 +442,7 @@
       <div id="view-render-area"></div>
       <div id="view-text" class="code"></div>
       <h2 class="section-h2">Synthesis diagrams</h2>
-      <p class="hint">Yosys block-hierarchy and gate-level schematics. Generated only when <code>SYNTH_SHOW</code> is enabled in Config — rendered here from the <code>.dot</code> files via graphviz.</p>
+      <p class="hint">Yosys block-hierarchy and gate-level schematics. Generated when <code>SYNTH_SHOW</code> is enabled in configuration and rendered from <code>.dot</code> graph files using Graphviz.</p>
       <div id="view-diagrams"></div>
       <h2 class="section-h2">Output files</h2>
       <p class="hint">Every deliverable LibreLane wrote to <code>runs/&lt;tag&gt;/final/</code>. Download any file, or reveal it in your file manager (works when the GUI runs on your own machine). Intermediate per-step files live in the <strong>Files</strong> button on the Runs tab.</p>
@@ -495,7 +494,7 @@
             <label class="ide-field">Testbench<select id="ide-tb"></select></label>
             <label class="ide-field">TB top module<input id="ide-top" class="inp" type="text" placeholder="counter_tb" /></label>
             <label class="ide-field">Engine<select id="ide-sim-engine">
-              <option value="auto">Auto — Icarus if installed, else Verilator</option>
+              <option value="auto">Auto (Icarus if installed, otherwise Verilator)</option>
               <option value="iverilog">Icarus Verilog (best for classic testbenches)</option>
               <option value="verilator">Verilator (in the container image)</option>
             </select></label>
@@ -508,7 +507,7 @@
             </h3>
             <pre id="ide-log" class="ide-log"></pre>
             <h3>Waveform
-              <span id="ide-wave-partial" class="wave-partial" hidden title="The simulation hit the time limit (free-running clock / no $finish). The waveform below is incomplete — add $finish to the testbench for a full run.">⚠ partial — sim timed out</span>
+              <span id="ide-wave-partial" class="wave-partial" hidden title="The simulation reached its execution time limit without encountering a $finish statement. Add $finish to the testbench to capture the complete run.">⚠ partial: simulation timed out</span>
               <button class="btn btn-ghost panel-fs-btn" data-fs-target="ide-wave-host" title="Fullscreen waveform"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
               <span class="wave-radixes">
                 <button class="btn btn-ghost btn-sm" id="ide-wave-zoomout" title="Zoom out"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
@@ -539,19 +538,19 @@
         <button class="chip chip-clickable" data-jump="tools-pdk">PDK</button>
         <button class="chip chip-clickable" data-jump="tools-viewers">Viewers</button>
       </nav>
-      <h2 id="tools-toolchain">Install the toolchain <span class="hint">recommended — one click</span></h2>
-      <p class="hint">The simplest way to get every EDA tool (OpenROAD · Yosys · Magic · KLayout · Netgen · Verilator) is the version-matched LibreLane container image. With Docker or Podman present, one click pulls it and <code>Container</code> run mode needs <strong>no native tool installs at all</strong>. No engine yet? The card below installs Docker or Podman for you, then pulls the image — all in one go.</p>
+      <h2 id="tools-toolchain">Install the toolchain <span class="hint">(recommended default)</span></h2>
+      <p class="hint">The most reliable way to obtain all required EDA tools (OpenROAD, Yosys, Magic, KLayout, Netgen, Verilator) is the version-matched LibreLane container image. When Docker or Podman is installed, pulling the image enables <code>Container</code> execution without requiring native binary packages. If a container engine is not present, the installer card below sets up Docker or Podman automatically.</p>
       <div id="runtime-card"></div>
 
-      <h2 id="tools-extras">Recommended extra tools <span class="hint">optional power-ups</span></h2>
-      <p class="hint">Not part of the hardening flow, but LanEx uses these for the extras: <strong>Icarus Verilog</strong> drives RTL simulation in the IDE, <strong>Graphviz</strong> renders the synthesis schematics, and <strong>GDS3D</strong> is a 3D layer-stack viewer. One-click install — if a system package needs <code>sudo</code>, LanEx asks for your password in the terminal it was launched from.</p>
+      <h2 id="tools-extras">Recommended helper utilities <span class="hint">(optional)</span></h2>
+      <p class="hint">Auxiliary tools used for interactive features: <strong>Icarus Verilog</strong> provides testbench simulation in the IDE, <strong>Graphviz</strong> renders synthesis schematics, and <strong>GDS3D</strong> provides 3D layout visualization. If package installation requires elevated privileges, LanEx prompts for authentication in the terminal.</p>
       <div id="recommended-tools"></div>
 
       <details class="card tools-local-card" id="local-tools-card">
         <summary><strong>Advanced: local toolchain</strong><span class="hint">Only needed for <em>Local tools</em> run mode (Nix / conda / system installs).</span></summary>
         <div class="card-body">
-          <p class="hint">These are the tools LibreLane shells out to when running with native tools. Green means ready. <strong>librelane</strong> and <strong>ciel</strong> are pip-installable in place; <strong>OpenROAD/Magic/Netgen</strong> have no universal package — install them via Nix, conda (litex-hub), or just use Container mode above.</p>
-          <p class="hint"><strong>Version mismatch?</strong> If a native tool is too old/new for your LibreLane (e.g. a system Yosys that rejects pyosys options), the fix is Container mode — the image pins every tool to the exact versions your LibreLane was built against. Native pinning is via the Nix flake or conda litex-hub.</p>
+          <p class="hint">These binaries are invoked when running with native host tools. Green status indicates the executable was found in PATH. <strong>librelane</strong> and <strong>ciel</strong> can be installed via pip; <strong>OpenROAD</strong>, <strong>Magic</strong>, and <strong>Netgen</strong> require installation through Nix, Conda (litex-hub), or container mode.</p>
+          <p class="hint"><strong>Version compatibility:</strong> If an installed native tool is incompatible with your LibreLane release (such as an older Yosys build lacking pyosys bindings), switch to Container mode to execute the exact version-pinned binaries provided in the official image.</p>
           <div id="tools-grid"></div>
         </div>
       </details>
@@ -592,20 +591,20 @@
         <select id="analytics-run-select"></select>
         <button class="btn btn-ghost" id="btn-refresh-analytics"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Refresh</button>
         <button class="btn btn-ghost" id="btn-analytics-csv" title="Download this run's metrics as CSV"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg> CSV</button>
-        <button class="btn btn-ghost" id="btn-analytics-settings" title="Every variable this run resolved (resolved.json verbatim, empty ones included), with the source each value came from — your override, your config line, or a default."><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></svg> Final settings used</button>
+        <button class="btn btn-ghost" id="btn-analytics-settings" title="All resolved variables from this run (verbatim resolved.json including empty parameters), noting whether each value originated from an override, a configuration line, or a PDK default."><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></svg> Final settings used</button>
         <input type="search" id="analytics-search" class="grow" placeholder="Filter metrics (e.g. timing, area, lvs)…" autocomplete="off" />
         <span class="muted" id="analytics-count"></span>
       </div>
       <div id="analytics-summary"></div>
       <details class="card" id="analytics-cells" open style="margin-top:var(--s-6)">
-        <summary><strong>Cell usage</strong><span class="hint">Which standard cells this run placed, and how many of each — read from the run's "Cells by Master" report.</span></summary>
+        <summary><strong>Cell usage</strong><span class="hint">Standard cell placement distribution and instance counts, extracted from the run's Cells by Master report.</span></summary>
         <div class="card-body">
           <div id="cells-usage-body"></div>
         </div>
       </details>
       <div id="analytics-sections"></div>
       <details class="card" id="analytics-trends" open style="margin-top:var(--s-6)">
-        <summary><strong>Trends</strong><span class="hint">How key metrics moved across this design's runs over time — spot a regression at a glance.</span></summary>
+        <summary><strong>Trends</strong><span class="hint">Tracks key metric progression across design runs over time to identify regressions.</span></summary>
         <div class="card-body">
           <div class="row" style="gap:var(--s-2);align-items:center;flex-wrap:wrap">
             <label class="muted" for="trend-metric">Metric:</label>
@@ -626,20 +625,19 @@
       </details>
 
       <h2 style="margin-top:var(--s-6)">Metric reference</h2>
-      <p class="hint">Every metric LibreLane defines, grouped by category, with its pass/fail direction. Sourced live from LibreLane's metric registry — not a hand-written list.</p>
+      <p class="hint">Metrics catalog defined by LibreLane, categorized by flow stage with expected pass/fail directions, retrieved dynamically from the LibreLane metric registry.</p>
       <div id="analytics-glossary"></div>
     </section>
 
     <!-- VERIFY -->
     <section class="section" id="sec-verify">
       <h2>Verification Center</h2>
-      <p class="hint">The Classic flow runs the full signoff suite on every run. This is the tape-out verdict, organized by stage — no re-run needed.</p>
+      <p class="hint">Stage-by-stage verification metrics and signoff checks recorded during the most recent run.</p>
       <div class="verify-disclaimer">
-        <strong>⚠ Not a sign-off verdict.</strong> LanEx reports the numbers your EDA tools
-        (OpenROAD, Yosys, Magic, KLayout, Netgen) produced — it performs no silicon analysis of
-        its own. Before committing to fabrication, always confirm results against your foundry's
-        official sign-off decks and your shuttle program's checks. Provided <em>AS&nbsp;IS</em>,
-        without warranty (Apache-2.0).
+        <strong>⚠ Advisory summary only.</strong> LanEx displays outputs generated by underlying EDA tools
+        (OpenROAD, Yosys, Magic, KLayout, Netgen) without independent physical validation.
+        Prior to silicon fabrication, verify all designs against official foundry DRC/LVS rule decks
+        and shuttle qualification suites. Provided <em>AS&nbsp;IS</em>, without warranty (Apache-2.0).
       </div>
       <div id="verify-body"></div>
 
@@ -718,10 +716,7 @@
           <h2>Custom macros <span class="cc-badge">advanced</span></h2>
           <button class="btn btn-ghost" id="btn-custom-macro-help" title="How custom macro insertion works"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.1 9a3 3 0 1 1 4 2.8c-.9.4-1.6 1-1.6 2.2M12 17h.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/></svg> How it works</button>
         </div>
-        <p class="hint">Drop a pre-hardened block — an SRAM, a PLL, an analog IP, or a separately hardened sub-design —
-          into this run as a fixed macro. Its views (GDS/LEF and optionally LIB/netlist/SPEF/SPICE) and per-instance
-          placement are wired in through LibreLane's <code>MACROS</code> variable via a GUI overlay config — your
-          <code>config.json</code> is left untouched.</p>
+        <p class="hint">Integrate pre-hardened blocks, such as SRAM arrays, PLLs, analog IP, or sub-blocks, as fixed macros in this run. Required physical views (LEF and GDS) along with optional timing and netlist models (LIB, netlist, SPEF, SPICE) are supplied to LibreLane's <code>MACROS</code> variable via GUI overlay parameters, leaving your base <code>config.json</code> unchanged.</p>
         <div id="custom-macros-body"></div>
       </div>
 
@@ -730,10 +725,7 @@
           <h2>Custom cells <span class="cc-badge">advanced</span></h2>
           <button class="btn btn-ghost" id="btn-custom-cell-help" title="How custom cell swapping works"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.1 9a3 3 0 1 1 4 2.8c-.9.4-1.6 1-1.6 2.2M12 17h.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/></svg> How it works</button>
         </div>
-        <p class="hint">Bring your own standard cell (a hand-drawn gate, a tuned drive-strength) and have
-          this run use it <strong>in exchange for</strong> one or more library cells. The cell's views are added via
-          <code>EXTRA_LEFS/LIBS/GDS/SPICE_MODELS/VERILOG_MODELS</code> and the cells you name are removed via
-          <code>EXTRA_EXCLUDED_CELLS</code>. Applies to runs you start from the GUI — your <code>config.json</code> is left untouched.</p>
+        <p class="hint">Substitute proprietary standard cells or custom drive-strength variants for standard PDK library cells during flow execution. Custom cell definitions are passed through <code>EXTRA_LEFS/LIBS/GDS/SPICE_MODELS/VERILOG_MODELS</code> while excluded library cells are specified in <code>EXTRA_EXCLUDED_CELLS</code>, applied dynamically to GUI runs without modifying the underlying <code>config.json</code>.</p>
         <div id="custom-cells-body"></div>
       </div>
 
@@ -752,8 +744,7 @@
       <div class="card manual-card">
         <div class="card-body">
           <h3>Equivalent CLI for your current Setup</h3>
-          <p class="hint">Whatever you picked in Setup (PDK, SCL, flow, run name, From/To) as a command line.
-            Run it in your terminal — the GUI will pick up the new run automatically.</p>
+          <p class="hint">Equivalent command-line invocation representing the current Setup parameters (PDK, SCL, flow variant, and step bounds). Executing this command in a terminal updates the GUI runs history automatically.</p>
           <button class="btn btn-ghost" id="btn-cli-reveal">Show the command</button>
           <div id="cli-reveal" class="cli-reveal"></div>
         </div>
@@ -766,7 +757,7 @@
             <code>magic</code>, <code>klayout</code>, <code>netgen</code>, <code>iverilog</code>,
             <code>vvp</code>, <code>verilator</code>, <code>dot</code>, <code>ciel</code>,
             <code>docker</code>/<code>podman</code>.
-            Pipes, redirects and <code>sudo</code> are blocked — use your own terminal for those.</p>
+            Shell pipes, redirects, and <code>sudo</code> commands are disabled in this console; execute elevated commands in an external terminal.</p>
           <div class="manual-input-row">
             <input type="text" id="manual-cmd" placeholder="e.g. librelane --dockerized config.json -T floorplan" autocomplete="off" spellcheck="false"/>
             <button class="btn btn-primary" id="btn-manual-run">Run</button>
@@ -783,7 +774,7 @@
   <footer class="status">
     <span class="pill pill-pending" id="run-pill">idle</span>
     <span class="status-progress" id="overall-progress"></span>
-    <span class="status-disclaimer" title="LanEx displays output from third-party EDA tools and performs no silicon analysis of its own. It is NOT a sign-off tool — always verify against your foundry's official sign-off decks before fabrication. Provided AS IS, without warranty (Apache-2.0)."><span class="sd-full">⚠ not sign-off — verify with foundry decks</span><span class="sd-short">⚠ not sign-off</span></span>
+    <span class="status-disclaimer" title="LanEx displays metrics generated by third-party EDA tools without independent silicon validation. Always verify designs with official foundry sign-off decks prior to fabrication. Provided AS IS, without warranty (Apache-2.0)."><span class="sd-full">⚠ advisory only: verify with foundry decks</span><span class="sd-short">⚠ advisory only</span></span>
     <span class="status-help">
       <kbd>⌘K</kbd> commands · <kbd>?</kbd> shortcuts · <a href="https://librelane.org/" target="_blank" rel="noopener">docs</a>
     </span>
