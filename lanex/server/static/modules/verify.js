@@ -26,10 +26,10 @@ function mountSectionJump(verifyBody, jumpHtml) {
 let _runIndex = {};
 
 const STAGE_LABELS = {
-  rtl: "RTL — lint",
-  synth: "Synthesis — equivalence & checks",
-  timing: "Timing — STA",
-  physical: "Physical — DRC / LVS / antenna / XOR",
+  rtl: "RTL lint",
+  synth: "Synthesis equivalence & checks",
+  timing: "Static Timing Analysis",
+  physical: "Physical verification (DRC, LVS, antenna, XOR)",
   manufacturability: "Manufacturability",
 };
 
@@ -91,7 +91,7 @@ export async function renderVerify(tag) {
     "<span class='verdict-title'>" + vTitle + "</span>" +
     "<span class='muted'>run " + fmt.escape(rep.tag || "") + "</span>" +
     (v.incomplete && missing.length
-      ? "<span class='muted'>— no signoff data for: " + fmt.escape(missing.join(", ")) + "</span>"
+      ? "<span class='muted'>: no signoff data for " + fmt.escape(missing.join(", ")) + "</span>"
       : "") +
     (v.blockers && v.blockers.length
       ? "<div class='verdict-chips'>" + v.blockers.map((b) =>
@@ -112,7 +112,7 @@ export async function renderVerify(tag) {
       const mkey = Object.keys(c.values || {})[0];
       const prov = (mkey && rep.tag)
         ? provBtnHtml({ kind: "metric", key: mkey, tag: rep.tag },
-            "Show '" + mkey + "' in this run's metrics.json — the number this verdict is based on")
+            "Show '" + mkey + "' in this run's metrics.json, the data source for this verdict")
         : "";
       return "<div class='vcheck'>" +
         "<span class='vdot " + (DOT[c.status] || "vdot-absent") + "'></span>" +
@@ -127,7 +127,7 @@ export async function renderVerify(tag) {
     return "<div class='vstage card'>" +
       "<div class='vstage-head'><span class='vdot " + (DOT[stage.status] || "vdot-absent") + "'></span>" +
       "<h3>" + fmt.escape(STAGE_LABELS[id] || id) + "</h3></div>" +
-      (rows || "<p class='muted'>No data for this stage — this run didn't produce these metrics.</p>") + "</div>";
+      (rows || "<p class='muted'>No data for this stage; this run did not produce these metrics.</p>") + "</div>";
   }).join("");
 
   const jump = jumpBarHtml([
@@ -233,7 +233,7 @@ async function rerunCheck(stepId, tag) {
       step_id: stepId, overrides, run_tag: tag, run_mode: state.runMode,
     });
     if (res.ok) {
-      toast.show("Re-running " + stepId + "… watch the Pipeline tab.", "success");
+      toast.show("Re-running " + stepId + ". Track progress in the Pipeline tab.", "success");
       document.querySelector('.side-tab[data-tab="pipeline"]')?.click();
     } else {
       toast.show("Re-run refused: " + (res.reason || "unknown"), "error");

@@ -290,8 +290,8 @@ function renderSections(values, filter) {
     count++;
   }
   if (count === 0) {
-    root.innerHTML = "<div class='empty'><span class='ico'>" + icon('search',{size:40}) + "</span><h3>No metrics match “" +
-      fmt.escape(filter) + "”</h3><p>Clear the filter to see all metrics.</p></div>";
+    root.innerHTML = "<div class='empty'><span class='ico'>" + icon('search',{size:40}) + "</span><h3>No metrics match '" +
+      fmt.escape(filter) + "'</h3><p>Clear the filter to view all available metrics.</p></div>";
     if (cnt) cnt.textContent = "0 of " + Object.keys(values).length + " metrics";
     return;
   }
@@ -315,7 +315,7 @@ function renderSections(values, filter) {
       const nonFinite = v === "Infinity" || v === "-Infinity" || v === "NaN";
       const valTitle = nonFinite
         ? (/_r2r_/.test(k)
-            ? "No register-to-register paths in this design — this slack is unconstrained (genuinely ∞), not a parsing error."
+            ? "No register-to-register paths in this design; slack is unconstrained by design."
             : "Non-finite value reported by LibreLane (genuine, not a parse error).")
         : "";
       const prov = _lastTag
@@ -486,7 +486,7 @@ async function renderCellUsage(tag) {
         const chart = window.echarts.init(el, chartTheme(), { renderer: "canvas" });
         chart.setOption(Object.assign({ backgroundColor: "transparent" }, opt));
         el.setAttribute("role", "img");
-        el.setAttribute("aria-label", "Standard-cell usage breakdown — the same counts are in the table below.");
+        el.setAttribute("aria-label", "Standard-cell usage breakdown; identical counts are listed in the table below.");
       }
     }
   } catch (_e) { /* chart is a nicety; the table already shows everything */ }

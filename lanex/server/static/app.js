@@ -267,7 +267,7 @@ function handle(ev) {
     for (const p of (state.pipeline || [])) state.stepStatuses[p.id] = "pending";
     state.status.running = true;
     resetTimeline();
-    notePhase("DSE config " + (((ev.index || 0) + 1)) + "/" + (ev.total || "?") + " — preparing…");
+    notePhase("DSE config " + (((ev.index || 0) + 1)) + "/" + (ev.total || "?") + ": preparing…");
     renderRuntimeline();
   } else if (ev.type === "manual_started" || ev.type === "manual_line" || ev.type === "manual_done") {
     import("./modules/manual.js").then((m) => m.onManualEvent(ev));
@@ -404,7 +404,7 @@ function handle(ev) {
       } else {
         pill.classList.add("pill-pass");
         pill.textContent = "done";
-        toast.show("Flow completed — GDS is on the Preview tab", "success");
+        toast.show("Flow completed. Generated GDS is available in Preview.", "success");
       }
     }
     try {
@@ -472,7 +472,7 @@ async function populateLayoutRuns() {
   const prev = sel.value || state.selectedRunTag;
   sel.innerHTML = runs.length
     ? runOptionsHtml(runs, prev, (s) => fmt.escape(s))
-    : "<option value=''>(no runs yet — run the flow first)</option>";
+    : "<option value=''>(no runs yet; run the flow first)</option>";
   if (prev && idx[prev]) sel.value = prev;
   else if (runs.length) sel.value = runs[0].tag;
   if (!sel._wired) {
@@ -602,7 +602,7 @@ function maybeShowPostRunPanel() {
   el.className = "postrun-card";
   el.setAttribute("role", "status");
   el.innerHTML =
-    "<div class='postrun-head'><strong>Run complete — what now?</strong>" +
+    "<div class='postrun-head'><strong>Run complete. Next steps:</strong>" +
     "<button class='postrun-close' aria-label='Dismiss'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "<span class='muted'>See the layout, check sign-off, or dig into the numbers.</span>" +
     "<div class='postrun-actions'>" +

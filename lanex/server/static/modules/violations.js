@@ -99,8 +99,8 @@ function header(r, extra, needle) {
   // line to highlight, when the parsed view is judging one).
   const prov = (r.rel && _runTag)
     ? provBtnHtml({ kind: "report", tag: _runTag, path: r.rel, needle: needle || "" },
-        "Open the raw report as the tool wrote it" +
-        (needle ? " — the line the verdict was read from is highlighted" : ""))
+        "Open the raw report as written by the tool" +
+        (needle ? " (highlighted line indicates verdict source)" : ""))
     : "";
   return "<div class='report-head'><span class='chip rk'>" + fmt.escape(r.kind) + "</span>" +
     "<strong>" + fmt.escape(r.name) + "</strong> <span class='muted'>" + fmt.escape(r.step) + "</span>" +
@@ -123,7 +123,7 @@ function renderDrc(r, resp) {
   if (status === "error") {
     out.innerHTML = header(r) +
       "<p><span class='pill pill-warn'>Report unreadable</span> " +
-      fmt.escape((resp && resp.error) || "Could not parse this DRC report — open the raw file to inspect it.") + "</p>";
+      fmt.escape((resp && resp.error) || "Could not parse this DRC report. Open the raw file to inspect details.") + "</p>";
     return;
   }
   if (!violations.length) {
@@ -162,7 +162,7 @@ function renderLvs(r, resp) {
       fmt.escape(verdict || "Netgen reports the netlists do not match.") + "</p>";
   } else {
     head = "<p><span class='pill pill-warn'>LVS verdict unreadable</span> " +
-      "No Netgen final-verdict line found in this report — open the raw report to inspect it.</p>";
+      "No Netgen final verdict line found in this report. Open the raw report to inspect details.</p>";
   }
   const counts = (resp && resp.counts) || {};
   const keys = Object.keys(counts);
@@ -170,7 +170,7 @@ function renderLvs(r, resp) {
     ? "<table class='cmp-table'><tbody>" + keys.map((k) =>
         "<tr><td>" + fmt.escape(k.replace(/_/g, " ")) + "</td><td class='cmp-num'>" +
         fmt.escape(String(counts[k])) + "</td></tr>").join("") + "</tbody></table>"
-    : "";
+  : "";
   // Netgen's verdict line ("Final result: ...") is what the clean/mismatch
   // pill was judged on — highlight exactly it in the raw view.
   out.innerHTML = header(r, resp && resp.raw_chars ? resp.raw_chars + " chars" : "", "Final result") + head + body;
@@ -183,7 +183,7 @@ function renderText(r, text) {
   out.innerHTML = header(r) +
     (t.trim()
       ? "<pre class='code report-raw'>" + fmt.escape(t.slice(0, 20000)) +
-        (t.length > 20000 ? "\n… (truncated — download the full file)" : "") + "</pre>"
+        (t.length > 20000 ? "\n… (truncated; download the full file for complete output)" : "") + "</pre>"
       : "<p class='muted'>This report file is empty.</p>");
 }
 

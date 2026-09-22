@@ -105,8 +105,8 @@ export async function renderPreflight() {
   }
 
   const banner = pf.ready
-    ? "<div class='pf-banner pf-banner-ok'>All set — press ▶ Run flow.</div>"
-    : "<div class='pf-banner pf-banner-bad'>" + pf.blockers.length + " thing(s) to fix before a run will finish.</div>";
+    ? "<div class='pf-banner pf-banner-ok'>All checks passed. Ready to run flow.</div>"
+    : "<div class='pf-banner pf-banner-bad'>" + pf.blockers.length + " issue(s) to resolve before running the flow.</div>";
 
   root.innerHTML = banner + html;
 

@@ -36,7 +36,7 @@ export async function renderCustomCells() {
   if (!root) return;
   document.getElementById("btn-custom-cell-help")?.addEventListener("click", showCustomCellHelp, { once: true });
   if (!state.designDir) {
-    root.innerHTML = "<p class='muted'>Load a design folder first (Setup tab) — custom cells are stored per design.</p>";
+    root.innerHTML = "<p class='muted'>Select a design directory in Setup first. Custom cells are stored per design.</p>";
     return;
   }
   let cells = [];
@@ -121,7 +121,7 @@ function showCustomCellHelp() {
   backdrop.className = "smodal-backdrop";
   backdrop.innerHTML =
     "<div class='smodal cc-help-modal'>" +
-    "<div class='smodal-head'><span class='smodal-title'>Custom cells — how it works</span>" +
+    "<div class='smodal-head'><span class='smodal-title'>Custom cells: how it works</span>" +
     "<span class='smodal-spacer'></span><button class='btn btn-ghost' id='cc-help-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "<div class='smodal-log cc-help'>" + HELP_HTML + "</div></div>";
   document.body.appendChild(backdrop);
@@ -136,18 +136,17 @@ function showCustomCellHelp() {
 const HELP_HTML = `
 <h3>What this does</h3>
 <p>It lets a run use <strong>your own cell</strong> instead of one (or several) of the PDK's
-standard cells — what engineers call a <em>cell swap</em>. Typical reasons: a hand-optimised
-gate, a custom drive strength, a radiation-hard or low-leakage variant, or a small hardened macro.</p>
+standard cells (a standard cell swap). Typical use cases include custom drive strengths,
+radiation-hardened or low-leakage variants, or hand-optimized gates.</p>
 
 <h3>The mental model</h3>
-<p>A standard cell isn't one file — it's a set of <em>views</em>, one per tool that needs to know
-about the cell:</p>
+<p>A standard cell consists of several distinct <em>views</em> corresponding to specific tool requirements:</p>
 <ul>
-  <li><strong>LEF</strong> — the abstract/footprint (pins, blockages, size). Needed by placement &amp; routing. <em>Required.</em></li>
-  <li><strong>Liberty <code>.lib</code></strong> — timing &amp; power. Needed by synthesis and static timing (STA). Add it so the tools can actually choose your cell.</li>
-  <li><strong>GDS</strong> — the real polygons. Needed so the final chip layout contains your cell.</li>
-  <li><strong>SPICE / CDL</strong> — the device-level netlist. Needed by LVS (layout-vs-schematic) signoff.</li>
-  <li><strong>Verilog model</strong> — behavioural/gate model. Needed for gate-level simulation.</li>
+  <li><strong>LEF</strong>: abstract footprint (pins, blockages, boundaries). Required for placement and routing.</li>
+  <li><strong>Liberty <code>.lib</code></strong>: timing and power definitions. Used by synthesis and STA to evaluate and insert the cell.</li>
+  <li><strong>GDS</strong>: physical mask layout polygons for tapeout and DRC.</li>
+  <li><strong>SPICE / CDL</strong>: transistor-level circuit netlist for LVS verification.</li>
+  <li><strong>Verilog model</strong>: functional model used for gate-level simulation.</li>
 </ul>
 <p>LibreLane wires each view in through a dedicated variable:
 <code>EXTRA_LEFS</code>, <code>EXTRA_LIBS</code>, <code>EXTRA_GDS</code>,
@@ -168,15 +167,14 @@ optimiser reaches for your replacement.</p>
   <li>Add <strong>GDS</strong> for a clean final layout, and <strong>SPICE/CDL</strong> if you want LVS to pass.</li>
   <li>In <strong>Swap out</strong>, list the exact PDK cell name(s) to replace, e.g.
       <code>sky130_fd_sc_hd__nand2_1</code>. Leave empty to just <em>add</em> the cell without removing any.</li>
-  <li>Save. Toggle <strong>Use</strong> per run. Then start a run from Setup — the swap is applied automatically.</li>
+  <li>Save. Toggle <strong>Use</strong> per run. When you start a run from Setup, the swap applies automatically.</li>
 </ol>
 
 <h3>Important notes</h3>
 <ul>
   <li>This is <strong>per-run, GUI-managed</strong>. Your <code>config.json</code> is never modified. The files live
       in <code>custom_cells/</code> inside your design folder and a small <code>.gui-custom-cells.json</code> sidecar.</li>
-  <li>Your cell must be on the PDK's grid (site/row height, tracks) or placement/routing will fail —
-      this feature wires the views in; it can't make an off-grid cell legal.</li>
+  <li>Your cell must align with the PDK site grid and routing tracks (site and row height). Off-grid cells will cause placement and routing errors.</li>
   <li>If you exclude a cell the design genuinely needs and provide no working replacement, synthesis may
       fail to map. Start by adding LEF + LIB and excluding one low-risk cell.</li>
   <li>Names must match the library exactly (case-sensitive). Browse them in the table above.</li>

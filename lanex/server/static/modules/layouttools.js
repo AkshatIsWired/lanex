@@ -49,7 +49,7 @@ export async function renderLayoutTools(host, tag) {
       // saw the remedy (the exact XQuartz/WSLg fix lives in display.reason).
       where = "nodisplay"; title = (container.display && container.display.reason) || "no display reachable";
     }
-    else { where = "install"; title = t.label + " isn't installed — click to set it up in Tools"; }
+    else { where = "install"; title = t.label + " is not installed; click to set it up in Tools"; }
     const badge = { container: "container", host: "installed", nodisplay: "no display", install: "not installed" }[where];
     return "<button class='btn btn-ghost layout-tool' data-tool='" + fmt.escape(t.key) +
       "' data-where='" + where + "'" + disabled + " title='" + fmt.escape(title) + "'>" +
@@ -81,7 +81,7 @@ async function launch(btn, tag) {
     if (where === "container") {
       r = await api.openInContainerTool(tool, tag);
       if (r && r.ok) toast.show("Launched " + (r.label || tool) + " in the container" +
-        (r.hint ? " — " + r.hint : "") + ". The window may take a few seconds.", "success");
+        (r.hint ? " (" + r.hint + ")" : "") + ". The window may take a few seconds to appear.", "success");
     } else {
       // Host launch honours the Layout bar's "PDK layer colours" toggle.
       const colorsEl = document.getElementById("layout-pdk-colors");

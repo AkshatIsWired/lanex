@@ -19,8 +19,8 @@ export async function renderViewer3d(tag) {
     "<p>3D viewing renders the chip's physical layer stack (metals, vias, devices) " +
     "as a real 3D model. Use the tool buttons on the Layout bar above:</p>" +
     "<ul class='v3d-list'>" +
-    "<li><strong>GDS3D</strong> — open-source OpenGL GDS viewer (uses the PDK layer " +
-    "stack). Install it from the Tools tab; runs on your own machine only.</li>" +
-    "<li><strong>KLayout</strong> — has a 2.5D view; also opens the GDS for inspection.</li>" +
+    "<li><strong>GDS3D</strong>: open-source OpenGL layout viewer using the PDK layer " +
+    "stack. Built locally from the Tools tab for host execution.</li>" +
+    "<li><strong>KLayout</strong>: includes 2.5D rendering and full GDSII layout inspection.</li>" +
     "</ul></div></div>";
 }

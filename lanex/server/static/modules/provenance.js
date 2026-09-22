@@ -34,9 +34,9 @@ export function configChipSpec(entry, rel) {
   const title =
     (scoped
       ? "Set in " + rel + " line " + entry.line + " inside a " + (entry.scope || "scoped") +
-        " section — it applies only when the run's PDK/SCL matches that section."
+        " section. Applies only when the run's PDK/SCL matches that section."
       : "Set in " + rel + " line " + entry.line +
-        " — this is what an untouched field uses (an override supersedes it).") +
+        "; used when no override is present (an override supersedes it).") +
     (entry.others ? " The file has " + entry.others + " more entr" +
       (entry.others === 1 ? "y" : "ies") + " for this variable." : "") +
     " Click to open the file at that line.";
@@ -103,7 +103,7 @@ export async function openProvenance(params, meta = {}) {
     bodyHtml:
       "<p class='muted prov-note'>Raw file as written by <b>" +
       fmt.escape(r.writer || "the flow") +
-      "</b> — LanEx did not generate or edit it." +
+      "</b> (not generated or edited by LanEx)." +
       (r.line ? " The highlighted line is where the value above was read from." : "") +
       "</p><div class='prov-view'></div>",
     onMount: (back) => {

@@ -78,8 +78,8 @@ export async function checkAfterRun() {
   } catch (_e) { /* fall back to state.metrics — still real, just possibly older */ }
   const viols = evaluateWatch(metrics, rules);
   for (const v of viols) {
-    toast.show("Watch: " + v.metric + " = " + fmt.metric(v.value) +
-      " — expected " + v.cmp + " " + v.threshold, "error");
+    toast.show("Watch violation: " + v.metric + " = " + fmt.metric(v.value) +
+      " (expected " + v.cmp + " " + v.threshold + ")", "error");
   }
 }
 
@@ -95,7 +95,7 @@ export async function renderWatch() {
         "<div class='watch-row'><code>" + fmt.escape(r.metric) + "</code> " +
         "<span class='muted'>" + fmt.escape(r.cmp) + " " + fmt.escape(String(r.threshold)) + "</span>" +
         "<button class='btn btn-ghost watch-del' data-i='" + i + "' aria-label='Remove rule'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>").join("")
-    : "<p class='muted'>No watch rules yet. Add one below — you'll be warned after a run breaks it.</p>";
+    : "<p class='muted'>No watch rules configured yet. Add a rule below to receive alerts when a run exceeds its threshold.</p>";
 
   body.innerHTML =
     "<div class='watch-list'>" + rows + "</div>" +

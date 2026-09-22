@@ -143,7 +143,7 @@ async function renderRecommendedTools(info) {
     "<div class='row1'><span class='name'>GDS3D</span>" +
     (gds3d && gds3d.available ? "<span class='dot-installed' title='installed'></span>" : "<span class='dot-missing' title='missing'></span>") +
     "</div>" +
-    "<div class='what'>3D layer-stack viewer (OpenGL). Open-source, built from source once. Open a run's GDS from the <strong>Layout</strong> tab → “3D (desktop viewer)”.</div>" +
+    "<div class='what'>3D layer-stack viewer (OpenGL). Open-source, built from source once. Open a run's GDS from the <strong>Layout</strong> tab → '3D (desktop viewer)'.</div>" +
     "<div class='meta' style='margin-top:var(--s-2)'>" +
     (gds3d && gds3d.available
       ? "<div style='display:flex;gap:var(--s-2);align-items:center'><span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span>" +
@@ -186,7 +186,7 @@ async function renderRecommendedTools(info) {
     try {
       const r = await api.installTool("gds3d");
       if (r && r.in_progress) toast.show("GDS3D compilation already in progress. Check Install logs.", "info");
-      else if (r && r.ok === false) toast.show(r.guidance || r.error || "Build couldn't start — use the manual steps.", "warn");
+      else if (r && r.ok === false) toast.show(r.guidance || r.error || "Build could not start. Follow the manual build steps instead.", "warn");
       else toast.show("GDS3D build started. Progress is reported in Install logs.", "success");
     } catch (ex) {
       toast.show("Could not start GDS3D build: " + (ex.message || ex), "error");
@@ -421,7 +421,7 @@ function paintRuntimeCard(container) {
       "<div class='tool-card installed-installed'>" +
       "<div class='row1'><span class='name'>✓ " + fmt.escape(engineLabel) + " ready</span>" +
       "<span class='dot-installed' title='ready'></span></div>" +
-      "<div class='what'>All EDA tools are available via the LibreLane image (version-matched). No native tool installs needed — just keep the <strong>Container</strong> run engine selected.</div>" +
+      "<div class='what'>All EDA tools are available via the LibreLane image (version-matched). No native tool installation required. Keep the <strong>Container</strong> run engine selected.</div>" +
       (verBad
         ? "<div class='hint' style='color:var(--warn)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l10 18H2zM12 10v5M12 18h.01'/></svg> " + fmt.escape(c.engine) + " " + fmt.escape(c.version) +
           " is older than LibreLane's recommended " + fmt.escape(c.min_version) + "; upgrading is recommended.</div>"
@@ -636,7 +636,7 @@ export function paintLocalToolsGrid(info) {
       "<div class='row1'>" +
       "<span class='name'>" + fmt.escape(t.label) + "</span>" +
       (inCont
-        ? "<span class='pill pill-pass' style='margin-left:auto;margin-right:var(--s-2);font-size:10px' title='Ships in the pulled LibreLane image — usable with no native install'><span class='d'></span><span class='text'>in container</span></span>"
+        ? "<span class='pill pill-pass' style='margin-left:auto;margin-right:var(--s-2);font-size:10px' title='Ships in the pulled LibreLane image; usable without host installation'><span class='d'></span><span class='text'>in container</span></span>"
         : "") +
       (t.installed
         ? "<span class='dot-installed' title='installed locally'></span>"

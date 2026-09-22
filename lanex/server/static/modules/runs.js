@@ -135,7 +135,7 @@ export async function renderRuns() {
       (run.success
         ? "<span class='pill pill-pass'><span class='d'></span><span class='text'>✓ passed</span></span>"
         : "<span class='pill pill-fail'><span class='d'></span><span class='text'>✗ failed</span></span>") +
-      (run.imported ? "<span class='pill pill-pending' title='Imported from elsewhere — a partial run'>imported</span>" : "") +
+      (run.imported ? "<span class='pill pill-pending' title='Imported from an external source (partial run)'>imported</span>" : "") +
       "</div>" +
       designRow +
       "<div class='row2'>" +
@@ -149,7 +149,7 @@ export async function renderRuns() {
       "<button class='btn btn-ghost run-act' data-act='reproduce' title='Load this run's settings into Setup'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M21 12a9 9 0 1 1-3-6.7M21 4v4h-4'/></svg> Reproduce</button>" +
       "<button class='btn btn-ghost run-act' data-act='files'>" + icon("folder", { size: 13 }) + " Files</button>" +
       "<button class='btn btn-ghost run-act' data-act='note'>" + icon("file", { size: 13 }) + " Note</button>" +
-      "<button class='btn btn-ghost run-act' data-act='bundle' title='Download a .zip — pick what to include'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Bundle</button>" +
+      "<button class='btn btn-ghost run-act' data-act='bundle' title='Download a .zip bundle with selected deliverables'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Bundle</button>" +
       "<button class='btn btn-ghost run-act' data-act='export' title='Download a run report (CSV / Markdown / HTML)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Export</button>" +
       "<button class='btn btn-ghost run-act run-del' data-act='delete'>" + icon("trash", { size: 13 }) + " Delete</button>" +
       "</div>";
@@ -265,9 +265,9 @@ const BUNDLE_PARTS = [
 ];
 async function bundleDownloadFlow(tag) {
   const picked = await checklistDialog({
-    title: "Download bundle — “" + tag + "”",
-    body: "Tick what to include in the .zip. The text/data parts are on by default; " +
-      "the binary deliverables (GDS, netlists, timing, images…) are large, so tick only what you need.",
+    title: "Download bundle: " + tag,
+    body: "Select components to include in the .zip archive. Text and report data are selected by default. " +
+      "Binary deliverables like GDS, netlists, timing models, and images are large, so select only what you need.",
     items: BUNDLE_PARTS,
     confirmText: "Download .zip",
   });
@@ -283,8 +283,8 @@ async function bundleDownloadFlow(tag) {
 // (history.export_run + /api/run-export) already exists; this is the UI for it.
 async function exportRunFlow(tag) {
   const fmt = await choiceDialog({
-    title: "Export run report — “" + tag + "”",
-    body: "Download a formatted report of this run. (For the raw metrics table use Analytics → Metrics CSV.)",
+    title: "Export run report: " + tag,
+    body: "Download a formatted report for this run. (For the raw metrics table, use Analytics > Metrics CSV.)",
     choices: [
       { label: "CSV", value: "csv" },
       { label: "Markdown", value: "md" },
@@ -308,7 +308,7 @@ async function reproduceRun(tag) {
     await alertDialog({
       title: "Can't reproduce this run",
       body: (ex && ex.message) ||
-        "This run has no saved settings — it predates reproduce support or was made outside the GUI.",
+        "No saved settings found for this run. It was created before reproduce support was available or generated outside the GUI.",
     });
     return;
   }
@@ -348,20 +348,20 @@ async function reproduceRun(tag) {
   document.querySelector('.side-tab[data-tab="setup"]')?.click();
   const summary = "Loaded " + Object.keys(meta.overrides || {}).length + " override(s), " +
     (meta.sources || []).length + " source(s), " + (meta.run_mode || "container") +
-    " mode, flow " + (meta.flow || "Classic") + ". Review the Setup tab, then press Run — " +
-    "nothing was started automatically.";
+    " mode, flow " + (meta.flow || "Classic") + ". Review your settings in Setup, then click Run flow when ready. " +
+    "Nothing has started yet.";
   // E4.4 — offer the EXACT CLI command this run was launched with (persisted in
   // gui-run.json, not rebuilt), so a terminal user can reproduce it verbatim.
   const cli = (meta.cli_command || "").trim();
   const choices = cli ? [{ label: "Copy the run's CLI command", value: "copy" }] : [];
   const pick = await choiceDialog({
-    title: "Loaded “" + tag + "” into Setup",
+    title: "Loaded " + tag + " into Setup",
     body: summary + (cli ? "\n\nThat run's exact command:\n" + cli : ""),
     choices,
   });
   if (pick === "copy" && cli) {
     try { await navigator.clipboard.writeText(cli); toast.show("CLI command copied.", "success"); }
-    catch (_e) { toast.show("Copy failed — select the text in the Manual tab instead.", "warn"); }
+    catch (_e) { toast.show("Copy failed. Select and copy the command in the Manual tab.", "warn"); }
   }
 }
 
@@ -383,7 +383,7 @@ async function importRunFlow() {
   if (!state.designDir) {
     await alertDialog({
       title: "No active design",
-      body: "Set a design directory first — imported runs land in its runs/ folder.",
+      body: "Set a design directory first. Imported runs are saved into its runs directory.",
     });
     return;
   }
@@ -418,7 +418,7 @@ async function importRunFlow() {
 
 async function deleteRunFlow(tag) {
   const ok = await confirmDialog({
-    title: "Delete run “" + tag + "”?", danger: true, confirmText: "Delete run",
+    title: "Delete run " + tag + "?", danger: true, confirmText: "Delete run",
     body: "This permanently deletes run '" + tag + "' and all its files. Consider downloading a bundle first. This cannot be undone.",
   });
   if (!ok) return;
@@ -462,7 +462,7 @@ function fmtBytes(n) {
 async function showFilesModal(tag) {
   const ov = filesOverlay();
   ov.hidden = false;
-  ov.querySelector("#files-title").textContent = "Files — " + tag;
+  ov.querySelector("#files-title").textContent = "Files: " + tag;
   const body = ov.querySelector("#files-body");
   body.textContent = "loading…";
   let r;
@@ -484,7 +484,7 @@ async function showFilesModal(tag) {
       );
     });
   body.innerHTML =
-    "<div class='muted' style='margin-bottom:8px'>" + rows.length + " files — click to open/download</div>" +
+    "<div class='muted' style='margin-bottom:8px'>" + rows.length + " files: click to open or download</div>" +
     rows.join("");
 }
 

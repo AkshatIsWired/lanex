@@ -65,7 +65,7 @@ function renderShortcutList() {
   const ul = document.getElementById("help-shortcut-list");
   if (!ul) return;
   // The key strings are fixed, HTML-safe literals defined above.
-  ul.innerHTML = SHORTCUTS.map((s) => "<li><kbd>" + s.keys + "</kbd> — " + s.desc + "</li>").join("");
+  ul.innerHTML = SHORTCUTS.map((s) => "<li><kbd>" + s.keys + "</kbd>: " + s.desc + "</li>").join("");
 }
 
 function dispatchJump(name) {

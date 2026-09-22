@@ -102,7 +102,7 @@ export async function openLearnIndex() {
   body.innerHTML = "<h2>Glossary</h2>" +
     Object.keys(g).sort().map((term) =>
       "<div class='learn-term' data-explain='" + fmt.escape(term) + "'><strong>" +
-      fmt.escape(term) + "</strong> — " + fmt.escape(g[term]) + "</div>").join("");
+      fmt.escape(term) + "</strong>: " + fmt.escape(g[term]) + "</div>").join("");
 }
 
 // Wire any `[data-explain]` affordance (step id, metric key, or glossary term).

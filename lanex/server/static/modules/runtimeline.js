@@ -83,7 +83,7 @@ export function renderRuntimeline() {
   if (!ids.length) {
     root.innerHTML =
       "<div class='rt-empty'><span class='rt-empty-ico'>" + icon('flow',{size:32}) + "</span>" +
-      "<div><strong>No flow loaded yet</strong><div class='hint'>Pick a design and press Run — each step will light up here with the tool and timing.</div></div></div>";
+      "<div><strong>No flow loaded yet</strong><div class='hint'>Select a design and click Run flow. Each step will display here with its active tool and execution time.</div></div></div>";
     stopTimer();
     return;
   }
