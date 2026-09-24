@@ -203,54 +203,74 @@ body.theme-light #theme-btn .ico-moon { display: none; }
 .project-row.is-current .via { background: var(--met1); border-color: var(--met1); }
 .project-empty { padding: 6px 10px 8px; font-size: 13px; color: var(--ink-2); }
 
-/* ------------------------------------------------------------ shuttle index (rail) */
+/* ------------------------------------------------------------ side rail */
+/* Inset well with a faint routing-track texture; groups spread evenly. */
 .side-tabs {
   grid-area: side;
-  display: flex; flex-direction: column; justify-content: space-between; gap: 14px;
-  padding: 12px 8px;
-  background: var(--wafer);
-  border-right: 1px solid var(--seal);
+  display: flex; flex-direction: column; justify-content: space-between; gap: 12px;
+  padding: 12px 8px 12px 10px;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 23px, rgba(120, 140, 170, 0.05) 23px 24px),
+    var(--bg-2);
+  border-right: 1px solid var(--border);
   overflow-y: auto; overflow-x: hidden; min-height: 0;
   scrollbar-width: none;
 }
+body.theme-light .side-tabs {
+  background:
+    repeating-linear-gradient(0deg, transparent 0 23px, rgba(60, 90, 130, 0.06) 23px 24px),
+    var(--bg-2);
+}
 .side-tabs::-webkit-scrollbar { display: none; }
 .rail-group { display: flex; flex-direction: column; gap: 2px; }
-/* Group names read as lanes, not tabs: centred caps between two hairlines. */
-.rail-label {
+/* Group names read as section markers, not tabs: small tracked caps in the
+   dim text colour, centred between two hairlines. */
+.side-tabs .rail-label {
   display: flex; align-items: center; gap: 5px; justify-content: center;
-  padding: 0 0 6px; font-size: 12px; letter-spacing: 0.1em; color: var(--ink-2);
+  padding: 0 0 5px;
+  font-family: var(--mono); font-size: 10px; font-weight: 500;
+  letter-spacing: 0.14em; color: var(--text-disabled);
 }
-.rail-label::before, .rail-label::after { content: ""; flex: 1 1 0; min-width: 4px; height: 1px; background: var(--seal-strong); }
+body.theme-light .side-tabs .rail-label { color: var(--text-muted); }
+.rail-label::before, .rail-label::after { content: ""; flex: 1 1 0; min-width: 4px; height: 1px; background: var(--border); }
 .side-tab {
   position: relative;
   display: flex; flex-direction: column; align-items: center; gap: 3px;
   width: 100%; padding: 8px 4px 7px;
-  background: transparent; border: 1px solid transparent; border-radius: var(--r-md);
-  color: var(--ink-2); cursor: pointer;
-  transition: background var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out);
+  background: transparent; border: 0; border-radius: var(--r-md);
+  color: var(--text-muted); cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
-.side-tab:hover { background: var(--die); color: var(--ink-strong); }
+.side-tab:hover { background: var(--surface); color: var(--text); }
 .side-tab .ico { display: inline-flex; line-height: 0; }
 body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .side-tab .label { font-size: 12.5px; font-weight: 500; line-height: 1.2; max-width: 100%; text-align: center; overflow-wrap: anywhere; }
-/* Selected die: the only lifted thing in the rail. */
-.side-tab.side-tab-active { background: var(--die-2); border-color: var(--seal); color: var(--ink-strong); }
-.side-tab.side-tab-active .ico { color: var(--met1); }
-.side-tab.side-tab-active::before {
-  content: ""; position: absolute; left: -9px; top: 10px; bottom: 10px; width: 1px; background: var(--met1);
+.side-tab.side-tab-active {
+  background: linear-gradient(90deg, var(--accent-soft) 0%, transparent 70%);
+  color: var(--text-strong);
 }
+.side-tab.side-tab-active .ico { color: var(--met1); }
+/* Active = an energized met1 routing spine on the channel edge ... */
+.side-tab.side-tab-active::before {
+  content: ""; position: absolute; left: -2px; top: 6px; bottom: 6px; width: 2px;
+  background: var(--met1); box-shadow: 0 0 10px var(--accent-glow);
+}
+/* ... with a square via where the trace taps into this row. */
 .side-tab.side-tab-active::after {
-  content: ""; position: absolute; left: -11px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; background: var(--met1);
+  content: ""; position: absolute; left: -5px; top: 50%; width: 8px; height: 8px; margin-top: -4px;
+  background: var(--met1); box-shadow: 0 0 10px var(--accent-glow);
 }
 .side-tab .help-pill { display: none; }
 
-/* Short windows: labels shrink, group names go, the rail scrolls rather than clips. */
-/* Short windows: group names shrink to a single hairline so the groups stay
-   distinct; the rail scrolls rather than clips. */
+/* Short windows: tighter rows; group names stay (they keep the groups
+   distinct); the rail scrolls rather than clips. */
 @media (max-height: 900px) {
-  .side-tabs { gap: 10px; padding: 8px 8px; }
+  .side-tabs { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
   .side-tab { padding: 6px 4px 5px; gap: 2px; }
-  .rail-label { font-size: 0; gap: 0; padding: 0 6px 6px; }
+  .side-tabs .rail-label { padding-bottom: 3px; }
+}
+@media (max-height: 720px) {
+  .side-tabs .rail-label { font-size: 0; gap: 0; padding: 0 6px 4px; }
   .rail-label::after { display: none; }
 }
 
