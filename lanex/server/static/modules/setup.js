@@ -9,7 +9,7 @@ import { toast } from "./toast.js";
 import { renderPreflight } from "./preflight.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
-import { pdkFacts, stackSvg } from "./pdkinfo.js";
+import { pdkFacts, stackHtml } from "./pdkinfo.js";
 
 const RECENT_KEY = "ll.recentDesigns";
 
@@ -236,7 +236,6 @@ export async function adoptDesignDir(designDir, opts = {}) {
 // project's name, where it lives and what it contains.
 function paintProjectBlock() {
   const open = !!state.designDir;
-  document.getElementById("hero")?.classList.toggle("is-compact", open);
   const empty = document.getElementById("project-empty");
   const card = document.getElementById("project-open");
   if (empty) empty.hidden = open;
@@ -362,11 +361,9 @@ function paintPdkAbout(pdk) {
   const facts = pdkFacts(pdk);
   if (about) about.textContent = facts.about;
   const fig = document.getElementById("layer-stack");
-  if (fig) {
-    const svg = stackSvg(pdk);
-    fig.innerHTML = svg ? svg + "<figcaption>" + fmt.escape(pdk) + " · " + facts.stack.length + " layers</figcaption>" : "";
-    fig.hidden = !svg;
-  }
+  const html = stackHtml(pdk);
+  // Unknown PDK: keep the sky130 stack the page ships with.
+  if (fig && html) fig.innerHTML = html;
 }
 
 async function onSclSelected() {
