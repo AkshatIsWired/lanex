@@ -210,6 +210,8 @@
   opacity: 0.6;
 }
 .picker.picker-ready { border-left: 3px solid var(--pass); }
+/* Step buttons scroll a card to the top; clear the sticky page header. */
+#sec-setup .picker, #setup-run { scroll-margin-top: 64px; }
 .picker h2 {
   font-size: var(--t-lg);
   font-weight: 600;
