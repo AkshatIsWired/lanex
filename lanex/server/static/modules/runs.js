@@ -118,8 +118,8 @@ export async function renderRuns() {
   }
   for (const run of shown) {
     const li = document.createElement("li");
-    // Pass/fail left border for at-a-glance scanning (status text + ✓/✗ glyph
-    // give a colour-blind-safe redundant cue).
+    // Pass/fail left border for at-a-glance scanning (the status word is the
+    // colour-blind-safe redundant cue).
     li.className = run.success ? "run-pass" : "run-fail";
     const designRow = scope === "all"
       ? "<div class='row2 muted'>" + icon("folder", { size: 13 }) + " " + fmt.escape(designLabel(run._design)) + "</div>"
@@ -133,8 +133,8 @@ export async function renderRuns() {
         " this run' aria-label='Pin run'>" + (run.pinned ? "<svg viewBox='0 0 24 24' width='14' height='14' fill='currentColor' stroke='currentColor' stroke-width='1' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z'/></svg>" : "<svg viewBox='0 0 24 24' width='14' height='14' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z'/></svg>") + "</button>" +
       "<span class='tag'>" + fmt.escape(run.tag) + "</span>" +
       (run.success
-        ? "<span class='pill pill-pass'><span class='d'></span><span class='text'>✓ passed</span></span>"
-        : "<span class='pill pill-fail'><span class='d'></span><span class='text'>✗ failed</span></span>") +
+        ? "<span class='pill pill-pass'><span class='text'>passed</span></span>"
+        : "<span class='pill pill-fail'><span class='text'>failed</span></span>") +
       (run.imported ? "<span class='pill pill-pending' title='Imported from an external source (partial run)'>imported</span>" : "") +
       "</div>" +
       designRow +
