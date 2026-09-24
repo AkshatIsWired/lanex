@@ -204,7 +204,7 @@ check("tools: engine-not-usable card is platform-aware with a Start action", () 
   // Desktop runs, so the card must branch on the server-reported platform and
   // offer one-click Start buttons wired to /api/container/start-engine.
   const src = readFileSync(resolve(MOD, "tools.js"), "utf8");
-  const card = src.indexOf("Container engine installed — not usable yet");
+  const card = src.indexOf("Container engine installed but not currently active");
   assert.ok(card >= 0, "not-usable card not found");
   assert.match(src, /c\.platform === "darwin"/,
     "the card no longer branches on the server-reported platform");
@@ -408,7 +408,7 @@ check("provenance.js: config chips state scope + conditionality faithfully", () 
       scoped: true, scope: "pdk::sky130*", others: 1 }, "config.yaml");
   assert.equal(scoped.text, "config (pdk::sky130*): 45");
   assert.ok(scoped.title.includes("line 6"), "title must name the exact line");
-  assert.ok(scoped.title.includes("applies only when the run's PDK/SCL matches"),
+  assert.ok(scoped.title.includes("pplies only when the run's PDK/SCL matches"),
     "a scoped value must be declared conditional");
   assert.ok(scoped.title.includes("1 more entry"), "extra entries must be disclosed");
   assert.equal(scoped.scoped, true);
@@ -417,7 +417,7 @@ check("provenance.js: config chips state scope + conditionality faithfully", () 
     { line: 3, text: "CLOCK_PERIOD: 10", value: "10",
       scoped: false, scope: null, others: 0 }, "config.yaml");
   assert.equal(plain.text, "your config: 10");
-  assert.ok(plain.title.includes("what an untouched field uses"),
+  assert.ok(plain.title.includes("used when no override is present"),
     "an unscoped value is what an untouched field uses");
   assert.ok(!plain.title.includes("more entr"), "no phantom extra entries");
 });
@@ -520,13 +520,13 @@ check("finalsettings: the cumulative directory classifies every variable", () =>
 });
 
 check("finalsettings: source labels state the same story in both tables", () => {
-  assert.match(fs.sourceLabel({ source: "override" }), /beats the file/);
+  assert.match(fs.sourceLabel({ source: "override" }), /supersedes configuration file/);
   assert.match(fs.sourceLabel({ source: "config", line: 3 }, "config.yaml"),
     /config\.yaml line 3/);
   assert.match(
     fs.sourceLabel({ source: "config", config_line: 5, scoped: true, scope: "pdk::sky130*" },
       "config.yaml"),
-    /line 5 \(pdk::sky130\* — applied only if/);
+    /line 5 \(pdk::sky130\*: applied only if/);
   assert.match(fs.sourceLabel({ source: "pdk" }), /resolved\.json/);
   assert.match(fs.sourceLabel({ source: "default" }), /LibreLane default/);
 });
