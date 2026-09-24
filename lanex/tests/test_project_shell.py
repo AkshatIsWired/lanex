@@ -22,8 +22,57 @@ class _CapturingHandler:
         self.status = status
 
 
-def test_projects_dir_lives_in_home():
+def test_projects_dir_prefers_the_windows_profile(monkeypatch, tmp_path):
+    monkeypatch.setattr(platform_env, "wsl_windows_home", lambda: str(tmp_path))
+    assert platform_env.projects_dir() == tmp_path / "LanEx-Projects"
+
+
+def test_projects_dir_avoids_paths_with_spaces(monkeypatch):
+    # LibreLane splits file lists on whitespace, so a profile path with a space
+    # would break every run; those fall back to the Linux home.
+    monkeypatch.setattr(platform_env, "wsl_windows_home", lambda: "/mnt/c/Users/Jane Doe")
     assert platform_env.projects_dir() == Path.home() / "lanex-projects"
+
+
+def test_projects_dir_off_wsl_is_the_home_folder(monkeypatch):
+    monkeypatch.setattr(platform_env, "wsl_windows_home", lambda: None)
+    assert platform_env.projects_dir() == Path.home() / "lanex-projects"
+
+
+def test_windows_paths_pass_through_off_wsl(monkeypatch):
+    monkeypatch.setattr(platform_env, "is_wsl", lambda: False)
+    assert platform_env.to_host_path("C:/Users/x/chip") == "C:/Users/x/chip"
+    assert platform_env.to_host_path("/home/x/chip") == "/home/x/chip"
+
+
+def test_delete_refuses_folders_outside_the_projects_dir(monkeypatch, tmp_path):
+    root = tmp_path / "LanEx-Projects"
+    (root / "keep").mkdir(parents=True)
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.setattr(platform_env, "projects_dir", lambda: root)
+    h = _CapturingHandler(body={"design_dir": str(other), "confirm_name": "elsewhere"})
+    routes.h_project_delete(h)
+    assert h.status == 403 and other.is_dir()
+
+
+def test_delete_needs_the_typed_name_and_not_the_open_project(monkeypatch, tmp_path):
+    root = tmp_path / "LanEx-Projects"
+    victim = root / "old"
+    victim.mkdir(parents=True)
+    monkeypatch.setattr(platform_env, "projects_dir", lambda: root)
+    monkeypatch.setattr(routes, "_get_active_design_dir", lambda: None)
+    h = _CapturingHandler(body={"design_dir": str(victim), "confirm_name": "wrong"})
+    routes.h_project_delete(h)
+    assert h.status == 400 and victim.is_dir()
+    monkeypatch.setattr(routes, "_get_active_design_dir", lambda: str(victim))
+    h = _CapturingHandler(body={"design_dir": str(victim), "confirm_name": "old"})
+    routes.h_project_delete(h)
+    assert h.status == 409 and victim.is_dir()
+    monkeypatch.setattr(routes, "_get_active_design_dir", lambda: None)
+    h = _CapturingHandler(body={"design_dir": str(victim), "confirm_name": "old"})
+    routes.h_project_delete(h)
+    assert h.status == 200 and not victim.exists()
 
 
 def test_project_defaults_reports_the_projects_dir():

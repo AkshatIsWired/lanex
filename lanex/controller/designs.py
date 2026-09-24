@@ -81,3 +81,25 @@ def remember(design_dir: str) -> None:
         _store().write_text(json.dumps(ordered, indent=2), encoding="utf-8")
     except Exception:
         pass
+
+
+def forget(design_dir: str) -> bool:
+    """Drop *design_dir* from the remembered list (the folder is untouched)."""
+    try:
+        cur = json.loads(_store().read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(cur, list):
+        return False
+    try:
+        target = str(Path(design_dir).resolve())
+    except Exception:
+        target = design_dir
+    kept = [x for x in cur if isinstance(x, str) and x != design_dir and x != target]
+    if len(kept) == len(cur):
+        return False
+    try:
+        _store().write_text(json.dumps(kept, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False

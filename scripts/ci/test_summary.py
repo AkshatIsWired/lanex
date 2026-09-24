@@ -59,6 +59,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_editor_lint_sim": "IDE lint/sim jobs behave; watchdogs free a stuck job instead of hanging 'running'.",
     "test_introspect": "Step/metric/variable introspection matches librelane, so the UI offers real options only.",
     "test_scaffold": "Generated example/config scaffolding is valid and launches.",
+    "test_project_shell": "Projects land in a space-free folder, Windows paths are accepted, and only LanEx's own project folders can be deleted.",
     "test_server": "HTTP routing, CSRF, and traversal confinement hold (no arbitrary file read).",
     "test_tools": "Tool/engine detection is accurate and its probes can't hang the UI.",
     "test_fsbrowser": "The file browser stays confined to allowed roots (no path traversal).",

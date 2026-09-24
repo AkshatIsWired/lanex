@@ -157,8 +157,21 @@ def _list_scls_at(pdk_dir: Path) -> List[Tuple[str, str]]:
         label = scl.name
         if not is_synthesis_scl(variant, label):
             continue
+        # A library folder can exist without its timing views (a partial or
+        # skipped download). Only offer it when the liberty files are there.
+        if not _has_liberty(scl):
+            continue
         out.append((label, label))
     return out
+
+
+def _has_liberty(scl_dir: Path) -> bool:
+    try:
+        if any((scl_dir / "lib").glob("*.lib")):
+            return True
+        return next(scl_dir.rglob("*.lib"), None) is not None
+    except OSError:
+        return False
 
 
 def list_scls(pdk: str) -> List[Dict[str, Any]]:
@@ -174,8 +187,11 @@ def list_scls(pdk: str) -> List[Dict[str, Any]]:
                 continue
             if not is_synthesis_scl(pdk, scl.name):
                 continue
-            # Probe for the .lib that LibreLane expects.
-            lib_hits = list(scl.rglob("*.lib"))
+            # Probe for the .lib that LibreLane expects; a library without one
+            # isn't really installed, so it isn't offered at all.
+            lib_hits = [True] if _has_liberty(scl) else []
+            if not lib_hits:
+                continue
             out.append(
                 to_json(
                     PDK(

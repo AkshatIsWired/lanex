@@ -470,7 +470,7 @@ def h_fs_roots(handler: Any) -> None:
 
 
 def h_fs_list(handler: Any) -> None:
-    path = _query_param(handler.path, "path")
+    path = platform_env.to_host_path(_query_param(handler.path, "path"))
     if not path:
         _respond(handler, "missing path", 400)
         return
@@ -679,9 +679,9 @@ def h_design_summary(handler: Any) -> None:
             # here but not in VERILOG_FILES. Say what it is so the number can't
             # be read as the flow's source list.
             cfg_count = _config_source_count(p, cfg)
-            label = f"{v_count} HDL file{'s' if v_count != 1 else ''} found"
+            label = f"{v_count} Verilog file{'s' if v_count != 1 else ''}"
             if cfg_count is not None and cfg_count != v_count:
-                label += f" (config uses {cfg_count})"
+                label += f", {cfg_count} used by the config"
             pills.append({"type": "info", "text": label})
             if mem_count:
                 pills.append({"type": "info", "text": f"{mem_count} memory files"})
@@ -689,9 +689,9 @@ def h_design_summary(handler: Any) -> None:
         # only when there ARE sources to derive one from.
         config_missing = cfg is None
         if config_missing and v_count:
-            pills.append({"type": "warn", "text": "no config — can auto-generate"})
+            pills.append({"type": "warn", "text": "No config yet. LanEx can write one"})
         if _whitespace_path_error(str(p)):
-            pills.append({"type": "warn", "text": "path contains spaces — runs will fail; use a space-free folder"})
+            pills.append({"type": "warn", "text": "The path has spaces, which breaks runs. Use a folder without spaces"})
         pills.append({"type": "pending", "text": str(p)})
         _respond(handler, {"pills": pills, "config_missing": config_missing,
                            "has_sources": bool(v_count)})
@@ -948,11 +948,11 @@ def h_preflight(handler: Any) -> None:
 
 def h_set_design_dir(handler: Any) -> None:
     body = getattr(handler, "_body", {})
-    path = body.get("path", "")
+    path = platform_env.to_host_path(body.get("path", ""))
     if not path:
         _respond(handler, "missing path", 400)
         return
-    p = Path(path).resolve()
+    p = Path(path).expanduser().resolve()
     if not p.is_dir():
         _respond(handler, "directory not found", 400)
         return
@@ -2406,17 +2406,78 @@ def h_templates(handler: Any) -> None:
 
 
 def h_project_defaults(handler: Any) -> None:
-    """Where New project suggests putting a design, and whether it exists yet."""
-    from ..controller import platform_env
+    """Where New project suggests putting a design, whether it exists yet, and
+    what the UI needs to show paths the way the person's OS does."""
     proj = platform_env.projects_dir()
     _respond(handler, {"projects_dir": str(proj), "exists": proj.is_dir(),
-                       "wsl": platform_env.is_wsl()})
+                       "wsl": platform_env.is_wsl(),
+                       "distro": os.environ.get("WSL_DISTRO_NAME") or None})
+
+
+def h_native_pick(handler: Any) -> None:
+    """Open the OS's own folder/file picker; blocks until the person answers.
+    ``native: false`` tells the UI to use its built-in browser instead."""
+    from ..controller import native_pick
+    body = getattr(handler, "_body", {})
+    start = platform_env.to_host_path(body.get("start") or "")
+    _respond(handler, native_pick.pick(body.get("mode") or "folder",
+                                       str(body.get("title") or ""), start))
+
+
+def h_project_forget(handler: Any) -> None:
+    """Remove a project from the recent list. The folder is left alone."""
+    from ..controller import designs
+    body = getattr(handler, "_body", {})
+    path = body.get("design_dir") or ""
+    if not path:
+        _respond(handler, "missing design_dir", 400)
+        return
+    _respond(handler, {"forgotten": designs.forget(path)})
+
+
+def h_project_delete(handler: Any) -> None:
+    """Delete a project folder, but only one inside the LanEx projects folder
+    and only when the request repeats its folder name (a typed confirmation).
+    Folders anywhere else are the person's own and are never deleted here."""
+    from ..controller import designs
+    body = getattr(handler, "_body", {})
+    raw = body.get("design_dir") or ""
+    try:
+        target = Path(raw).resolve()
+        root = platform_env.projects_dir().resolve()
+    except Exception:
+        _respond(handler, "invalid path", 400)
+        return
+    if not raw or target == root or not target.is_relative_to(root):
+        _respond(handler, "only projects inside the LanEx projects folder can be deleted here", 403)
+        return
+    if (body.get("confirm_name") or "") != target.name:
+        _respond(handler, "confirmation does not match the project name", 400)
+        return
+    if not target.is_dir():
+        designs.forget(str(target))
+        _respond(handler, {"deleted": False, "forgotten": True})
+        return
+    # The open project may have a run writing into it; switching first keeps
+    # that decision with the person rather than racing a live flow.
+    active = _get_active_design_dir()
+    if active and Path(active).resolve() == target:
+        _respond(handler, "this project is open; switch to another project first", 409)
+        return
+    try:
+        shutil.rmtree(target)
+    except Exception as ex:
+        _log.exception("project delete failed")
+        _respond(handler, "could not delete the folder: " + str(ex), 500)
+        return
+    designs.forget(str(target))
+    _respond(handler, {"deleted": True})
 
 
 def h_project_new(handler: Any) -> None:
     """Scaffold a new design from a template, then make it the active design."""
     body = getattr(handler, "_body", {})
-    dest = body.get("dest_dir") or ""
+    dest = platform_env.to_host_path(body.get("dest_dir") or "")
     template = body.get("template") or ""
     top = (body.get("top") or "").strip()
     pdk = (body.get("pdk") or "").strip()
@@ -3283,6 +3344,9 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/templates", h_templates),
     ("/api/project/new", h_project_new),
     ("/api/project/defaults", h_project_defaults),
+    ("/api/project/forget", h_project_forget),
+    ("/api/project/delete", h_project_delete),
+    ("/api/fs/native-pick", h_native_pick),
     ("/api/run-export", h_run_export),
     ("/api/verify/rerun", h_verify_rerun),
     ("/api/verify", h_verify),

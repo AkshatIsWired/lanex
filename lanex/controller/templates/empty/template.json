@@ -1,10 +1,13 @@
 {
   "name": "empty",
-  "title": "Empty (start from scratch)",
-  "description": "A minimal top module + config you fill in yourself. For users who already have a design in mind.",
+  "title": "Blank project",
+  "description": "One empty top module and a starter config. Write your own Verilog in the RTL IDE.",
   "top": "top",
   "clock_port": "clk",
   "clock_period": 10.0,
-  "sources": ["src/top.v"],
-  "testbench": null
+  "sources": [
+    "src/top.v"
+  ],
+  "testbench": null,
+  "kind": "blank"
 }

@@ -705,13 +705,40 @@ def wsl_windows_home() -> Optional[str]:
 
 
 def projects_dir() -> Path:
-    """Where New project puts designs by default: ``~/lanex-projects``.
+    """Where New project puts designs by default.
 
-    Inside the appliance this is the WSL home, which keeps runs fast (the
-    container bind-mount over ``/mnt/c`` is slow); Explorer still reaches it
-    through ``\\\\wsl.localhost``.
+    On the Windows appliance that is ``%USERPROFILE%/LanEx-Projects`` (seen from
+    WSL as ``/mnt/c/Users/<name>/LanEx-Projects``), so projects sit with the
+    user's own files and Explorer shows them like any other folder. Two cases
+    fall back to ``~/lanex-projects`` in the Linux home: a Windows profile path
+    with whitespace (LibreLane splits file lists on spaces) and no WSL at all.
     """
+    win = wsl_windows_home()
+    if win and not any(c.isspace() for c in win):
+        return Path(win) / "LanEx-Projects"
     return Path.home() / "lanex-projects"
+
+
+_WIN_PATH_RX = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+
+def to_host_path(path: str) -> str:
+    """Accept a Windows-style path where a Linux path is expected.
+
+    On WSL, drive paths (``C:/Users/me/chip``, either slash) and UNC paths
+    (``//wsl.localhost/lanex/home/...``, backslashed as Explorer shows them) are
+    translated with ``wslpath -u``, so people can paste what Explorer shows them. Anything else (and everything off WSL) is returned unchanged.
+    """
+    p = (path or "").strip().strip('"')
+    if not p or not is_wsl() or not _WIN_PATH_RX.match(p):
+        return p
+    try:
+        import subprocess
+        out = subprocess.run(["wslpath", "-u", p], capture_output=True, text=True, timeout=5)
+        conv = (out.stdout or "").strip()
+        return conv or p
+    except Exception:
+        return p
 
 
 def network_status() -> dict:

@@ -37,6 +37,27 @@ def _templates_root() -> Path:
     return Path(__file__).resolve().parent / "templates"
 
 
+def spm_source() -> Optional[Path]:
+    """The SPM example LanEx bundles (repo checkout), else LibreLane's own copy."""
+    here = Path(__file__).resolve().parents[2] / "spm"
+    if here.is_dir():
+        return here
+    try:
+        import librelane  # noqa: F401  (optional at import time)
+        cand = Path(librelane.__file__).parent / "examples" / "spm"
+        return cand if cand.is_dir() else None
+    except Exception:
+        return None
+
+
+def _copy_from(manifest: Dict[str, Any]) -> Optional[Path]:
+    """A template that ships a complete, tuned design (its own config, SDC and
+    pin order) is copied verbatim instead of rendered from the manifest."""
+    if manifest.get("copy_from") == "spm":
+        return spm_source()
+    return None
+
+
 def _read_manifest(tdir: Path) -> Optional[Dict[str, Any]]:
     mf = tdir / "template.json"
     if not mf.is_file():
@@ -77,10 +98,28 @@ def list_templates() -> List[Dict[str, Any]]:
                 "clock_port": doc.get("clock_port") or "clk",
                 "clock_period": doc.get("clock_period"),
                 "has_testbench": bool(tb),
+                "kind": doc.get("kind") or "example",
+                "fixed_config": bool(doc.get("copy_from")),
+                "order": doc.get("order", 99),
             }
         )
-    out.sort(key=lambda d: (d["name"] == "empty", d["name"]))
+    # The blank project leads; examples follow in their curated order.
+    out.sort(key=lambda d: (d["kind"] != "blank", d["order"], d["name"]))
     return out
+
+
+def _rename_starter(dest: Path, old: str, new: str, written: List[str]) -> None:
+    import re
+    src = dest / "src" / (old + ".v")
+    if not src.is_file() or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", new):
+        return
+    text = src.read_text(encoding="utf-8")
+    text = re.sub(r"\bmodule\s+" + re.escape(old) + r"\b", "module " + new, text, count=1)
+    target = dest / "src" / (new + ".v")
+    target.write_text(text, encoding="utf-8")
+    src.unlink()
+    rel_old, rel_new = str(Path("src") / (old + ".v")), str(Path("src") / (new + ".v"))
+    written[:] = [rel_new if w == rel_old else w for w in written]
 
 
 def _render_config(
@@ -136,6 +175,16 @@ def create_project(
             return {"ok": False, "error": "destination directory is not empty"}
     dest.mkdir(parents=True, exist_ok=True)
 
+    verbatim = _copy_from(manifest)
+    if manifest.get("copy_from"):
+        if verbatim is None:
+            return {"ok": False, "error": "this example isn't available in this install"}
+        shutil.copytree(str(verbatim), str(dest), dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("runs", "__pycache__"))
+        files = sorted(str(p.relative_to(dest)) for p in dest.rglob("*") if p.is_file())
+        return {"ok": True, "design_dir": str(dest), "template": template,
+                "top": manifest.get("top") or template, "files": files}
+
     written: List[str] = []
     # Copy src/ and verify/ trees (only those — never the manifest).
     for sub in ("src", "verify"):
@@ -156,7 +205,15 @@ def create_project(
             shutil.copyfile(f, target)
             written.append(str(rel))
 
-    top = top or manifest.get("top") or template
+    tpl_top = manifest.get("top") or template
+    top = top or tpl_top
+    if manifest.get("kind") == "blank" and top != tpl_top:
+        # A blank project's starter module takes the name the person chose, so
+        # DESIGN_NAME, the module and its file all agree.
+        _rename_starter(dest, tpl_top, top, written)
+    elif manifest.get("kind") != "blank":
+        # An example's top module is fixed by its Verilog.
+        top = tpl_top
     clock_port = manifest.get("clock_port") or "clk"
     if clock_period is None:
         clock_period = manifest.get("clock_period")
