@@ -1,98 +1,106 @@
-/* LanEx: Shuttle Reticle
+/* LanEx: MASK ROOM
  * ------------------------------------------------------------------
- * The cockpit is a reticle plate. Panels are dies on a chrome-black wafer,
- * separated by scribe lanes and named in the lane. Colour is sky130 layer
- * state only (met1 active, met3 pass, met4 warn, poly fail), in thin bands,
- * never on prose. Barlow (DIN lineage) for UI, Semi Condensed caps for lane
- * labels, JetBrains Mono only for paths, code and numbers.
+ * Grounded in chip physical design. Surfaces are the dark layout canvas the
+ * EDA tools (KLayout / OpenROAD / Magic) render on. The accent system is the
+ * sky130 process-layer stack (poly + metal1..5): each hue means a real
+ * layer/operation and carries that meaning through pipeline, status and
+ * charts. Geometry is Manhattan: tight, rectilinear.
  *
- * The world's own names (--wafer, --die, --seal, --ink, --met*) are the source
- * of truth; the older names below them (--bg, --surface, --text, ...) are kept
- * as aliases so every module picks the world up without a rewrite.
+ * The classic names (--bg, --surface, --text, --accent, ...) are the source of
+ * truth. The frame files (shell.css, setup.css) use a second vocabulary
+ * (--wafer, --die, --seal, --ink, ...); those are aliases of the classic ones.
  */
 
-/* Declared on body too: aliases like --surface: var(--die) must resolve where
-   body.theme-light redefines --die, not once at :root. */
+/* Declared on body too: aliases like --die: var(--surface) must resolve where
+   body.theme-light redefines --surface, not once at :root. */
 :root, body {
-  /* ---- the plate ---- */
-  --wafer: #0b0d0f;           /* app ground; the scribe streets between dies */
-  --wafer-2: #08090b;         /* inset wells (log bodies, code) */
-  --die: #131619;             /* a panel */
-  --die-2: #1a1e22;           /* control face inside a die */
-  --die-3: #22272c;           /* hover / pressed */
-  --seal: #272c32;            /* seal-ring hairline around a die */
-  --seal-strong: #3b4249;
-  --mark: #4a525a;            /* alignment crosses */
+  /* surfaces: substrate, die, raised control */
+  --bg: #06080d;              /* deep substrate (the canvas ground) */
+  --bg-2: #04060a;            /* rail / inset wells */
+  --surface: #0e131c;         /* die area / panel */
+  --surface-2: #131b28;       /* raised control */
+  --surface-3: #1c2738;       /* hover / nested */
+  --border: #1f2a3b;          /* floorplan grid line */
+  --border-strong: #33445e;
+  --hover: rgba(77, 163, 255, 0.10);
 
-  --ink: #e6e3dc;             /* quartz */
-  --ink-strong: #f7f5f0;
-  --ink-2: #a3a098;           /* secondary (AA on die + wafer) */
-  --ink-3: #6f6d68;           /* disabled, placeholders on large controls */
+  /* text */
+  --text: #c2cee0;
+  --text-muted: #7e8ea7;
+  --text-strong: #f2f7ff;
+  --text-disabled: #46556b;
 
-  /* ---- sky130 layer state ---- */
-  --met1: #5aa9ff;            /* active / selected / primary action */
-  --met1-hi: #82bfff;
-  --met1-lo: #3a8ae6;
-  --met2: #e17ad0;
-  --met3: #3ccf91;            /* pass */
-  --met4: #f0b43c;            /* warn */
-  --met5: #ff8a4c;
-  --poly: #f0616d;            /* fail */
-  --li:   #93a7bf;
-  --met1-band: rgba(90, 169, 255, 0.13);
-  --met3-band: rgba(60, 207, 145, 0.12);
-  --met4-band: rgba(240, 180, 60, 0.13);
-  --poly-band: rgba(240, 97, 109, 0.13);
-  --on-met: #06121f;          /* ink on any bright layer fill */
+  /* process-layer palette (the silicon stack itself). Mapped from the
+     canonical sky130 layer colours; meaning-bearing, not decoration. */
+  --poly: #d6446f;            /* synthesis / logical netlist */
+  --li:   #8ea6c4;            /* local interconnect */
+  --met1: #4da3ff;            /* metal1: primary interconnect ("energized") */
+  --met2: #e879c9;            /* metal2 / via: upper routing */
+  --met3: #36d399;            /* metal3: signoff / pass */
+  --met4: #f2c14e;            /* metal4: power / warn */
+  --met5: #ff7a45;            /* metal5: top metal / heat */
 
-  /* ---- aliases (older module vocabulary) ---- */
-  --bg: var(--wafer);
-  --bg-2: var(--wafer-2);
-  --surface: var(--die);
-  --surface-2: var(--die-2);
-  --surface-3: var(--die-3);
-  --border: var(--seal);
-  --border-strong: var(--seal-strong);
-  --hover: rgba(230, 227, 220, 0.05);
-  --text: var(--ink);
-  --text-muted: var(--ink-2);
-  --text-strong: var(--ink-strong);
-  --text-disabled: var(--ink-3);
-  --accent: var(--met1);
-  --accent-2: var(--met1-hi);
-  --accent-3: var(--met1-lo);
-  --accent-soft: var(--met1-band);
-  --accent-glow: var(--met1-band);
-  --accent-cyan: #45c7c0;
-  --pass: var(--met3);
-  --pass-soft: var(--met3-band);
-  --warn: var(--met4);
-  --warn-soft: var(--met4-band);
-  --fail: var(--poly);
-  --fail-soft: var(--poly-band);
-  --pending: var(--ink-3);
-  --info: var(--met1);
-  --info-soft: var(--met1-band);
-  --on-accent: var(--on-met);
-  --on-status: var(--on-met);
-  --on-warn: var(--on-met);
-  --on-pass: var(--on-met);
+  /* accent ramp (interactive fills): a deep, AA-safe met-blue; the bright
+     met1 above is reserved for spines, glow and the signature. */
+  --accent: #2f6fe0;
+  --accent-2: #2156c0;
+  --accent-3: #18408f;
+  --accent-soft: rgba(77, 163, 255, 0.16);
+  --accent-glow: rgba(77, 163, 255, 0.42);
+
+  /* status mapped to real layers (green=met3, gold=met4, heat=met5) */
+  --pass: #2faa6a;
+  --pass-soft: rgba(54, 211, 153, 0.16);
+  --warn: #c98a14;
+  --warn-soft: rgba(242, 193, 78, 0.16);
+  --fail: #e5484d;
+  --fail-soft: rgba(229, 72, 77, 0.16);
+  --pending: #6d7d94;
+  --info: #2f6fe0;
+  --info-soft: rgba(77, 163, 255, 0.16);
+
+  --on-accent: #ffffff;       /* text/icon on an accent fill */
+  --on-status: #ffffff;       /* text/icon on a status fill */
+  --on-warn: #000;            /* on an amber fill (white fails contrast) */
+  --on-pass: #000;            /* on a green fill (black is the AA choice) */
   --canvas: #ffffff;          /* GDS renders assume a white backdrop */
   --canvas-dark: #000;
   --focus: var(--met1);
+  --accent-cyan: #38d6c8;     /* secondary chart hue only */
 
-  /* syntax (RTL IDE) */
-  --syntax-kw: #ff8aa0;
-  --syntax-com: #6f7780;
-  --syntax-str: #a6d4ff;
-  --syntax-num: var(--met1);
-  --syntax-pp: var(--met2);
+  /* syntax highlighting (RTL IDE), recoloured to the layer family */
+  --syntax-kw: #ff7a93;
+  --syntax-com: #5d6e85;
+  --syntax-str: #9fd0ff;
+  --syntax-num: #4da3ff;
+  --syntax-pp: #e879c9;
 
-  /* ---- geometry: rectilinear, like mask shapes ---- */
+  /* ---- frame vocabulary (aliases of the above) ---- */
+  --wafer: var(--bg);
+  --wafer-2: var(--bg-2);
+  --die: var(--surface);
+  --die-2: var(--surface-2);
+  --die-3: var(--surface-3);
+  --seal: var(--border);
+  --seal-strong: var(--border-strong);
+  --mark: var(--border-strong);
+  --ink: var(--text);
+  --ink-strong: var(--text-strong);
+  --ink-2: var(--text-muted);
+  --ink-3: var(--text-disabled);
+  --met1-hi: #7cbcff;
+  --met1-lo: var(--accent);
+  --met1-band: var(--accent-soft);
+  --met3-band: var(--pass-soft);
+  --met4-band: var(--warn-soft);
+  --poly-band: var(--fail-soft);
+  --on-met: #06121f;          /* ink on a bright layer fill */
+
+  /* radius: rectilinear, tight. Pills reserved for true toggles/dots. */
   --r-sm: 2px;
-  --r-md: 3px;
-  --r-lg: 4px;
-  --r-xl: 6px;
+  --r-md: 4px;
+  --r-lg: 6px;
+  --r-xl: 10px;               /* landing cards + large modals only */
   --r-pill: 999px;
   --radius: var(--r-md);
 
@@ -119,15 +127,15 @@
   --cond: "Barlow Semi Condensed", "Barlow", "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
 
-  /* ---- depth: flat dies; only popovers and the selected die lift ---- */
-  --sh-1: 0 1px 0 rgba(0, 0, 0, 0.45);
-  --sh-2: 0 6px 12px -4px rgba(0, 0, 0, 0.6);
-  --sh-3: 0 12px 14px -6px rgba(0, 0, 0, 0.7);
+  /* shadows: deep and cool, like depth on the substrate */
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --sh-2: 0 8px 24px rgba(0, 0, 0, 0.55);
+  --sh-3: 0 20px 60px rgba(0, 0, 0, 0.66);
 
-  /* landing hero + splash only */
-  --irid-1: var(--met1);
-  --irid-2: var(--met2);
-  --irid-3: var(--met3);
+  /* wafer iridescence: landing hero + splash wordmark only */
+  --irid-1: #4da3ff;
+  --irid-2: #e879c9;
+  --irid-3: #36d399;
   --iridescence: linear-gradient(115deg, var(--irid-1) 0%, var(--irid-2) 45%, var(--irid-3) 90%);
 
   /* ---- frame metrics ---- */
@@ -156,46 +164,58 @@
   color-scheme: dark;
 }
 
-/* Quartz: the same plate under daylight. */
+/* Blueprint / datasheet light: cool paper, met-blue ink, same layer hues. */
 body.theme-light {
-  --wafer: #e6e3db;
-  --wafer-2: #dcd8cf;
-  --die: #f6f4ef;
-  --die-2: #ffffff;
-  --die-3: #ece9e1;
-  --seal: #d2cec4;
-  --seal-strong: #aea99d;
-  --mark: #9c978b;
+  --bg: #eef2f7;
+  --bg-2: #e4eaf1;
+  --surface: #f8fafc;
+  --surface-2: #eef2f7;
+  --surface-3: #e1e8f0;
+  --border: #c3cedb;
+  --border-strong: #9fb0c4;
+  --hover: rgba(47, 111, 224, 0.09);
 
-  --ink: #232528;
-  --ink-strong: #0d0e10;
-  --ink-2: #5a5850;
-  --ink-3: #8d897f;
+  --text: #1c2733;
+  --text-muted: #566377;
+  --text-strong: #0a1320;
+  --text-disabled: #92a0b1;
 
-  --met1: #1d6fd8;
-  --met1-hi: #1a62c0;
-  --met1-lo: #1757ab;
-  --met2: #ad3f9a;
-  --met3: #16805a;
-  --met4: #9a6606;
-  --met5: #c4551c;
-  --poly: #c8323f;
-  --li: #5b738f;
-  --met1-band: rgba(29, 111, 216, 0.10);
-  --met3-band: rgba(22, 128, 90, 0.10);
-  --met4-band: rgba(154, 102, 6, 0.11);
-  --poly-band: rgba(200, 50, 63, 0.09);
+  --poly: #c01f56;
+  --li:   #5b738f;
+  --met1: #1f6fe0;
+  --met2: #b8409a;
+  --met3: #128a59;
+  --met4: #a9760a;
+  --met5: #d2581f;
+
+  --accent: #1f5fd0;
+  --accent-2: #1a4fb0;
+  --accent-3: #143e8c;
+  --accent-soft: rgba(31, 95, 208, 0.10);
+  --accent-glow: rgba(31, 95, 208, 0.28);
+
+  --pass: #128a59;
+  --pass-soft: rgba(18, 138, 89, 0.10);
+  --warn: #a9760a;
+  --warn-soft: rgba(169, 118, 10, 0.12);
+  --fail: #cf2230;
+  --fail-soft: rgba(207, 34, 48, 0.10);
+  --pending: #6e7781;
+  --info: #1f5fd0;
+  --info-soft: rgba(31, 95, 208, 0.10);
+
+  --met1-hi: #1a4fb0;
   --on-met: #ffffff;
-  --hover: rgba(35, 37, 40, 0.05);
 
-  --syntax-kw: #b3244d;
-  --syntax-com: #7a7d80;
-  --syntax-str: #0b3a78;
-  --syntax-num: #0b56b3;
+  --syntax-kw: #c01f56;
+  --syntax-com: #6e7781;
+  --syntax-str: #0a3069;
+  --syntax-num: #0550ae;
+  --syntax-pp: #b8409a;
 
-  --sh-1: 0 1px 0 rgba(40, 36, 28, 0.08);
-  --sh-2: 0 6px 12px -4px rgba(40, 36, 28, 0.18);
-  --sh-3: 0 12px 14px -6px rgba(40, 36, 28, 0.24);
+  --sh-1: 0 1px 2px rgba(20, 40, 70, 0.10);
+  --sh-2: 0 6px 16px rgba(20, 40, 70, 0.12);
+  --sh-3: 0 16px 48px rgba(20, 40, 70, 0.18);
 
   color-scheme: light;
 }
