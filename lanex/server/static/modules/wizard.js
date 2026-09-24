@@ -47,7 +47,7 @@ function steps(n) {
     "<span class='wiz-step" + (n === 2 ? " is-on" : "") + "'>2 Name and target</span></div>";
 }
 
-export async function openWizard() {
+export async function openWizard({ template = "" } = {}) {
   const ov = overlay();
   ov.hidden = false;
   document.addEventListener("keydown", onKey);
@@ -59,24 +59,35 @@ export async function openWizard() {
       api.templates(),
       api.projectDefaults().catch(() => null),
     ]);
+    _display = (await import("./shell.js")).displayPath;
   } catch (ex) {
     body.innerHTML = steps(1) + "<p class='wiz-err'>Could not load the templates: " + fmt.escape(ex.message || ex) + "</p>";
     return;
   }
-  renderStep1(body);
+  const pre = template && _templates.find((t) => t.name === template);
+  if (pre) renderStep2(body, pre); else renderStep1(body);
+}
+
+function tplCard(t, cls) {
+  return "<button class='wiz-tpl " + cls + "' data-name='" + fmt.escape(t.name) + "'>" +
+    "<span class='wiz-tpl-title'>" + fmt.escape(t.title) + "</span>" +
+    "<span class='wiz-tpl-desc'>" + fmt.escape(t.description) + "</span>" +
+    (t.has_testbench ? "<span class='wiz-tpl-tag'>Includes a testbench</span>" : "") +
+    "</button>";
 }
 
 function renderStep1(body) {
+  // A new project usually starts blank; the examples are there to learn from
+  // or to try the flow on something that is known to work.
+  const blank = _templates.filter((t) => t.kind === "blank");
+  const examples = _templates.filter((t) => t.kind !== "blank");
   body.innerHTML = steps(1) +
-    "<div class='wiz-templates'>" +
-    _templates.map((t) =>
-      "<button class='wiz-tpl" + (t.name === "empty" ? " wiz-tpl-empty" : "") + "' data-name='" + fmt.escape(t.name) + "'>" +
-      "<span class='wiz-tpl-title'>" + fmt.escape(t.title) + "</span>" +
-      "<span class='wiz-tpl-desc'>" + fmt.escape(t.description) + "</span>" +
-      (t.has_testbench ? "<span class='wiz-tpl-tag'>Includes a testbench</span>" : "") +
-      "</button>",
-    ).join("") +
-    "</div>";
+    blank.map((t) => tplCard(t, "wiz-tpl-blank")).join("") +
+    (examples.length
+      ? "<div class='wiz-lane'><span class='lane-label'>Or start from an example</span>" +
+        "<span class='wiz-lane-note'>Working designs with a testbench. Good for a first run.</span></div>" +
+        "<div class='wiz-templates'>" + examples.map((t) => tplCard(t, "")).join("") + "</div>"
+      : "");
   body.querySelectorAll(".wiz-tpl").forEach((b) =>
     b.addEventListener("click", () => {
       const tpl = _templates.find((t) => t.name === b.dataset.name);
@@ -89,6 +100,15 @@ function renderStep1(body) {
 function projectsDir() {
   return _parent || (_defaults && _defaults.projects_dir) || "";
 }
+
+function defaultName(tpl) {
+  return tpl.kind === "blank" ? "my-chip" : tpl.name;
+}
+
+function shown(p) {
+  return _display ? _display(p) : p;
+}
+let _display = null;
 
 function joinPath(dir, name) {
   if (!dir) return name;
@@ -118,14 +138,14 @@ function renderStep2(body, tpl) {
   body.innerHTML = steps(2) +
     "<div class='wiz-form'>" +
     "<label class='wiz-field span-2'><span>Project name</span>" +
-    "<input id='wiz-name' type='text' value='" + fmt.escape(tpl.name) + "' autocomplete='off' spellcheck='false' />" +
+    "<input id='wiz-name' type='text' value='" + fmt.escape(defaultName(tpl)) + "' autocomplete='off' spellcheck='false' />" +
     "<span class='wiz-help'>Letters, numbers, dashes and underscores. This becomes the folder name.</span></label>" +
     "<div class='wiz-field span-2'><span>Location</span>" +
     "<div class='wiz-loc'><code id='wiz-where'></code><button class='btn btn-ghost btn-sm' id='wiz-change'>Change…</button></div>" +
     "<span class='wiz-help' id='wiz-where-help'></span></div>" +
     "<label class='wiz-field'><span>Top module</span>" +
     "<input id='wiz-top' type='text' value='" + fmt.escape(tpl.top) + "' spellcheck='false' />" +
-    "<span class='wiz-help'>The Verilog module at the top of your design. The template already names it; change it only if you rename that module.</span></label>" +
+    "<span class='wiz-help'>The name of your top-level Verilog module. LanEx creates <code>src/&lt;name&gt;.v</code> with an empty module of that name.</span></label>" +
     "<label class='wiz-field'><span>Clock period</span>" +
     "<span class='wiz-unit' data-unit='ns'><input id='wiz-clk' type='number' min='0.1' step='0.1' value='" + fmt.escape(clk) + "' /></span>" +
     "<span class='wiz-help' id='wiz-clk-help'></span></label>" +
@@ -154,23 +174,24 @@ function renderStep2(body, tpl) {
   pdkSel.addEventListener("change", paintScl);
 
   const paintWhere = () => {
-    const name = $("wiz-name").value.trim() || tpl.name;
-    $("wiz-where").textContent = joinPath(projectsDir(), name);
-    $("wiz-where").title = joinPath(projectsDir(), name);
+    const name = $("wiz-name").value.trim() || defaultName(tpl);
+    $("wiz-where").textContent = shown(joinPath(projectsDir(), name));
+    $("wiz-where").title = shown(joinPath(projectsDir(), name));
     $("wiz-where-help").textContent = _parent
       ? "A new folder is created inside the folder you chose."
       : (_defaults && _defaults.wsl
-        ? "Your LanEx projects folder. Open it from Windows with Project → Show in Explorer."
+        ? "Your LanEx projects folder, next to your other Windows files."
         : "Your LanEx projects folder.");
   };
   const paintClk = () => {
+    if (!$("wiz-clk")) return;
     const f = mhz($("wiz-clk").value);
     $("wiz-clk-help").textContent = f ? "Target speed: " + f + ". A smaller period is a faster chip and harder to meet." : "Enter a period in nanoseconds.";
   };
   paintWhere();
   paintClk();
   $("wiz-name").addEventListener("input", () => { $("wiz-err").textContent = ""; paintWhere(); });
-  $("wiz-clk").addEventListener("input", paintClk);
+  $("wiz-clk")?.addEventListener("input", paintClk);
   $("wiz-change").addEventListener("click", async () => {
     const { pickFolder } = await import("./fs.js");
     const dir = await pickFolder({ title: "Where should the project folder go?", use: "Put it here", seed: projectsDir() });
@@ -178,6 +199,21 @@ function renderStep2(body, tpl) {
   });
   $("wiz-back").addEventListener("click", () => renderStep1(body));
   $("wiz-create").addEventListener("click", () => doCreate(body, tpl));
+  // Enter anywhere in the form creates the project.
+  body.querySelector(".wiz-form").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName !== "SELECT") { e.preventDefault(); doCreate(body, tpl); }
+  });
+  // An example's top module is defined by its Verilog; only a blank project
+  // lets you name it (the starter module and file are renamed to match).
+  if (tpl.kind !== "blank") $("wiz-top")?.closest(".wiz-field").remove();
+  if (tpl.fixed_config) {
+    // This example ships its own tuned config: the fields below don't apply.
+    body.querySelectorAll("#wiz-top, #wiz-clk").forEach((el) => el.closest(".wiz-field")?.remove());
+    const note = document.createElement("p");
+    note.className = "wiz-help wiz-fixed";
+    note.textContent = "This example comes with its own tuned settings (clock, floorplan and power grid) for sky130 and gf180, so there's nothing else to set.";
+    body.querySelector(".wiz-form").appendChild(note);
+  }
   $("wiz-name").focus();
   $("wiz-name").select();
 }
@@ -192,10 +228,10 @@ async function doCreate(body, tpl) {
     return;
   }
   const dest = joinPath(projectsDir(), name);
-  const top = $("wiz-top").value.trim() || tpl.top;
+  const top = ($("wiz-top") ? $("wiz-top").value.trim() : "") || tpl.top;
   const pdk = $("wiz-pdk").value || "";
   const scl = $("wiz-scl").value || "";
-  const clk = parseFloat($("wiz-clk").value);
+  const clk = $("wiz-clk") ? parseFloat($("wiz-clk").value) : NaN;
   const btn = $("wiz-create");
   btn.disabled = true; btn.textContent = "Creating…";
   try {
@@ -204,11 +240,20 @@ async function doCreate(body, tpl) {
       clock_period: isNaN(clk) ? null : clk,
     });
     close();
-    toast.show("Created " + name + ". It's open now.", "success");
     const setup = await import("./setup.js");
     const input = document.getElementById("design-dir-input");
     if (input) input.value = res.design_dir;
     await setup.adoptDesignDir(res.design_dir);
+    if (tpl.kind === "blank") {
+      toast.show("Created " + name + ". Write your design in the RTL IDE; src/" + (res.top || "top") + ".v is ready.", "success");
+      document.querySelector('.side-tab[data-tab="ide"]')?.click();
+      const ide = await import("./ide/main.js");
+      await ide.initIde({ designDir: res.design_dir, runMode: state.runMode });
+      await ide.openInIde({ rel: "src/" + (res.top || "top") + ".v" });
+    } else {
+      document.querySelector('.side-tab[data-tab="setup"]')?.click();
+      toast.show("Created " + name + ". It's ready to run.", "success");
+    }
   } catch (ex) {
     err.textContent = ex.message || String(ex);
     btn.disabled = false; btn.textContent = "Create project";

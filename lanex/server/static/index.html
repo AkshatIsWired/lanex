@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/static/features.css" />
   <link rel="stylesheet" href="/static/ide.css" />
   <link rel="stylesheet" href="/static/shell.css" />
+  <link rel="stylesheet" href="/static/setup.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
        real icon (zero extra deps; static manifest, no service worker). -->
@@ -36,9 +37,8 @@
     <!-- Reticle edge: identity, project, search, run, and the few global controls. -->
     <header class="topbar">
       <div class="brand">
-        <img class="brand-logo logo--dark" src="/static/vendor/lanex-mark-dark.png" alt="" />
-        <img class="brand-logo logo--light" src="/static/vendor/lanex-mark-light.png" alt="" />
-        <span class="brand-name">LanEx</span>
+        <img class="brand-logo logo--dark" src="/static/vendor/lanex-wordmark-dark.png" alt="LanEx" width="95" height="26" />
+        <img class="brand-logo logo--light" src="/static/vendor/lanex-wordmark-light.png" alt="LanEx" width="96" height="26" />
       </div>
 
       <div class="tb-project">
@@ -186,144 +186,175 @@
     <!-- SETUP -->
     <section class="section section-active" id="sec-setup">
       <div class="section-jump-stack">
-        <nav class="section-jump" id="setup-jump" aria-label="Jump to section">
-          <span class="muted">Jump to:</span>
-          <button class="chip chip-clickable" data-jump="setup-design">Design</button>
-          <button class="chip chip-clickable" data-jump="setup-pdk">PDK &amp; SCL</button>
-          <button class="chip chip-clickable" data-jump="setup-preflight">Preflight</button>
+        <nav class="section-jump" id="setup-jump" aria-label="Sections of this page">
+          <button class="chip chip-clickable" data-jump="setup-design">Project</button>
+          <button class="chip chip-clickable" data-jump="setup-sources">Sources</button>
+          <button class="chip chip-clickable" data-jump="setup-pdk">PDK</button>
+          <button class="chip chip-clickable" data-jump="setup-preflight">Check</button>
           <button class="chip chip-clickable" data-jump="setup-run">Run</button>
           <button class="chip chip-clickable" data-jump="cfg-card">Constraints</button>
-          <button class="chip chip-clickable" data-jump="setup-help">Help</button>
         </nav>
-        <!-- Constraint milestones — populated by config.js from the same groups
-             as the in-card nav; revealed when the Constraints card opens. -->
-        <nav class="section-jump section-jump-sub" id="setup-jump-config" aria-label="Constraint sections" hidden></nav>
       </div>
-      <!-- Welcome / Quickstart hero -->
-      <div class="hero" id="hero">
-        <div class="hero-inner">
-          <div class="hero-head">
-            <div class="hero-copy">
-              <p class="section-eyebrow">open-silicon flow · sky130 · gf180mcu</p>
-              <h1>Take Verilog <span class="hl">all the way to silicon.</span></h1>
-              <p class="hero-sub">
-                LibreLane is the open-source implementation flow used to harden designs on
-                <strong>Skywater 130&nbsp;nm</strong>, <strong>GF 180&nbsp;nm MCU</strong>, and other
-                supported PDKs. This cockpit provides a guided, step-by-step flow environment.
-              </p>
-            </div>
-            <!-- Signature: the chip's process-layer stack, built bottom-up like the flow. -->
-            <aside class="layer-stack" aria-hidden="true">
-              <div class="ls-layer" style="--lc:var(--met5);--lsw:90%" title="metal5: top metal and power routing"><span class="ls-bar"></span><span class="ls-tag">met5</span></div>
-              <div class="ls-layer" style="--lc:var(--met4);--lsw:82%" title="metal4: routing layer"><span class="ls-bar"></span><span class="ls-tag">met4</span></div>
-              <div class="ls-layer" style="--lc:var(--met3);--lsw:74%" title="metal3: routing layer"><span class="ls-bar"></span><span class="ls-tag">met3</span></div>
-              <div class="ls-layer" style="--lc:var(--met2);--lsw:66%" title="metal2: routing layer"><span class="ls-bar"></span><span class="ls-tag">met2</span></div>
-              <div class="ls-layer" style="--lc:var(--met1);--lsw:58%" title="metal1: interconnect layer"><span class="ls-bar"></span><span class="ls-tag">met1</span></div>
-              <div class="ls-layer" style="--lc:var(--li);--lsw:46%" title="local interconnect: placement layer"><span class="ls-bar"></span><span class="ls-tag">li1</span></div>
-              <div class="ls-layer" style="--lc:var(--poly);--lsw:36%" title="poly: polysilicon gates and standard cells"><span class="ls-bar"></span><span class="ls-tag">poly</span></div>
-              <div class="ls-sub">substrate · 130&nbsp;nm</div>
-            </aside>
-          </div>
-          <ol class="steps-3" id="onboard-checklist">
-            <li data-ck="design"><span class="ck-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0"/></svg></span><strong>1. Pick your HDL folder.</strong> A folder with your <code>.v</code> (and ideally <code>.sdc</code>) files.</li>
-            <li data-ck="pdk"><span class="ck-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0"/></svg></span><strong>2. Confirm the PDK is installed.</strong> If not, the Tools tab installs it for you.</li>
-            <li data-ck="run"><span class="ck-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0"/></svg></span><strong>3. Press Run.</strong> Watch each stage light up green. The GDS lands in <code>runs/<tag>/final/gds</code>.</li>
-          </ol>
 
-          <!-- Design picker -->
-          <div class="picker" id="setup-design">
-            <h2><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Your design folder</h2>
-            <p class="hint">Pick the directory that contains your Verilog sources. Click <strong>Browse…</strong> to navigate without copy-pasting the path. LibreLane will scan for <code>.v</code>, <code>.sv</code>, <code>.vh</code>, <code>.mem</code>, <code>.sdc</code> and a <code>config.yaml</code> (if you have one).</p>
-            <div class="picker-row">
-              <input type="text" id="design-dir-input" placeholder="e.g. /home/<you>/projects/my-chip" autocomplete="off"/>
-              <button class="btn btn-ghost" id="btn-browse-folder"><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Browse…</button>
-              <button class="btn btn-primary" id="btn-set-design">Load design</button>
-            </div>
-            <div class="picker-actions">
-              <button class="btn btn-ghost" id="btn-load-spm">Use the SPM example</button>
-              <button class="btn btn-ghost" id="btn-quickstart">Show me around</button>
-            </div>
-            <div id="recent-designs" class="recent-designs"></div>
-            <div id="design-summary" class="design-summary"></div>
-            <div id="autoconfig-banner" class="autoconfig-banner" hidden></div>
-          </div>
+      <!-- Opening die: what LanEx does, the three steps, and the process stack. -->
+      <div class="hero die" id="hero">
+        <div class="hero-copy">
+          <h1>Take Verilog <span class="hl">all the way to silicon.</span></h1>
+          <p class="hero-sub">
+            LibreLane is the open-source flow that turns Verilog into a chip layout on
+            <strong>SkyWater 130&nbsp;nm</strong>, <strong>GF 180&nbsp;nm MCU</strong> and other open
+            processes. LanEx runs it for you, one step at a time, with no terminal.
+          </p>
+        </div>
+        <figure class="stack" id="layer-stack" aria-label="Metal layers of the selected process"></figure>
+        <ol class="steps" id="onboard-checklist">
+          <li data-ck="design">
+            <span class="step-no" aria-hidden="true">1</span>
+            <div class="step-text"><b>Open a project</b><span>Start a new one, or open a folder that already has your Verilog.</span></div>
+            <button class="btn btn-sm step-act" data-step-act="project">New project</button>
+          </li>
+          <li data-ck="pdk">
+            <span class="step-no" aria-hidden="true">2</span>
+            <div class="step-text"><b>Choose a PDK</b><span>The chip process to build for. sky130A is set by default.</span></div>
+            <button class="btn btn-sm btn-ghost step-act" data-step-act="pdk">Change</button>
+          </li>
+          <li data-ck="run">
+            <span class="step-no" aria-hidden="true">3</span>
+            <div class="step-text"><b>Run the flow</b><span>Each stage lights up as it finishes. The layout lands in <code>runs/&lt;name&gt;/final/gds</code>.</span></div>
+            <button class="btn btn-sm btn-ghost step-act" data-step-act="run">Go to Run</button>
+          </li>
+        </ol>
+      </div>
 
-          <!-- File selector card -->
-          <div class="card" id="filesel-card" hidden>
-            <div class="card-body">
-              <div class="filesel-head">
-                <h3 class="filesel-h3">Verilog sources & memory files <span class="help-pill" data-help="files" title="What is this?" role="button" tabindex="0">?</span></h3>
-                <span class="muted" id="filesel-count">0 files</span>
-                <button class="btn btn-ghost" id="btn-filesel-all">Select all</button>
-                <button class="btn btn-ghost" id="btn-filesel-none">Clear</button>
-                <button class="btn btn-ghost" id="btn-filesel-refresh"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Rescan</button>
-              </div>
-              <div id="filesel-list" class="filesel-list"></div>
-              <input type="text" id="filesel-extras" placeholder="Extra files (pin_order.cfg, readme.txt…); separate paths with commas"/>
-              <p class="hint filesel-note">All detected source files are checked by default. Deselect ones you want LibreLane to ignore. Memory files (<code>.mem / .hex / .bin</code>) are listed separately.</p>
-            </div>
-          </div>
-
-          <!-- PDK picker -->
-          <div class="picker" id="setup-pdk">
-            <h2><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3M5 5h14v14H5zM9 9h6v6H9z"/></svg>Process + standard-cell library</h2>
-            <p class="hint">Pick the silicon recipe your design will be hardened against. Most beginners use <strong>sky130A</strong> with <code>sky130_fd_sc_hd</code>.</p>
-            <div class="picker-row">
-              <select id="pdk-select"></select>
-              <select id="scl-select"></select>
-              <span id="pdk-readiness" class="pill pill-pending">checking…</span>
-            </div>
-          </div>
-
-          <!-- Preflight readiness checklist -->
-          <div class="picker" id="setup-preflight">
-            <h2><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>Ready to run? <button class="btn btn-ghost btn-sm" id="btn-preflight"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Re-check</button></h2>
-            <p class="hint">Validates that all flow prerequisites are met: design source files, configuration parameters, target PDK, and required EDA toolchains.</p>
-            <div id="preflight" class="preflight"></div>
-          </div>
-
-          <!-- Mode + Run -->
-          <div class="run-name-row">
-            <label for="run-name-input">Run name <span class="hint">(optional; names this run directory under <code>runs/</code>)</span></label>
-            <input type="text" id="run-name-input" placeholder="e.g. spm-area-sweep-1" autocomplete="off"/>
-          </div>
-          <div class="cta" id="setup-run">
-            <button class="btn btn-cta" id="btn-run">
-              <span class="big"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Run flow</span>
-              <span class="hint">Compiles your HDL → GDSII. Takes 5–60 minutes.</span>
-            </button>
-            <button class="btn btn-warn" id="btn-cancel" disabled><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg> Stop</button>
-            <button class="btn btn-ghost" id="btn-resume" hidden title="In Step-by-step mode the flow pauses after each step."><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Resume / Next step</button>
+      <!-- Project -->
+      <div class="die setup-block" id="setup-design">
+        <div class="block-head">
+          <h2>Project</h2>
+          <span class="block-sub" id="project-sub">The folder that holds this chip's Verilog, config and runs.</span>
+        </div>
+        <div class="project-empty-state" id="project-empty">
+          <p>No project is open. Start a new one from a blank file or an example, or open a folder that already has your Verilog.</p>
+          <div class="btn-row">
+            <button class="btn btn-primary" data-open="new-project">New project…</button>
+            <button class="btn" id="btn-browse-folder">Open folder…</button>
           </div>
         </div>
+        <div class="project-open-state" id="project-open" hidden>
+          <div class="proj-id">
+            <div class="proj-name" id="proj-name"></div>
+            <div class="proj-path" id="proj-path"></div>
+          </div>
+          <div id="design-summary" class="design-summary"></div>
+          <div class="btn-row">
+            <button class="btn" data-open="ide">Open in RTL IDE</button>
+            <button class="btn btn-ghost" data-open="reveal" id="proj-reveal">Show in Explorer</button>
+            <button class="btn btn-ghost" data-open="switch">Switch project</button>
+          </div>
+        </div>
+        <details class="path-entry" id="path-entry">
+          <summary>Type or paste a folder path</summary>
+          <div class="picker-row">
+            <input type="text" id="design-dir-input" placeholder="C:\Users\you\my-chip   or   /home/you/my-chip" autocomplete="off" spellcheck="false"/>
+            <button class="btn" id="btn-set-design">Open</button>
+          </div>
+        </details>
+        <div id="recent-designs" class="recent-designs" hidden></div>
+        <div id="autoconfig-banner" class="autoconfig-banner" hidden></div>
+      </div>
+
+      <!-- Sources -->
+      <div class="die setup-block" id="setup-sources">
+        <div class="block-head">
+          <h2>Sources</h2>
+          <span class="block-sub" id="filesel-count">Open a project to see its files.</span>
+          <span class="block-actions">
+            <button class="btn btn-sm" data-open="new-file"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New file</button>
+            <button class="btn btn-sm btn-ghost" id="btn-add-files">Add files…</button>
+            <button class="btn btn-sm btn-ghost" id="btn-filesel-refresh" aria-label="Rescan the project folder"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Rescan</button>
+          </span>
+        </div>
+        <div class="card-plain" id="filesel-card" hidden>
+          <div id="filesel-list" class="filesel-list"></div>
+          <div class="filesel-foot">
+            <span class="muted">Ticked files are what the run synthesizes. Testbenches are for simulation and stay unticked.</span>
+            <span class="spacer"></span>
+            <button class="linklike" id="btn-filesel-all">Tick all design files</button>
+            <button class="linklike" id="btn-filesel-none">Untick all</button>
+          </div>
+          <details class="extras-entry">
+            <summary>Files outside this project</summary>
+            <p class="muted">Paths to extra files the run needs that live somewhere else, such as a shared <code>pin_order.cfg</code>. Separate them with commas.</p>
+            <input type="text" id="filesel-extras" placeholder="/path/to/pin_order.cfg, /path/to/other.v" spellcheck="false"/>
+          </details>
+        </div>
+      </div>
+
+      <!-- PDK -->
+      <div class="die setup-block" id="setup-pdk">
+        <div class="block-head">
+          <h2>PDK and cell library</h2>
+          <span id="pdk-readiness" class="pill pill-pending">checking…</span>
+        </div>
+        <div class="pdk-row">
+          <label class="field"><span>Process (PDK)</span><select id="pdk-select"></select></label>
+          <label class="field"><span>Standard-cell library</span><select id="scl-select"></select></label>
+        </div>
+        <p class="pdk-about" id="pdk-about"></p>
+      </div>
+
+      <!-- Check -->
+      <div class="die setup-block" id="setup-preflight">
+        <div class="block-head">
+          <h2>Ready to run?</h2>
+          <span class="block-sub">Checks the design, config, PDK and tools so a run doesn't fail half-way through.</span>
+          <span class="block-actions"><button class="btn btn-sm btn-ghost" id="btn-preflight"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Check again</button></span>
+        </div>
+        <div id="preflight" class="preflight"></div>
+      </div>
+
+      <!-- Run -->
+      <div class="die setup-block" id="setup-run">
+        <div class="block-head">
+          <h2>Run</h2>
+          <span class="block-sub">A full run takes 5 to 60 minutes, depending on the design and your machine.</span>
+        </div>
+        <div class="run-row">
+          <label class="field run-name-row"><span>Run name <em>optional</em></span>
+            <input type="text" id="run-name-input" placeholder="e.g. first-try" autocomplete="off" spellcheck="false"/>
+          </label>
+          <div class="cta">
+            <button class="btn btn-primary btn-lg" id="btn-run"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Run flow</button>
+            <button class="btn btn-warn btn-lg" id="btn-cancel" disabled><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg> Stop</button>
+            <button class="btn btn-lg" id="btn-resume" hidden title="In Step by step mode the flow pauses after each step."><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Next step</button>
+          </div>
+        </div>
+        <p class="run-note">The run is saved in the project's <code>runs/</code> folder under this name, or under the date and time if you leave it empty. Watch it live on the Pipeline tab.</p>
       </div>
 
       <!-- Config / Constraints -->
       <details class="card" id="cfg-card">
         <summary>
-          <strong>Constraints & configuration</strong>
-          <span class="hint">Optional: tune clocks, utilisation, antenna strategy. Defaults are sane.</span>
+          <strong>Constraints and configuration</strong>
+          <span class="hint">Optional. Tune the clock, how tightly cells are packed, antenna fixes and 400+ other settings. The defaults work for most designs.</span>
         </summary>
         <div class="card-body">
-          <!-- Quick reports/diagram toggles (the most-asked-for knobs, surfaced). -->
+          <!-- Category tabs: sticky under the page header while you scroll the settings. -->
+          <nav class="config-nav" id="config-nav" aria-label="Setting categories"></nav>
           <div class="reports-row">
-            <strong>Reports &amp; diagrams</strong>
-            <label class="report-toggle" title="Instructs Yosys to emit hierarchy and gate-level dot schematics for viewing on the Preview tab.">
-              <input type="checkbox" id="cfg-synth-show"/> Generate Yosys synthesis diagrams (<code>SYNTH_SHOW</code>)
+            <label class="report-toggle" title="Yosys draws the design hierarchy and the gate-level schematic. They show up on the Preview tab.">
+              <input type="checkbox" id="cfg-synth-show"/> Draw synthesis diagrams (<code>SYNTH_SHOW</code>)
             </label>
           </div>
-          <!-- Sticky nav for jumping between config sections without scrolling. -->
-          <nav class="config-nav" id="config-nav"></nav>
           <div class="preset-row">
-            <span class="lbl">Preset:</span>
+            <span class="lbl">Start from</span>
             <button class="chip chip-clickable" data-preset="default">Default</button>
-            <button class="chip chip-clickable" data-preset="lowpower" title="Optimizes layout area (SYNTH_STRATEGY AREA 2 with denser core utilization). Smaller silicon area reduces dynamic wire capacitance; LibreLane has no explicit power-driven synthesis mode.">Area-lean</button>
+            <button class="chip chip-clickable" data-preset="lowpower" title="Smaller area: SYNTH_STRATEGY AREA 2 and a denser floorplan. Less area usually means shorter wires and a little less dynamic power. LibreLane has no power-driven synthesis mode.">Area-lean</button>
             <button class="chip chip-clickable" data-preset="perfpush">Performance</button>
             <button class="chip chip-clickable" data-preset="antenna">Antenna-hardened</button>
             <button class="chip chip-clickable" data-preset="minimalarea">Minimum area</button>
             <span id="config-user-presets" class="preset-user"></span>
-            <button class="btn btn-ghost" id="config-save-preset" title="Save the current overrides as a reusable preset"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> Save preset</button>
-            <input type="search" id="var-search" placeholder="filter variables…" class="grow"/>
+            <button class="btn btn-ghost btn-sm" id="config-save-preset" title="Save your current changes as a preset you can reuse"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> Save preset</button>
+            <input type="search" id="var-search" placeholder="Filter settings by name or description" class="grow"/>
           </div>
           <!-- What will actually be sent: a preset is a STARTING POINT; any field
                you then edit is layered on top. This shows the exact merged set
@@ -333,17 +364,6 @@
         </div>
       </details>
 
-      <details class="card" id="setup-help">
-        <summary><strong>Quick help</strong><span class="hint">What is RTL? GDSII? PDK?</span></summary>
-        <div class="card-body help-prose">
-          <p><strong>RTL:</strong> Verilog or SystemVerilog hardware description specifying chip registers and logic.</p>
-          <p><strong>GDSII:</strong> Stream format specifying physical mask geometries for foundry fabrication.</p>
-          <p><strong>PDK:</strong> Process Design Kit specifying foundry design rules, layer definitions, and device models.</p>
-          <p><strong>SCL:</strong> Standard Cell Library providing characterized logic gates (AND, OR, flip-flops) mapped during synthesis.</p>
-          <p><strong>The flow:</strong> RTL → <em>synthesis</em> → netlist → <em>place</em> → DEF → <em>route</em> → DEF → <em>DRC/LVS</em> → GDSII.</p>
-          <p class="muted">Press <kbd>?</kbd> at any time for the shortcut list.</p>
-        </div>
-      </details>
     </section>
 
     <!-- PIPELINE -->
@@ -452,6 +472,7 @@
             <h3>Files</h3>
             <div id="ide-tree" class="ide-tree"></div>
             <div class="ide-uploads">
+              <button class="btn btn-sm" id="ide-new-file" title="Create a new design module or testbench in this project"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New file</button>
               <button class="btn btn-ghost btn-sm" id="ide-upload-src" title="Upload Verilog source files into src/"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 8l5-5 5 5M5 20h14"/></svg> Sources</button>
               <button class="btn btn-ghost btn-sm" id="ide-upload-tb" title="Upload testbench files into verify/"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 8l5-5 5 5M5 20h14"/></svg> Testbench</button>
             </div>

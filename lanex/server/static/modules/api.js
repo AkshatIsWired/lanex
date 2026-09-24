@@ -197,6 +197,12 @@ export const api = {
   // ---------- Phase 0: project wizard + export
   templates: () => _fetch("/api/templates"),
   projectDefaults: () => _fetch("/api/project/defaults"),
+  projectForget: (designDir) =>
+    _fetch("/api/project/forget", { method: "POST", body: JSON.stringify({ design_dir: designDir }) }),
+  projectDelete: (designDir, confirmName) =>
+    _fetch("/api/project/delete", { method: "POST", body: JSON.stringify({ design_dir: designDir, confirm_name: confirmName }) }),
+  nativePick: ({ mode, title, start }) =>
+    _fetch("/api/fs/native-pick", { method: "POST", timeout: 0, body: JSON.stringify({ mode, title, start }) }),
   projectNew: (payload) =>
     _fetch("/api/project/new", { method: "POST", body: JSON.stringify(payload) }),
   runExportUrl: (tag, fmt) =>

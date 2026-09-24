@@ -1,8 +1,9 @@
-// jumpnav.js — a reusable "jump to section" chip bar (like the Analytics one),
-// for any tab with enough content to scroll. Pure DOM, zero dependency.
+// jumpnav.js — "jump to section" links for long tabs, with a scroll-spy that
+// underlines the section in view. Pure DOM, zero dependency.
 //
 //   container.insertAdjacentHTML("afterbegin", jumpBarHtml([{target,label}, …]));
-//   wireJump(container);   // delegates clicks → smooth-scroll to #target
+//   wireJump(container);   // the container's .section-jump
+//   wireJumpNav(nav);      // any nav whose buttons carry data-jump="<id>"
 
 export function jumpBarHtml(items, { label = "Jump to section" } = {}) {
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
@@ -13,56 +14,91 @@ export function jumpBarHtml(items, { label = "Jump to section" } = {}) {
     "</nav>";
 }
 
-// Delegate clicks on a container's `.section-jump` to a smooth scroll, AND keep
-// the chip for the section currently in view highlighted as the user scrolls.
-// Idempotent.
 export function wireJump(container) {
   const nav = (container || document).querySelector(".section-jump");
+  if (nav) wireJumpNav(nav);
+}
+
+// The nearest scrolling ancestor (the work area for page headers, the same for
+// the sticky category tabs inside a card).
+function scrollRootOf(el) {
+  return el.closest("main.work") || document.querySelector("main.work") || null;
+}
+
+// Click-to-jump + scroll-spy for one nav. Chips are read live, so navs whose
+// buttons are re-rendered (the Constraints categories) keep working. Idempotent.
+export function wireJumpNav(nav, { clicks = true } = {}) {
   if (!nav || nav._jumpWired) return;
   nav._jumpWired = true;
+  const root = scrollRootOf(nav);
+  const chips = () => Array.from(nav.querySelectorAll("[data-jump]"));
+  const setCurrent = (id) =>
+    chips().forEach((c) => c.classList.toggle("is-current", c.dataset.jump === id));
+
+  // A clicked link stays current while its section is on screen, even when the
+  // page can't scroll far enough to bring that section to the top (short
+  // sections near the end). Any manual scroll input releases it.
+  let pinned = null;
+  const release = () => { pinned = null; };
+  if (root) {
+    root.addEventListener("wheel", release, { passive: true });
+    root.addEventListener("touchstart", release, { passive: true });
+    root.addEventListener("keydown", release);
+  }
+
   nav.addEventListener("click", (e) => {
     const b = e.target.closest("[data-jump]");
     if (!b) return;
+    if (!clicks) { pinned = b.dataset.jump; setCurrent(pinned); return; }
     const t = document.getElementById(b.dataset.jump);
-    if (t) {
-      // <details> targets won't scroll their content into view unless open.
-      if (t.tagName === "DETAILS") t.open = true;
-      t.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
+    if (!t) return;
+    // <details> targets won't show their content unless open.
+    if (t.tagName === "DETAILS") t.open = true;
+    pinned = b.dataset.jump;
+    setCurrent(pinned);
+    const line = nav.getBoundingClientRect().bottom - (root ? root.getBoundingClientRect().top : 0);
+    const top = (root ? root.scrollTop : window.scrollY) + t.getBoundingClientRect().top -
+      (root ? root.getBoundingClientRect().top : 0) - line - 12;
+    (root || window).scrollTo({ top, behavior: "smooth" });
   });
-  wireScrollSpy(nav);
-}
-
-// Highlight the jump chip for whichever target section is currently at the top
-// of the scroll viewport, updating live as the user scrolls. Works against the
-// app's scroll container (`main.work`). Idempotent per nav.
-export function wireScrollSpy(nav, scrollRoot) {
-  if (!nav || nav._spyWired) return;
-  const chips = Array.from(nav.querySelectorAll("[data-jump]"));
-  if (!chips.length) return;
-  nav._spyWired = true;
-  const root = scrollRoot || nav.closest("main.work") ||
-    (typeof document !== "undefined" && document.querySelector("main.work")) || null;
-  const setCurrent = (id) =>
-    chips.forEach((c) => c.classList.toggle("is-current", c.dataset.jump === id));
 
   let raf = 0;
   const compute = () => {
     raf = 0;
-    if (nav.offsetParent === null) return;     // nav's tab isn't visible — skip
-    // The line just below the sticky nav; the section crossing it is "current".
-    const base = (root ? root.getBoundingClientRect().top : 0) +
-      (nav.getBoundingClientRect().height || 0) + 8;
-    let currentId = chips[0].dataset.jump;
-    for (const c of chips) {
-      const t = document.getElementById(c.dataset.jump);
-      if (!t) continue;
-      if (t.getBoundingClientRect().top - base <= 1) currentId = c.dataset.jump;
+    if (nav.offsetParent === null) return;          // its tab isn't visible
+    const list = chips();
+    if (!list.length) return;
+    const rootBox = root ? root.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+    if (pinned) {
+      const t = document.getElementById(pinned);
+      const r = t && t.getBoundingClientRect();
+      if (r && r.bottom > rootBox.top && r.top < rootBox.bottom) { setCurrent(pinned); return; }
+      pinned = null;
     }
-    setCurrent(currentId);
+    // The line just under the sticky nav; the last section to cross it is current.
+    const base = nav.getBoundingClientRect().bottom + 16;
+    let current = list[0].dataset.jump;
+    for (const c of list) {
+      const t = document.getElementById(c.dataset.jump);
+      if (t && t.offsetParent !== null && t.getBoundingClientRect().top <= base) current = c.dataset.jump;
+    }
+    // At the very bottom, the last visible section wins.
+    if (root && root.scrollTop + root.clientHeight >= root.scrollHeight - 2) {
+      for (const c of list) {
+        const t = document.getElementById(c.dataset.jump);
+        if (t && t.offsetParent !== null && t.getBoundingClientRect().top < rootBox.bottom) current = c.dataset.jump;
+      }
+    }
+    setCurrent(current);
   };
   const onScroll = () => { if (!raf) raf = requestAnimationFrame(compute); };
   (root || window).addEventListener("scroll", onScroll, { passive: true });
-  if (typeof window !== "undefined") window.addEventListener("resize", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll, { passive: true });
+  document.addEventListener("g:tab_activated", () => setTimeout(compute, 0));
   compute();
+}
+
+// Kept for callers that only want the spy (Analytics wires its own clicks).
+export function wireScrollSpy(nav) {
+  wireJumpNav(nav, { clicks: false });
 }

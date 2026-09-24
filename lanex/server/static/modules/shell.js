@@ -84,6 +84,25 @@ function baseName(p) {
   return s.slice(Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\")) + 1) || s;
 }
 
+// Where projects go by default, and how to show paths the way the person's OS
+// does. On the Windows appliance a path is shown as Explorer would show it
+// (C:\Users\... or \\wsl.localhost\<distro>\...); the server accepts either form.
+let _defaults = null;
+async function defaults() {
+  if (_defaults) return _defaults;
+  try { _defaults = await api.projectDefaults(); } catch (_e) { _defaults = {}; }
+  return _defaults;
+}
+
+export function displayPath(p) {
+  const path = String(p || "");
+  if (!_defaults || !_defaults.wsl || !path.startsWith("/")) return path;
+  const drive = path.match(/^\/mnt\/([a-z])(\/.*)?$/);
+  if (drive) return drive[1].toUpperCase() + ":" + (drive[2] || "/").replace(/\//g, "\\");
+  const distro = _defaults.distro || "lanex";
+  return "\\\\wsl.localhost\\" + distro + path.replace(/\//g, "\\");
+}
+
 export function paintProject() {
   const btn = document.getElementById("design-pill");
   if (!btn) return;
@@ -91,14 +110,12 @@ export function paintProject() {
   const text = btn.querySelector(".text");
   btn.classList.toggle("is-empty", !dir);
   if (text) text.textContent = dir ? baseName(dir) : "No project open";
-  btn.dataset.tip = dir ? dir : "Create a project or open a folder";
+  btn.dataset.tip = dir ? displayPath(dir) : "Create a project or open a folder";
   const reveal = document.getElementById("btn-reveal-project");
   if (reveal) reveal.disabled = !dir;
 }
 
-async function renderRecents() {
-  const host = document.getElementById("project-recents");
-  if (!host) return;
+async function knownProjects() {
   let dirs = [];
   try { dirs = (await api.knownDesigns()).designs || []; } catch (_e) {}
   try {
@@ -106,46 +123,140 @@ async function renderRecents() {
     for (const d of local) if (d && !dirs.includes(d)) dirs.push(d);
   } catch (_e) {}
   if (state.designDir && !dirs.includes(state.designDir)) dirs.unshift(state.designDir);
+  return dirs;
+}
+
+const RECENT_IN_MENU = 6;
+
+async function renderRecents() {
+  const host = document.getElementById("project-recents");
+  if (!host) return;
+  await defaults();
+  const dirs = await knownProjects();
   if (!dirs.length) {
-    host.innerHTML = "<div class='project-empty'>No projects yet. Start one from a template below.</div>";
+    host.innerHTML = "<div class='project-empty'>No projects yet. Start one below.</div>";
     return;
   }
-  host.innerHTML = dirs.slice(0, 8).map((d) =>
+  const shown = dirs.slice(0, RECENT_IN_MENU);
+  host.innerHTML = shown.map((d) =>
     "<button class='menu-item project-row" + (d === state.designDir ? " is-current" : "") +
     "' role='menuitem' data-dir='" + fmt.escape(d) + "'>" +
     "<span class='via' aria-hidden='true'></span>" +
-    "<span class='mi-text'><b>" + fmt.escape(baseName(d)) + "</b><small>" + fmt.escape(d) + "</small></span>" +
-    "</button>").join("");
+    "<span class='mi-text'><b>" + fmt.escape(baseName(d)) + "</b><small>" + fmt.escape(displayPath(d)) + "</small></span>" +
+    "</button>").join("") +
+    "<button class='menu-item project-more' role='menuitem' id='btn-manage-projects'>" +
+    (dirs.length > RECENT_IN_MENU ? "All " + dirs.length + " projects…" : "Manage projects…") + "</button>";
   host.querySelectorAll(".project-row").forEach((b) =>
     b.addEventListener("click", () => switchProject(b.dataset.dir)));
+  host.querySelector("#btn-manage-projects")?.addEventListener("click", () => manageProjects());
 }
 
 async function switchProject(dir) {
   if (!dir || dir === state.designDir) return;
   try {
+    const res = await api.setDesignDir(dir);
     const setup = await import("./setup.js");
     const input = document.getElementById("design-dir-input");
-    if (input) input.value = dir;
-    await setup.adoptDesignDir(dir);
+    if (input) input.value = res.design_dir || dir;
+    await setup.adoptDesignDir(res.design_dir || dir);
+    document.querySelector('.side-tab[data-tab="setup"]')?.click();
     toast.show("Opened " + baseName(dir) + ".", "success");
   } catch (ex) {
-    toast.show("Could not open " + dir + ": " + (ex.message || ex), "error");
+    toast.show("Could not open " + displayPath(dir) + ": " + (ex.message || ex), "error");
   }
 }
 
-async function openFolder() {
+export async function openFolder() {
   const { pickFolder } = await import("./fs.js");
-  const dir = await pickFolder({ title: "Open a project folder", use: "Open this folder", seed: state.designDir || "" });
+  const d = await defaults();
+  const dir = await pickFolder({ title: "Open a project folder", use: "Open this folder",
+    seed: state.designDir || (d && d.projects_dir) || "" });
   if (dir) await switchProject(dir);
 }
 
-async function revealProject() {
-  if (!state.designDir) return;
+async function revealProject(dir) {
+  const target = dir || state.designDir;
+  if (!target) return;
   try {
-    await api.revealDesign(state.designDir);
+    await api.revealDesign(target);
   } catch (ex) {
     toast.show("Could not open the file manager: " + (ex.message || ex), "error");
   }
+}
+
+function forgetLocally(dir) {
+  try {
+    const list = JSON.parse(localStorage.getItem("ll.recentDesigns") || "[]").filter((d) => d !== dir);
+    localStorage.setItem("ll.recentDesigns", JSON.stringify(list));
+  } catch (_e) {}
+}
+
+// Every project LanEx knows about, with the ways to tidy the list. Deleting a
+// folder is only offered for projects inside the LanEx projects folder; a
+// folder anywhere else is the person's own and can only leave the list.
+async function manageProjects() {
+  const d = await defaults();
+  const root = (d && d.projects_dir) || "";
+  const inRoot = (p) => !!root && (p + "/").startsWith(root.replace(/\/+$/, "") + "/") && p !== root;
+  const { customDialog, confirmTyped } = await import("./dialog.js");
+  const render = async (back) => {
+    const dirs = await knownProjects();
+    const list = back.querySelector(".pm-list");
+    if (!dirs.length) { list.innerHTML = "<p class='muted'>No projects yet.</p>"; return; }
+    list.innerHTML = dirs.map((p) =>
+      "<div class='pm-row" + (p === state.designDir ? " is-current" : "") + "' data-dir='" + fmt.escape(p) + "'>" +
+      "<span class='via' aria-hidden='true'></span>" +
+      "<span class='pm-text'><b>" + fmt.escape(baseName(p)) + (p === state.designDir ? " <em>open now</em>" : "") +
+      "</b><small>" + fmt.escape(displayPath(p)) + "</small></span>" +
+      "<span class='pm-acts'>" +
+      (p === state.designDir ? "" : "<button class='btn btn-sm' data-act='open'>Open</button>") +
+      "<button class='btn btn-sm btn-ghost' data-act='reveal'>Show</button>" +
+      "<button class='btn btn-sm btn-ghost' data-act='forget' title='Take it off this list. The folder stays where it is.'>Remove from list</button>" +
+      (inRoot(p) && p !== state.designDir
+        ? "<button class='btn btn-sm btn-ghost pm-danger' data-act='delete'>Delete…</button>" : "") +
+      "</span></div>").join("");
+  };
+  await customDialog({
+    title: "Projects",
+    wide: true,
+    bodyHtml:
+      "<p class='muted pm-note'>New projects go in <code>" + fmt.escape(displayPath(root)) + "</code>. " +
+      "Removing a project from this list leaves its folder alone; only projects in that folder can be deleted here.</p>" +
+      "<div class='pm-list'></div>",
+    onMount: (back, close) => {
+      render(back);
+      back.querySelector(".pm-list").addEventListener("click", async (e) => {
+        const b = e.target.closest("[data-act]");
+        const row = e.target.closest(".pm-row");
+        if (!b || !row) return;
+        const p = row.dataset.dir;
+        if (b.dataset.act === "open") { close(); switchProject(p); }
+        else if (b.dataset.act === "reveal") revealProject(p);
+        else if (b.dataset.act === "forget") {
+          try { await api.projectForget(p); } catch (_e) {}
+          forgetLocally(p);
+          render(back);
+        } else if (b.dataset.act === "delete") {
+          const name = baseName(p);
+          const ok = await confirmTyped({
+            title: "Delete " + name + "?",
+            body: "This permanently deletes the folder " + displayPath(p) +
+              ", including its Verilog, config and every run in it. It can't be undone.",
+            phrase: name, confirmText: "Delete project",
+          });
+          if (!ok) return;
+          try {
+            await api.projectDelete(p, name);
+            forgetLocally(p);
+            toast.show("Deleted " + name + ".", "success");
+          } catch (ex) {
+            toast.show("Could not delete " + name + ": " + (ex.message || ex), "error");
+          }
+          render(back);
+        }
+      });
+    },
+  });
 }
 
 // ------------------------------------------------------------ run menu + status mirrors
@@ -300,7 +411,7 @@ export function setupShell() {
   wireMenu(document.getElementById("design-pill"), document.getElementById("project-menu"), renderRecents);
   wireMenu(document.getElementById("run-opts-btn"), document.getElementById("run-menu"));
   document.getElementById("btn-open-project")?.addEventListener("click", openFolder);
-  document.getElementById("btn-reveal-project")?.addEventListener("click", revealProject);
+  document.getElementById("btn-reveal-project")?.addEventListener("click", () => revealProject());
   document.getElementById("help-icon")?.addEventListener("click", () => {
     if (_sheet && !_sheet.hidden) closeOpen(); else openHelp("learn");
   });
@@ -315,9 +426,12 @@ export function setupShell() {
   // Mode/engine changes happen in setup.js / runmode.js; mirror them here.
   document.getElementById("run-menu")?.addEventListener("click", () => setTimeout(paintRunSettings, 0));
   // Label the reveal action for the platform people are actually on.
-  api.projectDefaults?.().then((d) => {
+  defaults().then((d) => {
     const lbl = document.getElementById("reveal-label");
     if (lbl && d && d.wsl) lbl.textContent = "Show in Explorer";
+    const r2 = document.getElementById("proj-reveal");
+    if (r2 && d && !d.wsl) r2.textContent = "Show in file manager";
+    paintProject();
   }).catch(() => {});
   paintPageTitles();
   paintProject();

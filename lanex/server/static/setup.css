@@ -1,0 +1,266 @@
+/* setup.css — the Setup page, the New project dialog and the Projects list,
+ * in the Shuttle Reticle grammar (see shell.css for the rules of the world).
+ * Page-level dies carry alignment crosses on two corners, sitting in the
+ * scribe lane the way a reticle's registration marks do.
+ */
+
+/* ------------------------------------------------------------ dies */
+.die {
+  position: relative;
+  background: var(--die);
+  border: 1px solid var(--seal);
+  border-radius: var(--r-sm);
+}
+.die::before, .die::after, .reticle::before, .reticle::after {
+  content: ""; position: absolute; width: 11px; height: 11px; pointer-events: none;
+  background:
+    linear-gradient(var(--mark), var(--mark)) center / 1px 100% no-repeat,
+    linear-gradient(var(--mark), var(--mark)) center / 100% 1px no-repeat;
+}
+.die::before, .reticle::before { top: -6px; left: -6px; }
+.die::after, .reticle::after { bottom: -6px; right: -6px; }
+.reticle { position: relative; }
+
+.section-h2 { margin-top: var(--s-5); }
+.picker-row { display: flex; gap: var(--s-2); align-items: center; }
+.picker-row > input { flex: 1; min-width: 0; }
+
+/* ------------------------------------------------------------ hero */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "copy stack" "steps steps";
+  gap: 28px 48px;
+  padding: 32px 36px 28px;
+  margin-bottom: 24px;
+}
+.hero-copy { grid-area: copy; align-self: center; min-width: 0; }
+.hero h1 {
+  margin: 0 0 14px;
+  font-size: clamp(30px, calc(1.2vw / var(--ll-zoom, 1) + 22px), 44px);
+  line-height: 1.08; font-weight: 700; letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+.hero h1 .hl { color: var(--met1); }
+.hero-sub { margin: 0; max-width: 62ch; font-size: 16px; line-height: 1.55; color: var(--ink-2); }
+.hero-sub strong { color: var(--ink); font-weight: 600; }
+
+/* The selected process's layer stack, drawn as a cross-section. */
+.stack { grid-area: stack; margin: 0; align-self: center; }
+.stack[hidden] { display: none; }
+.stack svg { display: block; overflow: visible; }
+.stack .stk-lbl { font-family: var(--mono); font-size: 12px; fill: var(--ink-2); }
+.stack .stk-via { fill: var(--ink-3); }
+.stack .stk-sub { fill: var(--die-3); stroke: var(--seal-strong); stroke-width: 1; }
+.stack figcaption { margin-top: 10px; font-family: var(--mono); font-size: 12px; color: var(--ink-2); text-align: right; }
+
+/* The three steps: a number in a square via, the step, and its action. The
+   via fills met3 when done and outlines met1 for the next step. */
+.steps {
+  grid-area: steps;
+  list-style: none; margin: 0; padding: 22px 0 0;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px;
+  border-top: 1px solid var(--seal);
+}
+.steps li {
+  display: grid; grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 14px; row-gap: 12px; align-content: start;
+  padding: 16px 18px;
+  background: var(--die-2); border: 1px solid var(--seal); border-radius: var(--r-sm);
+}
+.step-no {
+  width: 30px; height: 30px; display: grid; place-items: center;
+  font-family: var(--mono); font-size: 14px; font-weight: 600;
+  color: var(--ink-2); border: 1.5px solid var(--ink-3); border-radius: 1px;
+}
+.steps li.is-next .step-no { color: var(--met1); border-color: var(--met1); }
+.steps li.is-done .step-no { color: var(--on-met); background: var(--met3); border-color: var(--met3); }
+.step-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.step-text b { font-size: 15.5px; font-weight: 600; color: var(--ink-strong); }
+.steps li.is-done .step-text b::after {
+  content: "Done"; margin-left: 10px;
+  font-family: var(--cond); font-size: 12px; font-weight: 600; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--met3);
+}
+.step-text span { font-size: 14px; line-height: 1.45; color: var(--ink-2); }
+.step-act { grid-column: 2; justify-self: start; }
+
+@media (max-width: 1360px) {
+  .hero { padding: 28px 28px 24px; gap: 24px 32px; }
+  .steps li { padding: 14px; }
+}
+
+/* ------------------------------------------------------------ blocks */
+.setup-block { padding: 20px 22px 22px; margin-bottom: 20px; }
+.block-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 16px; }
+.block-head h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.block-sub { font-size: 14px; color: var(--ink-2); }
+.block-head > .pill, .block-actions { margin-left: auto; }
+.block-actions { display: flex; gap: 8px; align-self: center; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.linklike {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; font-size: 14px; color: var(--met1);
+}
+.linklike:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* Project */
+.project-empty-state p { margin: 0; max-width: 72ch; font-size: 15px; line-height: 1.55; color: var(--ink); }
+.project-open-state[hidden], .project-empty-state[hidden] { display: none; }
+.proj-name { font-size: 22px; font-weight: 600; line-height: 1.2; color: var(--ink-strong); }
+.proj-path { margin-top: 4px; font-family: var(--mono); font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+.design-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.path-entry, .extras-entry { margin-top: 16px; }
+.path-entry > summary, .extras-entry > summary {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+  font-size: 14px; color: var(--ink-2);
+}
+.path-entry > summary::-webkit-details-marker, .extras-entry > summary::-webkit-details-marker { display: none; }
+.path-entry > summary::before, .extras-entry > summary::before {
+  content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform var(--dur-2) var(--ease-out);
+}
+.path-entry[open] > summary::before, .extras-entry[open] > summary::before { transform: rotate(45deg); }
+.path-entry > summary:hover, .extras-entry > summary:hover { color: var(--ink-strong); }
+.path-entry .picker-row { margin-top: 10px; max-width: 760px; }
+.extras-entry p { margin: 8px 0; font-size: 14px; }
+.autoconfig-banner:not([hidden]) { margin-top: 16px; }
+
+/* Sources */
+.filesel-list { display: flex; flex-direction: column; }
+.filesel-group { display: flex; align-items: baseline; gap: 10px; padding: 16px 0 8px; }
+.filesel-group:first-child { padding-top: 0; }
+.filesel-group-note { font-size: 13px; color: var(--ink-2); }
+.filesel-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 14px;
+  min-height: 42px; padding: 3px 8px 3px 14px; margin-top: -1px;
+  background: var(--wafer-2); border: 1px solid var(--seal); border-radius: 0; cursor: pointer;
+}
+body.theme-light .filesel-row { background: var(--die-2); }
+.filesel-group + .filesel-row { margin-top: 0; }
+.filesel-row:hover { background: var(--die-2); border-color: var(--seal); }
+.filesel-row .name { font-family: var(--mono); font-size: 13.5px; color: var(--ink-strong); overflow-wrap: anywhere; }
+.filesel-row.is-tb .name { color: var(--ink-2); }
+.filesel-row .size { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+.filesel-row .ext { display: none; }
+.filesel-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin-top: 14px; font-size: 14px; }
+.filesel-foot .spacer { flex: 1; }
+.filesel-empty {
+  display: flex; flex-direction: column; gap: 4px; padding: 18px 20px;
+  border: 1px dashed var(--seal-strong); border-radius: var(--r-sm); font-size: 14px; color: var(--ink-2);
+}
+.filesel-empty b { color: var(--ink-strong); font-size: 15px; }
+#filesel-card[hidden] { display: none; }
+
+/* PDK */
+.pdk-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.field > span { font-size: 14px; font-weight: 500; color: var(--ink-strong); }
+.field > span em { font-style: normal; font-weight: 400; color: var(--ink-2); margin-left: 4px; }
+.pdk-about { margin: 12px 0 0; font-size: 14px; color: var(--ink-2); }
+.pdk-about:empty { display: none; }
+
+/* Ready to run? One banner with a thin state band, then flat rows. */
+.preflight { display: flex; flex-direction: column; }
+.pf-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 14px; font-size: 14.5px; font-weight: 600; color: var(--ink-strong);
+  background: var(--die-2); border: 1px solid var(--seal);
+}
+.pf-banner::before { content: ""; width: 8px; height: 8px; flex: 0 0 auto; }
+.pf-banner-ok { box-shadow: inset 0 2px 0 var(--met3); }
+.pf-banner-ok::before { background: var(--met3); }
+.pf-banner-bad { box-shadow: inset 0 2px 0 var(--met4); }
+.pf-banner-bad::before { background: var(--met4); }
+.pf-row {
+  display: grid; grid-template-columns: 18px minmax(150px, 190px) minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 10px 14px; margin-top: -1px;
+  background: var(--wafer-2); border: 1px solid var(--seal); border-radius: 0;
+}
+body.theme-light .pf-row { background: var(--die-2); }
+.pf-row-ok, .pf-row-warn, .pf-row-bad { border-left-width: 1px; }
+.pf-ok { color: var(--met3); display: inline-flex; }
+.pf-warn { color: var(--met4); display: inline-flex; }
+.pf-bad { color: var(--poly); display: inline-flex; }
+.pf-label { font-weight: 600; color: var(--ink-strong); min-width: 0; }
+.pf-detail { font-size: 14px; color: var(--ink-2); min-width: 0; }
+.pf-missing {
+  display: inline-block; margin: 0 6px 2px 0; padding: 1px 7px;
+  font-size: 12.5px; color: var(--ink-strong); background: var(--poly-band); border-radius: var(--r-sm);
+}
+.pf-act { white-space: nowrap; }
+
+/* Run */
+.run-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; }
+.run-name-row { width: min(360px, 100%); }
+.cta { display: flex; gap: 8px; }
+.run-note { margin: 14px 0 0; font-size: 14px; color: var(--ink-2); max-width: 80ch; }
+
+/* ------------------------------------------------------------ Constraints */
+#cfg-card { overflow: visible; margin-bottom: 20px; }
+#cfg-card > summary { padding: 16px 20px; background: var(--die); border-bottom: 1px solid transparent; align-items: baseline; }
+#cfg-card[open] > summary { border-bottom-color: var(--seal); }
+#cfg-card > summary strong { font-size: 18px; }
+#cfg-card > .card-body { padding: 0 20px 20px; }
+/* Category tabs, sticky under the page header while you scroll the settings. */
+.config-nav {
+  position: sticky; top: 49px; z-index: calc(var(--z-sticky) - 1);
+  display: flex; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+  gap: 2px; margin: 0 -20px 16px; padding: 0 20px;
+  min-height: 44px; background: var(--die); border-bottom: 1px solid var(--seal);
+}
+.config-nav::-webkit-scrollbar { display: none; }
+.config-nav .nav-chip {
+  position: relative; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 10px; background: transparent; border: 0; border-radius: 0;
+  font-family: var(--sans); font-size: 14px; font-weight: 500; color: var(--ink-2); cursor: pointer; white-space: nowrap;
+}
+.config-nav .nav-chip:hover { color: var(--ink-strong); }
+.config-nav .nav-chip.is-current { color: var(--ink-strong); }
+.config-nav .nav-chip.is-current::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; background: var(--met1); }
+.config-nav .nav-count { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+.reports-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 14px; }
+.preset-row .lbl { font-size: 14px; color: var(--ink-2); }
+
+/* ------------------------------------------------------------ New project */
+.wiz-tpl-blank {
+  width: 100%; min-height: 0; padding: 18px 20px;
+  background: var(--die-2); border: 1px solid var(--seal-strong);
+}
+.wiz-tpl-blank .wiz-tpl-title { font-size: 17px; }
+.wiz-lane { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin: 24px 0 10px; }
+.wiz-lane-note { font-size: 13.5px; color: var(--ink-2); }
+.wiz-fixed { grid-column: 1 / -1; margin: 0; padding: 10px 12px; background: var(--die-2); box-shadow: inset 0 2px 0 var(--met1); font-size: 14px; }
+
+.wizard { display: flex; flex-direction: column; max-height: calc(100vh / var(--ll-zoom, 1) - 64px); }
+.wizard .wizard-body { overflow-y: auto; min-height: 0; }
+
+/* New file (RTL IDE) */
+.newfile { display: flex; flex-direction: column; gap: 14px; min-width: min(460px, 78vw); }
+
+/* ------------------------------------------------------------ Projects list */
+.pm-note { margin-top: 0; font-size: 14px; }
+.pm-list { display: flex; flex-direction: column; max-height: calc(60vh / var(--ll-zoom, 1)); overflow-y: auto; }
+.pm-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 11px 4px; border-bottom: 1px solid var(--seal); }
+.pm-row .via { width: 8px; height: 8px; border: 1.5px solid var(--ink-3); }
+.pm-row.is-current .via { background: var(--met1); border-color: var(--met1); }
+.pm-text { min-width: 0; }
+.pm-text b { display: block; font-weight: 600; color: var(--ink-strong); }
+.pm-text em { font-style: normal; font-family: var(--cond); font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--met1); margin-left: 8px; }
+.pm-text small { display: block; font-family: var(--mono); font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
+.pm-list { min-width: min(720px, calc(80vw / var(--ll-zoom, 1))); }
+.pm-acts { display: flex; gap: 6px; }
+.pm-danger { color: var(--poly); }
+.pm-danger:hover { border-color: var(--poly); color: var(--poly); }
+.project-more { font-size: 14px; color: var(--ink-2); }
+
+/* With a project open the hero steps back: the pitch folds away and the
+   steps plus the process stack stay as a status strip. */
+.hero.is-compact { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "copy stack" "steps stack"; padding: 22px 28px; gap: 16px 40px; }
+.hero.is-compact h1 { font-size: 24px; margin: 0; }
+.hero.is-compact .hero-sub { display: none; }
+.hero.is-compact .steps { border-top: 0; padding-top: 0; align-self: end; align-items: start; }
+.hero.is-compact .stack svg { height: 170px; width: auto; }
+.hero.is-compact .step-text span { display: none; }
+.hero.is-compact .steps li { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; padding: 12px 14px; }
+.hero.is-compact .step-act { grid-column: 3; grid-row: 1; }

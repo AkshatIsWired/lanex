@@ -77,6 +77,7 @@ export async function initIde(opts = {}) {
   byId("ide-wave-fit", (b) => b.addEventListener("click", () => state.wave && state.wave.fit()));
   wireUpload("ide-upload-src", "src");
   wireUpload("ide-upload-tb", "verify");
+  byId("ide-new-file", (b) => b.addEventListener("click", () => newFile()));
   document.querySelectorAll(".wave-radix").forEach((b) =>
     b.addEventListener("click", () => { if (state.wave) state.wave.setRadix(b.dataset.radix); }));
 
@@ -102,6 +103,104 @@ export async function initIde(opts = {}) {
 }
 
 function byId(id, fn) { const el = document.getElementById(id); if (el) fn(el); }
+
+// Starter text for a new file. Design modules go in src/ (the config picks up
+// src/*.v); testbenches go in verify/ so they are simulated, never synthesized.
+function stub(kind, name) {
+  const L = (...lines) => lines.join("\n") + "\n";
+  if (kind === "tb") {
+    return L(
+      "`timescale 1ns/1ps",
+      "",
+      "module " + name + ";",
+      "  reg clk = 0;",
+      "  reg rst_n = 0;",
+      "  always #5 clk = ~clk;",
+      "",
+      "  // Instantiate your design here, for example:",
+      "  // my_design dut (.clk(clk), .rst_n(rst_n));",
+      "",
+      "  initial begin",
+      "    $dumpfile(\"" + name + ".vcd\");",
+      "    $dumpvars(0, " + name + ");",
+      "    #20 rst_n = 1;",
+      "    #1000 $finish;",
+      "  end",
+      "endmodule");
+  }
+  return L(
+    "module " + name + " (",
+    "    input  wire clk,",
+    "    input  wire rst_n",
+    ");",
+    "",
+    "  // Your logic here.",
+    "",
+    "endmodule");
+}
+
+// Create a design file or a testbench in the open project, then open it.
+export async function newFile(kind) {
+  if (!state.designDir) { note("Open a project first (Setup tab).", true); return; }
+  const { customDialog } = await import("../dialog.js");
+  let picked = null;
+  const res = await customDialog({
+    title: "New file",
+    bodyHtml:
+      "<div class='newfile'>" +
+      "<label class='wiz-field'><span>Kind</span><select id='nf-kind'>" +
+      "<option value='src'" + (kind !== "tb" ? " selected" : "") + ">Design module (src/, synthesized)</option>" +
+      "<option value='tb'" + (kind === "tb" ? " selected" : "") + ">Testbench (verify/, simulation only)</option>" +
+      "</select></label>" +
+      "<label class='wiz-field'><span>Module name</span><input id='nf-name' type='text' spellcheck='false' autocomplete='off' placeholder='e.g. alu'/>" +
+      "<span class='wiz-help'>The file is named after the module, for example <code>alu.v</code>.</span></label></div>",
+    buttons: [
+      { label: "Cancel", value: null, cls: "btn-ghost" },
+      { label: "Create", value: "ok", cls: "btn-primary" },
+    ],
+    onMount: (back) => {
+      const input = back.querySelector("#nf-name");
+      const create = back.querySelector(".btn-primary");
+      // Read the fields before the dialog closes and removes them.
+      create?.addEventListener("click", () => {
+        picked = { kind: back.querySelector("#nf-kind").value, name: (input?.value || "").trim() };
+      }, true);
+      input?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); create?.click(); }
+      });
+      setTimeout(() => input?.focus(), 0);
+    },
+  });
+  if (res !== "ok" || !picked) return;
+  if (!picked.name) { note("Give the module a name.", true); return; }
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(picked.name)) {
+    note("Module names use letters, digits and _, and can't start with a digit.", true);
+    return;
+  }
+  const rel = (picked.kind === "tb" ? "verify/" : "src/") + picked.name + ".v";
+  if ((state.files || []).some((f) => f.relpath === rel)) { note(rel + " already exists.", true); return; }
+  try {
+    const r = await api.fileWrite(rel, stub(picked.kind, picked.name));
+    if (!r.ok) throw new Error(r.error || "write refused");
+    await loadTree();
+    await loadTestbenches();
+    await openFile(state.designDir.replace(/\/+$/, "") + "/" + rel, rel);
+    note("Created " + rel);
+    document.dispatchEvent(new CustomEvent("g:sources_changed"));
+  } catch (ex) {
+    note("Could not create " + rel + ": " + (ex.message || ex), true);
+  }
+}
+
+// Called from the Setup tab: open a project file (or start a new one) here.
+export async function openInIde({ rel = "", create = "" } = {}) {
+  if (rel && state.designDir) {
+    await loadTree();
+    await openFile(state.designDir.replace(/\/+$/, "") + "/" + rel, rel);
+  } else if (create) {
+    await newFile(create);
+  }
+}
 function setDesignLabel() {
   byId("ide-design", (el) => { el.textContent = state.designDir || "(no design loaded)"; });
 }

@@ -60,7 +60,7 @@ export async function renderPreflight() {
     d.ok
       ? (d.config_file || "config") + " · " + (d.source_count || 0) + " source file(s)" + cfgNote
       : (d.dir ? "config / sources missing" : "no folder loaded"),
-    d.ok ? "" : "<button class='btn btn-ghost pf-act' data-act='design'>Pick folder</button>",
+    d.ok ? "" : "<button class='btn btn-ghost btn-sm pf-act' data-act='design'>Open a project</button>",
   );
   // A PDK that LibreLane can fetch on its own (online, just not local yet) is a
   // warning, not a blocker — so don't show a hard ✗ while the banner says "All set".
@@ -75,7 +75,7 @@ export async function renderPreflight() {
     pdkState,
     "PDK + standard cells",
     pdkDetail,
-    p.ready || pdkWillDownload ? "" : "<button class='btn btn-ghost pf-act' data-act='tools'>Install PDK</button>",
+    p.ready || pdkWillDownload ? "" : "<button class='btn btn-ghost btn-sm pf-act' data-act='tools'>Install PDK</button>",
   );
   // Engine row — container mode needs only Docker/Podman; local mode needs the
   // six native EDA tools.
@@ -88,7 +88,7 @@ export async function renderPreflight() {
       t.ok ? "ok" : "bad",
       "Container engine",
       detail,
-      t.ok ? "" : "<button class='btn btn-ghost pf-act' data-act='tools'>Open Tools</button>",
+      t.ok ? "" : "<button class='btn btn-ghost btn-sm pf-act' data-act='tools'>Open Tools</button>",
     );
   } else {
     const tools = t.tools || [];
@@ -100,13 +100,13 @@ export async function renderPreflight() {
       t.ok ? "ok" : "bad",
       "EDA tools",
       t.ok ? tools.length + " tool(s) ready" : "missing: " + (toolDetail || "—"),
-      t.ok ? "" : "<button class='btn btn-ghost pf-act' data-act='tools'>Open Tools</button>",
+      t.ok ? "" : "<button class='btn btn-ghost btn-sm pf-act' data-act='tools'>Open Tools</button>",
     );
   }
 
   const banner = pf.ready
-    ? "<div class='pf-banner pf-banner-ok'>All checks passed. Ready to run flow.</div>"
-    : "<div class='pf-banner pf-banner-bad'>" + pf.blockers.length + " issue(s) to resolve before running the flow.</div>";
+    ? "<div class='pf-banner pf-banner-ok'>All set. Press Run flow when you're ready.</div>"
+    : "<div class='pf-banner pf-banner-bad'>" + pf.blockers.length + (pf.blockers.length === 1 ? " thing" : " things") + " to fix before a run can finish.</div>";
 
   root.innerHTML = banner + html;
 

@@ -6,21 +6,24 @@ import { fmt } from "./api.js";
 
 const CATALOG = {
   setup: {
-    title: "Setup tab",
-    goal: "Specify the design directory and target process design kit.",
+    title: "Setup",
+    goal: "Everything a run needs, top to bottom: the project, its Verilog, the chip process, a readiness check and the Run button.",
     how: [
-      "Click \ud83d\udcc1 Browse\u2026 to select the directory containing your Verilog sources, SDC constraints, and optional config.yaml.",
-      "Select a PDK and standard-cell library. The indicator beside the SCL picker confirms whether cell libraries are installed locally.",
-      "In the Configuration card, select a Preset to apply baseline parameters, or search to inspect and override specific variables.",
+      "Open a project from <b>Project</b> in the top bar. <b>New project</b> starts from a blank module or one of the examples; <b>Open folder</b> uses a folder that already has your Verilog.",
+      "Write your design with <b>New file</b>, or <b>Edit</b> an existing one. Both open the RTL IDE. Files in <code>src/</code> are synthesized into the chip; testbenches in <code>verify/</code> are only simulated.",
+      "Pick the PDK and standard-cell library. sky130A with <code>sky130_fd_sc_hd</code> is the usual first choice and is set by default.",
+      "When <b>Ready to run?</b> is all green, press <b>Run flow</b> (or <b>Run</b> in the top bar, from any tab) and follow it on the Pipeline tab.",
+      "<b>Constraints</b> is optional: presets and every LibreLane setting, such as the clock period. Changes are sent with the run; your config file isn't edited.",
     ],
     samples: [
-      { key: "CLOCK_PERIOD", sample: "10 (ns)" },
-      { key: "FP_CORE_UTIL", sample: "50 (%)" },
-      { key: "STREAM_OUT_RESOLUTION", sample: "(per PDK)" },
+      { key: "CLOCK_PERIOD", sample: "10 (ns, which is 100 MHz)" },
+      { key: "FP_CORE_UTIL", sample: "50 (% of the core filled with cells)" },
     ],
     pitfalls: [
-      "Selecting an uninstalled SCL causes an immediate failure; install required libraries from the Tools tab first.",
-      "An incorrect VERILOG_FILES glob produces a 'module not found' error during synthesis.",
+      "A folder path with spaces breaks LibreLane runs. New projects are always created without them.",
+      "The top module's name has to match DESIGN_NAME in the config. New project keeps the two in step.",
+      "A ticked testbench is sent to synthesis. Leave testbenches unticked; they belong in the RTL IDE's simulator.",
+      "A library that isn't installed can't be picked; add it from the Tools tab.",
     ],
   },
   pipeline: {

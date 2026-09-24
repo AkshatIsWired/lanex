@@ -6,12 +6,15 @@ import { icon } from "./icons.js";
 
 let _curPath = "";
 const _checked = new Set();
+let _checkedFor = "";       // the design the ticks belong to
+let _seen = new Set();       // files present at the last scan
 // Set while a caller awaits pickFolder(); "Use this folder" then resolves it
 // instead of loading the folder as the design.
 let _pick = null;
 
 export function setupFolderBrowser() {
-  document.getElementById("btn-browse-folder")?.addEventListener("click", openModal);
+  document.getElementById("btn-browse-folder")?.addEventListener("click", () =>
+    import("./shell.js").then((m) => m.openFolder()));
   document.getElementById("fs-close")?.addEventListener("click", closeModal);
   document.getElementById("fs-use")?.addEventListener("click", useCurrentFolder);
   document.getElementById("fs-up")?.addEventListener("click", () => navigateUp());
@@ -23,7 +26,7 @@ export function setupFolderBrowser() {
 
   document.getElementById("btn-filesel-all")?.addEventListener("click", () => {
     _checked.clear();
-    for (const s of state.designSources) _checked.add(s.abspath);
+    for (const s of state.designSources) if (!isTestbench(s)) _checked.add(s.abspath);
     for (const m of state.designMemories) _checked.add(m.abspath);
     renderFileSelector();
     commitSelection();
@@ -53,15 +56,6 @@ function _fsKeydown(e) {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }
 
-async function openModal() {
-  const modal = document.getElementById("fs-modal");
-  modal.hidden = false;
-  document.addEventListener("keydown", _fsKeydown);
-  setTimeout(() => document.getElementById("fs-path")?.focus(), 0);
-  await loadRoots();
-  const seed = (document.getElementById("design-dir-input")?.value || "").trim();
-  await fetchDir(seed || (await defaultSeed()) || ("/"));
-}
 
 function closeModal() {
   const modal = document.getElementById("fs-modal");
@@ -79,7 +73,15 @@ function _labelModal(title = "Open a design folder", use = "Use this folder") {
 
 // Let any caller borrow the browser: resolves with the chosen folder, or null
 // when the user closes it. `seed` is where it opens.
-export function pickFolder({ title = "Choose a folder", use = "Choose this folder", seed = "" } = {}) {
+export async function pickFolder(opts = {}) {
+  try {
+    const r = await api.nativePick({ mode: "folder", title: opts.title || "Choose a folder", start: opts.seed || "" });
+    if (r && r.native) return (r.paths && r.paths[0]) || null;
+  } catch (_e) { /* fall through to the built-in browser */ }
+  return browseFolder(opts);
+}
+
+export function browseFolder({ title = "Choose a folder", use = "Choose this folder", seed = "" } = {}) {
   if (_pick) _pick.resolve(null);
   return new Promise((resolve) => {
     _pick = { resolve };
@@ -189,17 +191,23 @@ function useCurrentFolder() {
   document.getElementById("btn-set-design").click();
 }
 
-// `opts.show` (default true) reveals the file-selector card. At boot we adopt a
-// design only to scope Runs/Preview — there we call with {show:false} so the
-// selection is computed (a run still works) but the card stays hidden until the
-// user *explicitly* loads a design; the Setup tab then shows the history
-// (recent designs) instead of a directory's files.
+// A testbench drives a design in simulation and must never be synthesized.
+// Recognised by where it lives (verify/, tb/, test/, sim/) or by its name.
+export function isTestbench(item) {
+  const rel = String(item.relpath || item.name || "").replace(/\\/g, "/");
+  const name = rel.split("/").pop();
+  return /(^|\/)(verify|tb|tbs|test|tests|sim|testbench|testbenches)\//i.test(rel) ||
+    /(^tb_|_tb\.|^test_|testbench)/i.test(name);
+}
+
 export async function loadFilesFor(designDir, opts = {}) {
   const show = opts.show !== false;
+  const card = document.getElementById("filesel-card");
   if (!designDir) {
     state.designSources = [];
     state.designMemories = [];
-    document.getElementById("filesel-card").hidden = true;
+    if (card) card.hidden = true;
+    paintCount();
     return;
   }
   try {
@@ -207,73 +215,91 @@ export async function loadFilesFor(designDir, opts = {}) {
     if (!r.ok) return;
     state.designSources = r.sources;
     state.designMemories = r.memories;
-    document.getElementById("filesel-card").hidden = !show;
-    // By default, all checked; preserve any user deselection.
-    const keep = new Set();
-    for (const s of state.designSources) if (_checked.has(s.abspath)) keep.add(s.abspath);
-    for (const m of state.designMemories) if (_checked.has(m.abspath)) keep.add(m.abspath);
+    if (card) card.hidden = !show;
+    // Keep the person's earlier choices for files that are still here; a fresh
+    // project ticks every design file and memory file, never a testbench.
+    const present = new Set(state.designSources.concat(state.designMemories).map((x) => x.abspath));
+    const kept = [..._checked].filter((x) => present.has(x));
     _checked.clear();
-    for (const s of state.designSources) _checked.add(s.abspath);
-    for (const m of state.designMemories) _checked.add(m.abspath);
-    // keep preserves the old user choice
-    _checked.clear();
-    for (const x of keep) _checked.add(x);
-    if (!_checked.size) {
-      // Default: every file checked + first memory file checked.
-      for (const s of state.designSources) _checked.add(s.abspath);
+    if (kept.length && _checkedFor === designDir) {
+      for (const x of kept) _checked.add(x);
+      // A file added since (from the RTL IDE or Add files) starts ticked too.
+      for (const s of state.designSources) if (!_seen.has(s.abspath) && !isTestbench(s)) _checked.add(s.abspath);
+    } else {
+      for (const s of state.designSources) if (!isTestbench(s)) _checked.add(s.abspath);
       for (const m of state.designMemories) _checked.add(m.abspath);
     }
+    _checkedFor = designDir;
+    _seen = present;
     renderFileSelector();
     commitSelection();
   } catch (_e) {
     state.designSources = [];
     state.designMemories = [];
-    document.getElementById("filesel-card").hidden = true;
+    if (card) card.hidden = true;
   }
+}
+
+function paintCount() {
+  const el = document.getElementById("filesel-count");
+  if (!el) return;
+  if (!state.designDir) { el.textContent = "Open a project to see its files."; return; }
+  const design = (state.designSources || []).filter((s) => !isTestbench(s));
+  const tbs = (state.designSources || []).length - design.length;
+  const ticked = design.filter((s) => _checked.has(s.abspath)).length;
+  el.textContent = ticked + " of " + design.length + " design file" + (design.length === 1 ? "" : "s") +
+    " ticked" + (tbs ? " · " + tbs + " testbench" + (tbs === 1 ? "" : "es") : "");
+}
+
+function groupHead(text, note) {
+  const h = document.createElement("div");
+  h.className = "filesel-group";
+  h.innerHTML = "<span class='lane-label'>" + fmt.escape(text) + "</span>" +
+    (note ? "<span class='filesel-group-note'>" + fmt.escape(note) + "</span>" : "");
+  return h;
 }
 
 function renderFileSelector() {
   const root = document.getElementById("filesel-list");
   if (!root) return;
   root.innerHTML = "";
-  if (state.designSources.length === 0 && state.designMemories.length === 0) {
-    root.innerHTML = "<div class='empty'><span class='ico'>" + icon('folderOpen',{size:40}) + "</span><h3>No HDL files detected</h3><p>Try a different folder or place <code>.v</code> files inside it.</p></div>";
-    document.getElementById("filesel-count").textContent = "0 files";
+  const srcs = state.designSources || [];
+  const mems = state.designMemories || [];
+  if (!srcs.length && !mems.length) {
+    root.innerHTML = "<div class='filesel-empty'><b>No Verilog in this project yet.</b>" +
+      "<span>Use <b>New file</b> to write a module in the RTL IDE, or <b>Add files</b> to bring in ones you already have.</span></div>";
+    paintCount();
     return;
   }
-  // Sources group
-  if (state.designSources.length) {
-    const heading = document.createElement("div");
-    heading.className = "muted";
-    heading.style.cssText = "padding:8px 10px;font-family:var(--mono);font-size:var(--t-xs);color:var(--text-muted);letter-spacing:0.04em;text-transform:uppercase;";
-    heading.textContent = "Sources (" + state.designSources.length + ")";
-    root.appendChild(heading);
-    for (const s of state.designSources) root.appendChild(makeRow(s, "RTL"));
+  const design = srcs.filter((s) => !isTestbench(s));
+  const tbs = srcs.filter((s) => isTestbench(s));
+  if (design.length) {
+    root.appendChild(groupHead("Design files", "synthesized into the chip"));
+    for (const s of design) root.appendChild(makeRow(s, "RTL"));
   }
-  if (state.designMemories.length) {
-    const heading = document.createElement("div");
-    heading.className = "muted";
-    heading.style.cssText = "padding:8px 10px;font-family:var(--mono);font-size:var(--t-xs);color:var(--text-muted);letter-spacing:0.04em;text-transform:uppercase;";
-    heading.textContent = "Memory files (" + state.designMemories.length + ")";
-    root.appendChild(heading);
-    for (const m of state.designMemories) root.appendChild(makeRow(m, "MEM"));
+  if (tbs.length) {
+    root.appendChild(groupHead("Testbenches", "simulation only, open them in the RTL IDE"));
+    for (const s of tbs) root.appendChild(makeRow(s, "TB"));
   }
-  document.getElementById("filesel-count").textContent =
-    _checked.size + " of " + (state.designSources.length + state.designMemories.length) + " selected";
+  if (mems.length) {
+    root.appendChild(groupHead("Memory files", "initial contents for memories"));
+    for (const m of mems) root.appendChild(makeRow(m, "MEM"));
+  }
+  paintCount();
 }
 
 function makeRow(item, kind) {
   const row = document.createElement("label");
-  row.className = "filesel-row";
+  row.className = "filesel-row" + (kind === "TB" ? " is-tb" : "");
   row.dataset.path = item.abspath;
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.checked = _checked.has(item.abspath);
-  cb.style.cursor = "pointer";
+  cb.setAttribute("aria-label", (kind === "TB" ? "Synthesize " : "Include ") + item.relpath);
   cb.addEventListener("change", () => {
     if (cb.checked) _checked.add(item.abspath);
     else _checked.delete(item.abspath);
-    renderFileSelector();
+    paintCount();
     commitSelection();
   });
   row.appendChild(cb);
@@ -281,19 +307,19 @@ function makeRow(item, kind) {
   label.className = "name";
   label.textContent = item.relpath;
   row.appendChild(label);
-  const tail = document.createElement("span");
-  tail.style.display = "inline-flex";
-  tail.style.alignItems = "center";
-  tail.style.gap = "6px";
-  const ext = document.createElement("span");
-  ext.className = "ext";
-  ext.textContent = (item.ext || "").replace(".", "").toUpperCase();
-  tail.appendChild(ext);
   const size = document.createElement("span");
   size.className = "size";
   size.textContent = fmt.metric(item.size) + " B";
-  tail.appendChild(size);
-  row.appendChild(tail);
+  row.appendChild(size);
+  if (kind !== "MEM") {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "btn btn-sm btn-ghost filesel-edit";
+    edit.dataset.open = "edit";
+    edit.dataset.rel = item.relpath;
+    edit.textContent = "Edit";
+    row.appendChild(edit);
+  }
   return row;
 }
 

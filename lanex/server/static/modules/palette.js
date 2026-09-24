@@ -38,7 +38,7 @@ function actions() {
     { id: "resume", title: "Resume / next step", hint: "action", icon: icon("play"), run: () => click("btn-resume") },
     { id: "preflight", title: "Check my setup (preflight)", hint: "action", icon: icon("check"), run: () => click("btn-preflight") },
     { id: "runmode", title: "Switch run engine (Container / Local tools)", hint: "action", icon: icon("refresh"), run: () => toggleRunMode() },
-    { id: "spm", title: "Load the SPM example", hint: "action", icon: icon("plus"), run: () => click("btn-load-spm") },
+    { id: "spm", title: "New project from the SPM example", hint: "project", icon: icon("plus"), run: () => import("./wizard.js").then((m) => m.openWizard({ template: "spm" })) },
     { id: "theme", title: "Toggle dark / light theme", hint: "view", icon: icon("moon"), run: () => toggleTheme() },
     { id: "density", title: "Compact spacing on or off", hint: "view", icon: icon("grid"), run: () => toggleDensity() },
     { id: "go-ide", title: "Go to RTL IDE", hint: "tab", icon: icon("code"), run: () => tab("ide") },

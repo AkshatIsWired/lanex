@@ -9,6 +9,7 @@ import { toast } from "./toast.js";
 import { renderPreflight } from "./preflight.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
+import { pdkFacts, stackSvg } from "./pdkinfo.js";
 
 const RECENT_KEY = "ll.recentDesigns";
 
@@ -28,67 +29,113 @@ function rememberDesign(dir) {
     list = list.slice(0, 6);
     localStorage.setItem(RECENT_KEY, JSON.stringify(list));
   } catch (_e) {}
-  renderRecentDesigns();
 }
 
-export function renderRecentDesigns() {
-  const root = document.getElementById("recent-designs");
-  if (!root) return;
-  const list = getRecentDesigns().filter((d) => d !== state.designDir);
-  if (!list.length) {
-    root.innerHTML = "";
-    return;
-  }
-  root.innerHTML =
-    "<span class='muted' style='font-size:var(--t-xs);margin-right:var(--s-2)'>Recent:</span>" +
-    list
-      .map(
-        (d) =>
-          "<button class='chip chip-clickable recent-chip' data-dir='" +
-          fmt.escape(d) +
-          "' title='" + fmt.escape(d) + "'>" +
-          fmt.escape(d.split(/[/\\]/).pop() || d) +
-          "</button>",
-      )
-      .join("");
-  root.querySelectorAll(".recent-chip").forEach((b) => {
-    b.addEventListener("click", async () => {
-      const dir = b.dataset.dir;
-      const input = document.getElementById("design-dir-input");
-      if (input) input.value = dir;
-      try {
-        const res = await api.setDesignDir(dir);
-        await adoptDesignDir(res.design_dir);
-      } catch (ex) {
-        toast.show("Could not open " + dir + ": " + ex.message, "error");
+// Recent projects live in the top-bar project switcher now; kept as a no-op so
+// older callers stay valid.
+export function renderRecentDesigns() {}
+
+// Switch to another tab and run something there once it has rendered.
+function goTab(name) {
+  document.querySelector('.side-tab[data-tab="' + name + '"]')?.click();
+}
+
+async function openIde(opts) {
+  goTab("ide");
+  const m = await import("./ide/main.js");
+  await m.initIde({ designDir: state.designDir, runMode: state.runMode });
+  await m.openInIde(opts || {});
+}
+
+function scrollToBlock(id) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Buttons anywhere on the Setup page that hand off to the project switcher,
+// the RTL IDE or the file manager (data-open / data-step-act).
+function wireSetupActions() {
+  const sec = document.getElementById("sec-setup");
+  if (!sec) return;
+  sec.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-open], [data-step-act]");
+    if (!b) return;
+    const act = b.dataset.open || b.dataset.stepAct;
+    if (act === "new-project" || (act === "project" && !state.designDir)) {
+      document.getElementById("btn-new-project")?.click();
+    } else if (act === "project") {
+      scrollToBlock("setup-design");
+    } else if (act === "switch") {
+      e.stopPropagation();
+      document.getElementById("design-pill")?.click();
+    } else if (act === "reveal") {
+      document.getElementById("btn-reveal-project")?.click();
+    } else if (act === "ide") {
+      openIde({});
+    } else if (act === "new-file") {
+      if (!state.designDir) { toast.show("Open a project first.", "warn"); return; }
+      openIde({ create: "src" });
+    } else if (act === "edit") {
+      openIde({ rel: b.dataset.rel });
+    } else if (act === "pdk") {
+      scrollToBlock("setup-pdk");
+      document.getElementById("pdk-select")?.focus({ preventScroll: true });
+    } else if (act === "run") {
+      scrollToBlock("setup-run");
+    }
+  });
+  // "Add files…" copies files from anywhere on the computer into the project,
+  // so the project folder stays self-contained. The browser's file input opens
+  // the operating system's own file dialog.
+  const add = document.getElementById("btn-add-files");
+  if (add) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.hidden = true;
+    add.after(input);
+    add.addEventListener("click", () => {
+      if (!state.designDir) { toast.show("Open a project first.", "warn"); return; }
+      input.click();
+    });
+    input.addEventListener("change", async () => {
+      const files = [...input.files];
+      input.value = "";
+      let ok = 0;
+      for (const f of files) {
+        const name = f.name;
+        const isTb = /(^tb_|_tb\.|testbench)/i.test(name);
+        const isHdl = /\.(s?v|vh|svh)$/i.test(name);
+        const rel = (isHdl ? (isTb ? "verify/" : "src/") : "") + name;
+        try {
+          const r = await api.fileWrite(rel, await f.text());
+          if (r.ok) ok++; else toast.show("Could not add " + name + ": " + (r.error || "refused"), "error");
+        } catch (ex) {
+          toast.show("Could not add " + name + ": " + (ex.message || ex), "error");
+        }
+      }
+      if (ok) {
+        toast.show("Added " + ok + " file" + (ok === 1 ? "" : "s") + " to the project.", "success");
+        await loadFilesFor(state.designDir);
       }
     });
+  }
+  // Files created in the RTL IDE show up here without a manual rescan.
+  document.addEventListener("g:sources_changed", () => {
+    if (state.designDir) loadFilesFor(state.designDir);
   });
 }
 
 export function setupSetup() {
   setupFolderBrowser();
   renderRecentDesigns();
-  // Section-jump bar — the Setup tab is long (design → PDK → preflight → run →
-  // constraints), so give it the same "Jump to section" chip bar the other tabs
-  // have. Constraints is a <details>; wireJump opens it before scrolling.
+  // Page header links; the Constraints categories have their own tabs inside
+  // that card (config.js), so they never crowd this bar.
   wireJump(document.getElementById("sec-setup"));
-  // Second tier: the Constraints category milestones (Tech PDK, Synthesis, …)
-  // are populated by config.js and revealed only while the Constraints card is
-  // open — progressive disclosure so the jump bar stays clean until you need them.
-  const cfgCard = document.getElementById("cfg-card");
-  const cfgSub = document.getElementById("setup-jump-config");
-  if (cfgCard && cfgSub) {
-    const syncSub = () => { cfgSub.hidden = !(cfgCard.open && cfgSub.childElementCount > 0); };
-    cfgCard.addEventListener("toggle", syncSub);
-    syncSub();
-  }
+  wireSetupActions();
   document.getElementById("btn-set-design")?.addEventListener("click", onLoadDesign);
   document.getElementById("design-dir-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") onLoadDesign();
   });
-  document.getElementById("btn-load-spm")?.addEventListener("click", onLoadSpmExample);
-  document.getElementById("btn-quickstart")?.addEventListener("click", showOnboarding);
 
   document.getElementById("pdk-select")?.addEventListener("change", onPdkSelected);
   document.getElementById("scl-select")?.addEventListener("change", onSclSelected);
@@ -143,16 +190,15 @@ async function onLoadDesign() {
 
 // Populate the UI for a design directory the server already considers active.
 // Shared by manual "Load design", the SPM example, and `--design-dir` boot.
-// `opts.explicit` (default true) means the *user* chose this dir, so show its
-// scoped file list. Boot auto-adopt passes {explicit:false}: it scopes Runs /
-// Preview but leaves the Setup file selector hidden (the history / recent
-// designs stay visible) until the user explicitly loads a design.
+// `opts.explicit` (default true) records that the person chose this project,
+// as opposed to boot re-opening the last one ({explicit:false}).
 export async function adoptDesignDir(designDir, opts = {}) {
   const explicit = opts.explicit !== false;
   state.designDir = designDir;
   state.designExplicit = explicit;
   rememberDesign(designDir);
-  paintOnboardChecklist();  // E5.1 — step 1 (design chosen) is now satisfied
+  paintOnboardChecklist();  // step 1 (project open) is now satisfied
+  paintProjectBlock();
   // Keep the SERVER's active design dir in lock-step with the frontend's. Every
   // run-scoped endpoint (/api/runs, /api/runs/<tag>, cell-usage, run-images,
   // verify, …) resolves against the server's active dir. If it ever drifts from
@@ -162,14 +208,9 @@ export async function adoptDesignDir(designDir, opts = {}) {
   try { await api.setDesignDir(designDir); } catch (_e) { /* best-effort */ }
   paintDesignPill("loading…");
   const summaryEl = document.getElementById("design-summary");
-  if (summaryEl) summaryEl.innerHTML = explicit ? await summariseDir(designDir) : "";
-  const pill = document.getElementById("design-pill");
-  if (pill) {
-    pill.classList.remove("pill-warn");
-    pill.classList.add("pill-pass");
-  }
+  if (summaryEl) summaryEl.innerHTML = await summariseDir(designDir);
   paintDesignPill(fmt.shortPath(designDir));
-  await loadFilesFor(designDir, { show: explicit });
+  await loadFilesFor(designDir);
   const { renderRuns } = await import("./runs.js");
   const { renderPreview } = await import("./preview.js");
   try { state.runs = await api.runs(designDir); } catch (_e) { state.runs = []; }
@@ -191,36 +232,46 @@ export async function adoptDesignDir(designDir, opts = {}) {
   } catch (_e) { /* non-fatal */ }
 }
 
-async function onLoadSpmExample() {
-  try {
-    const res = await api.copySpm(state.designDir || undefined);
-    const input = document.getElementById("design-dir-input");
-    if (input) input.value = res.design_dir;
-    await adoptDesignDir(res.design_dir);
-    toast.show("SPM example copied to " + fmt.shortPath(res.design_dir) + ". Click Run flow to begin hardening.", "success");
-  } catch (ex) {
-    toast.show("Could not copy the SPM example: " + ex.message, "error");
-  }
+// The Project block: an empty state with the two ways in, or the open
+// project's name, where it lives and what it contains.
+function paintProjectBlock() {
+  const open = !!state.designDir;
+  document.getElementById("hero")?.classList.toggle("is-compact", open);
+  const empty = document.getElementById("project-empty");
+  const card = document.getElementById("project-open");
+  if (empty) empty.hidden = open;
+  if (card) card.hidden = !open;
+  if (!open) return;
+  const dir = state.designDir;
+  const name = dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || dir;
+  const n = document.getElementById("proj-name");
+  const p = document.getElementById("proj-path");
+  if (n) n.textContent = name;
+  import("./shell.js").then((m) => { if (p) { p.textContent = m.displayPath(dir); p.title = dir; } }).catch(() => {});
 }
 
 async function summariseDir(path) {
-  // Scan the directory for .v/.sdc/config and render the result as pills.
+  // What the folder holds, as facts. The name and path already head the block.
   const src = "/api/design-summary?path=" + encodeURIComponent(path);
-  const pillClass = { pass: "pill-pass", fail: "pill-fail", pending: "pill-pending", info: "pill-info" };
+  const pillClass = { pass: "pill-pass", fail: "pill-fail", pending: "pill-pending", info: "pill-info", warn: "pill-warn" };
+  const base = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
   try {
     const r = await fetch(src, { headers: { "X-Requested-With": "XMLHttpRequest" } });
     const body = await r.json();
     if (!r.ok || body.ok === false) throw new Error(body.error || "scan failed");
-    const pills = (body.data && body.data.pills) || [];
-    if (!pills.length) return "<span class='pill pill-pending'>empty folder</span>";
+    const pills = ((body.data && body.data.pills) || [])
+      .filter((x) => x.text !== base && x.text !== path && !(x.type === "pending" && x.text.startsWith("/")));
+    if (!pills.length) return "<span class='pill pill-pending'>Empty folder</span>";
     return pills
-      .map((p) => `<span class='pill ${pillClass[p.type] || "pill-info"}'>${fmt.escape(p.text)}</span>`)
+      .map((x) => {
+        const text = String(x.text).replace(/\s*✓$/, "");
+        return "<span class='pill " + (pillClass[x.type] || "pill-info") + "'>" + fmt.escape(text) + "</span>";
+      })
       .join(" ");
   } catch (_e) {
-    return "<span class='pill pill-fail'>could not scan directory</span>";
+    return "<span class='pill pill-fail'>Could not read this folder</span>";
   }
 }
-
 
 // The top-bar project switcher names the open project (folder name; full path
 // on hover). While a design is being opened it says so.
@@ -249,9 +300,9 @@ export function paintPdkPill(text, kind) {
   paintOnboardChecklist();
 }
 
-// E5.1 — the hero's 3-step guide reflects REAL state, not static prose. Each step
-// is only ticked when its condition is genuinely true (design chosen / PDK ready /
-// a successful run exists), so it never claims progress the user hasn't made.
+// The hero's three steps reflect real state, never static prose: a step is
+// done only when its condition is true (project open / PDK ready / a run that
+// finished), and the first unfinished step is marked as the next one.
 export function paintOnboardChecklist() {
   const list = document.getElementById("onboard-checklist");
   if (!list) return;
@@ -260,15 +311,19 @@ export function paintOnboardChecklist() {
     design: !!state.designDir,
     // The PDK pill is painted green only by the honest readiness probe.
     pdk: !!(pill && pill.classList.contains("pill-pass")),
-    // A genuinely completed run for this design — not merely "Run was pressed".
     run: (state.runs || []).some((r) => r && r.success),
   };
+  let next = null;
   list.querySelectorAll("li[data-ck]").forEach((li) => {
     const done = !!status[li.dataset.ck];
-    li.classList.toggle("ck-done", done);
-    const mark = li.querySelector(".ck-mark");
-    if (mark) mark.innerHTML = done ? icon("check", { size: 14 }) : icon("dot", { size: 14 });
+    li.classList.toggle("is-done", done);
+    li.classList.remove("is-next");
+    if (!done && !next) next = li;
   });
+  if (next) next.classList.add("is-next");
+  const first = list.querySelector('[data-step-act="project"]');
+  if (first) first.textContent = state.designDir ? "View project" : "New project";
+  first?.classList.toggle("btn-ghost", !!state.designDir);
 }
 
 async function onPdkSelected() {
@@ -286,15 +341,31 @@ async function onPdkSelected() {
       opt.textContent = s.variants[0]?.[0] || "(unknown)";
       sclSel.appendChild(opt);
     }
-    // Restore the previously-used SCL if it's offered for this PDK.
+    // The last-used library if this PDK offers it; otherwise the family's usual
+    // general-purpose one (sky130_fd_sc_hd, the 7-track gf180 cells).
     const wantScl = safeStorage.get("ll.recentScl", "");
-    if (wantScl && Array.from(sclSel.options).some((o) => o.value === wantScl)) {
-      sclSel.value = wantScl;
-    }
+    const offered = (v) => Array.from(sclSel.options).some((o) => o.value === v);
+    const usual = ["sky130_fd_sc_hd", "gf180mcu_fd_sc_mcu7t5v0", "sg13g2_stdcell"].find(offered);
+    if (offered(wantScl)) sclSel.value = wantScl;
+    else if (usual) sclSel.value = usual;
     state.selectedScl = sclSel.value || "";
+    paintPdkAbout(sel.value);
     refreshPdkReadiness();
   } catch (ex) {
     paintPdkPill("error", "pill-fail");
+  }
+}
+
+// One plain line about the chosen process, and its layer stack in the hero.
+function paintPdkAbout(pdk) {
+  const about = document.getElementById("pdk-about");
+  const facts = pdkFacts(pdk);
+  if (about) about.textContent = facts.about;
+  const fig = document.getElementById("layer-stack");
+  if (fig) {
+    const svg = stackSvg(pdk);
+    fig.innerHTML = svg ? svg + "<figcaption>" + fmt.escape(pdk) + " · " + facts.stack.length + " layers</figcaption>" : "";
+    fig.hidden = !svg;
   }
 }
 
@@ -327,12 +398,12 @@ export async function populatePdkPicker() {
     const pdks = await api.pdks();
     const sel = document.getElementById("pdk-select");
     sel.innerHTML = "";
-    sel.appendChild((() => {
+    if (!pdks.length) {
       const o = document.createElement("option");
       o.value = "";
-      o.textContent = "Select a PDK";
-      return o;
-    })());
+      o.textContent = "No PDK installed";
+      sel.appendChild(o);
+    }
     for (const p of pdks) {
       const o = document.createElement("option");
       o.value = p.name;
@@ -342,9 +413,11 @@ export async function populatePdkPicker() {
     // Restore the project PDK or previously-used PDK if it's still installed.
     // Respect the project's explicit PDK before recent UI preferences.
     const projectPdk = state.projectConfig?.PDK || state.config?.PDK || "";
-    const wantPdk = (projectPdk && Array.from(sel.options).some((o) => o.value === projectPdk))
-      ? projectPdk
-      : safeStorage.get("ll.recentPdk", "");
+    const has = (v) => !!v && Array.from(sel.options).some((o) => o.value === v);
+    const recent = safeStorage.get("ll.recentPdk", "");
+    // The project's own PDK, then the last one used, then sky130A for beginners.
+    const wantPdk = has(projectPdk) ? projectPdk : has(recent) ? recent
+      : has("sky130A") ? "sky130A" : (pdks[0] && pdks[0].name) || "";
     if (wantPdk && Array.from(sel.options).some((o) => o.value === wantPdk)) {
       sel.value = wantPdk;
       await onPdkSelected();   // repopulates SCLs + restores the SCL + readiness
@@ -485,7 +558,3 @@ export function paintRunning(running) {
   }
 }
 
-function showOnboarding() {
-  const overlay = document.getElementById("onboard");
-  overlay.hidden = false;
-}
