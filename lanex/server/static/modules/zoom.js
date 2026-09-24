@@ -19,53 +19,6 @@ export function clampZoom(v) {
   return Math.min(MAX, Math.max(MIN, Math.round(n * 10) / 10));
 }
 
-// Measure-and-fit compaction. Fixed px/@media thresholds can't cover every
-// screen × zoom × font × content combination (a 1850px window at 110% still
-// overflowed while 120% compacted; a loaded design widens the pills), so instead
-// MEASURE whether the real rendered topbar/rail overflow and shed chrome in
-// stages only as much as needed. Reset-then-escalate so it also UN-compacts when
-// there's room again. .zc1/.zc2 in styles.css define what each stage hides.
-function chromeOverflows() {
-  const tb = document.querySelector(".topbar");
-  const rail = document.querySelector(".side-tabs");
-  // +3px guards against sub-pixel rounding jitter causing a false overflow (which
-  // would compact — hide a label/button — while there's really still room).
-  const tbOver = !!tb && tb.scrollWidth > tb.clientWidth + 3;
-  const railOver = !!rail && rail.scrollHeight > rail.clientHeight + 3;
-  return tbOver || railOver;
-}
-
-// Escalate compaction until the chrome fits (0 = full; 1 = redundant labels;
-// 2 = icon-only switches + pill dots; 3 = wordmark + shrink; 4 = hide low-value
-// buttons incl. License + icon-only rail). Lowest-value chrome goes first, so the
-// wordmark and named buttons (License) survive until a lighter shed wasn't enough
-// — never dropped for a few px of overflow. Returns the stage it settled on.
-export function fitChrome() {
-  try {
-    const cl = document.documentElement.classList;
-    cl.remove("zc1", "zc2", "zc3", "zc4");
-    if (!chromeOverflows()) return 0;
-    cl.add("zc1");
-    if (!chromeOverflows()) return 1;
-    cl.add("zc2");
-    if (!chromeOverflows()) return 2;
-    cl.add("zc3");
-    if (!chromeOverflows()) return 3;
-    cl.add("zc4");
-    return 4;
-  } catch (_e) {
-    return 0;
-  }
-}
-
-let _fitScheduled = false;
-function scheduleFit() {
-  if (_fitScheduled) return;
-  _fitScheduled = true;
-  const run = () => { _fitScheduled = false; fitChrome(); };
-  (window.requestAnimationFrame || window.setTimeout)(run);
-}
-
 export function currentZoom() {
   try {
     return clampZoom(localStorage.getItem(KEY) || 1);
@@ -89,9 +42,6 @@ export function applyZoom(z) {
     if (v === 1) localStorage.removeItem(KEY);
     else localStorage.setItem(KEY, String(v));
   } catch (_e) {}
-  // Zoom changes the rendered chrome size → re-fit synchronously (reading
-  // scrollWidth after the zoom change forces an up-to-date layout).
-  fitChrome();
   const pct = document.getElementById("zoom-pct");
   if (pct) pct.textContent = `${Math.round(v * 100)}%`;
   return v;
@@ -107,38 +57,4 @@ export function setupZoom() {
   document.getElementById("zoom-in-btn")?.addEventListener("click", () => zoomBy(+STEP));
   // Clicking the readout resets to 100% (the app-window stand-in for Ctrl+0).
   document.getElementById("zoom-pct")?.addEventListener("click", () => applyZoom(1));
-  // Re-fit when the window resizes (available width changes) and when the topbar's
-  // own content changes (the design/PDK pills widen when a design is loaded).
-  window.addEventListener("resize", scheduleFit);
-  try {
-    const tb = document.querySelector(".topbar");
-    if (tb && window.MutationObserver) {
-      new MutationObserver(scheduleFit).observe(tb, {
-        subtree: true, childList: true, characterData: true,
-      });
-    }
-  } catch (_e) {}
-  // A late-loading webfont can reflow the text wider than the fallback measured.
-  try { document.fonts && document.fonts.ready.then(scheduleFit); } catch (_e) {}
-  // The "⋯ more" menu holds the low-frequency controls when the bar is compact.
-  const moreBtn = document.getElementById("topbar-more");
-  const extra = document.getElementById("topbar-extra");
-  if (moreBtn && extra) {
-    const closeMenu = () => {
-      extra.classList.remove("tb-open");
-      moreBtn.setAttribute("aria-expanded", "false");
-    };
-    moreBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const open = extra.classList.toggle("tb-open");
-      moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
-    });
-    // Picking an item, clicking outside, or Escape closes the menu.
-    extra.addEventListener("click", closeMenu);
-    document.addEventListener("click", (e) => {
-      if (!extra.contains(e.target) && !moreBtn.contains(e.target)) closeMenu();
-    });
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
-  }
-  scheduleFit();
 }

@@ -27,7 +27,7 @@ const toUrl = (p) => pathToFileURL(p).href;
 
 const { api, fmt } = await import(toUrl(resolve(MOD, "api.js")));
 const { csvCell } = await import(toUrl(resolve(MOD, "csvutil.js")));
-const { clampZoom, fitChrome } = await import(toUrl(resolve(MOD, "zoom.js")));
+const { clampZoom } = await import(toUrl(resolve(MOD, "zoom.js")));
 const toolsModule = await import(toUrl(resolve(MOD, "tools.js")));
 const { normalizeUnavailableLibraries } = toolsModule;
 
@@ -156,14 +156,6 @@ check("clampZoom: bounds, snap, garbage → 1", () => {
   assert.equal(clampZoom("junk"), 1);
   assert.equal(clampZoom(-1), 1);
   assert.equal(clampZoom(NaN), 1);
-});
-
-check("fitChrome is exported and DOM-safe when there's no document", () => {
-  // fitChrome measures real overflow in the browser; behaviour is verified
-  // headlessly (not in node). Here just lock the export + its no-DOM guard: it
-  // must never throw when there is no document/topbar (returns stage 0).
-  assert.equal(typeof fitChrome, "function");
-  assert.equal(fitChrome(), 0);
 });
 
 check("zoom: stylesheets compensate viewport units via --ll-zoom", () => {

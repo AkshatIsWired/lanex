@@ -204,56 +204,37 @@ const CATALOG = {
   },
 };
 
-function openHelp(key) {
+// The page guide shown at the top of the help sheet's Learn tab: what this tab
+// is for, how to use it, sample values and pitfalls. Catalog strings are
+// trusted literals from this file.
+export function guideHtml(key) {
   const def = CATALOG[key];
-  const title = def ? def.title : key;
-  // Built on the shared `.dlg-backdrop`/`.dlg` overlay (fixed, centered, blurred
-  // backdrop). The old `.onboard` classes were deleted with the onboarding tour
-  // in round 39, so this dialog had no CSS and rendered as a plain block at the
-  // bottom of <body> \u2014 you had to scroll to see/close it. `.dlg-*` is guaranteed
-  // present (folder browser, presets, etc. use it).
-  const body =
-    (def ? "<p><strong>Goal:</strong> " + def.goal + "</p>" : "") +
-    (def && def.how && def.how.length
-      ? "<h3 style='margin:var(--s-3) 0 var(--s-2)'>How to use</h3><ol style='margin:0;padding-left:1.2em'>" +
-        def.how.map((x) => "<li style='margin-bottom:4px'>" + x + "</li>").join("") + "</ol>"
+  if (!def) return "";
+  const list = (tag, items) => "<" + tag + " class='guide-list'>" + items.map((x) => "<li>" + x + "</li>").join("") + "</" + tag + ">";
+  return "<section class='guide'>" +
+    "<div class='sheet-lane'>This page</div>" +
+    "<h2>" + def.title + "</h2>" +
+    (def.goal ? "<p>" + def.goal + "</p>" : "") +
+    (def.how && def.how.length ? "<h3>How to use it</h3>" + list("ol", def.how) : "") +
+    (def.samples && def.samples.length
+      ? "<h3>Example values</h3><dl class='guide-samples'>" +
+        def.samples.map((x) => "<dt>" + x.key + "</dt><dd><code>" + x.sample + "</code></dd>").join("") + "</dl>"
       : "") +
-    (def && def.samples && def.samples.length
-      ? "<h3 style='margin:var(--s-3) 0 var(--s-2)'>Sample values</h3><pre class='code'>" +
-        def.samples.map((s) => s.key + ": " + s.sample).join("\n") + "</pre>"
-      : "") +
-    (def && def.pitfalls && def.pitfalls.length
-      ? "<h3 style='margin:var(--s-3) 0 var(--s-2)'>Pitfalls</h3><ul style='margin:0;padding-left:1.2em'>" +
-        def.pitfalls.map((x) => "<li style='margin-bottom:4px'>" + x + "</li>").join("") + "</ul>"
-      : "");
-  const back = document.createElement("div");
-  back.className = "dlg-backdrop";
-  back.innerHTML =
-    "<div class='dlg' style='max-width:680px' role='dialog' aria-modal='true'>" +
-    "<div class='dlg-head' style='display:flex;align-items:center;justify-content:space-between;gap:var(--s-3)'>" +
-    "<span>" + title + "</span>" +
-    "<button class='iconbtn dlg-x' aria-label='Close' style='margin:-4px -6px'>\u00d7</button></div>" +
-    "<div class='dlg-body'>" + body + "</div>" +
-    "</div>";
-  function close() {
-    back.remove();
-    document.removeEventListener("keydown", onKey);
-  }
-  function onKey(e) {
-    if (e.key === "Escape") close();
-  }
-  back.addEventListener("click", (e) => {
-    if (e.target === back || e.target.closest(".dlg-x")) close();
-  });
-  document.addEventListener("keydown", onKey);
-  document.body.appendChild(back);
+    (def.pitfalls && def.pitfalls.length ? "<h3>Watch out for</h3>" + list("ul", def.pitfalls) : "") +
+    "</section>";
+}
+
+async function openHelp(key) {
+  const [{ openHelp: openSheet }, learn] = await Promise.all([import("./shell.js"), import("./learn.js")]);
+  const body = openSheet("learn", { render: false });
+  learn.renderGlossary(body, { pageKey: key });
 }
 
 export const help = {
   catalog: CATALOG,
   open: openHelp,
   bind() {
-    // Event delegation — catches both static and dynamically created pills.
+    // Event delegation: any [data-help] affordance opens that page's guide.
     document.addEventListener("click", (e) => {
       const pill = e.target.closest("[data-help]");
       if (pill) {
@@ -261,18 +242,5 @@ export const help = {
         openHelp(pill.dataset.help);
       }
     });
-    // Side-tab help icons (rendered dynamically).
-    setInterval(() => {
-      document.querySelectorAll(".side-tab").forEach((tab) => {
-        if (!tab.querySelector(".help-pill")) {
-          const span = document.createElement("span");
-          span.className = "help-pill";
-          span.dataset.help = tab.dataset.tab;
-          span.textContent = "?";
-          span.title = "What does this tab do?";
-          tab.appendChild(span);
-        }
-      });
-    }, 600);
   },
 };

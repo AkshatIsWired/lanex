@@ -31,6 +31,8 @@ export function toggleRunMode() {
 
 function paint() {
   const m = getRunMode();
+  import("./shell.js").then((sh) => sh.paintRunSettings()).catch(() => {});
+  import("./tools.js").then((t) => t.repaintToolBadge()).catch(() => {});
   document.querySelectorAll(".engine-btn").forEach((b) =>
     b.classList.toggle("engine-btn-active", b.dataset.runmode === m),
   );

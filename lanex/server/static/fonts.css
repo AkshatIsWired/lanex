@@ -1,25 +1,19 @@
-/* Bundled, offline web fonts for the Mask Room theme.
- * Variable woff2 (latin subset) — one file per family covers the weight axis.
- * Space Grotesk = display/instrument · Inter = body/UI · JetBrains Mono = data.
+/* Bundled, offline web fonts (latin subset, woff2). The appliance may have no
+ * network, so nothing here loads from a CDN.
+ * Barlow = UI + headings (DIN lineage, the lettering of technical drawings)
+ * Barlow Semi Condensed = scribe-lane labels · JetBrains Mono = paths, code, numbers.
  */
-@font-face {
-  font-family: "Space Grotesk";
-  font-style: normal;
-  font-weight: 400 700;
-  font-display: swap;
-  src: url(/static/vendor/fonts/spacegrotesk.woff2) format("woff2");
-}
-@font-face {
-  font-family: "Inter var";
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url(/static/vendor/fonts/inter.woff2) format("woff2");
-}
-@font-face {
-  font-family: "JetBrains Mono";
-  font-style: normal;
-  font-weight: 100 800;
-  font-display: swap;
-  src: url(/static/vendor/fonts/jetbrainsmono.woff2) format("woff2");
-}
+@font-face { font-family: "Barlow"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(/static/vendor/fonts/barlow-400.woff2) format("woff2"); }
+@font-face { font-family: "Barlow"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url(/static/vendor/fonts/barlow-500.woff2) format("woff2"); }
+@font-face { font-family: "Barlow"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url(/static/vendor/fonts/barlow-600.woff2) format("woff2"); }
+@font-face { font-family: "Barlow"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(/static/vendor/fonts/barlow-700.woff2) format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url(/static/vendor/fonts/barlow-semi-condensed-500.woff2) format("woff2"); }
+@font-face { font-family: "Barlow Semi Condensed"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url(/static/vendor/fonts/barlow-semi-condensed-600.woff2) format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap;
+  src: url(/static/vendor/fonts/jetbrainsmono.woff2) format("woff2"); }

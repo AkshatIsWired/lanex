@@ -4,7 +4,6 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 
-let _panel = null;
 let _glossary = null;
 let _metricMeta = null;
 
@@ -27,20 +26,11 @@ async function metricMeta() {
   return _metricMeta;
 }
 
-function panel() {
-  if (_panel) return _panel;
-  const p = document.createElement("aside");
-  p.className = "learn-panel";
-  p.hidden = true;
-  p.innerHTML =
-    "<div class='learn-head'><span class='learn-title'>Learn</span>" +
-    "<button class='btn btn-ghost' id='learn-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
-    "<div class='learn-body' id='learn-body'></div>";
-  document.body.appendChild(p);
-  p.querySelector("#learn-close").addEventListener("click", () => { p.hidden = true; });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !p.hidden) p.hidden = true; });
-  _panel = p;
-  return p;
+// Explanations render into the help sheet's Learn pane (shell.js), which is
+// light-dismiss like every other overlay.
+async function learnBody() {
+  const { openHelp } = await import("./shell.js");
+  return openHelp("learn", { render: false });
 }
 
 // Render a tiny, safe subset of markdown (headings, **bold**, `code`, lists).
@@ -57,8 +47,7 @@ function mdToHtml(md) {
 }
 
 export async function explainStep(stepId) {
-  const p = panel(); p.hidden = false;
-  const body = p.querySelector("#learn-body");
+  const body = await learnBody();
   body.innerHTML = "<p class='muted'>Loading…</p>";
   let info = (state.steps || []).find((s) => s.id === stepId);
   if (!info || !info.help_md) {
@@ -67,14 +56,13 @@ export async function explainStep(stepId) {
   if (!info) { body.innerHTML = "<p class='muted'>No help for " + fmt.escape(stepId) + ".</p>"; return; }
   body.innerHTML =
     "<h2>" + fmt.escape(info.long_name || info.id) + "</h2>" +
-    "<p class='muted'><code>" + fmt.escape(info.id) + "</code></p>" +
+    "<p class='learn-id'>" + fmt.escape(info.id) + "</p>" +
     (info.help_md ? "<div class='learn-md'>" + mdToHtml(info.help_md) + "</div>"
                   : "<p class='muted'>LibreLane ships no help text for this step.</p>");
 }
 
 export async function explainMetric(key) {
-  const p = panel(); p.hidden = false;
-  const body = p.querySelector("#learn-body");
+  const body = await learnBody();
   const meta = (await metricMeta())[key];
   let dir = "";
   if (meta) dir = meta.higher_is_better ? "Higher is better." : "Lower is better.";
@@ -85,8 +73,7 @@ export async function explainMetric(key) {
 }
 
 export async function explainTerm(term) {
-  const p = panel(); p.hidden = false;
-  const body = p.querySelector("#learn-body");
+  const body = await learnBody();
   const g = await glossary();
   const text = g[term] || g[term.toUpperCase()];
   body.innerHTML =
@@ -94,15 +81,37 @@ export async function explainTerm(term) {
     (text ? "<p>" + fmt.escape(text) + "</p>" : "<p class='muted'>No glossary entry.</p>");
 }
 
-// Open the Learn panel showing the full glossary index (clickable terms).
-export async function openLearnIndex() {
-  const p = panel(); p.hidden = false;
-  const body = p.querySelector("#learn-body");
+// The glossary: a searchable list, one term per row. Rendered by the help
+// sheet's Learn tab (shell.js).
+export async function renderGlossary(body, { pageKey } = {}) {
   const g = await glossary();
-  body.innerHTML = "<h2>Glossary</h2>" +
-    Object.keys(g).sort().map((term) =>
-      "<div class='learn-term' data-explain='" + fmt.escape(term) + "'><strong>" +
-      fmt.escape(term) + "</strong>: " + fmt.escape(g[term]) + "</div>").join("");
+  const terms = Object.keys(g).sort();
+  const key = pageKey || document.querySelector(".side-tab.side-tab-active")?.dataset.tab;
+  const { guideHtml } = await import("./help.js");
+  const guide = key ? guideHtml(key) : "";
+  body.innerHTML = guide +
+    "<div class='sheet-lane'>Glossary</div>" +
+    "<div class='sheet-search'><input type='search' id='gloss-q' placeholder='Search " + terms.length +
+    " terms: DRC, slack, PDN…' autocomplete='off' aria-label='Search the glossary'/></div>" +
+    "<div class='gloss' id='gloss-list'></div>";
+  const list = body.querySelector("#gloss-list");
+  const paint = (q) => {
+    const needle = (q || "").trim().toLowerCase();
+    const hits = terms.filter((t) => !needle || t.toLowerCase().includes(needle) ||
+      String(g[t]).toLowerCase().includes(needle));
+    list.innerHTML = hits.length
+      ? hits.map((t) => "<div class='gloss-row'><span class='gloss-term'>" + fmt.escape(t) +
+          "</span><span class='gloss-def'>" + fmt.escape(g[t]) + "</span></div>").join("")
+      : "<p class='gloss-empty'>No term matches “" + fmt.escape(q) + "”.</p>";
+  };
+  paint("");
+  body.querySelector("#gloss-q").addEventListener("input", (e) => paint(e.target.value));
+}
+
+// Kept for callers that open the glossary directly (command palette).
+export async function openLearnIndex() {
+  const { openHelp } = await import("./shell.js");
+  openHelp("learn");
 }
 
 // Wire any `[data-explain]` affordance (step id, metric key, or glossary term).

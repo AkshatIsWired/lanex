@@ -6,7 +6,8 @@ import { setupTabs, activate } from "./modules/tabs.js";
 import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkPill, paintOnboardChecklist } from "./modules/setup.js";
 import { setupTheme, toggleTheme } from "./modules/theme.js";
 import { setupHotkeys } from "./modules/hotkeys.js";
-import { setupDensity, toggleDensity } from "./modules/density.js";
+import { setupDensity } from "./modules/density.js";
+import { setupShell, paintProgress } from "./modules/shell.js";
 import { setupZoom } from "./modules/zoom.js";
 import { setupPalette, openPalette } from "./modules/palette.js";
 import { setupRunMode } from "./modules/runmode.js";
@@ -27,7 +28,6 @@ import { setupWizard } from "./modules/wizard.js";
 import { setupLearn } from "./modules/learn.js";
 import { icon } from "./modules/icons.js";
 import { setupFullscreen } from "./modules/fullscreen.js";
-import { showAbout } from "./modules/about.js";
 import { setupTooltips } from "./modules/tooltip.js";
 
 // Map each side-nav tab to a line-style SVG icon (replaces per-OS emoji glyphs).
@@ -85,17 +85,14 @@ async function boot() {
     setupTheme();
     setupDensity();
     setupZoom();
-    // The standalone app window has no browser reload button; F5/Ctrl+R still
-    // work, but give staleness an obvious escape hatch.
-    document.getElementById("reload-btn")?.addEventListener("click", () => location.reload());
-    // Wire the topbar Logs toggle so a closed install-log drawer can always be
-    // reopened (it stays hidden until an install produces output).
+    // Wire the status-line Logs button so install output can always be reopened.
     import("./modules/logdrawer.js").then((d) => d.setupLogDrawer()).catch(() => {});
     setupPalette();
     setupRunMode();
     setupLogs();
     setupStepOutput();
     setupSetup();
+    setupShell();
     setupHotkeys();
     setupViolations();
     setupWizard();
@@ -108,8 +105,6 @@ async function boot() {
       const dd = state.designDir ? "?design_dir=" + encodeURIComponent(state.designDir) : "";
       window.open("/ide" + dd, "_blank", "noopener");
     });
-    document.getElementById("btn-learn")?.addEventListener("click", () =>
-      import("./modules/learn.js").then((m) => m.openLearnIndex()));
     document.getElementById("btn-view2d")?.addEventListener("click", () =>
       import("./modules/viewer2d.js").then((m) => m.renderViewer2d(layoutRunTag())));
     document.getElementById("btn-view3d")?.addEventListener("click", () =>
@@ -119,10 +114,6 @@ async function boot() {
     });
     document.getElementById("palette-btn")?.addEventListener("click", openPalette);
     document.getElementById("theme-btn")?.addEventListener("click", toggleTheme);
-    document.getElementById("density-btn")?.addEventListener("click", toggleDensity);
-    // Help-dialog quick links + the topbar Legal button (static markup; wired once).
-    document.getElementById("help-license")?.addEventListener("click", showAbout);
-    document.getElementById("legal-btn")?.addEventListener("click", showAbout);
     // The "Parse" button is wired once by setupViolations() (smart kind
     // detection). The old inline handler here double-bound it — removed.
 
@@ -504,6 +495,7 @@ async function renderLayoutTools(tag) {
 
 function setRunProgress(done, total, current) {
   const bar = document.getElementById("overall-progress");
+  paintProgress(done, total);
   if (!bar) return;
   if (!total) {
     bar.textContent = "";

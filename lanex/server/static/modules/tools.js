@@ -913,14 +913,26 @@ function buttonUninstallHtml(t) {
   return "<div class='tool-installed-row'><span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span><button class='uninstall-btn' data-key='" + t.key + "' title='Uninstall " + t.key + "' aria-label='Uninstall " + t.key + "'>" + icon("x", { size: 11 }) + "</button></div>";
 }
 
+let _lastToolInfo = null;
+// Engine switches change whether missing native tools matter; repaint the badge.
+export function repaintToolBadge() {
+  if (_lastToolInfo) paintToolBar(_lastToolInfo);
+}
+
 function paintToolBar(info) {
+  _lastToolInfo = info;
   const icon = document.getElementById("tools-count");
   if (!icon) return;
   const missing = info.tools.filter((t) => !t.installed && t.category !== "core").length;
+  // With the Container engine every EDA tool ships in the image, so missing
+  // native installs aren't a problem worth a badge; only flag them for Local.
+  const matters = state.runMode === "local" && missing > 0;
+  icon.hidden = !matters;
   icon.textContent = missing.toString();
   icon.classList.remove("badge-pass", "badge-fail");
-  if (missing === 0) icon.classList.add("badge-pass");
-  else icon.classList.add("badge-fail");
+  if (matters) icon.classList.add("badge-fail");
+  const btn = document.getElementById("tools-icon");
+  if (btn) btn.dataset.tip = matters ? missing + " native tool" + (missing === 1 ? "" : "s") + " missing for Local tools" : "Tools and PDKs";
 }
 
 function buttonHtml(t, { inContainer = false } = {}) {

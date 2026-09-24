@@ -1,5 +1,6 @@
 // hotkeys.js — global keyboard shortcuts + the single source of truth for the
-// "?" shortcut dialog (so the dialog and the handlers can never drift, F4/D8c).
+// Shortcuts tab of the help sheet (so the list and the handlers can never drift).
+import { toggleDensity } from "./density.js";
 
 // Number keys → tab. One declarative map drives BOTH the handler and the dialog
 // text, so adding a tab key is a one-line change that stays documented.
@@ -16,37 +17,35 @@ const TAB_KEYS = {
   "0": ["cells", "Cells"],
 };
 
-// Rendered verbatim into the "?" dialog. Kept next to the handlers below.
+// Rendered verbatim into the help sheet's Shortcuts tab. Kept next to the handlers.
 export const SHORTCUTS = [
-  { keys: "⌘/Ctrl+K", desc: "command palette (everything)" },
-  { keys: "1..6", desc: "Setup / Pipeline / Runs / Preview / Tools / Analytics" },
-  { keys: "7..0", desc: "Verify / DSE / Layout / Cells" },
-  { keys: "r / s", desc: "start a run / stop a run" },
-  { keys: "/", desc: "focus the log filter" },
-  { keys: "t / d", desc: "toggle theme / toggle compact density" },
-  { keys: "? / Esc", desc: "this help / close" },
+  { keys: "Ctrl K", desc: "Search every command and setting" },
+  { keys: "1 / 2 / 3 / 4 / 5", desc: "Setup, Pipeline, Runs, Preview, Tools" },
+  { keys: "6 / 7 / 8 / 9 / 0", desc: "Analytics, Verify, DSE, Layout, Cells" },
+  { keys: "r", desc: "Start a run" },
+  { keys: "s", desc: "Stop the running flow" },
+  { keys: "/", desc: "Filter the pipeline log" },
+  { keys: "t", desc: "Switch light or dark" },
+  { keys: "d", desc: "Compact spacing on or off" },
+  { keys: "?", desc: "Open this help" },
+  { keys: "Esc", desc: "Close a menu, panel or dialog" },
 ];
 
 export function setupHotkeys() {
-  renderShortcutList();
   window.addEventListener("keydown", (e) => {
     const tag = (e.target && e.target.tagName) || "";
     if (/input|textarea|select/i.test(tag)) {
       if (e.key === "Escape") e.target.blur();
       return;
     }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "?") {
-      const d = document.getElementById("help-dialog");
-      if (d && d.showModal) d.showModal();
+      import("./shell.js").then((m) => m.openHelp("keys"));
       e.preventDefault();
       return;
     }
-    if (e.key === "Escape") {
-      const d = document.getElementById("help-dialog");
-      if (d && d.close) d.close();
-    }
-    if (e.key === "t") toggleThemeDispatch();
-    if (e.key === "d") document.getElementById("density-btn")?.click();
+    if (e.key === "t") document.getElementById("theme-btn")?.click();
+    if (e.key === "d") toggleDensity();
     if (Object.prototype.hasOwnProperty.call(TAB_KEYS, e.key)) dispatchJump(TAB_KEYS[e.key][0]);
     if (e.key === "r") document.getElementById("btn-run")?.click();
     if (e.key === "s") document.getElementById("btn-cancel")?.click();
@@ -61,22 +60,6 @@ export function setupHotkeys() {
   });
 }
 
-function renderShortcutList() {
-  const ul = document.getElementById("help-shortcut-list");
-  if (!ul) return;
-  // The key strings are fixed, HTML-safe literals defined above.
-  ul.innerHTML = SHORTCUTS.map((s) => "<li><kbd>" + s.keys + "</kbd>: " + s.desc + "</li>").join("");
-}
-
 function dispatchJump(name) {
   document.querySelector('.side-tab[data-tab="' + name + '"]')?.click();
-}
-
-function toggleThemeDispatch() {
-  const isDark = document.body.classList.contains("theme-dark");
-  document.body.classList.toggle("theme-dark", !isDark);
-  document.body.classList.toggle("theme-light", isDark);
-  try {
-    localStorage.setItem("ll.theme", isDark ? "light" : "dark");
-  } catch (_) {}
 }

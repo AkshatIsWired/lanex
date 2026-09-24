@@ -6,6 +6,9 @@ import { icon } from "./icons.js";
 
 let _curPath = "";
 const _checked = new Set();
+// Set while a caller awaits pickFolder(); "Use this folder" then resolves it
+// instead of loading the folder as the design.
+let _pick = null;
 
 export function setupFolderBrowser() {
   document.getElementById("btn-browse-folder")?.addEventListener("click", openModal);
@@ -64,6 +67,31 @@ function closeModal() {
   const modal = document.getElementById("fs-modal");
   modal.hidden = true;
   document.removeEventListener("keydown", _fsKeydown);
+  if (_pick) { const p = _pick; _pick = null; p.resolve(null); _labelModal(); }
+}
+
+function _labelModal(title = "Open a design folder", use = "Use this folder") {
+  const t = document.getElementById("fs-modal-title");
+  const u = document.getElementById("fs-use");
+  if (t) t.textContent = title;
+  if (u) u.textContent = use;
+}
+
+// Let any caller borrow the browser: resolves with the chosen folder, or null
+// when the user closes it. `seed` is where it opens.
+export function pickFolder({ title = "Choose a folder", use = "Choose this folder", seed = "" } = {}) {
+  if (_pick) _pick.resolve(null);
+  return new Promise((resolve) => {
+    _pick = { resolve };
+    _labelModal(title, use);
+    const modal = document.getElementById("fs-modal");
+    modal.hidden = false;
+    document.addEventListener("keydown", _fsKeydown);
+    loadRoots().then(async () => {
+      await fetchDir(seed || (await defaultSeed()) || "/");
+      document.getElementById("fs-path")?.focus();
+    });
+  });
 }
 
 async function defaultSeed() {
@@ -146,6 +174,15 @@ function paintList(entries) {
 }
 
 function useCurrentFolder() {
+  if (_pick) {
+    const p = _pick; _pick = null;
+    const modal = document.getElementById("fs-modal");
+    modal.hidden = true;
+    document.removeEventListener("keydown", _fsKeydown);
+    _labelModal();
+    p.resolve(_curPath);
+    return;
+  }
   document.getElementById("design-dir-input").value = _curPath;
   closeModal();
   // Trigger a load + scan:

@@ -121,6 +121,7 @@ export function setupSetup() {
         b.classList.toggle("mode-btn-active", b === btn),
       );
       state.mode = btn.dataset.mode;
+      import("./shell.js").then((m) => m.paintRunSettings()).catch(() => {});
     });
   });
 }
@@ -221,8 +222,15 @@ async function summariseDir(path) {
 }
 
 
+// The top-bar project switcher names the open project (folder name; full path
+// on hover). While a design is being opened it says so.
 export function paintDesignPill(text) {
-  document.querySelector("#design-pill .text").textContent = text;
+  if (text === "loading…") {
+    const t = document.querySelector("#design-pill .text");
+    if (t) t.textContent = "Opening…";
+    return;
+  }
+  import("./shell.js").then((m) => m.paintProject()).catch(() => {});
 }
 
 export function paintPdkPill(text, kind) {

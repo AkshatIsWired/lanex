@@ -7,12 +7,6 @@ export function setupTheme() {
       document.body.classList.add("theme-light");
     }
   } catch (_) {}
-  document.getElementById("help-icon")?.addEventListener("click", () => {
-    document.getElementById("help-dialog")?.showModal && document.getElementById("help-dialog").showModal();
-  });
-  document.getElementById("btn-close-help")?.addEventListener("click", () =>
-    document.getElementById("help-dialog").close && document.getElementById("help-dialog").close(),
-  );
 }
 
 export function toggleTheme() {

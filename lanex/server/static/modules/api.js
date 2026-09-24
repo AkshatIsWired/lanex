@@ -91,6 +91,8 @@ export const api = {
   renderDot: (tag, path, force) =>
     _fetch("/api/render-dot?tag=" + encodeURIComponent(tag) + "&path=" + encodeURIComponent(path) +
       (force ? "&force=1" : "")),
+  revealDesign: (designDir) =>
+    _fetch("/api/reveal", { method: "POST", body: JSON.stringify({ design_dir: designDir }) }),
   revealFile: (tag, path) =>
     _fetch("/api/reveal", { method: "POST", body: JSON.stringify({ tag, path }) }),
   desktopTools: () => _fetch("/api/desktop-tools"),
@@ -194,6 +196,7 @@ export const api = {
 
   // ---------- Phase 0: project wizard + export
   templates: () => _fetch("/api/templates"),
+  projectDefaults: () => _fetch("/api/project/defaults"),
   projectNew: (payload) =>
     _fetch("/api/project/new", { method: "POST", body: JSON.stringify(payload) }),
   runExportUrl: (tag, fmt) =>
