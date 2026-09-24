@@ -441,8 +441,15 @@ def h_fs_roots(handler: Any) -> None:
     roots: List[Dict[str, str]] = []
     system = platform.system()
     if system in ("Linux", "Darwin"):
-        roots.append({"label": "/ (root)", "path": "/"})
+        from ..controller import platform_env
         roots.append({"label": "Home", "path": str(Path.home())})
+        proj = platform_env.projects_dir()
+        if proj.is_dir():
+            roots.append({"label": "Projects", "path": str(proj)})
+        win_home = platform_env.wsl_windows_home()
+        if win_home:
+            roots.append({"label": "Windows files", "path": win_home})
+        roots.append({"label": "/ (root)", "path": "/"})
         # "Current dir" only when it is somewhere the user could actually put a
         # design. On the Windows appliance the server's cwd is inherited from the
         # launcher's install directory (``/mnt/c/Program Files/LanEx``), so this
@@ -1908,8 +1915,26 @@ def _reveal_in_file_manager(target: Path) -> Tuple[bool, str]:
 
 
 def h_reveal(handler: Any) -> None:
-    """Reveal a run file in the host file manager (traversal-guarded)."""
+    """Reveal a run file in the host file manager (traversal-guarded).
+
+    With ``{"design_dir": <path>}`` instead, reveal a design folder itself, but
+    only one the server already knows (the active design or a remembered one),
+    so this never opens arbitrary paths.
+    """
     body = getattr(handler, "_body", {})
+    if body.get("design_dir"):
+        from ..controller import designs
+        want = str(body.get("design_dir"))
+        known = set(designs.list_designs())
+        active = _get_active_design_dir()
+        if active:
+            known.add(active)
+        if want not in known or not Path(want).is_dir():
+            _respond(handler, "not a known design folder", 404)
+            return
+        ok, info = _reveal_in_file_manager(Path(want))
+        _respond(handler, {"ok": True, "opened": info} if ok else info, 200 if ok else 500)
+        return
     tag = body.get("tag")
     rel = body.get("path")
     run_dir = _resolve_run_dir(tag)
@@ -2378,6 +2403,14 @@ def h_templates(handler: Any) -> None:
     except Exception as ex:
         _log.exception("list_templates failed")
         _respond(handler, str(ex), 500)
+
+
+def h_project_defaults(handler: Any) -> None:
+    """Where New project suggests putting a design, and whether it exists yet."""
+    from ..controller import platform_env
+    proj = platform_env.projects_dir()
+    _respond(handler, {"projects_dir": str(proj), "exists": proj.is_dir(),
+                       "wsl": platform_env.is_wsl()})
 
 
 def h_project_new(handler: Any) -> None:
@@ -3249,6 +3282,7 @@ def h_cells(handler: Any) -> None:
 ROUTES: List[Tuple[str, Any]] = [
     ("/api/templates", h_templates),
     ("/api/project/new", h_project_new),
+    ("/api/project/defaults", h_project_defaults),
     ("/api/run-export", h_run_export),
     ("/api/verify/rerun", h_verify_rerun),
     ("/api/verify", h_verify),

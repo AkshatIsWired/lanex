@@ -668,6 +668,52 @@ def wsl_windows_path(linux_path: str) -> Optional[str]:
         return None
 
 
+@functools.lru_cache(maxsize=1)
+def wsl_windows_home() -> Optional[str]:
+    """The Windows user's profile folder as a WSL path (``/mnt/c/Users/<name>``).
+
+    Lets the folder picker offer the user's own Windows files. Asks Windows for
+    ``%USERPROFILE%`` through interop (run from ``/mnt/c`` so cmd.exe doesn't warn
+    about a UNC cwd), then falls back to the only real profile under
+    ``/mnt/c/Users``. ``None`` off WSL or when neither works.
+    """
+    if not is_wsl():
+        return None
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["/mnt/c/Windows/System32/cmd.exe", "/c", "echo %USERPROFILE%"],
+            capture_output=True, text=True, timeout=5, cwd="/mnt/c",
+        )
+        win = (out.stdout or "").strip().splitlines()[-1].strip() if out.stdout else ""
+        if win and "%" not in win:
+            conv = subprocess.run(["wslpath", "-u", win], capture_output=True, text=True, timeout=5)
+            p = (conv.stdout or "").strip()
+            if p and Path(p).is_dir():
+                return p
+    except Exception:
+        pass
+    try:
+        skip = {"public", "default", "default user", "all users", "defaultapppool", "wdagutilityaccount"}
+        users = [d for d in Path("/mnt/c/Users").iterdir()
+                 if d.is_dir() and d.name.lower() not in skip]
+        if len(users) == 1:
+            return str(users[0])
+    except Exception:
+        pass
+    return None
+
+
+def projects_dir() -> Path:
+    """Where New project puts designs by default: ``~/lanex-projects``.
+
+    Inside the appliance this is the WSL home, which keeps runs fast (the
+    container bind-mount over ``/mnt/c`` is slow); Explorer still reaches it
+    through ``\\\\wsl.localhost``.
+    """
+    return Path.home() / "lanex-projects"
+
+
 def network_status() -> dict:
     """JSON-safe snapshot for the UI: WSL flag, DNS reachability, remediation."""
     resolves = dns_ok()
