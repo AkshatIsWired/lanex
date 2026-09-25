@@ -240,35 +240,81 @@ function paintProjectBlock() {
   const card = document.getElementById("project-open");
   if (empty) empty.hidden = open;
   if (card) card.hidden = !open;
-  if (!open) return;
+  if (!open) { document.dispatchEvent(new CustomEvent("g:projects_changed")); return; }
   const dir = state.designDir;
   const name = dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || dir;
   const n = document.getElementById("proj-name");
   const p = document.getElementById("proj-path");
   if (n) n.textContent = name;
   import("./shell.js").then((m) => { if (p) { p.textContent = m.displayPath(dir); p.title = dir; } }).catch(() => {});
+  document.dispatchEvent(new CustomEvent("g:projects_changed"));
+}
+
+// What the open project is, as a few labelled facts read from its config and
+// folder, plus a warning line for anything that will stop a run.
+let _facts = null;
+
+function ago(sec) {
+  const s = Math.max(0, Date.now() / 1000 - sec);
+  if (s < 90) return "just now";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago";
+  const d = Math.round(s / 86400);
+  return d === 1 ? "yesterday" : d + " days ago";
+}
+
+function mhzOf(ns) {
+  const n = parseFloat(ns);
+  if (!(n > 0)) return "";
+  const f = 1000 / n;
+  return (f >= 100 ? f.toFixed(0) : f.toFixed(1).replace(/\.0$/, "")) + " MHz";
+}
+
+export function paintProjectFacts() {
+  const dl = document.getElementById("proj-facts");
+  if (!dl) return;
+  const f = _facts;
+  if (!f) { dl.innerHTML = ""; return; }
+  const none = (t) => "<span class='fact-none'>" + fmt.escape(t) + "</span>";
+  const rows = [];
+  rows.push(["Top module", f.top ? "<code>" + fmt.escape(f.top) + "</code>" : none(f.config ? "not set in the config" : "no config yet")]);
+  rows.push(["Clock", f.clock_ns != null
+    ? fmt.escape(f.clock_ns + " ns") + (mhzOf(f.clock_ns) ? " <small>" + mhzOf(f.clock_ns) + "</small>" : "")
+    : none("not set")]);
+  const pdk = state.selectedPdk || f.pdk;
+  rows.push(["PDK", pdk ? fmt.escape(pdk) : none("pick one below")]);
+  let src = f.verilog_files + " Verilog file" + (f.verilog_files === 1 ? "" : "s");
+  let srcNote = "";
+  if (f.used_by_config != null && f.used_by_config !== f.verilog_files) srcNote = f.used_by_config + " in the config";
+  rows.push(["Sources", fmt.escape(src) + (srcNote ? " <small>" + fmt.escape(srcNote) + "</small>" : "")]);
+  rows.push(["Config", f.config ? "<code>" + fmt.escape(f.config) + "</code>" : none("none yet")]);
+  let runs = none("no runs yet");
+  if (f.runs) {
+    const last = f.last_run;
+    runs = f.runs + (f.runs === 1 ? " run" : " runs") +
+      (last ? " <small>newest " + (last.finished ? "finished" : "didn't finish") + ", " + fmt.escape(ago(last.at)) + "</small>" : "");
+  }
+  rows.push(["Runs", runs]);
+  dl.innerHTML = rows.map(([k, v]) => "<div><dt>" + k + "</dt><dd>" + v + "</dd></div>").join("");
 }
 
 async function summariseDir(path) {
-  // What the folder holds, as facts. The name and path already head the block.
   const src = "/api/design-summary?path=" + encodeURIComponent(path);
-  const pillClass = { pass: "pill-pass", fail: "pill-fail", pending: "pill-pending", info: "pill-info", warn: "pill-warn" };
-  const base = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  _facts = null;
   try {
     const r = await fetch(src, { headers: { "X-Requested-With": "XMLHttpRequest" } });
     const body = await r.json();
     if (!r.ok || body.ok === false) throw new Error(body.error || "scan failed");
-    const pills = ((body.data && body.data.pills) || [])
-      .filter((x) => x.text !== base && x.text !== path && !(x.type === "pending" && x.text.startsWith("/")));
-    if (!pills.length) return "<span class='pill pill-pending'>Empty folder</span>";
-    return pills
-      .map((x) => {
-        const text = String(x.text).replace(/\s*✓$/, "");
-        return "<span class='pill " + (pillClass[x.type] || "pill-info") + "'>" + fmt.escape(text) + "</span>";
-      })
-      .join(" ");
+    const data = body.data || {};
+    _facts = data.facts || null;
+    paintProjectFacts();
+    // Only the problems get a line of their own; the facts grid says the rest.
+    const warns = (data.pills || []).filter((x) => x.type === "warn" || x.type === "fail");
+    return warns.map((x) =>
+      "<p class='proj-note'>" + icon("alert", { size: 14 }) + "<span>" + fmt.escape(x.text) + "</span></p>").join("");
   } catch (_e) {
-    return "<span class='pill pill-fail'>Could not read this folder</span>";
+    paintProjectFacts();
+    return "<p class='proj-note is-fail'>" + icon("alert", { size: 14 }) + "<span>Could not read this folder.</span></p>";
   }
 }
 
@@ -299,27 +345,11 @@ export function paintPdkPill(text, kind) {
   paintOnboardChecklist();
 }
 
-// The hero's three steps reflect real state, never static prose: a step is
-// done only when its condition is true (project open / PDK ready / a run that
-// finished), and the first unfinished step is marked as the next one.
+// The hero's three steps look the same whatever the progress; only the first
+// step's button follows state (New project until one is open).
 export function paintOnboardChecklist() {
   const list = document.getElementById("onboard-checklist");
   if (!list) return;
-  const pill = document.getElementById("pdk-pill");
-  const status = {
-    design: !!state.designDir,
-    // The PDK pill is painted green only by the honest readiness probe.
-    pdk: !!(pill && pill.classList.contains("pill-pass")),
-    run: (state.runs || []).some((r) => r && r.success),
-  };
-  let next = null;
-  list.querySelectorAll("li[data-ck]").forEach((li) => {
-    const done = !!status[li.dataset.ck];
-    li.classList.toggle("is-done", done);
-    li.classList.remove("is-next");
-    if (!done && !next) next = li;
-  });
-  if (next) next.classList.add("is-next");
   const first = list.querySelector('[data-step-act="project"]');
   if (first) first.textContent = state.designDir ? "View project" : "New project";
   first?.classList.toggle("btn-ghost", !!state.designDir);
@@ -349,6 +379,7 @@ async function onPdkSelected() {
     else if (usual) sclSel.value = usual;
     state.selectedScl = sclSel.value || "";
     paintPdkAbout(sel.value);
+    paintProjectFacts();
     refreshPdkReadiness();
   } catch (ex) {
     paintPdkPill("error", "pill-fail");

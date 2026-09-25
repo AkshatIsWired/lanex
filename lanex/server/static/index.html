@@ -240,36 +240,51 @@
             </li>
           </ol>
 
-          <!-- Project -->
-          <div class="picker" id="setup-design">
-            <h2><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Your project</h2>
-            <p class="hint" id="project-sub">The folder that holds this chip's Verilog, config and runs.</p>
-            <div class="project-empty-state" id="project-empty">
-              <p>No project is open. Start a new one from a blank file or an example, or open a folder that already has your Verilog.</p>
-              <div class="picker-actions">
-                <button class="btn btn-primary" data-open="new-project">New project…</button>
-                <button class="btn btn-ghost" id="btn-browse-folder"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Open folder…</button>
-              </div>
+          <!-- Project hub: the open project on the left, every known project on the right -->
+          <div class="picker project-hub" id="setup-design">
+            <div class="hub-grid">
+              <section class="hub-current" aria-labelledby="hub-current-label">
+                <span class="hub-label" id="hub-current-label">Open project</span>
+                <div class="project-empty-state" id="project-empty">
+                  <div class="proj-name is-empty">No project open</div>
+                  <p>Start a new one from a blank file or an example, or open a folder that already has your Verilog.</p>
+                  <div class="picker-actions">
+                    <button class="btn btn-primary" data-open="new-project">New project…</button>
+                    <button class="btn" id="btn-browse-folder"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Open folder…</button>
+                  </div>
+                </div>
+                <div class="project-open-state" id="project-open" hidden>
+                  <div class="proj-name" id="proj-name"></div>
+                  <div class="proj-path" id="proj-path"></div>
+                  <dl class="proj-facts" id="proj-facts"></dl>
+                  <div id="design-summary" class="proj-notes" role="status"></div>
+                  <div class="picker-actions">
+                    <button class="btn btn-primary" data-open="ide">Open in RTL IDE</button>
+                    <button class="btn" data-open="reveal" id="proj-reveal">Show in Explorer</button>
+                  </div>
+                </div>
+              </section>
+              <section class="hub-list" aria-labelledby="hub-list-label">
+                <div class="hub-list-head">
+                  <span class="hub-label" id="hub-list-label">Your projects</span>
+                  <span class="hub-list-acts">
+                    <button class="btn btn-sm" data-open="new-project"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New</button>
+                    <button class="btn btn-sm btn-ghost" data-open="open-folder">Open folder…</button>
+                  </span>
+                </div>
+                <div class="hub-rows" id="hub-rows"></div>
+                <div class="hub-foot">
+                  <button class="linklike" data-open="manage">Manage projects…</button>
+                  <details class="path-entry" id="path-entry">
+                    <summary>Type or paste a folder path</summary>
+                    <div class="picker-row">
+                      <input type="text" id="design-dir-input" placeholder="C:\Users\you\my-chip   or   /home/you/my-chip" autocomplete="off" spellcheck="false"/>
+                      <button class="btn" id="btn-set-design">Open</button>
+                    </div>
+                  </details>
+                </div>
+              </section>
             </div>
-            <div class="project-open-state" id="project-open" hidden>
-              <div class="proj-id">
-                <div class="proj-name" id="proj-name"></div>
-                <div class="proj-path" id="proj-path"></div>
-              </div>
-              <div id="design-summary" class="design-summary"></div>
-              <div class="picker-actions">
-                <button class="btn" data-open="ide">Open in RTL IDE</button>
-                <button class="btn btn-ghost" data-open="reveal" id="proj-reveal">Show in Explorer</button>
-                <button class="btn btn-ghost" data-open="switch">Switch project</button>
-              </div>
-            </div>
-            <details class="path-entry" id="path-entry">
-              <summary>Type or paste a folder path</summary>
-              <div class="picker-row">
-                <input type="text" id="design-dir-input" placeholder="C:\Users\you\my-chip   or   /home/you/my-chip" autocomplete="off" spellcheck="false"/>
-                <button class="btn" id="btn-set-design">Open</button>
-              </div>
-            </details>
             <div id="recent-designs" class="recent-designs" hidden></div>
             <div id="autoconfig-banner" class="autoconfig-banner" hidden></div>
           </div>

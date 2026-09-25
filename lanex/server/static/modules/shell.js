@@ -115,9 +115,12 @@ export function paintProject() {
   if (reveal) reveal.disabled = !dir;
 }
 
+// The last list the server gave; a failed fetch shows that instead of an
+// almost-empty list.
+let _serverKnown = [];
 async function knownProjects() {
   let dirs = [];
-  try { dirs = (await api.knownDesigns()).designs || []; } catch (_e) {}
+  try { dirs = _serverKnown = (await api.knownDesigns()).designs || []; } catch (_e) { dirs = _serverKnown.slice(); }
   try {
     const local = JSON.parse(localStorage.getItem("ll.recentDesigns") || "[]");
     for (const d of local) if (d && !dirs.includes(d)) dirs.push(d);
@@ -149,6 +152,50 @@ async function renderRecents() {
   host.querySelectorAll(".project-row").forEach((b) =>
     b.addEventListener("click", () => switchProject(b.dataset.dir)));
   host.querySelector("#btn-manage-projects")?.addEventListener("click", () => manageProjects());
+}
+
+// The project list on the Setup page: every project LanEx knows about, newest
+// first, the open one marked. Clicking a row opens it.
+let _hubSeq = 0;
+export async function renderHubRows() {
+  const host = document.getElementById("hub-rows");
+  if (!host) return;
+  const seq = ++_hubSeq;
+  await defaults();
+  const dirs = await knownProjects();
+  if (seq !== _hubSeq) return;   // a newer render is on its way
+  if (!dirs.length) {
+    host.innerHTML = "<p class='hub-none'>No projects yet. New projects go in <code>" +
+      fmt.escape(displayPath((_defaults && _defaults.projects_dir) || "")) + "</code>.</p>";
+    return;
+  }
+  host.innerHTML = dirs.map((d) => {
+    const cur = d === state.designDir;
+    return "<button class='hub-row" + (cur ? " is-current" : "") + "' data-dir='" + fmt.escape(d) + "'" +
+      (cur ? " aria-current='true'" : "") + " title='" + fmt.escape(displayPath(d)) + "'>" +
+      "<span class='via' aria-hidden='true'></span>" +
+      "<span class='hub-row-text'><b>" + fmt.escape(baseName(d)) + "</b><small>" + fmt.escape(displayPath(d)) + "</small></span>" +
+      (cur ? "<span class='hub-row-tag'>Open</span>" : "") +
+      "</button>";
+  }).join("");
+}
+
+function wireHub() {
+  const host = document.getElementById("hub-rows");
+  if (!host) return;
+  host.addEventListener("click", (e) => {
+    const row = e.target.closest(".hub-row");
+    if (row) switchProject(row.dataset.dir);
+  });
+  const sec = document.getElementById("setup-design");
+  sec?.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-open]");
+    if (!b) return;
+    if (b.dataset.open === "open-folder") openFolder();
+    else if (b.dataset.open === "manage") manageProjects();
+  });
+  document.addEventListener("g:projects_changed", () => renderHubRows());
+  renderHubRows();
 }
 
 async function switchProject(dir) {
@@ -257,6 +304,7 @@ async function manageProjects() {
       });
     },
   });
+  renderHubRows();
 }
 
 // ------------------------------------------------------------ run menu + status mirrors
@@ -436,4 +484,5 @@ export function setupShell() {
   paintPageTitles();
   paintProject();
   paintRunSettings();
+  wireHub();
 }
