@@ -893,7 +893,12 @@ h3 { font-size: var(--t-md); font-weight: 600; color: var(--text-strong); margin
 /* ---- compact density --------------------------------------------------- */
 body.density-compact { font-size: 13px; }
 body.density-compact #app { grid-template-rows: 48px 1fr 26px; }
-body.density-compact .work { padding: var(--s-3); }
+/* No top padding: a sticky header sticks below its scroller's padding, which
+   left a strip of page showing between the top bar and the page header. */
+body.density-compact .work { padding: 0 var(--s-3) var(--s-3); }
+body.density-compact .section-jump,
+body.density-compact .section-jump-stack { margin-left: calc(-1 * var(--s-3)); margin-right: calc(-1 * var(--s-3)); padding: 0 var(--s-3); }
+body.density-compact .section-jump-stack .section-jump { margin: 0; padding: 0; }
 body.density-compact .hero { padding: var(--s-5) var(--s-5); margin-bottom: var(--s-3); }
 body.density-compact .hero h1 { font-size: var(--t-2xl); margin-bottom: var(--s-2); }
 body.density-compact .hero-sub { font-size: var(--t-md); margin-bottom: var(--s-4); }
