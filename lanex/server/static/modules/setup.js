@@ -555,7 +555,7 @@ export function paintRunning(running) {
   const g = document.getElementById("btn-run-global");
   if (running) {
     if (b) b.disabled = true;
-    if (c) c.disabled = false;
+    if (c) { c.disabled = false; c.hidden = false; }
     if (c2) c2.disabled = false;
     if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); }
     pill?.classList.remove("pill-pending");
@@ -563,7 +563,7 @@ export function paintRunning(running) {
     if (pill) pill.textContent = "running";
   } else {
     if (b) b.disabled = !state.designDir;
-    if (c) c.disabled = true;
+    if (c) { c.disabled = true; c.hidden = true; }   // Stop shows only while a run is live
     if (c2) c2.disabled = true;
     if (g) { g.disabled = !state.designDir; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); }
     pill?.classList.add("pill-pending");

@@ -202,7 +202,6 @@
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
   opacity: 0.6;
 }
-.picker.picker-ready { border-left: 3px solid var(--pass); }
 /* Step buttons scroll a card to the top; clear the sticky page header. */
 #sec-setup .picker, #setup-run { scroll-margin-top: 64px; }
 .picker h2 {
@@ -391,58 +390,123 @@ body.theme-light .src-tag.is-top { color: var(--accent); }
 .pdk-about:empty { display: none; }
 
 /* ---- Preflight "Ready to run?" checklist ---- */
-.preflight { display: flex; flex-direction: column; gap: var(--s-2); }
-.pf-banner { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-weight: 600; font-size: 14.5px; }
-.pf-banner-ok { background: var(--pass-soft); color: var(--pass); }
-.pf-banner-bad { background: var(--warn-soft); color: var(--warn); }
-body:not(.theme-light) .pf-banner-ok { color: var(--met3); }
-body:not(.theme-light) .pf-banner-bad { color: var(--met4); }
-.pf-row {
-  display: grid; grid-template-columns: 18px minmax(150px, 190px) minmax(0, 1fr) auto; align-items: center; gap: var(--s-3);
-  padding: var(--s-2) var(--s-3);
-  background: var(--surface-2); border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+/* ---------- Ready to run: checkpoints on a trace, then the launch ----------
+   Each check is a via on a metal trace. A via lights up (with a word saying
+   what it means) when its check passes; a failing one breaks the trace.
+   The Run button sits centred below, where the trace leads. */
+.picker-head .launch-verdict { margin-left: auto; }
+.picker-head .launch-verdict ~ .block-actions { margin-left: 0; }
+.launch-verdict {
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted);
 }
-.pf-row-ok { border-left: 3px solid var(--pass); }
-.pf-row-warn { border-left: 3px solid var(--warn); }
-.pf-row-bad { border-left: 3px solid var(--fail); }
-.pf-ok { color: var(--pass); display: inline-flex; }
-.pf-warn { color: var(--warn); display: inline-flex; }
-.pf-bad { color: var(--fail); display: inline-flex; }
-.pf-label { font-weight: 600; color: var(--text-strong); min-width: 0; }
-.pf-detail { color: var(--text-muted); font-size: 14px; min-width: 0; }
-.pf-missing {
-  display: inline-block; padding: 0 var(--s-2); margin: 0 var(--s-1) 2px 0;
-  background: var(--fail-soft); color: var(--fail);
-  border-radius: var(--r-pill); font-size: 12.5px;
-}
-.pf-act { white-space: nowrap; }
+.launch-verdict.is-ok { color: var(--pass); }
+body:not(.theme-light) .launch-verdict.is-ok { color: var(--met3); }
+.launch-verdict.is-bad { color: var(--warn); }
 
-/* ---------- run name + the big Run button ---------- */
-.run-name-row { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s-5); }
-.run-name-row label { font-size: 14px; font-weight: 500; color: var(--text); }
-.run-name-row label .hint { font-weight: 400; color: var(--text-muted); }
-.run-name-row input { max-width: 420px; }
-.cta {
-  display: flex;
-  gap: var(--s-3);
-  align-items: center;
-  margin-top: var(--s-3);
-  flex-wrap: wrap;
+.pf-chain { margin: var(--s-5) 0 0; }
+.pf-nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
+.pf-node {
+  position: relative; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 3px; padding: 0 var(--s-3);
 }
+/* The trace: half a segment either side of each via, coloured by that via. */
+.pf-node::before, .pf-node::after {
+  content: ""; position: absolute; top: 13px; height: 2px;
+  background: var(--border-strong);
+}
+.pf-node::before { left: 0; right: calc(50% + 15px); }
+.pf-node::after { left: calc(50% + 15px); right: 0; }
+.pf-node:first-child::before, .pf-node:last-child::after { display: none; }
+.pf-via {
+  position: relative; z-index: 1;
+  width: 28px; height: 28px; margin-bottom: var(--s-2);
+  border: 2px solid var(--border-strong); border-radius: 3px;
+  background: var(--surface);
+}
+.pf-via::after {                      /* the via cut */
+  content: ""; position: absolute; inset: 6px; border-radius: 1px;
+  background: var(--border-strong);
+}
+.pf-node.is-ok .pf-via {
+  border-color: var(--pass);
+  background: color-mix(in srgb, var(--pass) 16%, var(--surface));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--pass) 12%, transparent), 0 0 18px color-mix(in srgb, var(--pass) 45%, transparent);
+}
+.pf-node.is-ok .pf-via::after { background: var(--pass); }
+.pf-node.is-ok::before, .pf-node.is-ok::after {
+  background: var(--pass);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--pass) 60%, transparent);
+}
+.pf-node.is-warn .pf-via { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--surface)); }
+.pf-node.is-warn .pf-via::after { background: var(--warn); }
+.pf-node.is-warn::before, .pf-node.is-warn::after { background: var(--warn); }
+.pf-node.is-bad .pf-via { border-color: var(--fail); box-shadow: 0 0 0 4px color-mix(in srgb, var(--fail) 12%, transparent); }
+.pf-node.is-bad .pf-via::after { background: transparent; border: 2px solid var(--fail); inset: 7px; }
+.pf-node.is-bad::before, .pf-node.is-bad::after {   /* a broken trace */
+  background: repeating-linear-gradient(90deg, var(--fail) 0 6px, transparent 6px 11px);
+  opacity: 0.7;
+}
+.pf-chain.is-checking .pf-via { animation: pfPulse 0.9s ease-in-out infinite alternate; }
+@keyframes pfPulse { from { opacity: 1; } to { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .pf-chain.is-checking .pf-via { animation: none; } }
+
+.pf-state {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted);
+}
+.pf-node.is-ok .pf-state { color: var(--pass); }
+body:not(.theme-light) .pf-node.is-ok .pf-state { color: var(--met3); }
+.pf-node.is-warn .pf-state { color: var(--warn); }
+.pf-node.is-bad .pf-state { color: var(--fail); }
+.pf-label { font-size: 15.5px; font-weight: 600; color: var(--text-strong); }
+.pf-detail { font-size: 13.5px; line-height: 1.45; color: var(--text-muted); overflow-wrap: anywhere; max-width: 34ch; }
+.pf-node .pf-act { margin-top: var(--s-2); white-space: nowrap; }
+.pf-note-warn { color: var(--warn); }
+.pf-missing {
+  display: inline-block; padding: 0 6px; margin: 2px 4px 0 0;
+  border: 1px solid var(--fail); color: var(--fail);
+  border-radius: var(--r-sm); font-size: 12.5px;
+}
+/* Narrow: the checkpoints stack, the trace runs down the left. */
+@media (max-width: 720px) {
+  .pf-nodes { grid-template-columns: 1fr; gap: var(--s-4); }
+  .pf-node { display: grid; grid-template-columns: 28px 1fr; column-gap: var(--s-3); text-align: left; align-items: start; padding: 0; }
+  .pf-node > :not(.pf-via) { grid-column: 2; }
+  .pf-via { grid-row: 1 / span 4; margin: 0; }
+  .pf-node::before, .pf-node::after { display: none; }
+  .pf-node .pf-act { justify-self: start; }
+}
+
+/* The launch: centred under the trace. */
+.launch-pad {
+  margin-top: var(--s-6); padding-top: var(--s-5);
+  border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: center; gap: var(--s-3);
+  text-align: center;
+}
+.launch-controls { display: flex; gap: var(--s-2); }
+.launch-controls:not(:has(:not([hidden]))) { display: none; }
+.launch-controls [hidden] { display: none; }
+.launch-note { margin: 0; font-size: 13.5px; color: var(--text-muted); }
+.launch-name {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: 6px 10px; margin-top: var(--s-1);
+}
+.launch-name > span { font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); }
+.launch-name input { width: 220px; }
+.launch-name small { flex-basis: 100%; font-size: 12.5px; color: var(--text-muted); }
 .btn.btn-cta {
-  height: auto;
+  height: auto; min-width: min(340px, 100%);
   background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 60%, var(--accent-3) 100%);
   color: var(--on-accent);
   border: 1px solid var(--accent);
-  padding: var(--s-3) var(--s-5);
+  padding: var(--s-4) var(--s-6);
   border-radius: var(--r-md);
   font-size: var(--t-lg);
   font-weight: 600;
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
   box-shadow: 0 1px 0 rgba(255,255,255,0.10) inset, 0 12px 32px var(--accent-glow);
   transition: transform 0.08s ease, box-shadow 0.18s ease, filter 0.18s ease;
   overflow: hidden;
@@ -450,10 +514,7 @@ body:not(.theme-light) .pf-banner-bad { color: var(--met4); }
 .btn.btn-cta:hover { filter: brightness(1.08); transform: translateY(-1px); color: var(--on-accent); border-color: var(--accent); box-shadow: 0 14px 38px var(--accent-glow); }
 .btn.btn-cta:active { transform: translateY(0); }
 .btn.btn-cta:disabled { opacity: 0.5; cursor: not-allowed; transform: none; filter: none; }
-.btn-cta .big { display: inline-flex; align-items: center; gap: 8px; font-size: var(--t-lg); }
-.btn-cta .hint { font-size: 13px; color: rgba(255,255,255,0.78); font-weight: 400; }
-.cta .btn-warn, .cta .btn-ghost { height: 40px; }
-.cta [hidden] { display: none; }
+.btn-cta .big { display: inline-flex; align-items: center; gap: 10px; font-size: 19px; letter-spacing: 0.01em; }
 
 @media (max-width: 1360px) {
   .hero { padding: var(--s-6); }

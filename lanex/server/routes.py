@@ -878,15 +878,35 @@ def h_preflight(handler: Any) -> None:
             source_count = len(srcs.get("sources", [])) if srcs.get("ok") else 0
         except Exception:
             source_count = 0
+    # When the config lists its sources in a form LanEx reads, count what it
+    # will actually build, and catch entries that point at nothing (synthesis
+    # would stop on them). Otherwise fall back to the folder count, since the
+    # run then sends the ticked files itself.
+    missing_sources: List[str] = []
+    if design_ok and config_file:
+        try:
+            from ..controller import configedit
+            info = configedit.read_config(design_dir)
+            res = configedit.resolve_sources(design_dir, info["data"]) if info["editable"] else None
+            if res and res["mode"] == "list":
+                present = [f for f in res["files"] if Path(f).is_file()]
+                missing_sources = [f for f in res["files"] if not Path(f).is_file()]
+                source_count = len(present)
+        except Exception:
+            pass
     if not design_ok:
-        blockers.append("Pick a design folder (or click ‘Use the SPM example’).")
+        blockers.append("Open a project first.")
     elif not config_file:
         blockers.append("No config.yaml/json found in the design folder.")
+    elif missing_sources:
+        names = ", ".join(Path(f).name for f in missing_sources[:3])
+        blockers.append(f"The config lists source files that don't exist: {names}.")
     elif source_count == 0:
         blockers.append("No Verilog (.v/.sv) sources found in the design folder.")
 
     design_block = {
-        "ok": bool(design_ok and config_file and source_count),
+        "ok": bool(design_ok and config_file and source_count and not missing_sources),
+        "missing_sources": [Path(f).name for f in missing_sources],
         "dir": design_dir,
         "config_file": config_file,
         "config_note": config_note,

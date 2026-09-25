@@ -11,17 +11,15 @@ export function lastPreflight() {
   return _last;
 }
 
-// state: "ok" | "warn" | "bad". "warn" is a non-blocking caveat (e.g. a PDK
-// that will download itself on the first run) — distinct from a hard ✗.
+// One checkpoint on the trace. state: "ok" | "warn" | "bad" | "wait". "warn"
+// is a non-blocking caveat (a PDK that downloads itself on the first run).
+// The state is said in words too (pf-state), never by colour alone.
+const STATE_WORD = { ok: "Ready", warn: "Heads-up", bad: "Needs fixing", wait: "Checking" };
 function row(state, label, detail, actionHtml) {
-  const icon =
-    state === "ok" ? "<span class='pf-ok'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M5 13l4 4L19 7'/></svg></span>"
-    : state === "warn" ? "<span class='pf-warn'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l10 18H2zM12 10v5M12 18h.01'/></svg></span>"
-    : "<span class='pf-bad'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></span>";
-  const cls = state === "ok" ? "pf-row-ok" : state === "warn" ? "pf-row-warn" : "pf-row-bad";
   return (
-    "<div class='pf-row " + cls + "'>" +
-    icon +
+    "<div class='pf-node is-" + state + "'>" +
+    "<span class='pf-via' aria-hidden='true'></span>" +
+    "<span class='pf-state'>" + STATE_WORD[state] + "</span>" +
     "<span class='pf-label'>" + fmt.escape(label) + "</span>" +
     "<span class='pf-detail'>" + (detail || "") + "</span>" +
     (actionHtml || "") +
@@ -29,18 +27,39 @@ function row(state, label, detail, actionHtml) {
   );
 }
 
+function plural(n, word) {
+  return n + " " + word + (n === 1 ? "" : "s");
+}
+
+function verdict(text, kind) {
+  const v = document.getElementById("pf-verdict");
+  if (!v) return;
+  v.textContent = text;
+  v.className = "launch-verdict" + (kind ? " is-" + kind : "");
+}
+
 // Fetch + paint the checklist. Returns the preflight result object.
 export async function renderPreflight() {
   const root = document.getElementById("preflight");
   if (!root) return null;
-  root.innerHTML = "<div class='muted'>checking…</div>";
+  // Keep the last result on screen while re-checking (no layout jump); the
+  // first time, show the three checkpoints waiting.
+  if (!root.querySelector(".pf-node")) {
+    root.innerHTML = "<div class='pf-nodes'>" + row("wait", "Design + config", "") +
+      row("wait", "PDK + standard cells", "") + row("wait", "Engine", "") + "</div>";
+  }
+  root.classList.add("is-checking");
+  verdict("Checking…", "");
   let pf;
   try {
     pf = await api.preflight(state.selectedPdk, state.selectedScl, state.runMode);
   } catch (ex) {
-    root.innerHTML = "<div class='pf-row pf-row-bad'><span class='pf-bad'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></span><span class='pf-label'>Check failed</span><span class='pf-detail'>" + fmt.escape(ex.message) + "</span></div>";
+    root.classList.remove("is-checking");
+    root.innerHTML = "<div class='pf-nodes'>" + row("bad", "Check failed", fmt.escape(ex.message)) + "</div>";
+    verdict("Couldn't check", "bad");
     return null;
   }
+  root.classList.remove("is-checking");
   _last = pf;
 
   const d = pf.design || {};
@@ -58,9 +77,14 @@ export async function renderPreflight() {
     d.ok ? "ok" : "bad",
     "Design + config",
     d.ok
-      ? (d.config_file || "config") + " · " + (d.source_count || 0) + " source file(s)" + cfgNote
-      : (d.dir ? "config / sources missing" : "no folder loaded"),
-    d.ok ? "" : "<button class='btn btn-ghost btn-sm pf-act' data-act='design'>Open a project</button>",
+      ? (d.config_file || "config") + " · " + plural(d.source_count || 0, "source file") + cfgNote
+      : !d.dir ? "No project open."
+        : !d.config_file ? "No config file in the project."
+        : (d.missing_sources || []).length ? "The config lists files that don't exist: " + fmt.escape(d.missing_sources.join(", "))
+        : "No Verilog files to build.",
+    d.ok ? "" : !d.dir ? "<button class='btn btn-sm pf-act' data-act='design'>Open a project</button>"
+      : d.config_file && !(d.missing_sources || []).length ? "<button class='btn btn-sm pf-act' data-act='new-file'>New file</button>"
+      : "<button class='btn btn-sm pf-act' data-act='sources'>Open Sources</button>",
   );
   // A PDK that LibreLane can fetch on its own (online, just not local yet) is a
   // warning, not a blocker — so don't show a hard ✗ while the banner says "All set".
@@ -75,7 +99,7 @@ export async function renderPreflight() {
     pdkState,
     "PDK + standard cells",
     pdkDetail,
-    p.ready || pdkWillDownload ? "" : "<button class='btn btn-ghost btn-sm pf-act' data-act='tools'>Install PDK</button>",
+    p.ready || pdkWillDownload ? "" : "<button class='btn btn-sm pf-act' data-act='tools'>Install PDK</button>",
   );
   // Engine row — container mode needs only Docker/Podman; local mode needs the
   // six native EDA tools.
@@ -88,7 +112,7 @@ export async function renderPreflight() {
       t.ok ? "ok" : "bad",
       "Container engine",
       detail,
-      t.ok ? "" : "<button class='btn btn-ghost btn-sm pf-act' data-act='tools'>Open Tools</button>",
+      t.ok ? "" : "<button class='btn btn-sm pf-act' data-act='tools'>Open Tools</button>",
     );
   } else {
     const tools = t.tools || [];
@@ -99,19 +123,16 @@ export async function renderPreflight() {
     html += row(
       t.ok ? "ok" : "bad",
       "EDA tools",
-      t.ok ? tools.length + " tool(s) ready" : "missing: " + (toolDetail || "—"),
-      t.ok ? "" : "<button class='btn btn-ghost btn-sm pf-act' data-act='tools'>Open Tools</button>",
+      t.ok ? plural(tools.length, "tool") + " ready" : "missing: " + (toolDetail || "—"),
+      t.ok ? "" : "<button class='btn btn-sm pf-act' data-act='tools'>Open Tools</button>",
     );
   }
 
-  const banner = pf.ready
-    ? "<div class='pf-banner pf-banner-ok'>All set. Press Run flow when you're ready.</div>"
-    : "<div class='pf-banner pf-banner-bad'>" + pf.blockers.length + (pf.blockers.length === 1 ? " thing" : " things") + " to fix before a run can finish.</div>";
+  if (pf.ready) verdict("All set", "ok");
+  else verdict(pf.blockers.length + (pf.blockers.length === 1 ? " thing" : " things") + " to fix", "bad");
 
-  root.innerHTML = banner + html;
+  root.innerHTML = "<div class='pf-nodes'>" + html + "</div>";
 
-  // §6.1 — the "Ready to run?" picker reads as visually terminal (a --pass
-  // left edge) once preflight passes. Presentation only; no new logic.
   root.closest(".picker")?.classList.toggle("picker-ready", !!pf.ready);
 
   // Wire the fix buttons to jump to the right place.
@@ -121,7 +142,15 @@ export async function renderPreflight() {
       if (act === "tools") {
         document.querySelector('.side-tab[data-tab="tools"]')?.click();
       } else if (act === "design") {
-        document.getElementById("design-dir-input")?.focus();
+        document.getElementById("setup-design")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (act === "sources") {
+        document.getElementById("setup-sources")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (act === "new-file") {
+        document.querySelector('.side-tab[data-tab="ide"]')?.click();
+        import("./ide/main.js").then(async (m) => {
+          await m.initIde({ designDir: state.designDir, runMode: state.runMode });
+          m.newFile("module_v");
+        }).catch(() => {});
       }
     });
   });
