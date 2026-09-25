@@ -646,6 +646,41 @@ def _config_source_count(design_dir: Path, cfg_name: Optional[str]) -> Optional[
         return None
 
 
+def _design_facts(design_dir: Path, cfg_name: Optional[str]) -> Dict[str, Any]:
+    """The few config values the Setup project card shows (top module, clock,
+    PDK) plus the run count and how the newest run ended. Missing values are
+    left out rather than guessed."""
+    facts: Dict[str, Any] = {}
+    if cfg_name and not cfg_name.endswith(".tcl"):
+        try:
+            text = (design_dir / cfg_name).read_text(encoding="utf-8")
+            if cfg_name.endswith(".json"):
+                data = json.loads(text)
+            else:
+                import yaml as _yaml
+                data = _yaml.safe_load(text)
+            if isinstance(data, dict):
+                for key, out in (("DESIGN_NAME", "top"), ("CLOCK_PERIOD", "clock_ns"),
+                                 ("PDK", "pdk"), ("STD_CELL_LIBRARY", "scl")):
+                    v = data.get(key)
+                    if isinstance(v, (str, int, float)) and not isinstance(v, bool) and str(v).strip():
+                        facts[out] = v
+        except Exception:
+            pass
+    runs = design_dir / "runs"
+    try:
+        dirs = sorted((d for d in runs.iterdir() if d.is_dir()),
+                      key=lambda d: d.stat().st_mtime, reverse=True) if runs.is_dir() else []
+    except OSError:
+        dirs = []
+    facts["runs"] = len(dirs)
+    if dirs:
+        facts["last_run"] = {"tag": dirs[0].name,
+                             "finished": (dirs[0] / "final").is_dir(),
+                             "at": dirs[0].stat().st_mtime}
+    return facts
+
+
 def h_design_summary(handler: Any) -> None:
     # C5 — decision (kept intentionally unconfined): this endpoint reads an
     # arbitrary directory the user is about to pick as their design. It is the
@@ -693,8 +728,11 @@ def h_design_summary(handler: Any) -> None:
         if _whitespace_path_error(str(p)):
             pills.append({"type": "warn", "text": "The path has spaces, which breaks runs. Use a folder without spaces"})
         pills.append({"type": "pending", "text": str(p)})
+        facts = _design_facts(p, cfg)
+        facts.update({"config": cfg, "verilog_files": v_count,
+                      "used_by_config": _config_source_count(p, cfg)})
         _respond(handler, {"pills": pills, "config_missing": config_missing,
-                           "has_sources": bool(v_count)})
+                           "has_sources": bool(v_count), "facts": facts})
     except Exception as ex:
         _respond(handler, str(ex), 500)
 
@@ -2409,6 +2447,12 @@ def h_project_defaults(handler: Any) -> None:
     """Where New project suggests putting a design, whether it exists yet, and
     what the UI needs to show paths the way the person's OS does."""
     proj = platform_env.projects_dir()
+    # Create it up front: the Windows folder picker opens in Documents when its
+    # start folder doesn't exist, so "Change..." would land somewhere else.
+    try:
+        proj.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
     _respond(handler, {"projects_dir": str(proj), "exists": proj.is_dir(),
                        "wsl": platform_env.is_wsl(),
                        "distro": os.environ.get("WSL_DISTRO_NAME") or None})
@@ -2420,6 +2464,12 @@ def h_native_pick(handler: Any) -> None:
     from ..controller import native_pick
     body = getattr(handler, "_body", {})
     start = platform_env.to_host_path(body.get("start") or "")
+    # Open at the nearest folder that exists (a not-yet-created project path
+    # would otherwise drop the person in Documents).
+    p = Path(start) if start else None
+    while p is not None and not p.is_dir() and p.parent != p:
+        p = p.parent
+    start = str(p) if p is not None and p.is_dir() else start
     _respond(handler, native_pick.pick(body.get("mode") or "folder",
                                        str(body.get("title") or ""), start))
 
