@@ -59,6 +59,8 @@ IMPLICATIONS: Dict[str, str] = {
     "test_editor_lint_sim": "IDE lint/sim jobs behave; watchdogs free a stuck job instead of hanging 'running'.",
     "test_introspect": "Step/metric/variable introspection matches librelane, so the UI offers real options only.",
     "test_scaffold": "Generated example/config scaffolding is valid and launches.",
+    "test_configedit": "LanEx edits a design's config key by key: comments, pdk::/scl:: sections and line endings survive, and any edit that would change anything else is refused with the file untouched.",
+    "test_projectfiles": "New project files (modules, testbenches, SDC, pin order) are valid for LibreLane (pin files pass its own parser, every port matched once) and point the config at themselves.",
     "test_project_shell": "Projects land in a space-free folder, Windows paths are accepted, and only LanEx's own project folders can be deleted.",
     "test_server": "HTTP routing, CSRF, and traversal confinement hold (no arbitrary file read).",
     "test_tools": "Tool/engine detection is accurate and its probes can't hang the UI.",

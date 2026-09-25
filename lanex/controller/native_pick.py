@@ -27,12 +27,16 @@ import base64
 import os
 import shutil
 import subprocess
+import threading
 from typing import Any, Dict, List, Optional
 
 from . import platform_env
 
 _POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 _TIMEOUT = 900  # a person may take a while to find the folder
+# One picker at a time: a second click while one is open would stack another
+# dialog on top (they used to pile up unseen behind the browser).
+_BUSY = threading.Lock()
 
 # The folder picker is the Vista+ IFileOpenDialog in folder mode (the same
 # dialog Explorer uses); WinForms' FolderBrowserDialog on .NET Framework is the
@@ -71,6 +75,23 @@ public static class LanexPicker {
   }
   [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
   static extern void SHCreateItemFromParsingName(string path, IntPtr pbc, ref Guid riid, out IShellItem item);
+  // Windows won't let a background process (this PowerShell, started from WSL)
+  // take the foreground, so the dialog used to open behind the browser. A
+  // synthetic Alt press lifts the foreground lock; then the dialog is raised.
+  [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string cls, string title);
+  public static void Raise(IntPtr h) {
+    if (h == IntPtr.Zero) return;
+    keybd_event(0x12, 0, 0, UIntPtr.Zero);   // Alt down
+    keybd_event(0x12, 0, 2, UIntPtr.Zero);   // Alt up
+    SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040);   // TOPMOST, NOSIZE|NOMOVE|SHOWWINDOW
+    BringWindowToTop(h);
+    SetForegroundWindow(h);
+  }
+  public static IntPtr FindDialog(string title) { return FindWindow("#32770", title); }
   public static string PickFolder(IntPtr owner, string title, string start) {
     var dlg = (IFileDialog)new FileOpenDialogRCW();
     dlg.SetOptions(0x20 | 0x40 | 0x800);   // PICKFOLDERS | FORCEFILESYSTEM | PATHMUSTEXIST
@@ -92,11 +113,28 @@ public static class LanexPicker {
 $owner = New-Object System.Windows.Forms.Form
 $owner.TopMost = $true
 $owner.ShowInTaskbar = $false
+$owner.FormBorderStyle = "None"
+$owner.Opacity = 0
 $owner.StartPosition = "Manual"
-$owner.Location = New-Object System.Drawing.Point(-32000, -32000)
+# An invisible 1x1 owner in the middle of the main screen: the dialog centres on
+# its owner, so it opens mid-screen instead of in a corner or off-screen.
+$wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+$owner.Location = New-Object System.Drawing.Point(($wa.X + [int]($wa.Width / 2)), ($wa.Y + [int]($wa.Height / 3)))
 $owner.Size = New-Object System.Drawing.Size(1, 1)
 $owner.Show()
-$owner.Activate()
+[LanexPicker]::Raise($owner.Handle)
+# The dialog runs a modal loop that still pumps WinForms timers: once it exists,
+# raise it above the browser. Retries for a few seconds while it is being built.
+$script:tries = 0
+$timer = New-Object System.Windows.Forms.Timer
+$timer.Interval = 150
+$timer.Add_Tick({
+  $script:tries++
+  $h = [LanexPicker]::FindDialog($Title)
+  if ($h -ne [IntPtr]::Zero) { [LanexPicker]::Raise($h); $timer.Stop() }
+  elseif ($script:tries -gt 40) { $timer.Stop() }
+})
+$timer.Start()
 try {
   if ($Mode -eq "files") {
     $d = New-Object System.Windows.Forms.OpenFileDialog
@@ -108,7 +146,7 @@ try {
     $p = [LanexPicker]::PickFolder($owner.Handle, $Title, $Start)
     if ($p) { Write-Output $p }
   }
-} finally { $owner.Close() }
+} finally { $timer.Stop(); $owner.Close() }
 '''
 
 
@@ -178,12 +216,18 @@ def _pick_linux(mode: str, title: str, start: str) -> Optional[List[str]]:
 def pick(mode: str = "folder", title: str = "", start: str = "") -> Dict[str, Any]:
     """``{"native": bool, "paths": [...]}``. ``native`` False means no system
     picker exists here and the caller should use the built-in browser; an
-    empty ``paths`` with ``native`` True means the person cancelled."""
+    empty ``paths`` with ``native`` True means the person cancelled, and
+    ``busy`` True means another picker is already open."""
     mode = "files" if mode == "files" else "folder"
-    if platform_env.is_wsl():
-        got = _pick_windows(mode, title, start)
-    else:
-        got = _pick_linux(mode, title, start)
+    if not _BUSY.acquire(blocking=False):
+        return {"native": True, "paths": [], "busy": True}
+    try:
+        if platform_env.is_wsl():
+            got = _pick_windows(mode, title, start)
+        else:
+            got = _pick_linux(mode, title, start)
+    finally:
+        _BUSY.release()
     if got is None:
         return {"native": False, "paths": []}
     return {"native": True, "paths": got}

@@ -3390,10 +3390,152 @@ def h_cells(handler: Any) -> None:
 # Route table
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Project files and the design's own config (the Setup page's project model)
+# ---------------------------------------------------------------------------
+
+def _design_dir_or_400(handler: Any) -> Optional[str]:
+    body = getattr(handler, "_body", {}) or {}
+    d = body.get("design_dir") or _query_param(handler.path, "path") or _get_active_design_dir()
+    if not d or not Path(d).is_dir():
+        _respond(handler, "no project is open", 400)
+        return None
+    return str(Path(d).resolve())
+
+
+def _refuse_while_running(handler: Any) -> bool:
+    """The config is re-read between steps of a step-by-step run, so it must
+    not change under a live run."""
+    from ..server.app import get_runner
+    if get_runner().running:
+        _respond(handler, "A run is in progress. Change the project's settings after it finishes.", 409)
+        return True
+    return False
+
+
+def _scoped_report(scoped: Dict[str, Any], pdk: Optional[str], scl: Optional[str]) -> Dict[str, Any]:
+    from ..controller import configedit
+    return {k: [dict(e, applies=configedit.applies(e, pdk, scl)) for e in v] for k, v in scoped.items()}
+
+
+def h_project_files(handler: Any) -> None:
+    """Every file in the project with its role and the config variable using it."""
+    from ..controller import projectfiles
+    d = _design_dir_or_400(handler)
+    if d is None:
+        return
+    try:
+        _respond(handler, projectfiles.list_files(d))
+    except Exception as ex:
+        _log.exception("list_files failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_design_info(handler: Any) -> None:
+    """What the Setup page's Design row needs: the modules in the ticked files,
+    the config's top/clock values (and any pdk::/scl:: section overriding
+    them), and the ports of the chosen top module."""
+    from ..controller import autoconfig, configedit, projectfiles
+    d = _design_dir_or_400(handler)
+    if d is None:
+        return
+    body = getattr(handler, "_body", {}) or {}
+    files = [f for f in (body.get("files") or []) if isinstance(f, str)]
+    pdk, scl = body.get("pdk") or None, body.get("scl") or None
+    try:
+        info = configedit.read_config(d)
+        data = info["data"]
+        scan = autoconfig.scan_sources(d, only_files=files or None)
+        modules = [m for m in scan.get("modules", []) if m not in set(scan.get("testbench_modules", []))]
+        top = body.get("top") or data.get("DESIGN_NAME") or scan.get("top")
+        ports = projectfiles.find_module_ports(d, top, files or None) if isinstance(top, str) and top else []
+        scoped = {k: configedit.scoped_values(data, k) for k in ("DESIGN_NAME", "CLOCK_PORT", "CLOCK_PERIOD")}
+        _respond(handler, {
+            "config": {k: info[k] for k in ("name", "format", "editable", "reason")},
+            "values": {k: data.get(k) for k in ("DESIGN_NAME", "CLOCK_PORT", "CLOCK_PERIOD")},
+            "scoped": _scoped_report({k: v for k, v in scoped.items() if v}, pdk, scl),
+            "modules": modules,
+            "top_candidates": scan.get("top_candidates", []),
+            "suggested_top": scan.get("top"),
+            "module_files": {m: str((Path(d) / f).resolve()) for m, f in (scan.get("module_files") or {}).items()},
+            "ports": ports,
+        })
+    except Exception as ex:
+        _log.exception("design_info failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_config_set(handler: Any) -> None:
+    """Set/remove top-level keys in the design's config file (key by key)."""
+    from ..controller import configedit
+    d = _design_dir_or_400(handler)
+    if d is None or _refuse_while_running(handler):
+        return
+    body = getattr(handler, "_body", {}) or {}
+    sets = body.get("set") or {}
+    removes = body.get("remove") or []
+    if not isinstance(sets, dict) or not isinstance(removes, list):
+        _respond(handler, "set must be an object and remove a list", 400)
+        return
+    try:
+        res = configedit.set_keys(d, sets, removes)
+    except configedit.ConfigEditError as ex:
+        _respond(handler, str(ex), 400)
+        return
+    res.pop("text", None)
+    res["scoped"] = _scoped_report(res["scoped"], body.get("pdk") or None, body.get("scl") or None)
+    _respond(handler, res)
+
+
+def h_config_sources(handler: Any) -> None:
+    """Make the config's VERILOG_FILES resolve to exactly the ticked files."""
+    from ..controller import configedit
+    d = _design_dir_or_400(handler)
+    if d is None or _refuse_while_running(handler):
+        return
+    body = getattr(handler, "_body", {}) or {}
+    files = body.get("files")
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        _respond(handler, "files must be a list of paths", 400)
+        return
+    try:
+        res = configedit.set_sources(d, files)
+    except configedit.ConfigEditError as ex:
+        _respond(handler, str(ex), 400)
+        return
+    res.pop("text", None)
+    _respond(handler, res)
+
+
+def h_project_new_file(handler: Any) -> None:
+    """Create a starter file (module, testbench, header, SDC, pin order, memory
+    contents or any editable file) and, with ``use``, point the config at it."""
+    from ..controller import projectfiles
+    d = _design_dir_or_400(handler)
+    if d is None:
+        return
+    body = getattr(handler, "_body", {}) or {}
+    use = body.get("use", True) is not False
+    if use and _refuse_while_running(handler):
+        return
+    res = projectfiles.new_file(d, str(body.get("kind") or ""), str(body.get("name") or ""),
+                                top=body.get("top") or None, clock=body.get("clock") or None, use=use)
+    if not res.get("ok"):
+        _respond(handler, res.get("error") or "could not create the file", 400)
+        return
+    _respond(handler, res)
+
+
 ROUTES: List[Tuple[str, Any]] = [
     ("/api/templates", h_templates),
     ("/api/project/new", h_project_new),
     ("/api/project/defaults", h_project_defaults),
+    ("/api/project/files", h_project_files),
+    ("/api/project/design-info", h_design_info),
+    ("/api/project/new-file", h_project_new_file),
+    ("/api/config/set", h_config_set),
+    ("/api/config/sources", h_config_sources),
     ("/api/project/forget", h_project_forget),
     ("/api/project/delete", h_project_delete),
     ("/api/fs/native-pick", h_native_pick),
