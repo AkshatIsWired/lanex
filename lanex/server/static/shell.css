@@ -232,10 +232,13 @@ body.theme-light #theme-btn .ico-moon { display: none; }
 .project-empty { padding: 6px 10px 8px; font-size: 13px; color: var(--ink-2); }
 
 /* ------------------------------------------------------------ side rail */
-/* Inset well with a faint routing-track texture; groups spread evenly. */
+/* Inset well with a faint routing-track texture. Every tab gets the same
+   share of the rail's height: a group grows in proportion to its tab count
+   (--n, set in the markup) and its tabs split the group evenly, so there is
+   no dead space under a group. */
 .side-tabs {
   grid-area: side;
-  display: flex; flex-direction: column; justify-content: space-between; gap: 12px;
+  display: flex; flex-direction: column; justify-content: flex-start; gap: 14px;
   padding: 12px 8px 12px 10px;
   background:
     repeating-linear-gradient(0deg, transparent 0 23px, rgba(120, 140, 170, 0.05) 23px 24px),
@@ -250,7 +253,8 @@ body.theme-light .side-tabs {
     var(--bg-2);
 }
 .side-tabs::-webkit-scrollbar { display: none; }
-.rail-group { display: flex; flex-direction: column; gap: 2px; }
+.rail-group { display: flex; flex-direction: column; gap: 2px; flex: var(--n, 1) 1 auto; min-height: min-content; }
+.rail-group > .side-tab { flex: 1 1 auto; justify-content: center; max-height: 96px; }
 /* Group names read as section markers, not tabs: small tracked caps in the
    dim text colour, centred between two hairlines. */
 .side-tabs .rail-label {
@@ -280,7 +284,7 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .side-tab.side-tab-active .ico { color: var(--met1); }
 /* Active = an energized met1 routing spine on the channel edge ... */
 .side-tab.side-tab-active::before {
-  content: ""; position: absolute; left: -2px; top: 6px; bottom: 6px; width: 2px;
+  content: ""; position: absolute; left: -2px; top: 50%; height: min(44px, calc(100% - 12px)); transform: translateY(-50%); width: 2px;
   background: var(--met1); box-shadow: 0 0 10px var(--accent-glow);
 }
 /* ... with a square via where the trace taps into this row. */
