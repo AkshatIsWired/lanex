@@ -197,6 +197,15 @@ export const api = {
   // ---------- Phase 0: project wizard + export
   templates: () => _fetch("/api/templates"),
   projectDefaults: () => _fetch("/api/project/defaults"),
+  projectFiles: (path) => _fetch("/api/project/files" + (path ? "?path=" + encodeURIComponent(path) : "")),
+  designInfo: (payload) =>
+    _fetch("/api/project/design-info", { method: "POST", body: JSON.stringify(payload || {}) }),
+  newProjectFile: (payload) =>
+    _fetch("/api/project/new-file", { method: "POST", body: JSON.stringify(payload) }),
+  configSet: (set, remove, extra) =>
+    _fetch("/api/config/set", { method: "POST", body: JSON.stringify(Object.assign({ set: set || {}, remove: remove || [] }, extra || {})) }),
+  configSources: (files) =>
+    _fetch("/api/config/sources", { method: "POST", body: JSON.stringify({ files }) }),
   projectForget: (designDir) =>
     _fetch("/api/project/forget", { method: "POST", body: JSON.stringify({ design_dir: designDir }) }),
   projectDelete: (designDir, confirmName) =>

@@ -63,6 +63,31 @@ function highlight(code) {
   return out + "\n";
 }
 
+// SDC, Tcl and YAML: "#" starts a comment (outside a string), plus strings and
+// numbers. Pin-order files are left plain: there "#N" is a side, not a comment.
+const HASH_RX = /("(?:\\.|[^"\\])*")|(#[^\n]*)|(\b\d[\d_.]*\b)/g;
+function highlightHash(code) {
+  let out = "";
+  let last = 0;
+  let m;
+  HASH_RX.lastIndex = 0;
+  while ((m = HASH_RX.exec(code)) !== null) {
+    if (m.index > last) out += esc(code.slice(last, m.index));
+    const cls = m[1] ? "tk-str" : m[2] ? "tk-com" : "tk-num";
+    out += "<span class='" + cls + "'>" + esc(m[0]) + "</span>";
+    last = m.index + m[0].length;
+  }
+  if (last < code.length) out += esc(code.slice(last));
+  return out + "\n";
+}
+
+function highlightFor(relPath, code) {
+  const ext = (String(relPath || "").match(/\.[^./\\]+$/) || [""])[0].toLowerCase();
+  if ([".v", ".sv", ".vh", ".svh", ".verilog", ""].includes(ext)) return highlight(code);
+  if ([".sdc", ".tcl", ".xdc", ".yaml", ".yml"].includes(ext)) return highlightHash(code);
+  return esc(code) + "\n";
+}
+
 export class Editor {
   constructor(host) {
     this.host = host;
@@ -135,7 +160,7 @@ export class Editor {
   }
 
   _repaint() {
-    this.pre.innerHTML = highlight(this.area.value);
+    this.pre.innerHTML = highlightFor(this.relPath, this.area.value);
     this._paintGutter();
     this._syncScroll();
   }

@@ -81,6 +81,8 @@ function wireSetupActions() {
       document.getElementById("pdk-select")?.focus({ preventScroll: true });
     } else if (act === "run") {
       scrollToBlock("setup-run");
+    } else if (act === "runs") {
+      goTab("runs");
     }
   });
   // "Add files…" copies files from anywhere on the computer into the project,
@@ -101,6 +103,7 @@ function wireSetupActions() {
       const files = [...input.files];
       input.value = "";
       let ok = 0;
+      const added = [];
       for (const f of files) {
         const name = f.name;
         const isTb = /(^tb_|_tb\.|testbench)/i.test(name);
@@ -108,7 +111,7 @@ function wireSetupActions() {
         const rel = (isHdl ? (isTb ? "verify/" : "src/") : "") + name;
         try {
           const r = await api.fileWrite(rel, await f.text());
-          if (r.ok) ok++; else toast.show("Could not add " + name + ": " + (r.error || "refused"), "error");
+          if (r.ok) { ok++; added.push(rel); } else toast.show("Could not add " + name + ": " + (r.error || "refused"), "error");
         } catch (ex) {
           toast.show("Could not add " + name + ": " + (ex.message || ex), "error");
         }
@@ -116,6 +119,12 @@ function wireSetupActions() {
       if (ok) {
         toast.show("Added " + ok + " file" + (ok === 1 ? "" : "s") + " to the project.", "success");
         await loadFilesFor(state.designDir);
+        const base = state.designDir.replace(/\/+$/, "") + "/";
+        const design = added.filter((rel) => rel.startsWith("src/") && /\.s?v$/i.test(rel)).map((rel) => base + rel);
+        if (design.length) {
+          const { includeInConfig } = await import("./fs.js");
+          includeInConfig(design);
+        }
       }
     });
   }
@@ -132,6 +141,7 @@ export function setupSetup() {
   // that card (config.js), so they never crowd this bar.
   wireJump(document.getElementById("sec-setup"));
   wireSetupActions();
+  import("./projectcard.js").then((m) => m.wireDesignRow()).catch(() => {});
   document.getElementById("btn-set-design")?.addEventListener("click", onLoadDesign);
   document.getElementById("design-dir-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") onLoadDesign();
@@ -250,10 +260,8 @@ function paintProjectBlock() {
   document.dispatchEvent(new CustomEvent("g:projects_changed"));
 }
 
-// What the open project is, as a few labelled facts read from its config and
-// folder, plus a warning line for anything that will stop a run.
-let _facts = null;
-
+// Under the Design row: one line about the newest run, and a warning line for
+// anything that will stop a run (no config, spaces in the path).
 function ago(sec) {
   const s = Math.max(0, Date.now() / 1000 - sec);
   if (s < 90) return "just now";
@@ -263,57 +271,29 @@ function ago(sec) {
   return d === 1 ? "yesterday" : d + " days ago";
 }
 
-function mhzOf(ns) {
-  const n = parseFloat(ns);
-  if (!(n > 0)) return "";
-  const f = 1000 / n;
-  return (f >= 100 ? f.toFixed(0) : f.toFixed(1).replace(/\.0$/, "")) + " MHz";
-}
-
-export function paintProjectFacts() {
-  const dl = document.getElementById("proj-facts");
-  if (!dl) return;
-  const f = _facts;
-  if (!f) { dl.innerHTML = ""; return; }
-  const none = (t) => "<span class='fact-none'>" + fmt.escape(t) + "</span>";
-  const rows = [];
-  rows.push(["Top module", f.top ? "<code>" + fmt.escape(f.top) + "</code>" : none(f.config ? "not set in the config" : "no config yet")]);
-  rows.push(["Clock", f.clock_ns != null
-    ? fmt.escape(f.clock_ns + " ns") + (mhzOf(f.clock_ns) ? " <small>" + mhzOf(f.clock_ns) + "</small>" : "")
-    : none("not set")]);
-  const pdk = state.selectedPdk || f.pdk;
-  rows.push(["PDK", pdk ? fmt.escape(pdk) : none("pick one below")]);
-  let src = f.verilog_files + " Verilog file" + (f.verilog_files === 1 ? "" : "s");
-  let srcNote = "";
-  if (f.used_by_config != null && f.used_by_config !== f.verilog_files) srcNote = f.used_by_config + " in the config";
-  rows.push(["Sources", fmt.escape(src) + (srcNote ? " <small>" + fmt.escape(srcNote) + "</small>" : "")]);
-  rows.push(["Config", f.config ? "<code>" + fmt.escape(f.config) + "</code>" : none("none yet")]);
-  let runs = none("no runs yet");
-  if (f.runs) {
-    const last = f.last_run;
-    runs = f.runs + (f.runs === 1 ? " run" : " runs") +
-      (last ? " <small>newest " + (last.finished ? "finished" : "didn't finish") + ", " + fmt.escape(ago(last.at)) + "</small>" : "");
-  }
-  rows.push(["Runs", runs]);
-  dl.innerHTML = rows.map(([k, v]) => "<div><dt>" + k + "</dt><dd>" + v + "</dd></div>").join("");
+function paintLastRun(facts) {
+  const el = document.getElementById("proj-lastrun");
+  if (!el) return;
+  const last = facts && facts.last_run;
+  if (!facts || !facts.runs || !last) { el.innerHTML = "No runs yet."; return; }
+  el.innerHTML = "Last run " + (last.finished ? "finished" : "didn't finish") + " " + fmt.escape(ago(last.at)) +
+    " · <button type='button' class='linklike' data-open='runs'>" +
+    (facts.runs === 1 ? "View it" : "View all " + facts.runs + " runs") + "</button>";
 }
 
 async function summariseDir(path) {
   const src = "/api/design-summary?path=" + encodeURIComponent(path);
-  _facts = null;
   try {
     const r = await fetch(src, { headers: { "X-Requested-With": "XMLHttpRequest" } });
     const body = await r.json();
     if (!r.ok || body.ok === false) throw new Error(body.error || "scan failed");
     const data = body.data || {};
-    _facts = data.facts || null;
-    paintProjectFacts();
-    // Only the problems get a line of their own; the facts grid says the rest.
+    paintLastRun(data.facts || null);
     const warns = (data.pills || []).filter((x) => x.type === "warn" || x.type === "fail");
     return warns.map((x) =>
       "<p class='proj-note'>" + icon("alert", { size: 14 }) + "<span>" + fmt.escape(x.text) + "</span></p>").join("");
   } catch (_e) {
-    paintProjectFacts();
+    paintLastRun(null);
     return "<p class='proj-note is-fail'>" + icon("alert", { size: 14 }) + "<span>Could not read this folder.</span></p>";
   }
 }
@@ -379,7 +359,7 @@ async function onPdkSelected() {
     else if (usual) sclSel.value = usual;
     state.selectedScl = sclSel.value || "";
     paintPdkAbout(sel.value);
-    paintProjectFacts();
+    import("./projectcard.js").then((m) => m.paintDesignRow()).catch(() => {});
     refreshPdkReadiness();
   } catch (ex) {
     paintPdkPill("error", "pill-fail");
@@ -539,8 +519,14 @@ export function collectRunPayload() {
   }
   if (state.selectedPdk) overrides.PDK = state.selectedPdk;
   if (state.selectedScl) overrides.STD_CELL_LIBRARY = state.selectedScl;
-  // Optional extras.
-  const sources = (state.selectedFiles || []).filter(Boolean);
+  // Sources: the config's VERILOG_FILES is the project's list. The ticks are
+  // sent as a per-run override only when they differ from it (a Tcl config,
+  // a config LanEx couldn't edit, or a run loaded from history).
+  const ticked = (state.selectedFiles || []).filter(Boolean);
+  const cfgSrc = state.configSources;
+  const sameAsConfig = Array.isArray(cfgSrc) && cfgSrc.length > 0 && ticked.length === cfgSrc.length &&
+    ticked.every((f) => cfgSrc.includes(f));
+  const sources = sameAsConfig ? [] : ticked;
   const extras = (state.extrasFiles || []).filter(Boolean);
   return {
     tag: tag || null,

@@ -154,16 +154,39 @@ async function renderRecents() {
   host.querySelector("#btn-manage-projects")?.addEventListener("click", () => manageProjects());
 }
 
-// The project list on the Setup page: every project LanEx knows about, newest
-// first, the open one marked. Clicking a row opens it.
+// Where a project lives, short: its parent folder's last two parts
+// ("lanex-projects\lanextest"), enough to tell same-named projects apart.
+// The full path is on hover.
+function whereShort(d) {
+  const full = displayPath(String(d).replace(/[\\/]+$/, ""));
+  const sep = full.includes("\\") ? "\\" : "/";
+  const parts = full.split(/[\\/]+/).filter(Boolean);
+  parts.pop();
+  return parts.slice(-2).join(sep) || full;
+}
+
+// The project list on the Setup page: every project LanEx knows about, the
+// open one marked. Clicking a row opens it.
 let _hubSeq = 0;
+// Rows keep the place they had when the page loaded: opening a project marks
+// it where it is instead of jumping it to the top (the top-bar menu is the
+// most-recent-first list). Projects seen for the first time go on top.
+let _hubOrder = [];
+function stableOrder(dirs) {
+  const known = _hubOrder.filter((d) => dirs.includes(d));
+  const fresh = dirs.filter((d) => !known.includes(d));
+  _hubOrder = fresh.concat(known);
+  return _hubOrder.slice();
+}
+
 export async function renderHubRows() {
   const host = document.getElementById("hub-rows");
   if (!host) return;
   const seq = ++_hubSeq;
   await defaults();
-  const dirs = await knownProjects();
+  const dirs = stableOrder(await knownProjects());
   if (seq !== _hubSeq) return;   // a newer render is on its way
+  const scroll = host.scrollTop;
   if (!dirs.length) {
     host.innerHTML = "<p class='hub-none'>No projects yet. New projects go in <code>" +
       fmt.escape(displayPath((_defaults && _defaults.projects_dir) || "")) + "</code>.</p>";
@@ -174,10 +197,10 @@ export async function renderHubRows() {
     return "<button class='hub-row" + (cur ? " is-current" : "") + "' data-dir='" + fmt.escape(d) + "'" +
       (cur ? " aria-current='true'" : "") + " title='" + fmt.escape(displayPath(d)) + "'>" +
       "<span class='via' aria-hidden='true'></span>" +
-      "<span class='hub-row-text'><b>" + fmt.escape(baseName(d)) + "</b><small>" + fmt.escape(displayPath(d)) + "</small></span>" +
-      (cur ? "<span class='hub-row-tag'>Open</span>" : "") +
+      "<span class='hub-row-text'><b>" + fmt.escape(baseName(d)) + "</b><small>" + fmt.escape(whereShort(d)) + "</small></span>" +
       "</button>";
   }).join("");
+  host.scrollTop = scroll;
 }
 
 function wireHub() {
@@ -217,7 +240,7 @@ export async function openFolder() {
   const { pickFolder } = await import("./fs.js");
   const d = await defaults();
   const dir = await pickFolder({ title: "Open a project folder", use: "Open this folder",
-    seed: state.designDir || (d && d.projects_dir) || "" });
+    seed: (d && d.projects_dir) || state.designDir || "" });
   if (dir) await switchProject(dir);
 }
 

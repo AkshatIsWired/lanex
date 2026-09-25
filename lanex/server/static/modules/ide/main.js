@@ -104,91 +104,108 @@ export async function initIde(opts = {}) {
 
 function byId(id, fn) { const el = document.getElementById(id); if (el) fn(el); }
 
-// Starter text for a new file. Design modules go in src/ (the config picks up
-// src/*.v); testbenches go in verify/ so they are simulated, never synthesized.
-function stub(kind, name) {
-  const L = (...lines) => lines.join("\n") + "\n";
-  if (kind === "tb") {
-    return L(
-      "`timescale 1ns/1ps",
-      "",
-      "module " + name + ";",
-      "  reg clk = 0;",
-      "  reg rst_n = 0;",
-      "  always #5 clk = ~clk;",
-      "",
-      "  // Instantiate your design here, for example:",
-      "  // my_design dut (.clk(clk), .rst_n(rst_n));",
-      "",
-      "  initial begin",
-      "    $dumpfile(\"" + name + ".vcd\");",
-      "    $dumpvars(0, " + name + ");",
-      "    #20 rst_n = 1;",
-      "    #1000 $finish;",
-      "  end",
-      "endmodule");
-  }
-  return L(
-    "module " + name + " (",
-    "    input  wire clk,",
-    "    input  wire rst_n",
-    ");",
-    "",
-    "  // Your logic here.",
-    "",
-    "endmodule");
-}
+// Every kind of file a LibreLane project uses. The server writes the starter
+// content (controller/projectfiles.py) and, for the kinds the flow reads
+// through a config variable, points the config at the new file.
+const KINDS = [
+  { group: "Design", items: [
+    { kind: "module_v", label: "Verilog module (.v)", ph: "alu", help: "Goes in src/ and into the chip. A new module joins the config's file list." },
+    { kind: "module_sv", label: "SystemVerilog module (.sv)", ph: "alu", help: "Goes in src/ and into the chip. LibreLane reads it as SystemVerilog." },
+  ] },
+  { group: "Simulation", items: [
+    { kind: "tb_v", label: "Verilog testbench (.v)", ph: "alu_tb", help: "Goes in verify/. Simulation only, never built into the chip." },
+    { kind: "tb_sv", label: "SystemVerilog testbench (.sv)", ph: "alu_tb", help: "Goes in verify/. Simulation only, never built into the chip." },
+  ] },
+  { group: "Constraints", items: [
+    { kind: "sdc", label: "Timing constraints (.sdc)", ph: "timing", use: true,
+      help: "Starts as LibreLane's own default constraints, so nothing changes until you edit it." },
+    { kind: "pins", label: "Pin order (.cfg)", ph: "pin_order", use: true,
+      help: "Lists every port of the top module on a chip edge: clock and reset at the bottom, inputs left, outputs right." },
+  ] },
+  { group: "Other", items: [
+    { kind: "header_vh", label: "Include file (.vh)", ph: "defs", help: "Shared `define macros, pulled in with `include. Not listed in the config." },
+    { kind: "header_svh", label: "SystemVerilog include (.svh)", ph: "defs", help: "Shared `define macros, pulled in with `include. Not listed in the config." },
+    { kind: "memory", label: "Memory contents (.hex)", ph: "rom", help: "Initial contents for a memory, loaded with $readmemh." },
+    { kind: "other", label: "Other text file", ph: "notes.md", help: "Any file LanEx can edit: .md, .txt, .tcl, .json, .yaml …" },
+  ] },
+];
+const ALL = KINDS.flatMap((g) => g.items);
+const LEGACY = { src: "module_v", tb: "tb_v" };
 
-// Create a design file or a testbench in the open project, then open it.
 export async function newFile(kind) {
   if (!state.designDir) { note("Open a project first (Setup tab).", true); return; }
+  kind = LEGACY[kind] || kind || "module_v";
+  if (!ALL.some((k) => k.kind === kind)) kind = "module_v";
   const { customDialog } = await import("../dialog.js");
   let picked = null;
+  const opts = KINDS.map((g) => "<optgroup label='" + g.group + "'>" +
+    g.items.map((k) => "<option value='" + k.kind + "'" + (k.kind === kind ? " selected" : "") + ">" + fmt.escape(k.label) + "</option>").join("") +
+    "</optgroup>").join("");
   const res = await customDialog({
     title: "New file",
     bodyHtml:
       "<div class='newfile'>" +
-      "<label class='wiz-field'><span>Kind</span><select id='nf-kind'>" +
-      "<option value='src'" + (kind !== "tb" ? " selected" : "") + ">Design module (src/, synthesized)</option>" +
-      "<option value='tb'" + (kind === "tb" ? " selected" : "") + ">Testbench (verify/, simulation only)</option>" +
-      "</select></label>" +
-      "<label class='wiz-field'><span>Module name</span><input id='nf-name' type='text' spellcheck='false' autocomplete='off' placeholder='e.g. alu'/>" +
-      "<span class='wiz-help'>The file is named after the module, for example <code>alu.v</code>.</span></label></div>",
+      "<label class='wiz-field'><span>Kind</span><select id='nf-kind'>" + opts + "</select>" +
+      "<span class='wiz-help' id='nf-help'></span></label>" +
+      "<label class='wiz-field'><span id='nf-name-label'>Name</span><input id='nf-name' type='text' spellcheck='false' autocomplete='off'/></label>" +
+      "<label class='nf-use' id='nf-use-row'><input type='checkbox' id='nf-use' checked/> <span id='nf-use-text'></span></label>" +
+      "</div>",
     buttons: [
       { label: "Cancel", value: null, cls: "btn-ghost" },
       { label: "Create", value: "ok", cls: "btn-primary" },
     ],
     onMount: (back) => {
+      const sel = back.querySelector("#nf-kind");
       const input = back.querySelector("#nf-name");
       const create = back.querySelector(".btn-primary");
+      const paint = () => {
+        const k = ALL.find((x) => x.kind === sel.value);
+        back.querySelector("#nf-help").textContent = k.help;
+        back.querySelector("#nf-name-label").textContent = /^(module|tb)/.test(k.kind) ? "Module name" : "File name";
+        if (!input.dataset.touched) input.value = k.ph;
+        back.querySelector("#nf-use-row").hidden = !k.use;
+        back.querySelector("#nf-use-text").textContent = k.kind === "sdc"
+          ? "Use it for this project's runs (sets PNR_SDC_FILE and SIGNOFF_SDC_FILE in the config)"
+          : "Use it for this project's runs (sets IO_PIN_ORDER_CFG in the config)";
+      };
+      sel.addEventListener("change", paint);
+      input.addEventListener("input", () => { input.dataset.touched = "1"; });
+      paint();
       // Read the fields before the dialog closes and removes them.
       create?.addEventListener("click", () => {
-        picked = { kind: back.querySelector("#nf-kind").value, name: (input?.value || "").trim() };
+        picked = { kind: sel.value, name: (input.value || "").trim(), use: back.querySelector("#nf-use").checked };
       }, true);
-      input?.addEventListener("keydown", (e) => {
+      input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") { e.preventDefault(); create?.click(); }
       });
-      setTimeout(() => input?.focus(), 0);
+      setTimeout(() => { input.focus(); input.select(); }, 0);
     },
   });
   if (res !== "ok" || !picked) return;
-  if (!picked.name) { note("Give the module a name.", true); return; }
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(picked.name)) {
-    note("Module names use letters, digits and _, and can't start with a digit.", true);
-    return;
+  if (!picked.name) { note("Give the file a name.", true); return; }
+  // SDC and pin files are written for the top module named in the config.
+  let top = null, clock = null;
+  if (picked.kind === "sdc" || picked.kind === "pins" || picked.kind.startsWith("tb")) {
+    try {
+      const info = await api.designInfo({ design_dir: state.designDir });
+      top = (info.values && info.values.DESIGN_NAME) || info.suggested_top || null;
+      const cp = info.values && info.values.CLOCK_PORT;
+      clock = Array.isArray(cp) ? cp[0] : cp || null;
+    } catch (_e) { /* the server says what's missing */ }
   }
-  const rel = (picked.kind === "tb" ? "verify/" : "src/") + picked.name + ".v";
-  if ((state.files || []).some((f) => f.relpath === rel)) { note(rel + " already exists.", true); return; }
   try {
-    const r = await api.fileWrite(rel, stub(picked.kind, picked.name));
-    if (!r.ok) throw new Error(r.error || "write refused");
+    const r = await api.newProjectFile({ design_dir: state.designDir, kind: picked.kind, name: picked.name,
+      top, clock, use: picked.use });
     await loadTree();
     await loadTestbenches();
-    await openFile(state.designDir.replace(/\/+$/, "") + "/" + rel, rel);
-    note("Created " + rel);
+    await openFile(r.abs, r.rel);
+    const cfg = r.config && r.config.changed && r.config.changed.length
+      ? " and updated " + r.config.name + " (" + r.config.changed.join(", ") + ")" : "";
+    note(r.config_error ? "Created " + r.rel + ", but the config wasn't updated: " + r.config_error
+      : "Created " + r.rel + cfg + ".", !!r.config_error);
     document.dispatchEvent(new CustomEvent("g:sources_changed"));
   } catch (ex) {
-    note("Could not create " + rel + ": " + (ex.message || ex), true);
+    note("Could not create the file: " + (ex.message || ex), true);
   }
 }
 
@@ -210,8 +227,10 @@ async function loadTree() {
   if (!tree) return;
   if (!state.designDir) { tree.innerHTML = "<p class='muted'>No design loaded. Open one in Setup first.</p>"; return; }
   let res;
-  try { res = await api.walkSources(state.designDir); } catch (_e) { return; }
-  state.files = (res.sources || []).concat(res.memories || []);
+  // Every project file (RTL, testbenches, SDC, pin order, config, notes …),
+  // not just Verilog: the IDE is where all of them are written.
+  try { res = await api.projectFiles(state.designDir); } catch (_e) { return; }
+  state.files = (res.files || []).map((f) => ({ relpath: f.rel, abspath: f.abs, role: f.role }));
   tree.innerHTML = state.files.map((f) =>
     "<div class='ide-file-row'>" +
     "<button class='ide-file' data-abs='" + fmt.escape(f.abspath) + "' data-rel='" +
@@ -269,6 +288,8 @@ async function saveFile() {
     const r = await api.fileWrite(ed.relPath, ed.getValue());
     if (!r.ok) throw new Error(r.error || "write refused");
     note("Saved " + ed.relPath + " (" + r.bytes + " bytes)");
+    // The Setup page reads the config and the file list; let it catch up.
+    document.dispatchEvent(new CustomEvent("g:sources_changed"));
   } catch (ex) {
     note("Save failed: " + (ex.message || ex), true);
   }
