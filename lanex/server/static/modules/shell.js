@@ -294,6 +294,7 @@ async function manageProjects() {
       "Removing a project from this list leaves its folder alone; only projects in that folder can be deleted here.</p>" +
       "<div class='pm-list'></div>",
     onMount: (back, close) => {
+      back.querySelector(".dlg")?.classList.add("dlg-pm");
       render(back);
       back.querySelector(".pm-list").addEventListener("click", async (e) => {
         const b = e.target.closest("[data-act]");

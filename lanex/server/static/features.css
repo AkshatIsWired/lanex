@@ -153,7 +153,9 @@
    "text cut, can't scroll" bug). Flex column: the BODY scrolls, so the head
    and the Close button stay reachable however long the content is; height is
    content-driven up to .dlg's 90vh cap. */
-.dlg-xl { width: min(980px, calc(96vw / var(--ll-zoom, 1)));
+/* .dlg.dlg-xl: .dlg (declared later in this file) used to win on width, so
+   the wide variant silently stayed 480px. */
+.dlg.dlg-xl { width: min(980px, calc(96vw / var(--ll-zoom, 1)));
   display: flex; flex-direction: column; }
 .dlg-xl .dlg-body { overflow: auto; flex: 1 1 auto; min-height: 0; }
 .dlg-xl .dlg-head, .dlg-xl .dlg-actions { flex: none; }

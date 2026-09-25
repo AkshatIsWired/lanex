@@ -502,17 +502,20 @@ body:not(.theme-light) .pf-banner-bad { color: var(--met4); }
 .newfile { display: flex; flex-direction: column; gap: 14px; min-width: min(460px, 78vw); }
 
 /* ------------------------------------------------------------ Projects list */
+.dlg.dlg-xl.dlg-pm { width: min(720px, calc(96vw / var(--ll-zoom, 1))); }
 .pm-note { margin-top: 0; font-size: 14px; }
-.pm-list { display: flex; flex-direction: column; max-height: calc(60vh / var(--ll-zoom, 1)); overflow-y: auto; }
-.pm-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 11px 4px; border-bottom: 1px solid var(--border); }
+.pm-list { display: flex; flex-direction: column; max-height: calc(60vh / var(--ll-zoom, 1)); overflow-y: auto; overflow-x: hidden; }
+/* Name and path on top, the actions underneath: fits any dialog width, no
+   sideways scrolling however long the path. */
+.pm-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px 14px; padding: 12px 4px; border-bottom: 1px solid var(--border); }
+.pm-row .via { margin-top: 6px; }
 .pm-row .via { width: 8px; height: 8px; border: 1.5px solid var(--text-disabled); }
 .pm-row.is-current .via { background: var(--met1); border-color: var(--met1); box-shadow: 0 0 8px var(--accent-glow); }
 .pm-text { min-width: 0; }
 .pm-text b { display: block; font-weight: 600; color: var(--text-strong); }
 .pm-text em { font-style: normal; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--met1); margin-left: 8px; }
 .pm-text small { display: block; font-family: var(--mono); font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
-.pm-list { min-width: min(720px, calc(80vw / var(--ll-zoom, 1))); }
-.pm-acts { display: flex; gap: 6px; }
+.pm-acts { grid-column: 2; display: flex; flex-wrap: wrap; gap: 6px; }
 .pm-danger { color: var(--fail); }
 .pm-danger:hover { border-color: var(--fail); color: var(--fail); }
 .project-more { font-size: 14px; color: var(--text-muted); }
