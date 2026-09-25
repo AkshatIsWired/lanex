@@ -34,7 +34,7 @@ export function configChipSpec(entry, rel) {
   const title =
     (scoped
       ? "Set in " + rel + " line " + entry.line + " inside a " + (entry.scope || "scoped") +
-        " section. Applies only when the run's PDK/SCL matches that section."
+        " section, so it applies only when the run's PDK/SCL matches that section."
       : "Set in " + rel + " line " + entry.line +
         "; used when no override is present (an override supersedes it).") +
     (entry.others ? " The file has " + entry.others + " more entr" +

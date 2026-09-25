@@ -396,7 +396,7 @@ async function showOverrideTrail(varName, value) {
   } else if (inp && inp.rel) {
     cfgHtml =
       "<p><b>" + fmt.escape(inp.rel) + "</b> does <b>not</b> set <code>" + fmt.escape(varName) +
-      "</code>. Nothing is inserted into your file. The override passes as a runtime argument; " +
+      "</code>, and nothing is inserted into your file. The override passes as a runtime argument; " +
       "without it, the flow uses the PDK and flow defaults.</p>";
   } else {
     cfgHtml = "<p class='muted'>" +
