@@ -149,10 +149,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # IPv6 literals need brackets in a URL (http://[::1]:8765/).
     host_disp = f"[{args.host}]" if ":" in args.host else args.host
     url = f"http://{host_disp}:{port}/"
-    # The browser opens on the landing home screen; the printed URL stays the
-    # cockpit root. The landing page honours the user's "skip this screen"
-    # choice client-side and forwards to "/" instantly when set.
-    home_url = url + "landing"
+    # The window opens straight on the cockpit, the same page the Windows
+    # launcher opens. /landing is still served for anyone who links to it.
+    home_url = url
     _print_url(url)
     if args.design_dir:
         # Register the initial design directory directly with the server so the

@@ -192,16 +192,30 @@ func openAppWindow(port int) error {
 		// cockpit is a dense multi-pane IDE, so it opens maximized — a re-open
 		// from the tray must not land in a small window when a normal start
 		// would be maximized.
+		// Edge/Chrome ignore this for --app windows once the profile has a saved
+		// placement, so maximizeNewAppWindow enforces it after the window shows.
 		"--start-maximized",
 		"--window-size=1440,900",
+		// A fresh dedicated profile must not open the browser's first-run
+		// welcome page or default-browser prompt next to the LanEx window
+		// (the WSL-side launch has always passed these, appwindow.build_app_argv).
+		"--no-first-run",
+		"--no-default-browser-check",
 	}
+	before := chromiumWindows()
+	var err error
 	if exe := chromiumPath(); exe != "" {
-		return hiddenCmd(exe, args...).Start()
+		err = hiddenCmd(exe, args...).Start()
+	} else {
+		// Nothing found on disk (unusual — Edge ships with Windows): let the shell
+		// resolve msedge through the App Paths registry key. The empty "" argument is
+		// start's title parameter; without it start would eat the first quoted arg.
+		err = hiddenCmd("cmd.exe", append([]string{"/c", "start", "", "msedge"}, args...)...).Start()
 	}
-	// Nothing found on disk (unusual — Edge ships with Windows): let the shell
-	// resolve msedge through the App Paths registry key. The empty "" argument is
-	// start's title parameter; without it start would eat the first quoted arg.
-	return hiddenCmd("cmd.exe", append([]string{"/c", "start", "", "msedge"}, args...)...).Start()
+	if err == nil {
+		go maximizeNewAppWindow(before, port)
+	}
+	return err
 }
 
 // appProfileDir mirrors appwindow.py:250,279 exactly — including the lowercase
