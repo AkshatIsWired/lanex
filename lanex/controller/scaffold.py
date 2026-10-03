@@ -122,14 +122,28 @@ def _rename_starter(dest: Path, old: str, new: str, written: List[str]) -> None:
     written[:] = [rel_new if w == rel_old else w for w in written]
 
 
+def _to_sv(dest: Path, top: str, written: List[str]) -> None:
+    """A blank SystemVerilog project: the starter module (plain Verilog is
+    valid SystemVerilog) moves to src/<top>.sv, and its note says *.sv."""
+    src = dest / "src" / (top + ".v")
+    if not src.is_file():
+        return
+    text = src.read_text(encoding="utf-8").replace("src/*.v", "src/*.sv").replace("any *.v", "any *.sv")
+    (dest / "src" / (top + ".sv")).write_text(text, encoding="utf-8")
+    src.unlink()
+    rel_old, rel_new = str(Path("src") / (top + ".v")), str(Path("src") / (top + ".sv"))
+    written[:] = [rel_new if w == rel_old else w for w in written]
+
+
 def _render_config(
-    *, top: str, pdk: str, scl: Optional[str], clock_port: str, clock_period: Optional[float]
+    *, top: str, pdk: str, scl: Optional[str], clock_port: str, clock_period: Optional[float],
+    sources: str = "dir::src/*.v",
 ) -> Dict[str, Any]:
     cfg: Dict[str, Any] = {
         "DESIGN_NAME": top,
         # `dir::` resolves relative to the config file's directory, so any *.v
-        # the user drops into src/ is picked up automatically.
-        "VERILOG_FILES": ["dir::src/*.v"],
+        # (or *.sv) the user drops into src/ is picked up automatically.
+        "VERILOG_FILES": [sources],
         "CLOCK_PORT": clock_port,
     }
     if clock_period is not None:
@@ -149,8 +163,13 @@ def create_project(
     pdk: str,
     scl: Optional[str] = None,
     clock_period: Optional[float] = None,
+    language: str = "verilog",
 ) -> Dict[str, Any]:
     """Copy *template* into *dest_dir* and render its ``config.json``.
+
+    *language* ("verilog" or "systemverilog") only changes a blank project:
+    its starter module becomes ``src/<top>.sv`` and the config builds
+    ``src/*.sv``. Examples keep the language they're written in.
 
     Refuses to write into a non-empty existing directory (never clobbers user
     work). All writes are confined to *dest_dir*. Returns
@@ -214,10 +233,20 @@ def create_project(
     elif manifest.get("kind") != "blank":
         # An example's top module is fixed by its Verilog.
         top = tpl_top
+    sv = manifest.get("kind") == "blank" and language == "systemverilog"
+    if sv:
+        _to_sv(dest, top, written)
     clock_port = manifest.get("clock_port") or "clk"
     if clock_period is None:
         clock_period = manifest.get("clock_period")
-    cfg = _render_config(top=top, pdk=pdk, scl=scl, clock_port=clock_port, clock_period=clock_period)
+    cfg = _render_config(top=top, pdk=pdk, scl=scl, clock_port=clock_port, clock_period=clock_period,
+                         sources="dir::src/*.sv" if sv else "dir::src/*.v")
+    # A template may add settings its design needs, such as a fixed die for a
+    # design too small for a utilization-sized one (placement can't legalize
+    # the clock buffers on a die a few dozen microns across).
+    extra = manifest.get("config")
+    if isinstance(extra, dict):
+        cfg.update({k: v for k, v in extra.items() if isinstance(k, str) and k not in cfg})
     (dest / "config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
     written.append("config.json")
 

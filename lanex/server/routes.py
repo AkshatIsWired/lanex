@@ -22,6 +22,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -883,15 +884,27 @@ def h_preflight(handler: Any) -> None:
     # would stop on them). Otherwise fall back to the folder count, since the
     # run then sends the ticked files itself.
     missing_sources: List[str] = []
+    top_empty = None
     if design_ok and config_file:
         try:
-            from ..controller import configedit
+            from ..controller import configedit, projectfiles
             info = configedit.read_config(design_dir)
             res = configedit.resolve_sources(design_dir, info["data"]) if info["editable"] else None
             if res and res["mode"] == "list":
                 present = [f for f in res["files"] if Path(f).is_file()]
                 missing_sources = [f for f in res["files"] if not Path(f).is_file()]
                 source_count = len(present)
+            # A top module with ports but no logic (a fresh starter module)
+            # synthesizes to nothing and the run stops at placement. Say so
+            # before the run, as a heads-up rather than a blocker.
+            top = info["data"].get("DESIGN_NAME")
+            if isinstance(top, str) and top and not missing_sources:
+                files = present if res and res["mode"] == "list" else None
+                f = projectfiles.find_module_file(design_dir, top, files)
+                if f is not None and projectfiles.module_is_empty(
+                        f.read_text(encoding="utf-8", errors="replace"), top):
+                    top_empty = {"module": top, "rel": Path(f).resolve().relative_to(
+                        Path(design_dir).resolve()).as_posix()}
         except Exception:
             pass
     if not design_ok:
@@ -911,6 +924,7 @@ def h_preflight(handler: Any) -> None:
         "config_file": config_file,
         "config_note": config_note,
         "source_count": source_count,
+        "top_empty": top_empty,
     }
 
     # 2) PDK readiness (mode-aware: container needs the exact pinned version in
@@ -2561,7 +2575,9 @@ def h_project_new(handler: Any) -> None:
     except (TypeError, ValueError):
         cp = None
     try:
-        result = scaffold.create_project(dest, template, top=top or template, pdk=pdk, scl=scl, clock_period=cp)
+        language = "systemverilog" if body.get("language") == "systemverilog" else "verilog"
+        result = scaffold.create_project(dest, template, top=top or template, pdk=pdk, scl=scl, clock_period=cp,
+                                         language=language)
     except Exception as ex:
         _log.exception("create_project failed")
         _respond(handler, str(ex), 500)
@@ -3471,7 +3487,14 @@ def h_design_info(handler: Any) -> None:
         top = body.get("top") or data.get("DESIGN_NAME") or scan.get("top")
         ports = projectfiles.find_module_ports(d, top, files or None) if isinstance(top, str) and top else []
         scoped = {k: configedit.scoped_values(data, k) for k in ("DESIGN_NAME", "CLOCK_PORT", "CLOCK_PERIOD")}
+        # The Setup page's Settings card asks for a few more keys: their
+        # top-level values as the config writes them, and any pdk::/scl::
+        # section that sets them too.
+        keys = [k for k in (body.get("keys") or []) if isinstance(k, str) and re.match(r"^[A-Z][A-Z0-9_]*$", k)]
+        settings_scoped = {k: configedit.scoped_values(data, k) for k in keys}
         _respond(handler, {
+            "settings": {k: data.get(k) for k in keys},
+            "settings_scoped": _scoped_report({k: v for k, v in settings_scoped.items() if v}, pdk, scl),
             "config": {k: info[k] for k in ("name", "format", "editable", "reason")},
             "values": {k: data.get(k) for k in ("DESIGN_NAME", "CLOCK_PORT", "CLOCK_PERIOD")},
             "scoped": _scoped_report({k: v for k, v in scoped.items() if v}, pdk, scl),

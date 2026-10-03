@@ -1,7 +1,7 @@
 {
   "name": "empty",
   "title": "Blank project",
-  "description": "One empty top module and a starter config. Write your own Verilog in the RTL IDE.",
+  "description": "A small starter module and its config. Write your own design in the RTL IDE.",
   "top": "top",
   "clock_port": "clk",
   "clock_period": 10.0,
@@ -9,5 +9,9 @@
     "src/top.v"
   ],
   "testbench": null,
-  "kind": "blank"
+  "kind": "blank",
+  "config": {
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [0, 0, 150, 150]
+  }
 }

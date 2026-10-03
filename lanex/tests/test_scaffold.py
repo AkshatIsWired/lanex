@@ -36,6 +36,43 @@ def test_blank_project_renames_its_starter_module(tmp_path: Path):
     assert json.loads((dest / "config.json").read_text())["DESIGN_NAME"] == "alu"
 
 
+def test_blank_systemverilog_project(tmp_path: Path):
+    dest = tmp_path / "svchip"
+    res = scaffold.create_project(str(dest), "empty", top="alu", pdk="sky130A", language="systemverilog")
+    assert res["ok"] is True
+    assert (dest / "src" / "alu.sv").is_file() and not (dest / "src" / "alu.v").exists()
+    assert "module alu" in (dest / "src" / "alu.sv").read_text()
+    assert json.loads((dest / "config.json").read_text())["VERILOG_FILES"] == ["dir::src/*.sv"]
+
+
+def test_blank_project_starts_with_a_fixed_die(tmp_path: Path):
+    # A handful of cells on a utilization-sized die (~33x44 um) fails detailed
+    # placement after CTS (DPL-0036); the starter gets room to place and route.
+    dest = tmp_path / "b"
+    scaffold.create_project(str(dest), "empty", top="top", pdk="sky130A")
+    cfg = json.loads((dest / "config.json").read_text())
+    assert cfg["FP_SIZING"] == "absolute" and cfg["DIE_AREA"] == [0, 0, 150, 150]
+    assert cfg["DESIGN_NAME"] == "top"
+
+
+def test_template_config_keys_are_real_variables():
+    from lanex.controller import introspect
+    known = {v["name"] for v in introspect.list_variables()}
+    if not known:
+        pytest.skip("librelane not importable in this environment")
+    for tdir in scaffold._templates_root().iterdir():
+        doc = scaffold._read_manifest(tdir) if tdir.is_dir() else None
+        for key in ((doc or {}).get("config") or {}):
+            assert key in known, f"{tdir.name}: {key} is not a real LibreLane variable"
+
+
+def test_language_leaves_examples_alone(tmp_path: Path):
+    dest = tmp_path / "ex"
+    scaffold.create_project(str(dest), "blinky", top="", pdk="sky130A", language="systemverilog")
+    assert (dest / "src" / "blinky.v").is_file()
+    assert json.loads((dest / "config.json").read_text())["VERILOG_FILES"] == ["dir::src/*.v"]
+
+
 def test_example_keeps_its_own_top_module(tmp_path: Path):
     # An example's top is fixed by its Verilog; a different name would point
     # DESIGN_NAME at a module that doesn't exist.

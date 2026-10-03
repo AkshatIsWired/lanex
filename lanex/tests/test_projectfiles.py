@@ -182,3 +182,77 @@ def test_tcl_config_file_still_created_with_config_error(design):
     (design / "config.tcl").write_text("set ::env(DESIGN_NAME) alu\n")
     res = projectfiles.new_file(design, "sdc", "impl", top="alu")
     assert res["ok"] and res["config_error"] and "Tcl" in res["config_error"]
+
+
+# ------------------------------------------------- design-stage helpers
+
+def test_ports_carry_their_width_and_sign():
+    got = {p["name"]: p for p in projectfiles.module_ports(ANSI, "alu")}
+    assert got["a"]["range"] == got["b"]["range"] == "[W-1:0]"
+    assert got["op"]["range"] == "[3:0]" and got["op"]["signed"]
+    assert got["clk"]["range"] == "" and not got["clk"]["signed"]
+    classic = {p["name"]: p for p in projectfiles.module_ports(CLASSIC, "spm")}
+    assert classic["a"]["range"] == "[bits-1:0]" and classic["x"]["range"] == ""
+
+
+def test_module_params_from_header_and_body():
+    assert projectfiles.module_params(ANSI, "alu") == [("W", "(8)"), ("N", "2")]
+    assert projectfiles.module_params(CLASSIC, "spm") == [("bits", "32")]
+    assert projectfiles.module_params(ANSI, "nope") == []
+
+
+def test_testbench_drives_every_port_of_the_top():
+    ports = projectfiles.module_ports(ANSI, "alu")
+    tb = projectfiles.testbench_template("alu_tb", True, "alu", ports, "clk", 25.0,
+                                         projectfiles.module_params(ANSI, "alu"))
+    assert "localparam W = (8);" in tb
+    assert "alu dut (" in tb
+    for p in ports:
+        assert re.search(r"\.%s\s*\(%s\)" % (p["name"], p["name"]), tb), p["name"]
+    assert "always #12.5 clk = ~clk;" in tb           # half of CLOCK_PERIOD 25
+    assert "rst_n = 0;" in tb and "rst_n = 1;" in tb   # active-low reset released
+    assert '$dumpfile("alu_tb.vcd")' in tb and "$finish;" in tb
+    # Start values go in the initial block, not on the declarations
+    # (Verilator's PROCASSINIT), and every output is used (UNUSEDSIGNAL).
+    assert not re.search(r"^\s*logic[^;=]*\bclk\s*=", tb, re.M)
+    assert "$display(" in tb and "zero = %h" in tb
+
+
+def test_new_testbench_instantiates_the_top(design):
+    res = projectfiles.new_file(design, "tb_v", "alu_tb2", top="alu", clock="clk")
+    text = (design / "verify" / "alu_tb2.v").read_text()
+    assert res["ok"] and "alu dut (" in text and "always #5 clk" in text   # CLOCK_PERIOD 10
+
+
+def test_new_testbench_without_a_known_top_is_a_skeleton(design):
+    res = projectfiles.new_file(design, "tb_v", "lone_tb", top="nope")
+    assert res["ok"] and "Instantiate your design here" in (design / "verify" / "lone_tb.v").read_text()
+
+
+@pytest.mark.parametrize("src,empty", [
+    ("module top(input clk, input rst_n);\n  // Your logic here.\nendmodule\n", True),
+    ("module top(input a, output y); assign y = ~a; endmodule", False),
+    ("module top(input a, output y); wire t = ~a; endmodule", False),
+    ("module top(input a); localparam W = 3; endmodule", True),
+    ("module top; sub u0(); endmodule", False),
+    ("module top #(parameter W=8)(a, b); input [W-1:0] a; output b; assign b = ^a; endmodule", False),
+])
+def test_module_is_empty(src, empty):
+    assert projectfiles.module_is_empty(src, "top") is empty
+
+
+def test_module_is_empty_unknown_module():
+    assert projectfiles.module_is_empty("module foo; endmodule", "top") is None
+
+
+def test_setup_settings_card_keys_are_real_variables():
+    """The Setup page's Settings card writes these keys into the project's
+    config; every one must be a LibreLane variable."""
+    from lanex.controller import introspect
+    known = {v["name"] for v in introspect.list_variables()}
+    if not known:
+        pytest.skip("librelane not importable in this environment")
+    js = (Path(projectfiles.__file__).parents[1] / "server" / "static" / "modules" / "mostused.js").read_text()
+    keys = re.findall(r'key: "([A-Z0-9_]+)"', js)
+    assert len(keys) >= 10
+    assert [k for k in keys if k not in known] == []

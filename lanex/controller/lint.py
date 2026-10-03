@@ -110,7 +110,10 @@ def build_lint_command(
     ``cwd=design_dir``); container mode mounts the design dir at ``/work`` and
     runs the image's verilator. Pure / no system probing. All source paths are
     relative to the design dir (the cwd / mount), so they're portable."""
-    flags: List[str] = ["verilator", "--lint-only", "-Wall", "-Wno-fatal"]
+    # --timescale: the default for files without a `timescale, which is what
+    # the simulators assume too. Without it a testbench that has one and a
+    # design file that doesn't (the usual case) raise TIMESCALEMOD.
+    flags: List[str] = ["verilator", "--lint-only", "-Wall", "-Wno-fatal", "--timescale", "1ns/1ps"]
     if top:
         flags += ["--top-module", str(top)]
     for inc in (include_dirs or []):
