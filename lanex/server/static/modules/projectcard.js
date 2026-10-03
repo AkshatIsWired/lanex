@@ -50,7 +50,7 @@ function overrideNotes() {
   const v = state.varsValues || {};
   const out = [];
   if (v.CLOCK_PERIOD !== undefined && v.CLOCK_PERIOD !== null && String(v.CLOCK_PERIOD).trim() !== "") {
-    out.push("Constraints overrides the clock period for runs from LanEx: <b>" + fmt.escape(v.CLOCK_PERIOD) + " ns</b>.");
+    out.push("All settings overrides the clock period for runs from LanEx: <b>" + fmt.escape(v.CLOCK_PERIOD) + " ns</b>.");
   }
   return out;
 }
@@ -58,6 +58,8 @@ function overrideNotes() {
 export async function paintDesignRow() {
   const box = $("proj-design");
   if (!box) return;
+  // The Settings card reads the same config; keep it in step.
+  import("./mostused.js").then((m) => m.paintSettings()).catch(() => {});
   if (!state.designDir) { _info = null; return; }
   const seq = ++_seq;
   let info;

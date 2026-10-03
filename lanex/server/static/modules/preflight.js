@@ -73,16 +73,23 @@ export async function renderPreflight() {
   const cfgNote = d.config_note
     ? " · <span class='pf-note-warn'>" + fmt.escape(d.config_note) + "</span>"
     : "";
+  // A starter top module with no logic in it yet: the run would stop at
+  // placement with nothing to place. A heads-up, not a blocker.
+  const empty = d.ok && d.top_empty;
   html += row(
-    d.ok ? "ok" : "bad",
+    !d.ok ? "bad" : empty ? "warn" : "ok",
     "Design + config",
-    d.ok
+    empty
+      ? "<code>" + fmt.escape(empty.module) + "</code> has no logic yet, so there's nothing to place. Write it in " +
+        fmt.escape(empty.rel) + " first." + cfgNote
+      : d.ok
       ? (d.config_file || "config") + " · " + plural(d.source_count || 0, "source file") + cfgNote
       : !d.dir ? "No project open."
         : !d.config_file ? "No config file in the project."
         : (d.missing_sources || []).length ? "The config lists files that don't exist: " + fmt.escape(d.missing_sources.join(", "))
         : "No Verilog files to build.",
-    d.ok ? "" : !d.dir ? "<button class='btn btn-sm pf-act' data-act='design'>Open a project</button>"
+    empty ? "<button class='btn btn-sm pf-act' data-act='edit' data-rel='" + fmt.escape(empty.rel) + "'>Open in RTL IDE</button>"
+      : d.ok ? "" : !d.dir ? "<button class='btn btn-sm pf-act' data-act='design'>Open a project</button>"
       : d.config_file && !(d.missing_sources || []).length ? "<button class='btn btn-sm pf-act' data-act='new-file'>New file</button>"
       : "<button class='btn btn-sm pf-act' data-act='sources'>Open Sources</button>",
   );
@@ -128,7 +135,8 @@ export async function renderPreflight() {
     );
   }
 
-  if (pf.ready) verdict("All set", "ok");
+  if (pf.ready && empty) verdict("1 heads-up", "bad");
+  else if (pf.ready) verdict("All set", "ok");
   else verdict(pf.blockers.length + (pf.blockers.length === 1 ? " thing" : " things") + " to fix", "bad");
 
   root.innerHTML = "<div class='pf-nodes'>" + html + "</div>";
@@ -145,6 +153,12 @@ export async function renderPreflight() {
         document.getElementById("setup-design")?.scrollIntoView({ behavior: "smooth", block: "start" });
       } else if (act === "sources") {
         document.getElementById("setup-sources")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (act === "edit") {
+        document.querySelector('.side-tab[data-tab="ide"]')?.click();
+        import("./ide/main.js").then(async (m) => {
+          await m.initIde({ designDir: state.designDir, runMode: state.runMode });
+          await m.openInIde({ rel: b.dataset.rel });
+        }).catch(() => {});
       } else if (act === "new-file") {
         document.querySelector('.side-tab[data-tab="ide"]')?.click();
         import("./ide/main.js").then(async (m) => {

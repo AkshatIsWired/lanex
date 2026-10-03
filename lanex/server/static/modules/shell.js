@@ -187,6 +187,8 @@ export async function renderHubRows() {
   const dirs = stableOrder(await knownProjects());
   if (seq !== _hubSeq) return;   // a newer render is on its way
   const scroll = host.scrollTop;
+  // First run, nothing anywhere yet: the start tiles get the whole card.
+  document.getElementById("setup-design")?.classList.toggle("no-projects", !dirs.length);
   if (!dirs.length) {
     host.innerHTML = "<p class='hub-none'>No projects yet. New projects go in <code>" +
       fmt.escape(displayPath((_defaults && _defaults.projects_dir) || "")) + "</code>.</p>";

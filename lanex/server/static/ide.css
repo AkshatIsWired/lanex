@@ -1,29 +1,139 @@
-/* ide.css — the RTL IDE (/ide) layout. Token-only, reuses styles.css :root. */
+/* ide.css — the RTL IDE, embedded as a cockpit tab and as the /ide pop-out.
+   Explorer on the left; open-file tabs, the editor and a full-width bottom
+   panel (Problems · Simulation · Waveform) on the right. Token-only. */
 .ide-body { margin: 0; height: calc(100vh / var(--ll-zoom, 1)); display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
-.ide-topbar { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-4); border-bottom: 1px solid var(--border); background: var(--surface); }
+.ide-body > .ide-embed { flex: 1; height: auto; border: 0; border-radius: 0; }
+.ide-embed [hidden] { display: none !important; }
+.ide-topbar { display: flex; align-items: center; gap: var(--s-3); padding: 8px var(--s-4); min-height: 48px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.ide-topbar strong { font-size: 15px; color: var(--text-strong); }
+.ide-design { font-family: var(--mono); font-size: 12.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ide-spacer { flex: 1; }
-.ide-note { color: var(--text-muted); font-size: var(--t-sm); }
+.ide-note { color: var(--text-muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 52ch; }
 .ide-note-bad { color: var(--fail); }
 
-/* Single row pinned to the container height (minmax(0,1fr)) so a long file
-   scrolls *inside* the editor instead of growing the row past .ide-embed
-   (which is overflow:hidden) and getting clipped — the "can't scroll down" bug. */
-.ide-grid { flex: 1; display: grid; grid-template-columns: 240px 1fr 360px;
-  grid-template-rows: minmax(0, 1fr); min-height: 0; }
-.ide-side { border-right: 1px solid var(--border); padding: var(--s-3); overflow: auto; min-height: 0; }
-.ide-tree { display: flex; flex-direction: column; gap: 2px; }
-.ide-file-row { display: flex; align-items: center; gap: 2px; }
-.ide-file { flex: 1; text-align: left; background: transparent; color: var(--text); border: 0; border-radius: var(--r-sm); padding: var(--s-1) var(--s-2); cursor: pointer; font-family: var(--mono); font-size: var(--t-xs); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.ide-file:hover { background: var(--hover); }
-.ide-file-del { flex: 0 0 auto; background: transparent; color: var(--text-muted); border: 0; border-radius: var(--r-sm); padding: 0 var(--s-1); cursor: pointer; font-size: var(--t-xs); opacity: 0; }
-.ide-file-row:hover .ide-file-del { opacity: 1; }
-.ide-file-del:hover { color: var(--fail, #e5484d); background: var(--hover); }
-.ide-sim-actions { display: flex; gap: var(--s-2); align-items: center; }
-.ide-sim-actions .btn { flex: 1; }
+/* One row pinned to the container height (minmax(0,1fr)) so a long file
+   scrolls inside the editor instead of growing the page. */
+.ide-grid { flex: 1; display: grid; grid-template-columns: 248px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-height: 0; }
 
-.ide-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--border); }
-.ide-toolbar { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--border); }
-.ide-editor { flex: 1; min-height: 0; display: flex; }
+/* ---------- explorer ---------- */
+.ide-side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 70%, var(--bg)); }
+.ide-side-head { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--border); }
+.ide-side-title { flex: 1; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+.ide-side-head .iconbtn { background: transparent; border-color: transparent; height: 28px; }
+.ide-side-head .iconbtn:hover { border-color: var(--border); }
+.ide-tree { flex: 1; overflow: auto; padding: 6px 6px 12px; display: flex; flex-direction: column; }
+.ide-tree > .muted { padding: 8px; font-size: 13px; }
+.ide-group { display: flex; align-items: center; gap: 6px; padding: 12px 8px 4px; }
+.ide-group:first-child { padding-top: 4px; }
+.ide-group-name { flex: 1; font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--met1); }
+body.theme-light .ide-group-name { color: var(--accent); }
+.ide-group-add { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: var(--r-sm); background: none; color: var(--text-muted); cursor: pointer; }
+.ide-group-add:hover { border-color: var(--border); color: var(--text-strong); }
+.ide-group-empty { margin: 0; padding: 2px 8px 4px 10px; font-size: 12.5px; line-height: 1.45; color: var(--text-muted); }
+.ide-group-empty .linklike { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; font-size: 12.5px; color: var(--accent); }
+body:not(.theme-light) .ide-group-empty .linklike { color: var(--met1); }
+.ide-group-empty .linklike:hover { text-decoration: underline; text-underline-offset: 3px; }
+.ide-file-row { display: flex; align-items: center; gap: 2px; border-radius: var(--r-sm); }
+.ide-file-row:hover { background: var(--hover); }
+.ide-file-row.is-active { background: var(--accent-soft); }
+.ide-file { flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0; text-align: left; background: transparent; color: var(--text); border: 0; padding: 5px 6px 5px 10px; cursor: pointer; font-family: var(--mono); font-size: 12.5px; }
+.ide-file .fn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ide-file .dir { color: var(--text-muted); }
+.ide-file-row.is-active .ide-file { color: var(--text-strong); }
+.ide-file-row.is-out .ide-file .fn { color: var(--text-muted); }
+.ide-file .tag { flex: 0 0 auto; font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; padding: 1px 5px; border-radius: var(--r-sm); border: 1px solid var(--border-strong); color: var(--text-muted); }
+.ide-file .tag.is-top { border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--met1); background: var(--accent-soft); }
+body.theme-light .ide-file .tag.is-top { color: var(--accent); }
+.ide-file-del { flex: 0 0 auto; background: transparent; color: var(--text-muted); border: 0; border-radius: var(--r-sm); padding: 4px; cursor: pointer; opacity: 0; display: inline-flex; }
+.ide-file-row:hover .ide-file-del, .ide-file-del:focus-visible { opacity: 1; }
+.ide-file-del:hover { color: var(--fail); }
+
+/* ---------- editor column ---------- */
+.ide-center { display: flex; flex-direction: column; min-width: 0; min-height: 0; --ide-panel-h: 36%; }
+.ide-tabs { display: flex; align-items: stretch; min-height: 38px; overflow-x: auto; scrollbar-width: thin; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 70%, var(--bg)); }
+.ide-tabs:empty { display: none; }
+.ide-tab { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 0 6px 0 14px; max-width: 240px; border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--text-muted); font-family: var(--mono); font-size: 12.5px; cursor: pointer; }
+.ide-tab:hover { color: var(--text); background: var(--hover); }
+.ide-tab.is-on { color: var(--text-strong); background: var(--bg); }
+.ide-tab.is-on::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--met1); }
+.ide-tab .fn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ide-tab .x { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--r-sm); color: var(--text-muted); }
+.ide-tab .x:hover { background: var(--surface-3); color: var(--text-strong); }
+.ide-tab.is-dirty .x::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+.ide-tab.is-dirty .x svg { display: none; }
+.ide-tab.is-dirty .x:hover::before { display: none; }
+.ide-tab.is-dirty .x:hover svg { display: block; }
+.ide-toolbar { display: flex; align-items: center; gap: var(--s-2); padding: 6px var(--s-3); min-height: 44px; border-bottom: 1px solid var(--border); }
+.ide-open { font-family: var(--mono); font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ide-cursor { font-family: var(--mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.ide-toolbar .tb-sep { height: 20px; margin: 0 2px; }
+.ide-autolint { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); white-space: nowrap; cursor: pointer; }
+.ide-editor-wrap { position: relative; flex: 1; min-height: 80px; display: flex; }
+.ide-editor { flex: 1; min-height: 0; display: flex; min-width: 0; }
+
+/* No file open: the IDE's short version of the workflow. */
+.ide-start { position: absolute; inset: 0; z-index: 2; overflow: auto; padding: 36px 44px; background: var(--bg); }
+.ide-start h3 { margin: 0 0 6px; font-size: 20px; color: var(--text-strong); }
+.ide-start > p { margin: 0 0 20px; max-width: 72ch; font-size: 14.5px; line-height: 1.55; color: var(--text-muted); }
+.ide-start-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 28px; }
+.ide-path { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; max-width: 980px; }
+@media (max-width: 1200px) { .ide-path { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.ide-path li { padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); }
+.ide-path b { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-strong); margin-bottom: 4px; }
+.ide-path b span { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; font-family: var(--mono); font-size: 12px; color: var(--met1); background: var(--accent-soft); border: 1px solid var(--accent); border-radius: var(--r-sm); }
+body.theme-light .ide-path b span { color: var(--accent); }
+.ide-path small { font-size: 13px; line-height: 1.45; color: var(--text-muted); }
+
+/* ---------- bottom panel ---------- */
+.ide-split { flex: 0 0 6px; cursor: row-resize; background: var(--border); background-clip: content-box; padding: 2px 0; border: 0; }
+.ide-split:hover, .ide-split:focus-visible, .ide-split.is-drag { background-color: var(--accent); outline: none; }
+.ide-panel { flex: 0 0 var(--ide-panel-h); min-height: 140px; max-height: 80%; display: flex; flex-direction: column; background: var(--surface); }
+.ide-center.panel-closed .ide-panel { flex: 0 0 auto; min-height: 0; }
+.ide-center.panel-closed .ide-pane { display: none !important; }
+.ide-center.panel-closed .ide-split { display: none; }
+.ide-center.panel-closed #ide-panel-toggle svg { transform: rotate(180deg); }
+.ide-panel-bar { display: flex; align-items: center; gap: 4px; padding: 0 8px 0 4px; min-height: 38px; border-bottom: 1px solid var(--border); }
+.ide-ptabs { display: flex; align-self: stretch; }
+.ide-ptab { position: relative; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; background: none; border: 0; color: var(--text-muted); font: inherit; font-size: 13.5px; font-weight: 500; cursor: pointer; }
+.ide-ptab:hover { color: var(--text-strong); }
+.ide-ptab.is-on { color: var(--text-strong); }
+.ide-ptab.is-on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; background: var(--met1); }
+.ide-ptab .pcount { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); }
+.ide-ptab .pcount-err { color: var(--fail); }
+.ide-ptab .pcount-warn { color: var(--warn); }
+.ide-panel-bar .iconbtn { background: transparent; border-color: transparent; height: 28px; }
+.ide-panel-bar .iconbtn:hover { border-color: var(--border); }
+.ide-pane { display: none; flex: 1; min-height: 0; flex-direction: column; }
+.ide-pane.is-on { display: flex; }
+.ide-diags { flex: 1; overflow: auto; padding: 8px 12px; font-family: var(--mono); font-size: 12.5px; }
+.ide-diags .muted { font-family: var(--sans); font-size: 13.5px; margin: 4px 0; }
+.ide-diag { cursor: pointer; padding: 3px 6px; border-radius: var(--r-sm); }
+.ide-diag:hover { background: var(--hover); }
+.ide-diag-error { color: var(--fail); }
+.ide-diag-warning { color: var(--warn); }
+.ide-sim-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.ide-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.ide-field select, .ide-field input { min-height: 30px; padding: 4px 8px; font-size: 13px; }
+.ide-sim-bar .ide-field:first-child select { min-width: 220px; }
+.ide-sim-bar #ide-top { width: 170px; }
+.ide-log { flex: 1; min-height: 0; margin: 0; padding: 10px 12px; overflow: auto; background: var(--bg-2); border: 0; border-radius: 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; }
+.ide-log:empty::before { content: "Simulate builds the selected testbench with the design files and prints its output here."; font-family: var(--sans); font-size: 13.5px; color: var(--text-muted); }
+.ide-wave-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.wave-seg { display: inline-flex; margin-left: 8px; }
+.wave-seg .btn { border-radius: 0; margin-left: -1px; }
+.wave-seg .btn:first-child { border-radius: var(--r-md) 0 0 var(--r-md); margin-left: 0; }
+.wave-seg .btn:last-child { border-radius: 0 var(--r-md) var(--r-md) 0; }
+.wave-seg .btn.is-on { background: var(--accent-soft); color: var(--text-strong); border-color: var(--accent); z-index: 1; }
+.ide-wave-host { position: relative; flex: 1; min-height: 0; overflow: auto; background: var(--bg-2); }
+#ide-wave { display: block; }
+.ide-wave-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; margin: 0; padding: 20px; text-align: center; font-size: 13.5px; color: var(--text-muted); }
+/* Durable "partial waveform" badge: a timed-out sim writes an incomplete
+   dump; it stays on the Waveform tab while that dump is on screen. */
+.wave-partial {
+  display: inline-block; padding: 0 7px; border: 1px solid var(--fail); border-radius: 999px;
+  color: var(--fail); font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; line-height: 16px;
+}
+.wave-partial[hidden] { display: none; }
 
 /* Syntax-highlighting editor: transparent <textarea> over a colored <pre>. */
 .hl-editor { display: flex; flex-direction: column; width: 100%; min-height: 0;
@@ -69,6 +179,12 @@
      caret (caret-color) and the <pre> underneath remain visible. */
   color: transparent; -webkit-text-fill-color: transparent;
   caret-color: var(--text-strong); }
+/* The app's form rules (shell.css: a white textarea in light theme, a focus
+   ring, min-height, radius) must not reach the editing layer, or it covers
+   the highlighted text beneath it. */
+.hl-editor .ed-area, body.theme-light .hl-editor .ed-area {
+  background: transparent; border: 0; border-radius: 0; box-shadow: none; min-height: 0;
+}
 .ed-area::selection { background: var(--accent-glow); }
 .tk-kw  { color: var(--syntax-kw); }
 .tk-com { color: var(--syntax-com); font-style: italic; }
@@ -85,25 +201,6 @@
 .ed-find-count { font-size: var(--t-xs); }
 .ed-find-x { margin-left: auto; }
 
-.ide-uploads { display: flex; gap: var(--s-2); margin-top: var(--s-3); flex-wrap: wrap; }
-.ide-uploads .btn { flex: 1; }
-/* "Problems" panel: dedicated lint-output area with its own header + count, so
-   syntax-check diagnostics (file:line:col) have a clear home, not a thin strip. */
-.ide-problems { display: flex; flex-direction: column; border-top: 1px solid var(--border);
-  flex: 0 0 auto; max-height: 38%; min-height: 0; }
-.ide-problems-head { display: flex; align-items: center; gap: var(--s-2);
-  padding: var(--s-1) var(--s-3); background: var(--surface-2); font-size: var(--t-xs);
-  font-family: var(--mono); color: var(--text-muted); }
-.ide-problems-head .pcount { color: var(--text); }
-.ide-problems-head .pcount-err { color: var(--fail); }
-.ide-problems-head .pcount-warn { color: var(--warn); }
-.ide-problems-head .ide-spacer { flex: 1; }
-.ide-diag { cursor: pointer; padding: 2px 4px; border-radius: var(--r-sm); }
-.ide-diag:hover { background: var(--hover); }
-.ide-diags { flex: 1; overflow: auto; padding: var(--s-2); font-family: var(--mono); font-size: var(--t-xs); }
-.ide-diag-error { color: var(--fail); }
-.ide-diag-warning { color: var(--warn); }
-
 /* Fullscreen toggle for any panel (console, waveform, problems). Promotes the
    element to a fixed overlay covering the viewport; the ✕/Esc restores it. */
 .panel-fs-btn { margin-left: auto; }
@@ -119,35 +216,14 @@
 .panel-fs-host > .panel-fs-bar { display: flex; align-items: center; gap: var(--s-2);
   font-size: var(--t-xs); color: var(--text-muted); }
 
-.ide-sim { padding: var(--s-3); overflow: auto; min-height: 0; }
-.ide-sim h3 { margin: var(--s-3) 0 var(--s-2); font-size: var(--t-md); }
-.ide-field { display: flex; flex-direction: column; gap: var(--s-1); margin-bottom: var(--s-2); }
-.ide-field select, .ide-field input { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-2); }
-.ide-log { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-2); height: 160px; overflow: auto; font-family: var(--mono); font-size: var(--t-xs); white-space: pre-wrap; }
-.wave-radixes { font-size: var(--t-xs); }
-.ide-wave-host { border: 1px solid var(--border); border-radius: var(--r-sm); overflow: auto; background: var(--surface-2); }
-#ide-wave { display: block; }
-/* Durable "partial waveform" badge (N2): a timed-out sim writes an INCOMPLETE
-   dump; unlike the transient toast, this stays pinned in the Waveform header for
-   as long as the partial dump is on screen, so a screenshot never reads as a
-   completed run. Cleared the moment a full (non-partial) waveform loads. */
-.wave-partial {
-  display: inline-block; margin-left: var(--s-2); padding: 1px 8px;
-  border: 1px solid var(--danger, #d9534f); border-radius: 999px;
-  background: color-mix(in srgb, var(--danger, #d9534f) 14%, transparent);
-  color: var(--danger, #d9534f); font-size: 11px; font-weight: 600;
-  vertical-align: middle; white-space: nowrap;
-}
-.wave-partial[hidden] { display: none; }
 
 /* Embedded IDE (the "RTL IDE" tab inside the main cockpit). Fills the work
    area; its own grid scrolls internally instead of growing the page. */
 .ide-embed { display: flex; flex-direction: column; height: calc(100vh / var(--ll-zoom, 1) - 96px);
   border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
-.ide-embed .ide-topbar { border-bottom: 1px solid var(--border); }
 .ide-embed .ide-grid { flex: 1; min-height: 0; }
 body.density-compact .ide-embed { height: calc(100vh / var(--ll-zoom, 1) - 80px); }
 @media (max-width: 960px) {
-  .ide-embed .ide-grid { grid-template-columns: 180px 1fr; }
-  .ide-embed .ide-sim { display: none; }
+  .ide-grid { grid-template-columns: 190px minmax(0, 1fr); }
+  .ide-autolint { display: none; }
 }

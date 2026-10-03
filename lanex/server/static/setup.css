@@ -149,14 +149,18 @@
   padding: 0;
   margin: 0 0 var(--s-6);
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--s-3);
 }
+@media (max-width: 1240px) { .steps-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .steps-3 { grid-template-columns: 1fr; } }
+/* Number, then title and line, then the step's button under the text. */
 .steps-3 li {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--s-3);
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+  align-items: start;
+  gap: var(--s-2) var(--s-3);
   background: var(--surface-2);
   border: 1px solid var(--border);
   padding: var(--s-3) var(--s-4);
@@ -180,7 +184,7 @@
 .step-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .step-text b { font-size: 15px; font-weight: 600; color: var(--text-strong); }
 .step-text span { font-size: 13.5px; line-height: 1.4; color: var(--text-muted); text-wrap: pretty; }
-.step-act { flex: 0 0 auto; }
+.step-act { grid-column: 2; justify-self: start; }
 
 /* ---------- picker cards ---------- */
 .h2ico { vertical-align: -3px; margin-right: 8px; color: var(--text-muted); }
@@ -260,7 +264,42 @@ body.theme-light .hub-label { color: var(--accent); }
   color: var(--text-strong); overflow-wrap: anywhere;
 }
 .proj-name.is-empty { color: var(--text-muted); font-weight: 600; }
-.project-empty-state p { margin: var(--s-2) 0 0; max-width: 60ch; font-size: 15px; line-height: 1.55; color: var(--text); }
+.project-empty-state p { margin: var(--s-2) 0 0; max-width: 64ch; font-size: 15px; line-height: 1.55; color: var(--text); }
+.project-empty-state p code { font-size: 13px; }
+/* The three ways in, as big targets: same box language as the steps above. */
+.start-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-3); margin-top: var(--s-5); }
+.no-projects .start-tiles { max-width: 980px; }
+@media (max-width: 1240px) { .project-hub:not(.no-projects) .start-tiles { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .start-tiles { grid-template-columns: 1fr; } }
+.start-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-3);
+  min-width: 0; padding: var(--s-4); text-align: left; cursor: pointer;
+  font: inherit; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.08s ease;
+}
+.start-tile:hover {
+  border-color: var(--accent);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.start-tile:active { transform: translateY(1px); }
+.start-tile .st-ico {
+  width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm); color: var(--text-muted);
+  background: var(--surface);
+}
+.start-tile .st-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.start-tile b { font-size: 16px; font-weight: 600; color: var(--text-strong); }
+.start-tile small { font-size: 13.5px; line-height: 1.45; color: var(--text-muted); text-wrap: pretty; }
+.start-tile.is-primary {
+  background: linear-gradient(160deg, var(--accent-soft) 0%, var(--surface-2) 70%);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.start-tile.is-primary .st-ico { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+/* With one project or more open-able, the tiles sit in a column on the left
+   (narrow) or a row (wide); with none at all they get the whole card. */
+.project-hub.no-projects .hub-grid { grid-template-columns: 1fr; }
+.project-hub.no-projects .hub-list { display: none; }
 .proj-path { margin-top: 6px; font-family: var(--mono); font-size: 12.5px; color: var(--text-muted); overflow-wrap: anywhere; }
 /* Design row: the three settings every run needs, saved to the config. */
 .proj-design {
@@ -308,7 +347,9 @@ body.theme-light .hub-label { color: var(--accent); }
 .hub-row-text small { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hub-row.is-current { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, transparent); cursor: default; }
 .hub-row.is-current .via { background: var(--met1); border-color: var(--met1); box-shadow: 0 0 6px var(--met1); }
-body.theme-light .hub-foot { margin-top: auto; padding-top: var(--s-3); display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-2); }
+.hub-foot { margin-top: auto; padding-top: var(--s-3); display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-2); }
+.hub-switch { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; padding-bottom: var(--s-2); border-bottom: 1px solid var(--border); margin-bottom: 2px; }
+.hub-switch[hidden] { display: none; }
 .hub-foot .path-entry { margin-top: 0; width: 100%; }
 .project-hub .autoconfig-banner:not([hidden]) { margin: 0 var(--s-5) var(--s-5); }
 .path-entry, .extras-entry { margin-top: var(--s-4); }
@@ -329,6 +370,9 @@ body.theme-light .hub-foot { margin-top: auto; padding-top: var(--s-3); display:
 .recent-designs[hidden] { display: none; }
 
 /* Sources */
+#sec-setup.no-project #setup-sources, #sec-setup.no-project #setup-settings,
+#sec-setup.no-project .section-jump [data-jump="setup-sources"],
+#sec-setup.no-project .section-jump [data-jump="setup-settings"] { display: none; }
 #filesel-card[hidden] { display: none; }
 .filesel-foot[hidden] { display: none; }
 .src-row {
@@ -388,6 +432,44 @@ body.theme-light .src-tag.is-top { color: var(--accent); }
 .field > span em { font-style: normal; font-weight: 400; color: var(--text-muted); margin-left: 4px; }
 .pdk-about { margin: 12px 0 0; font-size: 14px; color: var(--text-muted); }
 .pdk-about:empty { display: none; }
+
+/* ---------- Settings: the most used variables, saved in the config ---------- */
+.ms-where { margin-left: auto; font-size: 13px; color: var(--text-muted); }
+.ms-where code { font-size: 12px; }
+.ms-where .is-warn { color: var(--warn); }
+.picker-head .ms-where ~ .block-actions { margin-left: 0; }
+.ms-ro { margin: 0 0 var(--s-3); font-size: 14px; color: var(--warn); }
+.ms-groups { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-3); align-items: stretch; }
+@media (max-width: 1400px) { .ms-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .ms-groups { grid-template-columns: 1fr; } }
+.ms-group {
+  display: flex; flex-direction: column; gap: var(--s-3); min-width: 0;
+  padding: var(--s-3) var(--s-4) var(--s-4);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+}
+.ms-group > .lane-label { font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--met1); }
+body.theme-light .ms-group > .lane-label { color: var(--accent); }
+.ms-gnote { margin: auto 0 0; font-size: 13px; line-height: 1.45; color: var(--text-muted); border-top: 1px dashed var(--border); padding-top: var(--s-2); }
+.ms-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-left: 10px; border-left: 2px solid transparent; margin-left: -12px; }
+.ms-field.is-set { border-left-color: var(--met1); }
+.ms-top { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ms-top label { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.ms-key { font-size: 11px; color: var(--text-muted); background: none; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-field.is-set .ms-key { color: var(--met1); }
+body.theme-light .ms-field.is-set .ms-key { color: var(--accent); }
+.ms-ctl { display: flex; align-items: center; gap: 8px; }
+.ms-ctl input, .ms-ctl select { flex: 1; min-width: 0; width: 100%; }
+.ms-ctl em { font-style: normal; font-family: var(--mono); font-size: 13px; color: var(--text-muted); }
+.ms-reset {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0; cursor: pointer;
+  background: transparent; border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-muted);
+}
+.ms-reset:hover { color: var(--text-strong); border-color: var(--border-strong); }
+.ms-reset[hidden] { display: none; }
+.ms-hint { font-size: 12.5px; line-height: 1.45; color: var(--text-muted); text-wrap: pretty; }
+.ms-note { font-size: 12.5px; line-height: 1.45; color: var(--warn); }
+.ms-note code { font-size: 11.5px; }
 
 /* ---- Preflight "Ready to run?" checklist ---- */
 /* ---------- Ready to run: checkpoints on a trace, then the launch ----------
@@ -554,6 +636,11 @@ body:not(.theme-light) .pf-node.is-ok .pf-state { color: var(--met3); }
 .wiz-tpl-blank .wiz-tpl-title { font-size: 17px; }
 .wiz-lane { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin: 24px 0 10px; }
 .wiz-lane-note { font-size: 13.5px; color: var(--text-muted); }
+.wiz-field > label:first-child { font-size: 14px; font-weight: 500; color: var(--text-strong); }
+.wiz-top-row { display: flex; gap: 8px; min-width: 0; }
+.wiz-top-row input { flex: 1; min-width: 0; }
+.wiz-top-row select { flex: 0 0 auto; width: auto; }
+.wiz-form .nf-use.span-2 { grid-column: 1 / -1; margin-top: 0; }
 .wiz-fixed { grid-column: 1 / -1; margin: 0; padding: 10px 12px; background: var(--accent-soft); border-left: 2px solid var(--accent); border-radius: var(--r-sm); font-size: 14px; }
 
 .wizard { display: flex; flex-direction: column; max-height: calc(100vh / var(--ll-zoom, 1) - 64px); }

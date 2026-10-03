@@ -3,6 +3,26 @@
 // readout, radix toggle, and signal search. In-house (no heavyweight dep).
 import { formatValue } from "./vcd.js";
 
+// A signal inside the design under test reads "dut.count", so it can't be
+// mistaken for the testbench's own wire of the same name. Long names keep
+// their end, which is the part that differs.
+function laneLabel(sig) {
+  const full = ((sig.scope || []).slice(1).concat([sig.name])).join(".");
+  return full.length > 22 ? "…" + full.slice(-21) : full;
+}
+
+// The lanes shown first: the testbench's own signals (what it drives and
+// watches), then the design's internal ones that aren't just the same ports
+// again, up to `max`.
+export function defaultLanes(vcd, max = 12) {
+  const depth = (s) => (s.scope || []).length;
+  const top = Math.min(...vcd.signals.map(depth));
+  const outer = vcd.signals.filter((s) => depth(s) === top);
+  const names = new Set(outer.map((s) => s.name));
+  const inner = vcd.signals.filter((s) => depth(s) > top && !names.has(s.name));
+  return outer.concat(inner).slice(0, max).map((s) => s.id);
+}
+
 export class WaveView {
   constructor(canvas, { laneHeight = 26, labelWidth = 160 } = {}) {
     this.canvas = canvas;
@@ -21,7 +41,7 @@ export class WaveView {
 
   load(vcd, visibleIds) {
     this.vcd = vcd;
-    this.visible = visibleIds || vcd.signals.slice(0, 12).map((s) => s.id);
+    this.visible = visibleIds || defaultLanes(vcd);
     const span = Math.max(1, vcd.end);
     const plotW = Math.max(100, this.canvas.width - this.labelWidth);
     this.pxPerTime = plotW / span;
@@ -105,7 +125,7 @@ export class WaveView {
       const y = row * lh;
       // label
       ctx.fillStyle = text;
-      ctx.fillText(sig.name.slice(0, 22), 6, y + lh / 2);
+      ctx.fillText(laneLabel(sig), 6, y + lh / 2);
       ctx.strokeStyle = border;
       ctx.beginPath(); ctx.moveTo(lw, y + lh); ctx.lineTo(W, y + lh); ctx.stroke();
       this._drawSignal(sig, y, W, accent, fail, text);

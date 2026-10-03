@@ -62,6 +62,8 @@ function wireSetupActions() {
     const act = b.dataset.open || b.dataset.stepAct;
     if (act === "new-project" || (act === "project" && !state.designDir)) {
       document.getElementById("btn-new-project")?.click();
+    } else if (act === "example") {
+      import("./wizard.js").then((m) => m.openWizard({ template: "blinky" }));
     } else if (act === "project") {
       scrollToBlock("setup-design");
     } else if (act === "switch") {
@@ -132,6 +134,15 @@ function wireSetupActions() {
   document.addEventListener("g:sources_changed", () => {
     if (state.designDir) loadFilesFor(state.designDir);
   });
+  // Design files added from the RTL IDE join the config's file list, like
+  // the ones added here.
+  document.addEventListener("g:sources_added", async (e) => {
+    const files = (e.detail && e.detail.files) || [];
+    if (!files.length || !state.designDir) return;
+    await loadFilesFor(state.designDir);
+    const { includeInConfig } = await import("./fs.js");
+    includeInConfig(files);
+  });
 }
 
 export function setupSetup() {
@@ -142,6 +153,7 @@ export function setupSetup() {
   wireJump(document.getElementById("sec-setup"));
   wireSetupActions();
   import("./projectcard.js").then((m) => m.wireDesignRow()).catch(() => {});
+  import("./mostused.js").then((m) => m.wireSettings()).catch(() => {});
   document.getElementById("btn-set-design")?.addEventListener("click", onLoadDesign);
   document.getElementById("design-dir-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") onLoadDesign();
@@ -250,6 +262,11 @@ function paintProjectBlock() {
   const card = document.getElementById("project-open");
   if (empty) empty.hidden = open;
   if (card) card.hidden = !open;
+  const sw = document.getElementById("hub-switch");
+  if (sw) sw.hidden = !open;
+  document.getElementById("hub-current-label")?.replaceChildren(open ? "Open project" : "Get started");
+  // Sources and Settings belong to a project; with none open they'd only say so.
+  document.getElementById("sec-setup")?.classList.toggle("no-project", !open);
   if (!open) { document.dispatchEvent(new CustomEvent("g:projects_changed")); return; }
   const dir = state.designDir;
   const name = dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || dir;

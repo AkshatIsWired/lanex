@@ -184,15 +184,15 @@
   <!-- Main work area -->
   <main class="work">
     <!-- SETUP -->
-    <section class="section section-active" id="sec-setup">
+    <section class="section section-active no-project" id="sec-setup">
       <div class="section-jump-stack">
         <nav class="section-jump" id="setup-jump" aria-label="Sections of this page">
           <button class="chip chip-clickable" data-jump="setup-design">Project</button>
           <button class="chip chip-clickable" data-jump="setup-sources">Sources</button>
           <button class="chip chip-clickable" data-jump="setup-pdk">PDK</button>
-          <button class="chip chip-clickable" data-jump="setup-preflight">Check</button>
-          <button class="chip chip-clickable" data-jump="setup-run">Run</button>
-          <button class="chip chip-clickable" data-jump="cfg-card">Constraints</button>
+          <button class="chip chip-clickable" data-jump="setup-settings">Settings</button>
+          <button class="chip chip-clickable" data-jump="setup-preflight">Run</button>
+          <button class="chip chip-clickable" data-jump="cfg-card">All settings</button>
         </nav>
       </div>
 
@@ -225,17 +225,22 @@
           <ol class="steps-3" id="onboard-checklist">
             <li data-ck="design">
               <span class="step-no" aria-hidden="true">1</span>
-              <div class="step-text"><b>Open a project</b><span>Start a new one, or open a folder with your Verilog.</span></div>
+              <div class="step-text"><b>Open a project</b><span>A new one, an example, or a folder with your Verilog.</span></div>
               <button class="btn btn-sm step-act" data-step-act="project">New project</button>
             </li>
-            <li data-ck="pdk">
+            <li data-ck="rtl">
               <span class="step-no" aria-hidden="true">2</span>
-              <div class="step-text"><b>Choose a PDK</b><span>The chip process to build for. sky130A is the default.</span></div>
+              <div class="step-text"><b>Write and simulate</b><span>Check the syntax and run a testbench before the long run.</span></div>
+              <button class="btn btn-sm btn-ghost step-act" data-step-act="ide">RTL IDE</button>
+            </li>
+            <li data-ck="pdk">
+              <span class="step-no" aria-hidden="true">3</span>
+              <div class="step-text"><b>Pick PDK and settings</b><span>sky130A is the default. Most designs change two or three settings.</span></div>
               <button class="btn btn-sm btn-ghost step-act" data-step-act="pdk">Change</button>
             </li>
             <li data-ck="run">
-              <span class="step-no" aria-hidden="true">3</span>
-              <div class="step-text"><b>Run the flow</b><span>Each stage lights up as it finishes. The layout lands in <code>runs/&lt;name&gt;/final/gds</code>.</span></div>
+              <span class="step-no" aria-hidden="true">4</span>
+              <div class="step-text"><b>Run the flow</b><span>Each stage lights up as it finishes. The GDS lands in <code>runs/&lt;name&gt;/final</code>.</span></div>
               <button class="btn btn-sm btn-ghost step-act" data-step-act="run">Go to Run</button>
             </li>
           </ol>
@@ -244,13 +249,24 @@
           <div class="picker project-hub" id="setup-design">
             <div class="hub-grid">
               <section class="hub-current" aria-labelledby="hub-current-label">
-                <span class="hub-label" id="hub-current-label">Open project</span>
+                <span class="hub-label" id="hub-current-label">Get started</span>
+                <!-- Nothing open: the three ways in. Each lives here and only here. -->
                 <div class="project-empty-state" id="project-empty">
-                  <div class="proj-name is-empty">No project open</div>
-                  <p>Start a new one from a blank file or an example, or open a folder that already has your Verilog.</p>
-                  <div class="picker-actions">
-                    <button class="btn btn-primary" data-open="new-project">New project…</button>
-                    <button class="btn" id="btn-browse-folder"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Open folder…</button>
+                  <div class="proj-name">Start a project</div>
+                  <p>A project is one chip design: a folder with your Verilog, its testbenches, any constraint files and the <code>config.json</code> LibreLane runs.</p>
+                  <div class="start-tiles">
+                    <button class="start-tile is-primary" data-open="new-project">
+                      <span class="st-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
+                      <span class="st-text"><b>New project</b><small>Blank or from an example. Opens the RTL IDE on your top module.</small></span>
+                    </button>
+                    <button class="start-tile" id="btn-browse-folder">
+                      <span class="st-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+                      <span class="st-text"><b>Open a folder</b><small>Verilog you already have, or a LibreLane or OpenLane design with its config.</small></span>
+                    </button>
+                    <button class="start-tile" data-open="example">
+                      <span class="st-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4l13 8-13 8z"/></svg></span>
+                      <span class="st-text"><b>Try an example</b><small>Blinky goes from Verilog to a GDS in a few minutes. The quickest way to see the whole flow.</small></span>
+                    </button>
                   </div>
                 </div>
                 <div class="project-open-state" id="project-open" hidden>
@@ -275,13 +291,15 @@
               <section class="hub-list" aria-labelledby="hub-list-label">
                 <div class="hub-list-head">
                   <span class="hub-label" id="hub-list-label">Your projects</span>
-                  <span class="hub-list-acts">
-                    <button class="btn btn-sm" data-open="new-project"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New</button>
-                    <button class="btn btn-sm btn-ghost" data-open="open-folder">Open folder…</button>
-                  </span>
                 </div>
                 <div class="hub-rows" id="hub-rows"></div>
                 <div class="hub-foot">
+                  <!-- Switching to another project: shown only while one is open
+                       (with none open, the start tiles on the left do this). -->
+                  <div class="hub-switch" id="hub-switch" hidden>
+                    <button class="btn btn-sm" data-open="new-project"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New project</button>
+                    <button class="btn btn-sm btn-ghost" data-open="open-folder">Open folder…</button>
+                  </div>
                   <button class="linklike" data-open="manage">Manage projects…</button>
                   <details class="path-entry" id="path-entry">
                     <summary>Type or paste a folder path</summary>
@@ -335,6 +353,17 @@
             <p class="pdk-about" id="pdk-about"></p>
           </div>
 
+          <!-- Most used settings: the handful of LibreLane variables real
+               projects change, saved into the project's config (mostused.js). -->
+          <div class="picker" id="setup-settings">
+            <h2 class="picker-head"><span><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><path d="M16 4v4M10 10v4M18 16v4"/></svg>Settings</span>
+              <span class="ms-where" id="ms-where"></span>
+              <span class="block-actions"><button class="btn btn-sm btn-ghost" data-jump-to="cfg-card">All settings</button></span>
+            </h2>
+            <p class="hint">Most designs only change a few of LibreLane's 400+ settings. These are the usual ones, with when to change them. Leave a field empty to use the default.</p>
+            <div class="ms-body" id="ms-body"><p class="muted">Open a project to see its settings.</p></div>
+          </div>
+
           <!-- Ready to run: three checkpoints on one trace, then the launch. -->
           <div class="picker launch" id="setup-preflight">
             <h2 class="picker-head"><span><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h5M15 12h5M9 9h6v6H9z"/></svg>Ready to run?</span>
@@ -363,8 +392,8 @@
       <!-- Config / Constraints -->
       <details class="card" id="cfg-card">
         <summary>
-          <strong>Constraints and configuration</strong>
-          <span class="hint">Optional. Tune the clock, how tightly cells are packed, antenna fixes and 400+ other settings. The defaults work for most designs.</span>
+          <strong>All settings</strong>
+          <span class="hint">Every LibreLane variable, by flow stage. Values set here apply to runs started from LanEx and leave <code>config.json</code> as it is; the Settings card above saves into it.</span>
         </summary>
         <div class="card-body">
           <!-- Category tabs: sticky under the page header while you scroll the settings. -->
@@ -491,77 +520,89 @@
       <div class="ide-embed">
         <div class="ide-topbar">
           <strong>RTL IDE</strong>
-          <span class="muted" id="ide-design">…</span>
+          <span class="ide-design" id="ide-design">…</span>
           <span class="ide-spacer"></span>
-          <button class="btn btn-ghost" id="ide-popout" title="Open the IDE in its own window"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M10 5H5v14h14v-5"/></svg> Pop out</button>
-          <span class="ide-note" id="ide-note"></span>
+          <span class="ide-note" id="ide-note" role="status"></span>
+          <button class="btn btn-ghost btn-sm" id="ide-popout" title="Open the IDE in its own window"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M10 5H5v14h14v-5"/></svg> Pop out</button>
         </div>
         <div class="ide-grid">
-          <aside class="ide-side">
-            <h3>Files</h3>
+          <!-- Explorer: the project's files by what they're for, like an FPGA
+               tool's Sources view (design / simulation / constraints). -->
+          <aside class="ide-side" aria-label="Project files">
+            <div class="ide-side-head">
+              <span class="ide-side-title">Explorer</span>
+              <button class="iconbtn iconbtn-sm" id="ide-new-file" aria-label="New file" title="New file"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+              <button class="iconbtn iconbtn-sm" id="ide-upload" aria-label="Add files from your computer" title="Add files from your computer"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 8l5-5 5 5M5 20h14"/></svg></button>
+            </div>
             <div id="ide-tree" class="ide-tree"></div>
-            <div class="ide-uploads">
-              <button class="btn btn-sm" id="ide-new-file" title="Create a new design module or testbench in this project"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New file</button>
-              <button class="btn btn-ghost btn-sm" id="ide-upload-src" title="Upload Verilog source files into src/"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 8l5-5 5 5M5 20h14"/></svg> Sources</button>
-              <button class="btn btn-ghost btn-sm" id="ide-upload-tb" title="Upload testbench files into verify/"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 8l5-5 5 5M5 20h14"/></svg> Testbench</button>
-            </div>
           </aside>
-          <main class="ide-main">
+          <div class="ide-center">
+            <div class="ide-tabs" id="ide-tabs" role="tablist" aria-label="Open files"></div>
             <div class="ide-toolbar">
-              <span id="ide-open" class="muted">(no file open)</span>
-              <span id="ide-cursor" class="muted" style="font-family:var(--mono);font-size:var(--t-xs)">Ln 1, Col 1</span>
+              <span id="ide-open" class="ide-open">No file open</span>
+              <span id="ide-cursor" class="ide-cursor">Ln 1, Col 1</span>
               <span class="ide-spacer"></span>
-              <button class="btn" id="ide-find" title="Find &amp; replace (Ctrl/⌘ F)">Find</button>
-              <button class="btn" id="ide-save">Save</button>
-              <button class="btn" id="ide-lint" title="Syntax-check with Verilator; errors highlight inline">Syntax check</button>
-              <label class="ide-autolint" title="Save + re-lint automatically a moment after you stop typing"><input type="checkbox" id="ide-autolint"/> Auto-lint</label>
+              <button class="btn btn-ghost btn-sm" id="ide-find" title="Find and replace (Ctrl F)">Find</button>
+              <button class="btn btn-ghost btn-sm" id="ide-save" title="Save (Ctrl S)">Save</button>
+              <span class="tb-sep" aria-hidden="true"></span>
+              <label class="ide-autolint" title="Save and check the syntax a moment after you stop typing"><input type="checkbox" id="ide-autolint"/> Auto-check</label>
+              <button class="btn btn-sm" id="ide-lint" title="Check every design and testbench file with Verilator">Check syntax</button>
+              <button class="btn btn-primary btn-sm" id="ide-sim" title="Build and run the selected testbench, then show its waveform"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Simulate</button>
             </div>
-            <div id="ide-editor" class="ide-editor"></div>
-            <div class="ide-problems" id="ide-problems">
-              <div class="ide-problems-head">
-                <span>Problems</span>
-                <span class="pcount" id="ide-problems-count">no lint run yet</span>
+            <div class="ide-editor-wrap">
+              <div id="ide-editor" class="ide-editor"></div>
+              <div class="ide-start" id="ide-start" hidden></div>
+            </div>
+            <div class="ide-split" id="ide-split" role="separator" aria-orientation="horizontal" aria-label="Resize the bottom panel" tabindex="0"></div>
+            <div class="ide-panel" id="ide-panel">
+              <div class="ide-panel-bar">
+                <div class="ide-ptabs" role="tablist" aria-label="Output">
+                  <button class="ide-ptab is-on" role="tab" data-ptab="problems">Problems <span class="pcount" id="ide-problems-count">not checked</span></button>
+                  <button class="ide-ptab" role="tab" data-ptab="sim">Simulation</button>
+                  <button class="ide-ptab" role="tab" data-ptab="wave">Waveform
+                    <span id="ide-wave-partial" class="wave-partial" hidden title="The simulation hit its time limit before $finish, so this waveform is incomplete. Add $finish to the testbench to capture the whole run.">partial</span></button>
+                </div>
                 <span class="ide-spacer"></span>
-                <button class="btn btn-ghost panel-fs-btn" data-fs-target="ide-problems" title="Fullscreen"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
+                <button class="iconbtn iconbtn-sm panel-fs-btn" data-fs-target="ide-panel" aria-label="Fullscreen panel" title="Fullscreen (Esc to leave)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
+                <button class="iconbtn iconbtn-sm" id="ide-panel-toggle" aria-label="Hide the panel" title="Hide or show the panel"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
               </div>
-              <div id="ide-diags" class="ide-diags"><p class='muted'>Run 'Check syntax' to list errors and warnings here with file and line locations.</p></div>
+              <div class="ide-pane is-on" data-pane="problems" id="ide-problems">
+                <div id="ide-diags" class="ide-diags"><p class="muted">Check syntax lists errors and warnings here, with the file and line. Click one to jump to it.</p></div>
+              </div>
+              <div class="ide-pane" data-pane="sim">
+                <div class="ide-sim-bar">
+                  <label class="ide-field">Testbench <select id="ide-tb"></select></label>
+                  <label class="ide-field">Top module <input id="ide-top" class="inp" type="text" placeholder="from the testbench" spellcheck="false" /></label>
+                  <label class="ide-field">Simulator <select id="ide-sim-engine">
+                    <option value="auto">Auto (Icarus if installed, else Verilator)</option>
+                    <option value="iverilog">Icarus Verilog</option>
+                    <option value="verilator">Verilator</option>
+                  </select></label>
+                  <button class="btn btn-ghost btn-sm" id="ide-sim-stop" hidden title="Stop the running simulation"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg> Stop</button>
+                </div>
+                <pre id="ide-log" class="ide-log"></pre>
+              </div>
+              <div class="ide-pane" data-pane="wave">
+                <div class="ide-wave-bar wave-radixes">
+                  <button class="btn btn-ghost btn-sm" id="ide-wave-zoomout" title="Zoom out"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+                  <button class="btn btn-ghost btn-sm" id="ide-wave-zoomin" title="Zoom in"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+                  <button class="btn btn-ghost btn-sm" id="ide-wave-fit" title="Fit the whole run">Fit</button>
+                  <span class="wave-seg" role="group" aria-label="Number format">
+                    <button class="btn btn-ghost btn-sm wave-radix" data-radix="hex">hex</button>
+                    <button class="btn btn-ghost btn-sm wave-radix" data-radix="dec">dec</button>
+                    <button class="btn btn-ghost btn-sm wave-radix" data-radix="bin">bin</button>
+                    <button class="btn btn-ghost btn-sm wave-radix" data-radix="signed">signed</button>
+                  </span>
+                  <span class="ide-spacer"></span>
+                  <button class="btn btn-ghost btn-sm" id="ide-wave-png" title="Save the waveform as a PNG image">PNG</button>
+                  <button class="btn btn-ghost btn-sm" id="ide-wave-csv" title="Save the waveform as CSV">CSV</button>
+                  <button class="btn btn-ghost btn-sm" id="ide-wave-gtkwave" title="Open this waveform in GTKWave, signals preloaded"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h3l2-7 4 14 3-10 2 3h4"/></svg> GTKWave</button>
+                </div>
+                <div class="ide-wave-host" id="ide-wave-host"><canvas id="ide-wave"></canvas>
+                  <p class="ide-wave-empty" id="ide-wave-empty">Simulate a testbench that calls <code>$dumpfile</code> and <code>$dumpvars</code>, and its waveform shows here.</p></div>
+              </div>
             </div>
-          </main>
-          <section class="ide-sim">
-            <h3>Simulate</h3>
-            <label class="ide-field">Testbench<select id="ide-tb"></select></label>
-            <label class="ide-field">TB top module<input id="ide-top" class="inp" type="text" placeholder="counter_tb" /></label>
-            <label class="ide-field">Engine<select id="ide-sim-engine">
-              <option value="auto">Auto (Icarus if installed, otherwise Verilator)</option>
-              <option value="iverilog">Icarus Verilog (best for classic testbenches)</option>
-              <option value="verilator">Verilator (in the container image)</option>
-            </select></label>
-            <div class="ide-sim-actions">
-              <button class="btn btn-primary" id="ide-sim">Build &amp; run</button>
-              <button class="btn btn-ghost" id="ide-sim-stop" hidden title="Stop the running simulation"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg> Stop</button>
-            </div>
-            <h3>Console
-              <button class="btn btn-ghost panel-fs-btn" data-fs-target="ide-log" title="Fullscreen console"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
-            </h3>
-            <pre id="ide-log" class="ide-log"></pre>
-            <h3>Waveform
-              <span id="ide-wave-partial" class="wave-partial" hidden title="The simulation reached its execution time limit without encountering a $finish statement. Add $finish to the testbench to capture the complete run.">⚠ partial: simulation timed out</span>
-              <button class="btn btn-ghost panel-fs-btn" data-fs-target="ide-wave-host" title="Fullscreen waveform"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
-              <span class="wave-radixes">
-                <button class="btn btn-ghost btn-sm" id="ide-wave-zoomout" title="Zoom out"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
-                <button class="btn btn-ghost btn-sm" id="ide-wave-zoomin" title="Zoom in"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
-                <button class="btn btn-ghost" id="ide-wave-fit" title="Fit to window">fit</button>
-                <button class="btn btn-ghost wave-radix" data-radix="hex">hex</button>
-                <button class="btn btn-ghost wave-radix" data-radix="dec">dec</button>
-                <button class="btn btn-ghost wave-radix" data-radix="bin">bin</button>
-                <button class="btn btn-ghost wave-radix" data-radix="signed">signed</button>
-                <button class="btn btn-ghost btn-sm" id="ide-wave-png" title="Export the waveform as a PNG image"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg> PNG</button>
-                <button class="btn btn-ghost btn-sm" id="ide-wave-csv" title="Export the waveform as CSV"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg> CSV</button>
-                <button class="btn btn-ghost btn-sm" id="ide-wave-gtkwave" title="Open this waveform in GTKWave (desktop viewer, signals preloaded)"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h3l2-7 4 14 3-10 2 3h4"/></svg> GTKWave</button>
-              </span>
-            </h3>
-            <div class="ide-wave-host" id="ide-wave-host"><canvas id="ide-wave"></canvas></div>
-          </section>
+          </div>
         </div>
       </div>
     </section>

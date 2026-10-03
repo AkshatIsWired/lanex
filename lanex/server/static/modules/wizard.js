@@ -143,9 +143,11 @@ function renderStep2(body, tpl) {
     "<div class='wiz-field span-2'><span>Location</span>" +
     "<div class='wiz-loc'><code id='wiz-where'></code><button class='btn btn-ghost btn-sm' id='wiz-change'>Change…</button></div>" +
     "<span class='wiz-help' id='wiz-where-help'></span></div>" +
-    "<label class='wiz-field'><span>Top module</span>" +
-    "<input id='wiz-top' type='text' value='" + fmt.escape(tpl.top) + "' spellcheck='false' />" +
-    "<span class='wiz-help'>The name of your top-level Verilog module. LanEx creates <code>src/&lt;name&gt;.v</code> with an empty module of that name.</span></label>" +
+    "<div class='wiz-field'><label for='wiz-top'>Top module</label>" +
+    "<span class='wiz-top-row'><input id='wiz-top' type='text' value='" + fmt.escape(tpl.top) + "' spellcheck='false' />" +
+    "<select id='wiz-lang' aria-label='Language'><option value='verilog'>Verilog .v</option>" +
+    "<option value='systemverilog'>SystemVerilog .sv</option></select></span>" +
+    "<span class='wiz-help' id='wiz-top-help'></span></div>" +
     "<label class='wiz-field'><span>Clock period</span>" +
     "<span class='wiz-unit' data-unit='ns'><input id='wiz-clk' type='number' min='0.1' step='0.1' value='" + fmt.escape(clk) + "' /></span>" +
     "<span class='wiz-help' id='wiz-clk-help'></span></label>" +
@@ -153,6 +155,10 @@ function renderStep2(body, tpl) {
     "<span class='wiz-help'>The foundry process to build for. sky130A is the usual first choice.</span></label>" +
     "<label class='wiz-field'><span>Standard-cell library</span><select id='wiz-scl'></select>" +
     "<span class='wiz-help'>The ready-made logic gates the flow builds your design from.</span></label>" +
+    (tpl.kind === "blank"
+      ? "<label class='nf-use span-2'><input type='checkbox' id='wiz-tb' checked/> <span>Write a testbench too, in <code>verify/</code>, " +
+        "wired to the top module's ports, so you can simulate before the first run.</span></label>"
+      : "") +
     "</div>" +
     "<div class='wiz-actions'>" +
     "<button class='btn btn-ghost' id='wiz-back'>Back</button>" +
@@ -188,6 +194,17 @@ function renderStep2(body, tpl) {
     const f = mhz($("wiz-clk").value);
     $("wiz-clk-help").textContent = f ? "Target speed: " + f + ". A smaller period is a faster chip and harder to meet." : "Enter a period in nanoseconds.";
   };
+  const paintTop = () => {
+    const h = $("wiz-top-help");
+    if (!h) return;
+    const n = ($("wiz-top").value.trim() || tpl.top) + ($("wiz-lang").value === "systemverilog" ? ".sv" : ".v");
+    h.innerHTML = "Your top-level module. LanEx starts <code>src/" + fmt.escape(n) + "</code> with a small module of that name.";
+  };
+  if ($("wiz-top")) {
+    $("wiz-top").addEventListener("input", paintTop);
+    $("wiz-lang").addEventListener("change", paintTop);
+    paintTop();
+  }
   paintWhere();
   paintClk();
   $("wiz-name").addEventListener("input", () => { $("wiz-err").textContent = ""; paintWhere(); });
@@ -232,24 +249,42 @@ async function doCreate(body, tpl) {
   const pdk = $("wiz-pdk").value || "";
   const scl = $("wiz-scl").value || "";
   const clk = $("wiz-clk") ? parseFloat($("wiz-clk").value) : NaN;
+  const sv = $("wiz-lang") && $("wiz-lang").value === "systemverilog";
+  const withTb = !!($("wiz-tb") && $("wiz-tb").checked);
   const btn = $("wiz-create");
   btn.disabled = true; btn.textContent = "Creating…";
   try {
     const res = await api.projectNew({
       dest_dir: dest, template: tpl.name, top, pdk, scl,
       clock_period: isNaN(clk) ? null : clk,
+      language: sv ? "systemverilog" : "verilog",
     });
     close();
     const setup = await import("./setup.js");
     const input = document.getElementById("design-dir-input");
     if (input) input.value = res.design_dir;
+    const topName = res.top || "top";
+    const ext = sv ? ".sv" : ".v";
+    // The usual first pair: the design and a bench that drives it.
+    let tbRel = null;
+    if (tpl.kind === "blank" && withTb) {
+      try {
+        const tb = await api.newProjectFile({ design_dir: res.design_dir, kind: sv ? "tb_sv" : "tb_v",
+          name: topName + "_tb", top: topName, clock: "clk", use: false });
+        tbRel = tb.rel;
+      } catch (ex) {
+        toast.show("The project is ready, but the testbench wasn't written: " + (ex.message || ex), "warn", 6000);
+      }
+    }
     await setup.adoptDesignDir(res.design_dir);
     if (tpl.kind === "blank") {
-      toast.show("Created " + name + ". Write your design in the RTL IDE; src/" + (res.top || "top") + ".v is ready.", "success");
+      toast.show("Created " + name + ". src/" + topName + ext + (tbRel ? " and " + tbRel : "") +
+        " are open in the RTL IDE.", "success");
       document.querySelector('.side-tab[data-tab="ide"]')?.click();
       const ide = await import("./ide/main.js");
       await ide.initIde({ designDir: res.design_dir, runMode: state.runMode });
-      await ide.openInIde({ rel: "src/" + (res.top || "top") + ".v" });
+      if (tbRel) await ide.openInIde({ rel: tbRel });
+      await ide.openInIde({ rel: "src/" + topName + ext });
     } else {
       document.querySelector('.side-tab[data-tab="setup"]')?.click();
       toast.show("Created " + name + ". It's ready to run.", "success");
