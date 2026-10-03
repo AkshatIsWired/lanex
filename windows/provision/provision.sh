@@ -361,6 +361,32 @@ base_packages() {
    Check your network and click Retry."
 }
 
+# ------------------------------------------------------------ 4b. GUI runtime --
+# The desktop viewers (KLayout, GDS3D, GTKWave, the OpenROAD GUI) draw through
+# WSLg. A fresh Ubuntu WSL image ships no Mesa drivers and no legacy X fonts, so
+# the first launch used to open a blank, taskbar-only "[WARN: COPY MODE]" window
+# or crash, and LanEx only tried to install the missing pieces at that moment.
+# Install them here instead, once, with the rest of the appliance.
+gui_runtime() {
+    say "Desktop viewer support (WSLg)"
+    $APT install -y --no-install-recommends         libgl1 libgl1-mesa-dri libegl1 libglu1-mesa         xfonts-base x11-utils fonts-dejavu-core         libxcb-cursor0 libxkbcommon-x11-0         || warn "some desktop viewer libraries could not be installed; LanEx retries when a viewer is opened."
+    # Every shell inside the appliance (the tray's "Open shell", anything a
+    # user starts by hand) gets the same X11-only display environment the
+    # launcher gives the LanEx server. systemd's /run/user/<uid> has no WSLg
+    # wayland-0 socket, yet WSL exports WAYLAND_DISPLAY; trusting it is what
+    # sends GTK/Qt/EGL down the Wayland path that degrades to COPY MODE.
+    cat > /etc/profile.d/lanex-wslg.sh <<'EOS'
+# Managed by LanEx Setup. Desktop tools in this appliance use WSLg's X11 display.
+# Set LANEX_WAYLAND=1 before starting a shell to opt back into Wayland.
+if [ -n "${WSL_DISTRO_NAME:-}" ] && [ -z "${LANEX_WAYLAND:-}" ] && [ -n "${DISPLAY:-}" ]; then
+    unset WAYLAND_DISPLAY
+    export GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb
+fi
+EOS
+    chmod 0644 /etc/profile.d/lanex-wslg.sh
+    note "Mesa GL drivers, X11 fonts and the X11-only display profile are in place."
+}
+
 # ---------------------------------------------------------------- 5. docker --
 docker_ce() {
     say "Container engine (Docker)"
@@ -712,6 +738,8 @@ main() {
     # Ubuntu's WSL image ships sudo so the order was invisible there; a plain
     # ubuntu:24.04 base (the Phase 2a rootfs bake) does not.
     base_packages
+    check_cancel
+    gui_runtime
     check_cancel
     app_user
     check_cancel

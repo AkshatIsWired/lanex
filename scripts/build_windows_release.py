@@ -44,6 +44,21 @@ def main() -> int:
     if not source_sha:
         source_sha = "bb22dc66fbc83b774dde1d302285b18350a83a42"
     print(f"[*] Building for source SHA: {source_sha}")
+    # The ref recorded in the manifest is the branch actually built, so an
+    # installed appliance says which line of work it came from.
+    source_ref = os.environ.get("LANEX_SOURCE_REF", "")
+    if not source_ref:
+        res = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=REPO_ROOT,
+                             capture_output=True, text=True)
+        source_ref = res.stdout.strip() if res.returncode == 0 else ""
+    if not source_ref or source_ref == "HEAD":
+        source_ref = source_sha
+    dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
+                           cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
+    if dirty:
+        print("[!] WARNING: tracked files have uncommitted changes; the source SHA "
+              "does not describe this build exactly:\n" + dirty)
+    print(f"[*] Source ref: {source_ref}")
 
     # 2. Build Python wheel
     print("[*] Building Python wheel...")
@@ -71,10 +86,21 @@ def main() -> int:
     if go_bin:
         run_cmd([go_bin, "build", "-buildvcs=false", "-o", "LanEx.exe", "."], cwd=launcher_dir)
     else:
-        go_distro = "Ubuntu-24.04"
+        # No Windows Go: cross-compile in the first WSL distro that has one.
         wsl_dir = str(launcher_dir).replace("\\", "/").replace("C:", "/mnt/c")
         wsl_go_cmd = f"cd '{wsl_dir}' && GOOS=windows GOARCH=amd64 go build -buildvcs=false -o LanEx.exe ."
-        run_cmd(["wsl.exe", "-d", go_distro, "-u", "root", "--", "bash", "-c", wsl_go_cmd])
+        go_distro = ""
+        for candidate in (os.environ.get("LANEX_GO_DISTRO", ""), "Ubuntu-24.04", "Ubuntu"):
+            if not candidate:
+                continue
+            probe = subprocess.run(["wsl.exe", "-d", candidate, "--", "bash", "-lc", "command -v go"],
+                                   capture_output=True, text=True)
+            if probe.returncode == 0 and probe.stdout.strip():
+                go_distro = candidate
+                break
+        if not go_distro:
+            raise SystemExit("Go not found on Windows or in a WSL distro (set LANEX_GO_DISTRO)")
+        run_cmd(["wsl.exe", "-d", go_distro, "--", "bash", "-lc", wsl_go_cmd])
     if not launcher_exe.exists():
         raise SystemExit("LanEx.exe failed to build")
     print(f"[*] Built LanEx.exe: {sha256_file(launcher_exe)}")
@@ -96,7 +122,7 @@ def main() -> int:
             Action = 'NewManifest'
             OutputPath = '{manifest_path}'
             SourceRepository = 'AkshatIsWired/lanex'
-            SourceRef = 'windows-installer-support'
+            SourceRef = '{source_ref}'
             SourceSha = '{source_sha}'
             AppVersion = '1.0.0'
             WheelPath = '{wheel_path}'
@@ -164,6 +190,8 @@ def main() -> int:
         "--source-sha", source_sha,
         "--output", str(verification_output)
     ])
+    for artifact in (launcher_exe, wheel_path, manifest_path):
+        shutil.copy2(artifact, out_dir / artifact.name)
     print("[+] Candidate verification complete and clean!")
     return 0
 

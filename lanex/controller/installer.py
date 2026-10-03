@@ -337,6 +337,50 @@ def _escalate_argv(argv: List[str]) -> Optional[Tuple[List[str], bool]]:
 # image/PDK take a while — but finite.
 _INSTALL_TIMEOUT_S = 3600
 
+# A download step that shows neither a new output line nor any received network
+# traffic for this long is treated as stalled: the process tree is killed and the
+# caller's retry loop starts again from the tool's own cache (docker layers,
+# ciel's tarball store). Without this a dead TCP connection on flaky Wi-Fi sat
+# silently until the multi-hour watchdog fired, which looked like a frozen
+# installer.
+_DOWNLOAD_STALL_S = 600.0
+
+
+def _net_rx_bytes() -> Optional[int]:
+    """Total bytes received on every non-loopback interface (Linux), or None.
+
+    Read from /proc/net/dev, so it is cheap, needs no root, and sees traffic
+    from every process on the box -- dockerd's layer downloads included, which
+    the docker CLI itself never reports when its stdout is not a terminal.
+    """
+    try:
+        with open("/proc/net/dev", "r", encoding="ascii", errors="replace") as fh:
+            lines = fh.read().splitlines()[2:]
+    except OSError:
+        return None
+    total = 0
+    for line in lines:
+        name, _, rest = line.partition(":")
+        if not rest or name.strip() == "lo":
+            continue
+        fields = rest.split()
+        if fields:
+            try:
+                total += int(fields[0])
+            except ValueError:
+                continue
+    return total
+
+
+def _human_bytes(n: float) -> str:
+    if n >= 1 << 30:
+        return f"{n / (1 << 30):.2f} GB"
+    if n >= 1 << 20:
+        return f"{n / (1 << 20):.0f} MB"
+    if n >= 1 << 10:
+        return f"{n / (1 << 10):.0f} KB"
+    return f"{int(n)} B"
+
 
 def _shell_exec_quiet(argv: List[str], timeout: float = 10.0) -> Tuple[int, str, str]:
     """Run a probe command, capturing output; never raises. (rc, stdout, stderr)."""
@@ -1125,15 +1169,30 @@ def _run_argv_on_tty(argv: List[str], *, label: str, key: str,
 
 def _run_argv(argv: List[str], *, label: str, key: str,
               timeout_s: Optional[float] = None,
-              env_extra: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+              env_extra: Optional[Dict[str, str]] = None,
+              expect_bytes: Optional[int] = None,
+              stall_s: Optional[float] = None) -> Dict[str, Any]:
     """Run an install command, streaming output to the event bus.
 
     *timeout_s* overrides the default watchdog ceiling — the image pull passes a
     higher one because a multi-GB download on a slow line legitimately exceeds
     the 1-hour default (the engine resumes cached layers on retry, but killing a
     healthy download is still wrong). *env_extra* is merged over the install
-    environment (e.g. an isolated ``DOCKER_CONFIG`` for a credential-less pull)."""
+    environment (e.g. an isolated ``DOCKER_CONFIG`` for a credential-less pull).
+
+    *expect_bytes* marks a download step: the heartbeat then reports received
+    bytes, rate and an approximate percentage (``installer_progress`` events),
+    so a long quiet download visibly moves. *stall_s* kills the step when there
+    has been no output and no network traffic for that long, returning
+    ``stalled: True`` so the caller retries instead of waiting for the
+    multi-hour watchdog."""
     deadline_s = float(timeout_s or _INSTALL_TIMEOUT_S)
+    if stall_s is None and os.environ.get("LANEX_SETUP_CANCEL_FILE"):
+        # Under Windows Setup nobody can see a terminal or click Cancel on a
+        # single command, so every step (apt, git clone, builds) gets a
+        # generous no-output-and-no-traffic limit instead of only the hour-long
+        # watchdog.
+        stall_s = 900.0
     # A sudo command can't prompt for a password through the browser. Rather than
     # give up, escalate: prompt on the terminal the GUI was launched from (the
     # reliable path on WSL), else a graphical pkexec dialog. Only fall back to a
@@ -1234,21 +1293,62 @@ def _run_argv(argv: List[str], *, label: str, key: str,
         stop_heartbeat = threading.Event()
         start_tick = time.time()
         last_line_tick = [start_tick]
+        stalled = {"hit": False}
+        rx_start = _net_rx_bytes()
+        # (time, rx) samples for a ~30 s moving download rate.
+        rx_samples: List[Tuple[float, int]] = []
+        last_rx_activity = [start_tick, rx_start or 0]
 
         def _heartbeat() -> None:
-            while not stop_heartbeat.wait(4.0):
+            while not stop_heartbeat.wait(5.0):
                 if proc.poll() is not None:
                     break
                 now = time.time()
-                if (now - last_line_tick[0]) >= 4.0:
-                    elapsed = int(now - start_tick)
-                    mins, secs = divmod(elapsed, 60)
-                    time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+                elapsed = int(now - start_tick)
+                mins, secs = divmod(elapsed, 60)
+                time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+                rx_now = _net_rx_bytes()
+                received = None
+                rate = 0.0
+                if rx_now is not None and rx_start is not None:
+                    received = max(0, rx_now - rx_start)
+                    rx_samples.append((now, rx_now))
+                    while rx_samples and now - rx_samples[0][0] > 30.0:
+                        rx_samples.pop(0)
+                    if len(rx_samples) >= 2 and rx_samples[-1][0] > rx_samples[0][0]:
+                        rate = (rx_samples[-1][1] - rx_samples[0][1]) / (
+                            rx_samples[-1][0] - rx_samples[0][0])
+                    # 256 KB of traffic counts as "the download is alive".
+                    if rx_now - last_rx_activity[1] > 256 * 1024:
+                        last_rx_activity[:] = [now, rx_now]
+                if expect_bytes and received is not None:
+                    percent = min(99, int(received * 100 / max(1, expect_bytes)))
+                    msg = (f"{_human_bytes(received)} of ~{_human_bytes(expect_bytes)} downloaded"
+                           f" ({_human_bytes(rate)}/s), {time_str} elapsed")
+                    _emit("installer_progress", {"key": key, "label": label,
+                                                 "bytes": received, "expect": expect_bytes,
+                                                 "percent": percent, "message": msg})
+                    _emit("installer_line", {"key": key, "label": label,
+                                             "line": f"  [active] {msg}"})
+                elif (now - last_line_tick[0]) >= 5.0:
+                    extra = ""
+                    if received:
+                        extra = f", {_human_bytes(received)} received at {_human_bytes(rate)}/s"
                     _emit("installer_line", {
                         "key": key,
-                        "line": f"  [active] operation in progress... ({time_str} elapsed)",
+                        "line": f"  [active] still working ({time_str} elapsed{extra})",
                         "label": label,
                     })
+                if stall_s:
+                    quiet_for = now - max(last_line_tick[0], last_rx_activity[0])
+                    if quiet_for >= stall_s and proc.poll() is None:
+                        stalled["hit"] = True
+                        _emit("installer_line", {"key": key, "label": label, "line": (
+                            f"No download activity for {int(quiet_for // 60)} minutes; the "
+                            "connection looks stuck. Restarting this step (data already "
+                            "downloaded is kept).")})
+                        _kill_proc_tree(proc, grace=5.0)
+                        break
 
         hb = threading.Thread(target=_heartbeat, daemon=True, name="installer_heartbeat")
         hb.start()
@@ -1266,12 +1366,19 @@ def _run_argv(argv: List[str], *, label: str, key: str,
 
         rc = proc.returncode
         _emit("installer_done", {"key": key, "rc": rc, "label": label})
-        return {
-            "ok": rc == 0,
+        result: Dict[str, Any] = {
+            "ok": rc == 0 and not stalled["hit"],
             "rc": rc,
-            "output": out_lines,
+            # Bounded: a progress-bar-heavy tool can print tens of thousands of
+            # lines over a multi-GB download; callers only need the tail.
+            "output": out_lines[-400:],
             "label": label,
         }
+        if stalled["hit"]:
+            result["stalled"] = True
+        if timed_out["hit"]:
+            result["timed_out"] = True
+        return result
     except Exception as ex:
         _emit("installer_error", {"key": key, "error": str(ex), "label": label})
         return {
@@ -2652,7 +2759,8 @@ _PDK_PERMANENT_FAILURES = (
 def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
                      required_version: Optional[str] = None,
                      strict: bool = False,
-                     variant_libraries: Optional[Dict[str, List[str]]] = None) -> Dict[str, Any]:
+                     variant_libraries: Optional[Dict[str, List[str]]] = None,
+                     expect_bytes: Optional[int] = None) -> Dict[str, Any]:
     """Fetch, enable and verify one PDK before returning.
 
     This is the single completion contract used by Windows finalization and the
@@ -2729,8 +2837,9 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
             if _is_cancelled(key):
                 return _cancelled_result(key)
             last = _run_argv(ciel + ["fetch", *base],
-                             label=f"ciel fetch {family} ({attempt}/{max_attempts})", key=key)
-            if _is_cancelled(key) or last.get("rc") in (-15, -9):
+                             label=f"ciel fetch {family} ({attempt}/{max_attempts})", key=key,
+                             expect_bytes=expect_bytes, stall_s=_DOWNLOAD_STALL_S)
+            if _is_cancelled(key) or (last.get("rc") in (-15, -9) and not last.get("stalled")):
                 return _cancelled_result(key)
             if last.get("ok"):
                 break
@@ -2811,7 +2920,8 @@ def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, An
 
 
 def pull_image_sync(reference: str, expected_digest: str, *,
-                    expected_engine: Optional[str] = None) -> Dict[str, Any]:
+                    expected_engine: Optional[str] = None,
+                    expect_bytes: Optional[int] = None) -> Dict[str, Any]:
     """Synchronously pull the immutable image selected by a build manifest."""
     from . import tools
 
@@ -2838,19 +2948,33 @@ def pull_image_sync(reference: str, expected_digest: str, *,
     argv = [engine, "pull", target]
     if resolved.get("sg_wrap"):
         argv = tools.sg_wrap_argv(argv)
+    key = "container:image"
     result: Dict[str, Any] = {"ok": False, "reason": "image pull failed"}
-    max_attempts = 3
+    # Layers already pulled stay in the engine's store, so every retry resumes
+    # rather than restarts. Stalls (dead connection, no traffic) get more
+    # retries than hard failures: on bad Wi-Fi they are the normal case.
+    max_attempts = 6
     for attempt in range(1, max_attempts + 1):
+        if _is_cancelled(key):
+            return _cancelled_result(key)
         label = f"{engine} pull {expected_digest[:19]}…"
         if attempt > 1:
             label += f" (attempt {attempt}/{max_attempts})"
-        result = _run_argv(argv, label=label,
-                           key="container:image", timeout_s=4 * 3600)
+        result = _run_argv(argv, label=label, key=key, timeout_s=4 * 3600,
+                           expect_bytes=expect_bytes, stall_s=_DOWNLOAD_STALL_S)
         if result.get("ok"):
             record_image_digest(engine, target, sg_wrap=bool(resolved.get("sg_wrap")))
             break
+        if _is_cancelled(key) or (result.get("rc") in (-15, -9) and not result.get("stalled")):
+            return _cancelled_result(key)
+        if attempt >= 3 and not result.get("stalled"):
+            break
         if attempt < max_attempts:
-            time.sleep(3.0)
+            delay = min(30, 5 * attempt)
+            _emit("installer_info", {"key": key, "message": (
+                f"image download interrupted; retrying in {delay}s (layers already "
+                "downloaded are kept)…")})
+            time.sleep(delay)
     result.update({"engine": engine, "image": target})
     return result
 
@@ -3074,6 +3198,26 @@ def cancel_install(key: str) -> Dict[str, Any]:
         return {"ok": True, "status": "cancelling"}
     _end_job(key)  # stale key hygiene (no worker owns it)
     return {"ok": False, "reason": "not running"}
+
+
+def cancel_all() -> List[str]:
+    """Cancel every running job and kill every live install process.
+
+    Windows Setup's cancel has to stop whatever the finalizer is doing right
+    now, including a step (the image pull) that never claimed a job key; a
+    per-key cancel left those running and let their retry loops start the next
+    attempt.
+    """
+    keys = set(_active_installs)
+    with _in_progress_lock:
+        keys |= set(_in_progress)
+    for key in keys:
+        _mark_cancelled(key)
+    for key in list(keys):
+        proc = _active_installs.get(key)
+        if proc is not None:
+            _kill_proc_tree(proc)
+    return sorted(keys)
 
 
 def _uninstall_gds3d() -> Dict[str, Any]:

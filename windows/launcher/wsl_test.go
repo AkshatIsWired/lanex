@@ -78,6 +78,13 @@ func TestStartServerDefersWindowUntilWindowsHealth(t *testing.T) {
 	if !strings.Contains(joined, "-u lanex") || !strings.Contains(joined, "LANEX_INSTANCE_ID=") {
 		t.Fatalf("server is not bound to the appliance user and identity: %q", args)
 	}
+	// The [WARN: COPY MODE] class: every tool the server starts must inherit
+	// an X11-only display environment.
+	for _, want := range []string{"-u WAYLAND_DISPLAY", "GDK_BACKEND=x11", "QT_QPA_PLATFORM=xcb", "bash -ic"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("server env is missing %q: %q", want, args)
+		}
+	}
 }
 
 // distroPresent's comparison must be case-insensitive: WSL preserves the name we

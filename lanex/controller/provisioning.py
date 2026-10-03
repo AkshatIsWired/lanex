@@ -19,7 +19,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 class ProvisioningInputError(ValueError):
@@ -373,6 +373,33 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
     return {"schema": 1, "ready": ready, "checks": checks}
 
 
+_GIB = 1 << 30
+
+# Relative weights of the finalizer's steps, used only to spread Setup's
+# progress bar honestly: the image and the PDK families are gigabytes of
+# download, a native tool is a minute of apt.
+_STEP_WEIGHTS = {"engine": 3, "native": 1, "gds3d": 3, "image": 30, "pdk": 25}
+
+
+def _emit_setup_event(event: str, **fields: Any) -> None:
+    """One machine-readable line for Windows Setup (``@@LANEX:{json}``)."""
+    payload = {"schema": 1, "event": event}
+    payload.update(fields)
+    print("@@LANEX:" + json.dumps(payload, separators=(",", ":")), flush=True)
+
+
+def _pdk_family_download_bytes(manifest: Mapping[str, Any], variants: List[Mapping[str, Any]]) -> int:
+    catalog = manifest.get("pdkCatalog") or {}
+    approx = 0.0
+    for v in variants:
+        entry = catalog.get(v["variant"]) or {}
+        try:
+            approx = max(approx, float(entry.get("approx_gb") or 0))
+        except (TypeError, ValueError):
+            continue
+    return int((approx or 2.0) * _GIB)
+
+
 def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
     """Install selected components synchronously, then return strict readiness."""
     from . import installer, tools
@@ -386,10 +413,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
 
     def announce(component: str, message: str) -> None:
         current_key[:] = [component]
-        print("@@LANEX:" + json.dumps({
-            "schema": 1, "event": "component", "component": component,
-            "message": message,
-        }, separators=(",", ":")), flush=True)
+        _emit_setup_event("component", component=component, message=message)
 
     def watch_cancel() -> None:
         if not cancel_path:
@@ -397,19 +421,81 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
         while not cancel_requested.is_set():
             if Path(cancel_path).is_file():
                 cancel_requested.set()
+                print("Cancel requested: stopping the current download safely...", flush=True)
                 if current_key:
                     installer.cancel_install(current_key[0])
+                # Then every other live process: the image pull never claims a
+                # job key, so a per-key cancel alone missed it and its retry
+                # loop started the next attempt.
+                installer.cancel_all()
                 return
             time.sleep(0.2)
 
     if cancel_path:
         threading.Thread(target=watch_cancel, name="lanex-setup-cancel", daemon=True).start()
 
+    # ---- the step plan, so Setup can show "step 3 of 7" and a moving bar ----
+    engine = plan["engine"]
+    family_groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for selected in plan["pdks"]:
+        family_groups.setdefault((selected["family"], selected["version"]), []).append(selected)
+    steps: List[Tuple[str, int]] = []
+    if engine != "none":
+        steps.append((f"engine:{engine}", _STEP_WEIGHTS["engine"]))
+    for key in plan["nativeTools"]:
+        steps.append((f"native:{key}", _STEP_WEIGHTS["gds3d" if key == "gds3d" else "native"]))
+    if plan["image"]:
+        steps.append(("container:image", _STEP_WEIGHTS["image"]))
+    for (family, _version) in family_groups:
+        steps.append((f"pdk-family:{family}", _STEP_WEIGHTS["pdk"]))
+    total_weight = sum(w for _, w in steps) or 1
+    spans: Dict[str, Tuple[int, int]] = {}
+    acc = 0
+    for name, weight in steps:
+        spans[name] = (acc * 100 // total_weight, (acc + weight) * 100 // total_weight)
+        acc += weight
+    step_index = {name: i + 1 for i, (name, _) in enumerate(steps)}
+    active_step: List[str] = []
+
+    sizes = plan["manifest"].get("sizeEstimates") or {}
+    image_bytes = int(sizes.get("estimatedImageDownloadBytes") or 3.2 * _GIB)
+    download_total = 0.0
+    if plan["image"] and not initial["checks"].get("container:image", {}).get("ready"):
+        download_total += image_bytes
+    for (_family, _version), variants in family_groups.items():
+        if not all(initial["checks"].get(f"pdk:{v['variant']}:{lib}", {}).get("ready")
+                   for v in variants for lib in v["libraries"]):
+            download_total += _pdk_family_download_bytes(plan["manifest"], variants)
+    _emit_setup_event("plan", total=len(steps),
+                      steps=[name for name, _ in steps],
+                      downloadBytes=int(download_total))
+    if download_total > 512 * 1024 * 1024:
+        print(f"This stage downloads up to about {download_total / _GIB:.1f} GB "
+              "(the LibreLane tool image and the chip PDKs). On slow or unstable Wi-Fi "
+              "it can take an hour or more. Progress is shown below; if the connection "
+              "drops, Setup retries and keeps what was already downloaded.", flush=True)
+
+    def begin_step(name: str, message: str) -> None:
+        active_step[:] = [name]
+        lo, hi = spans.get(name, (0, 100))
+        _emit_setup_event("step", index=step_index.get(name, 0), total=len(steps),
+                          start=lo, end=hi, component=name, message=message)
+
+    def skip_step(name: str, message: str) -> None:
+        begin_step(name, message)
+        print(f"already verified: {name}", flush=True)
+
     def drain() -> None:
         nonlocal cursor
         for event in bus.events_since(cursor):
             cursor = max(cursor, int(event.get("seq") or cursor))
-            if not str(event.get("type", "")).startswith("installer"):
+            etype = str(event.get("type", ""))
+            if not etype.startswith("installer"):
+                continue
+            if etype == "installer_progress":
+                _emit_setup_event("progress", percent=int(event.get("percent") or 0),
+                                  message=str(event.get("message") or ""),
+                                  component=active_step[0] if active_step else "")
                 continue
             line = event.get("line") or event.get("message")
             if line:
@@ -427,34 +513,37 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
     drain_thread.start()
 
     failures: List[Dict[str, Any]] = []
-    engine = plan["engine"]
-    if engine != "none" and not initial["checks"].get(f"engine:{engine}", {}).get("ready"):
-        announce(engine, f"installing {engine}")
-        result = installer.install_tool(engine)
-        drain()
-        if not result.get("ok"):
-            failures.append({"component": f"engine:{engine}", "result": result})
+    if engine != "none":
+        if initial["checks"].get(f"engine:{engine}", {}).get("ready"):
+            skip_step(f"engine:{engine}", f"{engine} is already running")
         else:
-            for attempt in range(1, 61):
-                if cancel_requested.is_set():
-                    failures.append({"component": f"engine:{engine}", "cancelled": True})
-                    break
-                if tools.resolve_engine(engine).get("ready"):
-                    print(f"selected engine is reachable: {engine}", flush=True)
-                    break
-                if attempt % 5 == 0:
-                    print(f"waiting for {engine} readiness ({attempt * 2}s)...", flush=True)
-                time.sleep(2)
+            begin_step(f"engine:{engine}", f"Installing the {engine} container engine")
+            announce(engine, f"installing {engine}")
+            result = installer.install_tool(engine)
+            drain()
+            if not result.get("ok"):
+                failures.append({"component": f"engine:{engine}", "result": result})
             else:
-                failures.append(
-                    {
-                        "component": f"engine:{engine}",
-                        "result": {
-                            "ok": False,
-                            "reason": "engine did not become reachable within two minutes",
-                        },
-                    }
-                )
+                for attempt in range(1, 61):
+                    if cancel_requested.is_set():
+                        failures.append({"component": f"engine:{engine}", "cancelled": True})
+                        break
+                    if tools.resolve_engine(engine).get("ready"):
+                        print(f"selected engine is reachable: {engine}", flush=True)
+                        break
+                    if attempt % 5 == 0:
+                        print(f"waiting for {engine} readiness ({attempt * 2}s)...", flush=True)
+                    time.sleep(2)
+                else:
+                    failures.append(
+                        {
+                            "component": f"engine:{engine}",
+                            "result": {
+                                "ok": False,
+                                "reason": "engine did not become reachable within two minutes",
+                            },
+                        }
+                    )
     previous_commit = os.environ.get("LANEX_GDS3D_COMMIT")
     os.environ["LANEX_GDS3D_COMMIT"] = plan["manifest"]["gds3d"]["commit"]
     try:
@@ -464,8 +553,10 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                     failures.append({"component": f"native:{key}", "cancelled": True})
                     break
                 if initial["checks"].get(f"native:{key}", {}).get("ready"):
-                    print(f"already verified: native:{key}", flush=True)
+                    skip_step(f"native:{key}", f"{key} is already installed")
                     continue
+                label = "Building GDS3D (3D layout viewer)" if key == "gds3d" else f"Installing {key}"
+                begin_step(f"native:{key}", label)
                 announce(key, f"installing and verifying native tool {key}")
                 print(f"  * Installing native tool: {key}...", flush=True)
                 result = installer.install_tool(key)
@@ -479,15 +570,19 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
             os.environ.pop("LANEX_GDS3D_COMMIT", None)
         else:
             os.environ["LANEX_GDS3D_COMMIT"] = previous_commit
-    if not failures and plan["image"]:
+    if not failures and plan["image"] and not cancel_requested.is_set():
         image = plan["manifest"]["image"]
         if initial["checks"].get("container:image", {}).get("ready"):
-            print("already verified: container:image", flush=True)
+            skip_step("container:image", "The LibreLane tool image is already downloaded")
         else:
+            begin_step("container:image",
+                       f"Downloading the LibreLane tool image (about {image_bytes / _GIB:.1f} GB)")
             announce("container:image", "pulling and verifying the matched LibreLane image")
-            print(f"  * Pulling LibreLane container image ({image['reference']}) [~3.4 GB]...", flush=True)
+            print(f"  * Pulling LibreLane container image ({image['reference']}) "
+                  f"[~{image_bytes / _GIB:.1f} GB download]...", flush=True)
             result = installer.pull_image_sync(
-                image["reference"], image["digest"], expected_engine=plan["engine"]
+                image["reference"], image["digest"], expected_engine=plan["engine"],
+                expect_bytes=image_bytes,
             )
             drain()
             if not result.get("ok"):
@@ -495,11 +590,6 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
             else:
                 print("  [OK] LibreLane container image verified ready.", flush=True)
     if not failures:
-        family_groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
-        for selected in plan["pdks"]:
-            f_key = (selected["family"], selected["version"])
-            family_groups.setdefault(f_key, []).append(selected)
-
         for (family, version), variants in family_groups.items():
             if cancel_requested.is_set():
                 for v in variants:
@@ -513,6 +603,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                     all_ready = False
                     break
             if all_ready:
+                skip_step(f"pdk-family:{family}", f"{family} PDK is already installed")
                 for v in variants:
                     print(f"already verified: pdk:{v['variant']}", flush=True)
                 continue
@@ -526,6 +617,10 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                         all_libs.append(lib)
 
             var_names = ", ".join(v["variant"] for v in variants)
+            family_bytes = _pdk_family_download_bytes(plan["manifest"], variants)
+            begin_step(f"pdk-family:{family}",
+                       f"Downloading the {family} PDK ({var_names}, about "
+                       f"{family_bytes / _GIB:.1f} GB)")
             announce(f"pdk:{variants[0]['variant']}", f"installing and verifying {family} ({var_names})")
             print(f"  * Installing PDK family: {family} for {var_names} ({len(all_libs)} unique libraries)...", flush=True)
 
@@ -535,6 +630,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                 required_version=version,
                 strict=True,
                 variant_libraries=variant_libs_map,
+                expect_bytes=family_bytes,
             )
             drain()
             if not result.get("ok"):
@@ -543,6 +639,8 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                 break
             for v in variants:
                 print(f"  [OK] PDK verified ready: {v['variant']}", flush=True)
+    _emit_setup_event("step", index=len(steps), total=len(steps), start=100, end=100,
+                      component="verify", message="Verifying everything that was installed")
     if cancel_requested.is_set():
         report = {"schema": 1, "ready": False, "checks": initial["checks"]}
     else:
@@ -550,6 +648,17 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
     report["installFailures"] = failures
     report["cancelled"] = cancel_requested.is_set()
     report["ready"] = bool(report["ready"] and not failures)
+    if not report["ready"] and not report["cancelled"]:
+        # The JSON report below is for diagnostics; this is for people.
+        print("Not ready yet:", flush=True)
+        for failure in failures:
+            res = failure.get("result") or {}
+            why = res.get("reason") or res.get("error") or res.get("guidance") or "failed"
+            print(f"  - {failure['component']}: {str(why).splitlines()[0][:200]}", flush=True)
+        for name, check in report.get("checks", {}).items():
+            if not check.get("ready"):
+                missing = check.get("missing") or check.get("detail") or ""
+                print(f"  - {name}: not ready {str(missing)[:160]}".rstrip(), flush=True)
     draining.set()
     drain_thread.join(timeout=1.0)
     current_key.clear()

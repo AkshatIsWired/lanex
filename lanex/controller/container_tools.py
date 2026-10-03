@@ -205,6 +205,10 @@ def _x11_flags(engine: str = "docker") -> List[str]:
     # (e.g. a user who runs the engine with GPU passthrough themselves).
     if not platform_env.hw_gl_requested():
         flags += ["-e", "LIBGL_ALWAYS_SOFTWARE=1", "-e", "GALLIUM_DRIVER=llvmpipe"]
+    # Only an X11 display is ever forwarded into the container, so say so:
+    # a Qt/GTK build that defaults to Wayland would otherwise probe for a
+    # compositor that is not there (on WSL, the [WARN: COPY MODE] class).
+    flags += ["-e", "QT_QPA_PLATFORM=xcb", "-e", "GDK_BACKEND=x11"]
     disp = os.environ.get("DISPLAY")
     if sys.platform.startswith("linux"):
         if disp:

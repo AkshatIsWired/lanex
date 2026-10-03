@@ -141,8 +141,11 @@ def test_pdk_sync_retries_transient_then_enables_with_argv(monkeypatch: pytest.M
     _mock_pdk_environment(monkeypatch)
     calls = []
 
-    def run(argv, *, label, key):
+    def run(argv, *, label, key, **kwargs):
         calls.append(argv)
+        if "fetch" in argv:
+            # Download steps opt into progress reporting and stall detection.
+            assert kwargs.get("stall_s") and "expect_bytes" in kwargs
         if "fetch" in argv and sum("fetch" in c for c in calls) < 3:
             return {"ok": False, "rc": 1, "output": ["connection reset"]}
         return {"ok": True, "rc": 0, "output": []}
@@ -431,7 +434,10 @@ def test_finalizer_cancel_file_stops_current_job_and_no_later_component(
     assert cancelled == ["iverilog"]
     assert report["cancelled"] is True
     assert report["ready"] is False
-    assert "graphviz" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    # graphviz appears in the up-front step plan, but no step for it may start.
+    assert '"component":"native:graphviz"' not in out
+    assert "Installing native tool: graphviz" not in out
 
 
 def test_shell_and_setup_sequence_base_restart_finalize() -> None:

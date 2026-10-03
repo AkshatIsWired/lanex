@@ -147,6 +147,12 @@ def wsl_gui_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     if is_wsl() and not os.environ.get("LANEX_WAYLAND"):
         env.setdefault("GDK_BACKEND", "x11,*")
         env.setdefault("QT_QPA_PLATFORM", "xcb;wayland")
+        # With systemd on (the Windows appliance), /run/user/<uid> has no
+        # wayland-0 while WSL still exports WAYLAND_DISPLAY; Mesa's EGL and any
+        # toolkit that ignores the pins above then pick the Wayland path anyway.
+        # Without the variable, X11/XWayland is the only transport left.
+        if env.get("DISPLAY"):
+            env.pop("WAYLAND_DISPLAY", None)
     return env
 
 

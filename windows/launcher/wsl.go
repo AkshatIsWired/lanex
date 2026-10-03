@@ -122,6 +122,14 @@ func decodeUTF16LE(b []byte) string {
 //     first from ever running and leaves WSLg half-initialised.
 //  3. No LANEX_HW_GL / LIBRELANE_GUI_WSL_HW_GL. LanEx already selects safe
 //     software GL on WSL; forcing hardware GL deadlocks a degraded vGPU bridge.
+//  4. X11 only, for the server and everything it starts. The appliance runs
+//     systemd, which gives the user a fresh /run/user/<uid> WITHOUT WSLg's
+//     wayland-0 socket, while WSL still exports WAYLAND_DISPLAY=wayland-0. A
+//     toolkit or Mesa EGL that trusts that variable lands on WSLg's Wayland
+//     path, which is the one that degrades to the blank taskbar-only window.
+//     Removing WAYLAND_DISPLAY and pinning GTK/Qt to X11 here covers every
+//     child process (native tools, container launches, anything added later),
+//     not only the launch sites that remember to call wsl_gui_env.
 //
 // `cd ~` first, and it is not cosmetic either. wsl.exe translates the CALLING
 // process's Windows working directory into the Linux one, and this launcher is
@@ -154,6 +162,9 @@ func startServer() (*exec.Cmd, error) {
 
 func startServerArgs() []string {
 	return []string{"-d", distroName, "-u", appUser, "--", "env",
+		"-u", "WAYLAND_DISPLAY",
+		"GDK_BACKEND=x11",
+		"QT_QPA_PLATFORM=xcb",
 		"LANEX_INSTANCE_ID=" + activeConfig.InstallID,
 		"LANEX_SOURCE_SHA=" + activeConfig.SourceSHA,
 		"LANEX_MANIFEST_HASH=" + activeConfig.Manifest,

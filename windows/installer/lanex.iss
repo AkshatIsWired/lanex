@@ -226,6 +226,7 @@ Source: "..\provision\provision.sh"; Flags: dontcopy
 Source: "..\provision\selftest.sh"; Flags: dontcopy
 Source: "{#RepoRoot}scripts\install.sh"; Flags: dontcopy
 Source: "..\setup\setup.ps1"; Flags: dontcopy
+Source: "..\setup\run-streamed.ps1"; Flags: dontcopy
 ; The data-only worker remains available to the uninstaller for owner/marker
 ; validation, verified export, resume cleanup, and explicit removal.
 Source: "..\setup\setup.ps1"; DestDir: "{app}"; DestName: "setup-worker.ps1"; Flags: ignoreversion
@@ -332,6 +333,17 @@ var
   ProgressStartedTick: LongWord;
   ProgressTimer: LongWord;
   CancelRequested: Boolean;
+  // A long command is running under RunLogged. Only then does Cancel mean
+  // "stop the current step"; at any other moment it must close Setup normally
+  // (the old handler swallowed every Cancel on the progress pages, so after a
+  // failure or a finished cancel the user could only use Task Manager).
+  WorkerRunning: Boolean;
+  ForceStopRequested: Boolean;
+  CancelTick: LongWord;
+  RunCounter: Integer;
+  // Phase 6 (finalize) sub-progress, driven by @@LANEX step/progress events.
+  StepStartPct, StepEndPct: Integer;
+  StepLabel: String;
   BaseProvisionedForEstimate: Boolean;
   EstimateReuseApplied: Boolean;
 
@@ -420,18 +432,35 @@ begin
   StringChangeEx(Result, '[0m', '', True);
 end;
 
+// Where each phase STARTS on the bar. Phase 6 (tools, the ~3 GB image and the
+// PDKs) is most of the wall-clock time on a real install, so it owns half of
+// the bar and moves by measured download progress instead of sitting at 80%.
 function PhasePercent(Number: Integer): Integer;
 begin
   case Number of
-    1: Result := 15;
-    2: Result := 30;
-    3: Result := 45;
-    4: Result := 65;
-    5: Result := 75;
-    6: Result := 80;
+    1: Result := 2;
+    2: Result := 5;
+    3: Result := 16;
+    4: Result := 20;
+    5: Result := 46;
+    6: Result := 48;
   else
     Result := 0;
   end;
+end;
+
+const
+  FinalizeBase = 48;
+  FinalizeSpan = 51;
+
+procedure SetBarAtLeast(Pct: Integer);
+begin
+  if ProgressBar = nil then Exit;
+  if Pct > 100 then Pct := 100;
+  // Never move backwards: a retry is reported in the log, not by a bar that
+  // jumps back and makes the user think everything restarted.
+  if Pct > ProgressBar.Position then
+    ProgressBar.Position := Pct;
 end;
 
 procedure RefreshProgressCaption;
@@ -444,7 +473,9 @@ begin
   if ProgressBar <> nil then Pct := ProgressBar.Position;
   if Pct > 0 then PctStr := ' (' + IntToStr(Pct) + '%)' else PctStr := '';
 
-  if (ProgressPhase > 0) and (ProgressPhaseCount > 0) then
+  if (ProgressPhase = 6) and (StepLabel <> '') then
+    Caption := StepLabel + ': ' + ProgressActivity + PctStr
+  else if (ProgressPhase > 0) and (ProgressPhaseCount > 0) then
     Caption := 'Phase ' + IntToStr(ProgressPhase) + ' of ' + IntToStr(ProgressPhaseCount) + ': ' + ProgressActivity + PctStr
   else
     Caption := ProgressActivity + PctStr;
@@ -478,11 +509,12 @@ end;
 
 procedure SetPhase(Number, Total: Integer; const S: String);
 begin
+  if Number <> ProgressPhase then
+    StepLabel := '';
   ProgressPhase := Number;
   ProgressPhaseCount := Total;
   ProgressActivity := S;
-  if ProgressBar <> nil then
-    ProgressBar.Position := PhasePercent(Number);
+  SetBarAtLeast(PhasePercent(Number));
   RefreshProgressCaption;
   AppendLiveLine('--- Phase ' + IntToStr(Number) + '/' + IntToStr(Total) + ': ' + S);
   LogLine('--- phase ' + IntToStr(Number) + '/' + IntToStr(Total) + ': ' + S);
@@ -503,23 +535,124 @@ end;
 
 function StripNulls(const S: String): String; forward;
 
-function ProgressMessage(const Line: String): String;
+// Minimal readers for the one-line @@LANEX:{json} events. The values Setup
+// reads are flat strings and integers, so a full JSON parser is not needed.
+function EventStr(const Line, Key: String): String;
 var
   Marker, Rest: String;
-  P: Integer;
+  P, I: Integer;
 begin
   Result := '';
-  Marker := '"message":"';
+  Marker := '"' + Key + '":"';
   P := Pos(Marker, Line);
   if P = 0 then Exit;
   Rest := Copy(Line, P + Length(Marker), Length(Line));
-  P := Pos('"', Rest);
-  if P > 0 then Result := Copy(Rest, 1, P - 1);
+  I := 1;
+  while I <= Length(Rest) do
+  begin
+    if Rest[I] = '\' then
+    begin
+      if I < Length(Rest) then
+      begin
+        if Rest[I + 1] = 'n' then Result := Result + ' '
+        else Result := Result + Rest[I + 1];
+      end;
+      I := I + 2;
+    end
+    else if Rest[I] = '"' then
+      Break
+    else
+    begin
+      Result := Result + Rest[I];
+      I := I + 1;
+    end;
+  end;
+end;
+
+function EventInt(const Line, Key: String; Default: Integer): Integer;
+var
+  Marker, Digits: String;
+  P: Integer;
+begin
+  Result := Default;
+  Marker := '"' + Key + '":';
+  P := Pos(Marker, Line);
+  if P = 0 then Exit;
+  P := P + Length(Marker);
+  Digits := '';
+  if (P <= Length(Line)) and (Line[P] = '-') then
+  begin
+    Digits := '-';
+    P := P + 1;
+  end;
+  while (P <= Length(Line)) and (Line[P] >= '0') and (Line[P] <= '9') do
+  begin
+    Digits := Digits + Line[P];
+    P := P + 1;
+  end;
+  Result := StrToIntDef(Digits, Default);
+end;
+
+function ProgressMessage(const Line: String): String;
+begin
+  Result := EventStr(Line, 'message');
+end;
+
+procedure HandleSetupEvent(const Line: String);
+var
+  EventName, Msg: String;
+  Index, Total, Pct: Integer;
+begin
+  EventName := EventStr(Line, 'event');
+  Msg := ProgressMessage(Line);
+  if EventName = 'step' then
+  begin
+    Index := EventInt(Line, 'index', 0);
+    Total := EventInt(Line, 'total', 0);
+    StepStartPct := EventInt(Line, 'start', 0);
+    StepEndPct := EventInt(Line, 'end', StepStartPct);
+    if (Index > 0) and (Total > 0) then
+      StepLabel := 'Step ' + IntToStr(Index) + ' of ' + IntToStr(Total)
+    else
+      StepLabel := '';
+    if Msg <> '' then
+    begin
+      ProgressActivity := Msg;
+      AppendLiveLine('');
+      AppendLiveLine('>> ' + StepLabel + ': ' + Msg);
+    end;
+    if ProgressPhase = 6 then
+      SetBarAtLeast(FinalizeBase + StepStartPct * FinalizeSpan div 100);
+  end
+  else if EventName = 'progress' then
+  begin
+    Pct := EventInt(Line, 'percent', -1);
+    if (Pct >= 0) and (ProgressPhase = 6) then
+      SetBarAtLeast(FinalizeBase + (StepStartPct + (StepEndPct - StepStartPct) * Pct div 100) * FinalizeSpan div 100);
+    // The [active] line with the same text already reaches the live log.
+    if Msg <> '' then
+      ProgressActivity := Msg;
+  end
+  else if EventName = 'plan' then
+  begin
+    Total := EventInt(Line, 'total', 0);
+    if Total > 0 then
+      AppendLiveLine('Setup will install or verify ' + IntToStr(Total) + ' components.');
+  end
+  else if Msg <> '' then
+  begin
+    // phase / component announcements from provision.sh and the finalizer
+    ProgressActivity := Msg;
+    AppendLiveLine('  * ' + Msg);
+    if (EventName = 'phase') and (ProgressPhase = 4) and (ProgressBar <> nil) and
+       (ProgressBar.Position < PhasePercent(5) - 2) then
+      SetBarAtLeast(ProgressBar.Position + 2);
+  end;
 end;
 
 procedure CommandOutput(const S: String; const Error, FirstLine: Boolean);
 var
-  Line, Msg: String;
+  Line: String;
   IsNoise: Boolean;
 begin
   Line := Trim(StripNulls(S));
@@ -531,17 +664,13 @@ begin
 
   if Pos('@@LANEX:', Line) = 1 then
   begin
-    Msg := ProgressMessage(Line);
-    if Msg <> '' then
-    begin
-      ProgressActivity := Msg;
-      AppendLiveLine('  * ' + Msg);
-      RefreshProgressCaption;
-    end;
+    HandleSetupEvent(Line);
     Exit;
   end;
 
-  IsNoise := (Pos('creating virtual environment', Line) > 0) or
+  // The finalizer's closing JSON report is for the log file, not for people.
+  IsNoise := ((Pos('{"', Line) = 1) and (Length(Line) > 300)) or
+             (Pos('creating virtual environment', Line) > 0) or
              (Pos('determining package name', Line) > 0) or
              (Pos('installing lanex from spec', Line) > 0) or
              (Pos('Processing triggers for', Line) > 0) or
@@ -552,19 +681,12 @@ begin
   if not IsNoise then
   begin
     AppendLiveLine(Line);
-    if (Pos('  *', Line) = 1) or (Pos('* Installing', Line) > 0) or (Pos('already verified:', Line) = 1) or (Pos('[OK]', Line) > 0) then
-    begin
-      ProgressActivity := Copy(Line, 1, 120);
-      if (ProgressBar <> nil) and (ProgressPhase = 6) and (ProgressBar.Position < 98) then
-        ProgressBar.Position := ProgressBar.Position + 2;
-    end
-    else if Pos('[active]', Line) > 0 then
-    begin
-      ProgressActivity := Copy(Line, 1, 120);
-    end;
+    if (Pos('[active]', Line) > 0) then
+      ProgressActivity := Trim(Copy(Line, Pos('[active]', Line) + 8, 140))
+    else if (Pos('  *', Line) = 1) or (Pos('* Installing', Line) > 0) or
+            (Pos('already verified:', Line) = 1) or (Pos('[OK]', Line) > 0) then
+      ProgressActivity := Copy(Line, 1, 140);
   end;
-
-  RefreshProgressCaption;
 end;
 
 // StripNulls turns a UTF-16LE byte stream that was loaded as bytes into
@@ -624,102 +746,150 @@ begin
   DeleteFile(ScriptFile);
 end;
 
-// Output is consumed line-by-line using non-blocking execution so the wizard
-// remains responsive, draggable, minimizable, and log-selectable throughout.
+// RunLogged runs one long command through run-streamed.ps1 and feeds its output
+// to the log and the live view as it arrives, keeping the wizard responsive.
+//
+// Two properties matter more than anything else here:
+//   * flat cost: each output line is read exactly once (from small chunk files
+//     the runner hands over), no matter how many hours the step takes;
+//   * a bounded exit: after Cancel, a graceful Linux-side stop is tried first,
+//     then only our own distro is terminated, then the runner kills the
+//     process tree, and finally Setup stops waiting. Cancel can never leave the
+//     wizard spinning forever.
 function RunLogged(const FileName, Params: String; var ResultCode: Integer): Boolean;
 var
-  PreviousWslEnv, ForwardedWslEnv, BatFile, OutFile, DoneFile, ExitCodeStr, Line: String;
+  PreviousWslEnv, ForwardedWslEnv, Runner, RunDir, ChunkFile, AliveText, LastAlive: String;
+  Lines: TArrayOfString;
   Raw: AnsiString;
-  LastPos, CurrLen, DummyCode, P, NextNL: Integer;
+  Seq, I, DummyCode: Integer;
+  Done, TerminateSent, KillSent, DistroCommand, ImportCommand: Boolean;
+  LastAliveTick, LastCaptionTick, CancelAge: LongWord;
 begin
   ForceDirectories(LogDir);
   LogLine('$ ' + FileName + ' ' + Params);
+  ResultCode := -1;
+  Result := False;
+  ExtractTemporaryFile('run-streamed.ps1');
+  Runner := ExpandConstant('{tmp}\run-streamed.ps1');
+  RunCounter := RunCounter + 1;
+  RunDir := ExpandConstant('{tmp}\run-') + IntToStr(RunCounter);
+  DelTree(RunDir, True, True, True);
+  ForceDirectories(RunDir);
+  SaveStringToFile(RunDir + '\command.txt', FileName + #13#10 + Params + #13#10, False);
+  DistroCommand := Pos('-d ' + DistroNameValue + ' ', Params) = 1;
+  ImportCommand := Pos('--import', Params) > 0;
+
   PreviousWslEnv := GetEnv('WSLENV');
   ForwardedWslEnv := 'HTTP_PROXY:HTTPS_PROXY:NO_PROXY:http_proxy:https_proxy:no_proxy';
   if PreviousWslEnv <> '' then
     ForwardedWslEnv := PreviousWslEnv + ':' + ForwardedWslEnv;
   SetProcessEnvironmentVariable('WSLENV', ForwardedWslEnv);
+  WorkerRunning := True;
   try
     SetProcessEnvironmentVariable('WSL_UTF8', '1');
-    BatFile := ExpandConstant('{tmp}\lanex_exec.bat');
-    OutFile := ExpandConstant('{tmp}\lanex_exec.log');
-    DoneFile := ExpandConstant('{tmp}\lanex_exec.done');
-    DeleteFile(BatFile);
-    DeleteFile(OutFile);
-    DeleteFile(DoneFile);
-
-    SaveStringToFile(BatFile,
-      '@echo off' + #13#10 +
-      'chcp 65001 >nul' + #13#10 +
-      'set WSL_UTF8=1' + #13#10 +
-      'set COLUMNS=120' + #13#10 +
-      'set LINES=40' + #13#10 +
-      'set TERM=dumb' + #13#10 +
-      'call "' + FileName + '" ' + Params + ' >> "' + OutFile + '" 2>&1' + #13#10 +
-      'echo %errorlevel% > "' + DoneFile + '"' + #13#10, False);
-
-    Exec(ExpandConstant('{cmd}'), '/c ""' + BatFile + '""', '', SW_HIDE, ewNoWait, DummyCode);
-
-    LastPos := 1;
-    while not FileExists(DoneFile) do
+    SetProcessEnvironmentVariable('COLUMNS', '120');
+    SetProcessEnvironmentVariable('LINES', '40');
+    SetProcessEnvironmentVariable('TERM', 'dumb');
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+        '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'
+        + Runner + '" -ChunkDir "' + RunDir + '"', '', SW_HIDE, ewNoWait, DummyCode) then
     begin
-      Sleep(50);
+      LogLine('could not start the Setup step runner: ' + SysErrorMessage(DummyCode));
+      AppendLiveLine('Error: Setup could not start this step (PowerShell unavailable).');
+      Exit;
+    end;
+
+    Seq := 0;
+    Done := False;
+    TerminateSent := False;
+    KillSent := False;
+    LastAlive := '';
+    LastAliveTick := GetTickCount;
+    LastCaptionTick := 0;
+    while True do
+    begin
       ProcessSystemMessages;
-      if FileSize(OutFile, CurrLen) and (CurrLen >= LastPos) then
+      // Hand over every finished chunk, in order.
+      ChunkFile := RunDir + '\chunk-' + Format('%.6d', [Seq]) + '.txt';
+      while FileExists(ChunkFile) do
       begin
-        if LoadStringFromFile(OutFile, Raw) then
-        begin
-          CurrLen := Length(Raw);
-          if CurrLen >= LastPos then
+        if LoadStringsFromFile(ChunkFile, Lines) then
+          for I := 0 to GetArrayLength(Lines) - 1 do
           begin
-            P := LastPos;
-            while P <= CurrLen do
-            begin
-              NextNL := P;
-              while (NextNL <= CurrLen) and (Raw[NextNL] <> #10) do
-                NextNL := NextNL + 1;
-              if NextNL <= CurrLen then
-              begin
-                Line := Copy(String(Raw), P, NextNL - P);
-                CommandOutput(Line, False, False);
-                P := NextNL + 1;
-                LastPos := P;
-              end
-              else
-                Break;
-            end;
+            CommandOutput(Lines[I], False, False);
+            if (I mod 25) = 24 then ProcessSystemMessages;
           end;
+        DeleteFile(ChunkFile);
+        Seq := Seq + 1;
+        ChunkFile := RunDir + '\chunk-' + Format('%.6d', [Seq]) + '.txt';
+        ProcessSystemMessages;
+      end;
+      if Done then Break;
+      Done := FileExists(RunDir + '\exit.code');
+      if Done then Continue; // one more pass collects the final chunk
+
+      // A runner that died without reporting (killed, crashed) stops updating
+      // alive.txt; do not wait on it forever.
+      if LoadStringFromFile(RunDir + '\alive.txt', Raw) and (String(Raw) <> LastAlive) then
+      begin
+        LastAlive := String(Raw);
+        LastAliveTick := GetTickCount;
+      end
+      else if GetTickCount - LastAliveTick > 90000 then
+      begin
+        LogLine('the Setup step runner stopped responding; treating the step as failed');
+        AppendLiveLine('Error: the background step stopped responding.');
+        Break;
+      end;
+
+      if CancelRequested or ForceStopRequested then
+      begin
+        CancelAge := GetTickCount - CancelTick;
+        if ForceStopRequested then CancelAge := CancelAge + 600000;
+        // 1. graceful: the Linux side saw setup.cancel (CancelButtonClick).
+        // 2. after 25 s, stop ONLY our own distro; everything it was doing
+        //    ends, caches stay on disk, the next run re-checks and resumes.
+        if DistroCommand and (not TerminateSent) and (CancelAge > 25000) then
+        begin
+          TerminateSent := True;
+          SetStatus('Stopping the private LanEx environment...');
+          Exec(WslExe, '--terminate ' + DistroNameValue, '', SW_HIDE, ewNoWait, DummyCode);
+        end;
+        // 3. after 40 s the runner kills the command's process tree. An import
+        //    is local disk work that should finish; interrupting it could leave
+        //    a half-registered distro, so it is only abandoned on Force stop.
+        if (not KillSent) and (CancelAge > 40000) and ((not ImportCommand) or ForceStopRequested) then
+        begin
+          KillSent := True;
+          SaveStringToFile(RunDir + '\kill.request', 'stop', False);
+        end;
+        // 4. never wait more than a minute after Cancel.
+        if (CancelAge > 60000) and ((not ImportCommand) or ForceStopRequested) then
+        begin
+          LogLine('stopped waiting for the cancelled step');
+          ResultCode := 130;
+          Break;
         end;
       end;
-      RefreshProgressCaption;
-    end;
 
-    // Drain any remaining output lines
-    if FileExists(OutFile) and LoadStringFromFile(OutFile, Raw) then
-    begin
-      CurrLen := Length(Raw);
-      if CurrLen >= LastPos then
+      if GetTickCount - LastCaptionTick > 500 then
       begin
-        Line := Copy(String(Raw), LastPos, CurrLen - LastPos + 1);
-        if Trim(Line) <> '' then
-          CommandOutput(Line, False, False);
+        RefreshProgressCaption;
+        LastCaptionTick := GetTickCount;
       end;
+      Sleep(40);
     end;
 
-    ResultCode := -1;
-    if FileExists(DoneFile) and LoadStringFromFile(DoneFile, Raw) then
-    begin
-      ExitCodeStr := Trim(String(Raw));
-      ResultCode := StrToIntDef(ExitCodeStr, -1);
-    end;
-
-    DeleteFile(BatFile);
-    DeleteFile(OutFile);
-    DeleteFile(DoneFile);
+    if FileExists(RunDir + '\exit.code') and LoadStringFromFile(RunDir + '\exit.code', Raw) then
+      ResultCode := StrToIntDef(Trim(StripNulls(String(Raw))), -1);
+    LogLine('exit code: ' + IntToStr(ResultCode));
+    RefreshProgressCaption;
     Result := (ResultCode = 0);
   finally
+    WorkerRunning := False;
     SetProcessEnvironmentVariable('WSL_UTF8', '');
     SetProcessEnvironmentVariable('WSLENV', PreviousWslEnv);
+    DelTree(RunDir, True, True, True);
   end;
 end;
 
@@ -1800,6 +1970,48 @@ begin
   DesktopShortcutCheckbox.Checked := True;
 end;
 
+const
+  RunOnceKey = 'Software\Microsoft\Windows\CurrentVersion\RunOnce';
+  FirmwareResumeValue = 'LanExSetupAfterFirmware';
+
+// After the user enables virtualization in firmware, Setup should simply be
+// there again when they sign in. Nothing has been changed on the PC yet at this
+// point, so the reopened Setup is an ordinary first run of the same EXE (kept
+// in the per-user cache because the original may be in Downloads or on a
+// removable drive).
+procedure ScheduleFirmwareResume;
+var
+  Cached: String;
+begin
+  Cached := CacheDir + '\LanEx-Setup.exe';
+  ForceDirectories(CacheDir);
+  if CompareText(ExpandConstant('{srcexe}'), Cached) <> 0 then
+    if not FileCopy(ExpandConstant('{srcexe}'), Cached, False) then
+      Cached := ExpandConstant('{srcexe}');
+  if RegWriteStringValue(HKCU, RunOnceKey, FirmwareResumeValue, '"' + Cached + '"') then
+    LogLine('firmware virtualization disabled; Setup will reopen after the next sign-in: ' + Cached)
+  else
+    LogLine('firmware virtualization disabled; could not register the reopen trigger');
+end;
+
+procedure ClearFirmwareResume;
+begin
+  if RegValueExists(HKCU, RunOnceKey, FirmwareResumeValue) then
+    RegDeleteValue(HKCU, RunOnceKey, FirmwareResumeValue);
+end;
+
+// shutdown /r /fw reboots straight into the UEFI setup screen. It needs
+// administrator rights and UEFI firmware; on anything else it fails and the
+// caller falls back to written instructions.
+function RestartIntoFirmware: Boolean;
+var
+  Code: Integer;
+begin
+  Result := ShellExec('runas', ExpandConstant('{sys}\shutdown.exe'), '/r /fw /t 10', '',
+    SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+  LogLine('restart into firmware requested; exit=' + IntToStr(Code));
+end;
+
 function InitializeSetup(): Boolean;
 var
   Failure, Detail, SilentProfile: String;
@@ -1825,6 +2037,13 @@ begin
   ProgressPhaseCount := 6;
   ProgressStartedTick := 0;
   CancelRequested := False;
+  WorkerRunning := False;
+  ForceStopRequested := False;
+  CancelTick := 0;
+  RunCounter := 0;
+  StepStartPct := 0;
+  StepEndPct := 0;
+  StepLabel := '';
   BaseProvisionedForEstimate := False;
   EstimateReuseApplied := False;
 
@@ -1866,22 +2085,47 @@ begin
 
   // Firmware disabled is the only early BIOS/UEFI block. A running hypervisor
   // overrides misleading firmware=false signals; unknown produces a notice.
+  // Windows cannot change this setting, so Setup explains it in plain words,
+  // offers to restart straight into the firmware screen, and arranges to open
+  // again by itself after the next sign-in.
   if PreflightDecision = 'firmware-disabled' then
   begin
+    Result := False;
+    if WizardSilent then Exit;
+    ScheduleFirmwareResume;
     Detail := '';
     if ComputerDisplayValue <> '' then
-      Detail := #13#10#13#10 + 'PC: ' + ComputerDisplayValue;
-    if (not WizardSilent) and (MsgBox('LanEx cannot run because your computer''s virtualization feature '
-      + 'is switched off.' + #13#10#13#10
-      + 'It is a one-time setting in your PC''s BIOS/UEFI screen, not something '
-      + 'Windows can change. Microsoft''s instructions include manufacturer links.'
-      + Detail
-      + #13#10#13#10 + 'Open the instructions now?',
-      mbError, MB_YESNO) = IDYES) then
+      Detail := #13#10#13#10 + 'Your PC: ' + ComputerDisplayValue
+        + ' (search "' + ComputerDisplayValue + ' enable virtualization" for exact steps).';
+    if MsgBox('One setting needs to be switched on first.' + #13#10#13#10
+      + 'LanEx needs your processor''s virtualization feature, and it is turned off '
+      + 'in this PC''s BIOS/UEFI settings. Windows cannot change it; you can, in about a minute:'
+      + #13#10#13#10
+      + '1. Restart into the BIOS/UEFI settings (Setup can do this for you now).' + #13#10
+      + '2. Find "Virtualization Technology", "Intel VT-x", "SVM Mode" or "AMD-V" '
+      + '(usually under Advanced or CPU Configuration) and set it to Enabled.' + #13#10
+      + '3. Save and exit (usually F10). Windows starts normally.'
+      + Detail + #13#10#13#10
+      + 'LanEx Setup opens again by itself after you sign in and carries on.'
+      + #13#10#13#10 + 'Restart into the BIOS/UEFI settings now? Save your work first.'
+      + #13#10 + '(No opens step-by-step instructions instead.)',
+      mbConfirmation, MB_YESNO) = IDYES then
+    begin
+      if not RestartIntoFirmware then
+      begin
+        MsgBox('This PC did not accept a direct restart into its firmware settings '
+          + '(older BIOS PCs do not support it, or the administrator prompt was declined).'
+          + #13#10#13#10 + 'Restart Windows yourself and press the setup key while the '
+          + 'manufacturer logo shows (commonly F2, F10, F12, Del or Esc). The instructions '
+          + 'page has the key for most brands.', mbInformation, MB_OK);
+        OpenHelp('#enable-virtualization');
+      end;
+    end
+    else
       OpenHelp('#enable-virtualization');
-    Result := False;
     Exit;
   end;
+  ClearFirmwareResume;
 
   // Interactive choices do not exist until InitializeWizard. Silent setup uses
   // either a named profile or a manifest-validated JSON selection file.
@@ -2170,8 +2414,7 @@ begin
     Pct := Integer(Progress * 100 div ProgressMax);
     SetPhase(2, 6, Format('Downloading the LanEx environment... %d%% of %d MB', [
       Pct, ProgressMax div 1048576]));
-    if ProgressBar <> nil then
-      ProgressBar.Position := 15 + (Pct * 15 div 100);
+    SetBarAtLeast(PhasePercent(2) + (Pct * 10 div 100));
   end;
   ProcessSystemMessages;
   Result := not CancelRequested;
@@ -2204,7 +2447,14 @@ begin
   try
     // Inno verifies the SHA256 itself and raises if it differs, so a corrupted
     // or substituted download can never reach `wsl --import`.
-    DownloadTemporaryFile(Url, FileName, Sha256, @OnDownloadProgress);
+    // Cancel during the download goes through RequestSetupCancel, which makes
+    // OnDownloadProgress return False and aborts the transfer cleanly.
+    WorkerRunning := True;
+    try
+      DownloadTemporaryFile(Url, FileName, Sha256, @OnDownloadProgress);
+    finally
+      WorkerRunning := False;
+    end;
     Downloaded := ExpandConstant('{tmp}\') + FileName;
     if not FileCopy(Downloaded, Dest, False) then
     begin
@@ -2643,7 +2893,7 @@ begin
         + 'WSL runtime without /ALLOWWSLUPDATE=1.';
       Exit;
     end;
-    if (not WizardSilent) and (MsgBox('LanEx needs a newer WSL runtime for systemd and desktop tools.'
+    if (not WizardSilent) and (Trim(ListedDistros) <> '') and (MsgBox('LanEx needs a newer WSL runtime for systemd and desktop tools.'
       + #13#10#13#10 + 'Updating WSL is machine-wide and can briefly affect '
       + 'other WSL work. Save active WSL work before continuing. Setup will '
       + 'not shut down or convert any distribution.' + #13#10#13#10
@@ -2967,22 +3217,45 @@ begin
   ProcessSystemMessages;
 end;
 
-procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
+procedure RequestSetupCancel;
 var
   Code: Integer;
 begin
-  if ((CurPageID = wpPreparing) or (CurPageID = wpInstalling)) and
-     (DistroNameValue <> '') then
+  CancelRequested := True;
+  CancelTick := GetTickCount;
+  SetStatus('Stopping safely... Setup keeps everything already downloaded.');
+  AppendLiveLine('Cancel requested. The current step is being stopped; this can take up to a minute.');
+  LogLine('cancellation requested by user');
+  if DistroNameValue <> '' then
+    Exec(WslExe, '-d ' + DistroNameValue + ' -u root -- sh -c "mkdir -p /run/lanex; touch /run/lanex/setup.cancel"',
+      '', SW_HIDE, ewNoWait, Code);
+end;
+
+procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
+begin
+  // Only while a step is actually running does Cancel mean "stop the step".
+  // Otherwise (before work starts, after a failure, after the stop finished)
+  // it is Inno's normal "Exit Setup?" and always lets the user leave.
+  if not WorkerRunning then Exit;
+  Cancel := False;
+  Confirm := False;
+  if not CancelRequested then
   begin
-    Cancel := False;
-    Confirm := False;
-    if not CancelRequested then
+    if WizardSilent or (MsgBox('Stop LanEx Setup now?' + #13#10#13#10
+      + 'Everything downloaded so far is kept. Running LanEx Setup again '
+      + 'continues from where it stopped.', mbConfirmation, MB_YESNO) = IDYES) then
+      RequestSetupCancel;
+  end
+  else if not ForceStopRequested then
+  begin
+    if MsgBox('Setup is still stopping the current step.' + #13#10#13#10
+      + 'Force it to stop immediately? This ends the private LanEx environment '
+      + 'right away; your projects and finished downloads are kept.',
+      mbConfirmation, MB_YESNO) = IDYES then
     begin
-      CancelRequested := True;
-      SetStatus('Stopping safely... the current package database operation will finish first.');
-      LogLine('cancellation requested by user');
-      Exec(WslExe, '-d ' + DistroNameValue + ' -u root -- sh -c "mkdir -p /run/lanex; touch /run/lanex/setup.cancel"',
-        '', SW_HIDE, ewNoWait, Code);
+      ForceStopRequested := True;
+      LogLine('force stop requested by user');
+      AppendLiveLine('Force stop requested.');
     end;
   end;
 end;

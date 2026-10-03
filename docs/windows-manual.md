@@ -29,7 +29,7 @@ For a double-clickable shortcut, use **[`Launch-LanEx.bat`](Launch-LanEx.bat)**.
 Edit the one line at the top if your distro isn't named `Ubuntu` (run `wsl -l -q`
 in a Windows terminal to see the name).
 
-## The three launcher rules (do not improvise here)
+## The four launcher rules (do not improvise here)
 
 WSLg — the bridge that lets Linux GUI tools (KLayout, GDS3D, GTKWave, the
 OpenROAD GUI) draw on your Windows desktop — is fragile about how it is started.
@@ -45,6 +45,12 @@ titled `[WARN: COPY MODE]`, which looks exactly like a LanEx bug and isn't:
    on WSL, which renders reliably even when the vGPU bridge is degraded; opting
    into hardware GL is what makes a poisoned bridge deadlock.
 
+4. **X11 only.** Start LanEx with `env -u WAYLAND_DISPLAY GDK_BACKEND=x11
+   QT_QPA_PLATFORM=xcb`. With systemd enabled (the LanEx appliance enables it),
+   WSL still exports `WAYLAND_DISPLAY=wayland-0`, but the socket is missing from
+   `/run/user/<uid>`. A toolkit that trusts the variable takes WSLg's Wayland
+   path, which is the one that degrades to `[WARN: COPY MODE]`.
+
 And one that isn't about WSLg: **`cd` somewhere writable first.** `wsl.exe`
 translates the *calling* Windows program's working directory into the Linux one,
 so a launcher started from, say, `C:\Program Files\…` hands LanEx a cwd it cannot
@@ -53,7 +59,7 @@ resolves against. Start with `cd ~` (`Launch-LanEx.bat` uses `cd ~/lanex`). LanE
 now moves off an unwritable working directory by itself, but a launcher that
 never hands it one is better.
 
-`Launch-LanEx.bat` follows all three, and so does the installer's `LanEx.exe`
+`Launch-LanEx.bat` follows all four, and so does the installer's `LanEx.exe`
 (see `windows/launcher/wsl.go`) — if you write your own launcher, copy the shape,
 not the idea.
 
