@@ -232,7 +232,7 @@ body.theme-light #theme-btn .ico-moon { display: none; }
 .project-empty { padding: 6px 10px 8px; font-size: 13px; color: var(--ink-2); }
 
 /* ------------------------------------------------------------ side rail */
-/* Inset well with a faint routing-track texture. Every tab gets the same
+/* Plain inset well. Every tab gets the same
    share of the rail's height: a group grows in proportion to its tab count
    (--n, set in the markup) and its tabs split the group evenly, so there is
    no dead space under a group. */
@@ -240,17 +240,10 @@ body.theme-light #theme-btn .ico-moon { display: none; }
   grid-area: side;
   display: flex; flex-direction: column; justify-content: flex-start; gap: 14px;
   padding: 12px 8px 12px 10px;
-  background:
-    repeating-linear-gradient(0deg, transparent 0 23px, rgba(120, 140, 170, 0.05) 23px 24px),
-    var(--bg-2);
+  background: var(--bg-2);
   border-right: 1px solid var(--border);
   overflow-y: auto; overflow-x: hidden; min-height: 0;
   scrollbar-width: none;
-}
-body.theme-light .side-tabs {
-  background:
-    repeating-linear-gradient(0deg, transparent 0 23px, rgba(60, 90, 130, 0.06) 23px 24px),
-    var(--bg-2);
 }
 .side-tabs::-webkit-scrollbar { display: none; }
 .rail-group { display: flex; flex-direction: column; gap: 2px; flex: var(--n, 1) 1 auto; min-height: min-content; }
