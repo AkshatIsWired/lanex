@@ -70,6 +70,18 @@ def set_runner(r: Optional[FlowRunner]) -> None:
         _RUNNER = r
 
 
+# Requests the Windows launcher makes itself. Everything else comes from a
+# LanEx page, so it proves a window is alive even before that page has opened
+# its event stream (a reload is several seconds of boot fetches first).
+_LAUNCHER_PATHS = frozenset({"/api/presence", "/api/health"})
+
+
+def _note_page_activity(path: str) -> None:
+    if path not in _LAUNCHER_PATHS:
+        from ..controller import activity
+        activity.note_page_request()
+
+
 class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
     """One request handler. Stream-friendly, no globals except the runner."""
 
@@ -177,6 +189,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
+        _note_page_activity(path)
         if path == "/api/events":
             last_event_id = self.headers.get("Last-Event-ID", "-1")
             try:
@@ -312,6 +325,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             return
 
         path = self.path.split("?", 1)[0]
+        _note_page_activity(path)
 
         # Rate limit install endpoints
         if "/install" in path:

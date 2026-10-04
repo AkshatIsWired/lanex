@@ -516,7 +516,9 @@ def open_in_tool(tool: str, file_path: str | Path, *,
         }
         if sys.platform != "win32":
             kwargs["start_new_session"] = True  # detach from the server process
-        subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool only
+        proc = subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool only
+        from . import activity
+        activity.track_viewer(proc, spec["label"])
         out: Dict[str, Any] = {
             "ok": True, "tool": tool, "label": spec["label"], "file": str(f),
             "used_tech": bool((use_tech and (tech.get("magicrc") or tech.get("klayout_lyp")))

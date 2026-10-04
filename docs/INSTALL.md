@@ -154,8 +154,14 @@ mode never waits for a hidden Retry or WSL-update confirmation.
 **The tray icon** is the launcher's entire interface: **Open LanEx** re-opens the
 window, **Open project files** opens the folder above, **Open LanEx shell** gives
 you a terminal *inside* the environment (see below), **Quit LanEx** stops the
-server and shuts the Linux environment down. Closing the LanEx *window* does not
-stop anything — the server keeps running so re-opening is instant.
+server and shuts the Linux environment down.
+
+**Closing the LanEx window quits LanEx**, the same as **Quit LanEx**, so the Linux
+environment gives its memory and CPU back instead of idling in the tray. A
+reload never counts as a close. If quitting would interrupt something (a flow run,
+a sweep, a simulation, a download, a viewer such as KLayout or GTKWave still open,
+or a LanEx shell), LanEx lists it and asks first: **Yes** quits, **No** reopens the
+window. Your projects and finished runs are kept either way.
 
 **About that shell.** You should never need it. LanEx installs its own
 toolchains — including the compiler GDS3D is built with — and every supported

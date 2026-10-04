@@ -313,11 +313,11 @@ func appPathsLookup(exe string) string {
 // forbids — that rule is about the cold-boot race, where a second invocation
 // can stall the first and half-initialise WSLg. This one only ever runs on a
 // menu click, long after the server answered /api/health.
-func openShell() error {
+func openShell() (*exec.Cmd, error) {
 	cmd := exec.Command(wslExe, "-d", distroName, "--",
 		"bash", "-lic", "cd ~ 2>/dev/null; exec bash -i")
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewConsole}
-	return cmd.Start()
+	return cmd, cmd.Start()
 }
 
 // openProjectFiles shows the user's designs in File Explorer.

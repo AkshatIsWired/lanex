@@ -158,6 +158,26 @@ def h_health(handler: Any) -> None:
                        **current(), "compat": probe})
 
 
+def h_presence(handler: Any) -> None:
+    """How many LanEx windows are open, and what a quit would interrupt.
+
+    Polled by the Windows launcher, which quits LanEx (and frees the WSL
+    appliance's memory) once the last window has been closed for a few seconds,
+    asking first when ``busy`` is non-empty. Every page keeps exactly one
+    ``/api/events`` stream open for its lifetime, so the live stream count is
+    the open-window count. ``idleSeconds`` (time since any page request) is
+    what tells a reloading window, whose stream is briefly gone, from a closed
+    one.
+    """
+    from ..controller import activity
+    from .sse import active_handlers
+    _respond(handler, {
+        "windows": len(active_handlers()),
+        "idleSeconds": round(activity.seconds_since_page_request(), 1),
+        "busy": activity.busy(),
+    })
+
+
 def h_about(handler: Any) -> None:
     """Read-only product identity for the landing footer + License modal.
 
@@ -3667,6 +3687,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/custom-macros/enable", h_custom_macro_enable),
     ("/api/custom-macros", h_custom_macros),
     ("/api/health", h_health),
+    ("/api/presence", h_presence),
     ("/api/about", h_about),
     ("/api/steps", h_steps),
     ("/api/variables", h_variables),

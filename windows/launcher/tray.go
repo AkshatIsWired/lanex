@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"fyne.io/systray"
 )
@@ -33,6 +34,7 @@ type tray struct {
 	quitting atomic.Bool  // true once we are tearing down on purpose
 	stopOnce sync.Once
 	stopped  chan struct{} // closed when the server process has exited
+	shells   atomic.Int32  // "Open LanEx shell" consoles still open
 }
 
 func runTray(server *exec.Cmd) {
@@ -40,6 +42,13 @@ func runTray(server *exec.Cmd) {
 	// systray.Run owns the main goroutine (it needs the Win32 message loop on the
 	// thread that created the window) and only returns after systray.Quit().
 	systray.Run(t.onReady, t.onExit)
+	// systray.Quit runs onExit on the goroutine that called it, while the
+	// message loop above has already ended, so returning now would exit the
+	// process halfway through stopServer and leave the appliance running.
+	// stopOnce makes this wait for that in-flight stop (or do it, if none ran).
+	if t.quitting.Load() {
+		t.stopServer()
+	}
 }
 
 func (t *tray) onReady() {
@@ -79,9 +88,15 @@ func (t *tray) onReady() {
 			case <-files.ClickedCh:
 				openProjectFiles()
 			case <-shell.ClickedCh:
-				if err := openShell(); err != nil {
+				cmd, err := openShell()
+				if err != nil {
 					showError(fmt.Sprintf("Could not open a LanEx shell.\n\n%v", err))
+					break
 				}
+				// Quitting terminates the appliance, shell included, so an open
+				// shell counts as work in progress when the window closes.
+				t.shells.Add(1)
+				go func() { _ = cmd.Wait(); t.shells.Add(-1) }()
 			case <-quit.ClickedCh:
 				// Set BEFORE Quit so watchServer and waitReady know the exit is
 				// intentional and stay quiet.
@@ -104,6 +119,7 @@ func (t *tray) waitReady(open *systray.MenuItem) {
 			showError(fmt.Sprintf("LanEx is ready at http://127.0.0.1:%d/ but its "+
 				"window could not be opened.\n\n%v", port, err))
 		}
+		go t.watchWindows(port)
 		return
 	}
 	if t.quitting.Load() {
@@ -134,15 +150,62 @@ func (t *tray) watchServer() {
 	if t.quitting.Load() {
 		return
 	}
-	// Note what does NOT get here: closing the app WINDOW. That leaves the server
-	// running headless on purpose, so clicking the icon again reopens the cockpit
-	// instantly with every run still in place. Only Quit stops the server.
+	// Closing the app WINDOW does not get here: the server outlives the browser.
+	// watchWindows is what turns a closed window into a quit.
 	if t.port.Load() == 0 {
 		showError("LanEx stopped before it finished starting.\n\n" +
 			"Try again. If it keeps failing, run LanEx Setup and choose Repair. " +
 			"Your projects and other WSL environments are preserved.\n\nDetails are in:\n" + logPath())
 	}
 	systray.Quit()
+}
+
+// watchWindows quits LanEx once its last window has closed (see closewatch.go).
+func (t *tray) watchWindows(port int) {
+	var w closeWatcher
+	for {
+		select {
+		case <-t.stopped:
+			return
+		case <-time.After(presencePoll):
+		}
+		if t.quitting.Load() {
+			return
+		}
+		p, err := fetchPresence(port)
+		if err != nil {
+			w.unknown()
+			continue
+		}
+		if !w.observe(p, time.Now()) {
+			continue
+		}
+		busy := p.Busy
+		if t.shells.Load() > 0 {
+			busy = append(busy, "a LanEx shell window")
+		}
+		if len(busy) > 0 {
+			quit := askQuit(busyQuestion(busy))
+			// The question can sit unanswered for minutes; a window the user
+			// reopened from the Start menu meanwhile settles it.
+			if again, err := fetchPresence(port); err == nil && again.Windows > 0 {
+				w.reset()
+				continue
+			}
+			if !quit {
+				w.reset()
+				if err := openAppWindow(port); err != nil {
+					showError(fmt.Sprintf("Could not reopen the LanEx window.\n\n%v\n\n"+
+						"LanEx is still running: use the LanEx icon in the taskbar tray.", err))
+				}
+				continue
+			}
+		}
+		logf("last window closed; quitting (busy: %v)", busy)
+		t.quitting.Store(true)
+		systray.Quit()
+		return
+	}
 }
 
 // onExit runs after systray.Quit(), on the way out.
@@ -154,13 +217,22 @@ func (t *tray) onExit() {
 
 // stopServer ends the server and the appliance. Idempotent: the timeout path
 // calls it before quitting, and onExit calls it again.
+//
+// Terminate first, kill second. Killing wsl.exe first left the distro
+// "Running" for another ~10 s after the launcher had exited (observed on
+// WSL 2.x); terminating first stops it at once, and wsl.exe then exits on its
+// own. The kill only covers a client that somehow outlives the terminate.
 func (t *tray) stopServer() {
 	t.stopOnce.Do(func() {
-		if p := t.server.Process; p != nil {
-			if err := p.Kill(); err != nil {
-				logf("could not kill wsl.exe: %v", err)
+		terminateDistro()
+		select {
+		case <-t.stopped:
+		case <-time.After(5 * time.Second):
+			if p := t.server.Process; p != nil {
+				if err := p.Kill(); err != nil {
+					logf("could not kill wsl.exe: %v", err)
+				}
 			}
 		}
-		terminateDistro()
 	})
 }

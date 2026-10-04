@@ -664,7 +664,9 @@ def open_in_container_tool(
         }
         if sys.platform != "win32":
             kwargs["start_new_session"] = True
-        subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool/engine only
+        proc = subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool/engine only
+        from . import activity
+        activity.track_viewer(proc, spec["label"])
         hint = None
         if tool == "openroad":
             hint = (f"OpenROAD GUI opening with the run loaded ({odb_p.name}). The console "

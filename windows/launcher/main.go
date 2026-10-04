@@ -22,7 +22,8 @@
 //  2. Starts the server with exactly ONE `wsl.exe` invocation (wsl.go; that
 //     constraint is not cosmetic — see the comment on startServer).
 //  3. Waits for /api/health, then sits in the tray (probe.go, tray.go).
-//  4. Stops the server and shuts the appliance down on Quit.
+//  4. Stops the server and shuts the appliance down on Quit, or when the last
+//     LanEx window closes (closewatch.go), asking first if work would stop.
 //
 // The initial app window is opened from Windows only after the Windows-side
 // /api/health probe succeeds. A process spawned inside WSL cannot prove that
@@ -169,11 +170,12 @@ func scopedMutexName(cfg applianceConfig) string {
 // ------------------------------------------------------------------- dialogs --
 
 // MessageBoxW flags. Spelled out locally rather than pulled from a dependency:
-// these five values have been stable since Windows 3.1.
+// these values have been stable since Windows 3.1.
 const (
 	mbOK            = 0x00000000
 	mbYesNo         = 0x00000004
 	mbIconError     = 0x00000010
+	mbIconWarning   = 0x00000030
 	mbIconInfo      = 0x00000040
 	mbSetForeground = 0x00010000
 	idYes           = 6
@@ -195,6 +197,9 @@ func showInfo(text string)  { msgbox(text, mbOK|mbIconInfo) }
 func showError(text string) { msgbox(text, mbOK|mbIconError) }
 func askYesNo(text string) bool {
 	return msgbox(text, mbYesNo|mbIconError) == idYes
+}
+func askQuit(text string) bool {
+	return msgbox(text, mbYesNo|mbIconWarning) == idYes
 }
 
 // openURL opens *raw* in the user's default browser via the shell — the one
