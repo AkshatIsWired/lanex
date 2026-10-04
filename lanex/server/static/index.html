@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="/static/setup.css" />
   <link rel="stylesheet" href="/static/analytics.css" />
   <link rel="stylesheet" href="/static/verify.css" />
+  <link rel="stylesheet" href="/static/cells.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
        real icon (zero extra deps; static manifest, no service worker). -->
@@ -141,7 +142,7 @@
         <button class="side-tab" data-tab="ide" data-tip="Edit, lint and simulate Verilog">
           <span class="ico"></span><span class="label">RTL IDE</span>
         </button>
-        <button class="side-tab" data-tab="cells" data-tip="Custom cells and macros, and the PDK cell library">
+        <button class="side-tab" data-tab="cells" data-tip="Standard cells, memories and macros, and which cells the flow may use">
           <span class="ico"></span><span class="label">Cells</span>
         </button>
       </div>
@@ -801,36 +802,51 @@
       <div id="viewer3d-body"></div>
     </section>
 
-    <!-- CELLS & MACROS -->
+    <!-- CELLS & MACROS (modules/cells.js, cells-macros.js, cells-rules.js) -->
     <section class="section" id="sec-cells">
       <nav class="section-jump" id="cells-jump" aria-label="Jump to section">
-        <span class="muted">Quick explore:</span>
-        <button class="chip chip-clickable" data-jump="custom-macros-panel">Custom macros</button>
-        <button class="chip chip-clickable" data-jump="custom-cells-panel">Custom cells</button>
-        <button class="chip chip-clickable" data-jump="cells-library">Standard cells</button>
+        <span class="muted">Jump to:</span>
+        <button class="chip chip-clickable" data-jump="cl-library">Library</button>
+        <button class="chip chip-clickable" data-jump="cl-macros">Macros</button>
+        <button class="chip chip-clickable" data-jump="cl-rules">Flow rules</button>
       </nav>
-
-      <div class="cc-panel" id="custom-macros-panel">
-        <div class="cc-head">
-          <h2>Custom macros <span class="cc-badge">advanced</span></h2>
-          <button class="btn btn-ghost" id="btn-custom-macro-help" title="How custom macro insertion works"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.1 9a3 3 0 1 1 4 2.8c-.9.4-1.6 1-1.6 2.2M12 17h.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/></svg> How it works</button>
+      <div class="an-runbar cl-bar">
+        <div class="an-pick">
+          <label for="cl-libpick">Standard-cell library</label>
+          <select id="cl-libpick"></select>
         </div>
-        <p class="hint">Integrate pre-hardened blocks, such as SRAM arrays, PLLs, analog IP, or sub-blocks, as fixed macros in this run. Required physical views (LEF and GDS) along with optional timing and netlist models (LIB, netlist, SPEF, SPICE) are supplied to LibreLane's <code>MACROS</code> variable via GUI overlay parameters, leaving your base <code>config.json</code> unchanged.</p>
-        <div id="custom-macros-body"></div>
+        <div class="cl-libnote" id="cl-libnote"></div>
+        <span class="bar-spacer"></span>
+        <button class="btn btn-ghost btn-sm" id="cl-refresh" title="Re-read the PDK files and this project's config"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Refresh</button>
+      </div>
+      <div id="cl-summary"></div>
+
+      <div class="an-sec" id="cl-library">
+        <div class="an-head"><div>
+          <div class="an-eyebrow">Library</div>
+          <h2 class="an-title">The cells your design is built from</h2>
+          <p class="an-lede">Synthesis turns your RTL into these. Pick one to see what it does, what it looks like on silicon, how each drive strength trades area for speed, and whether this project's flow may use it.</p>
+        </div></div>
+        <div id="cl-lib"></div>
       </div>
 
-      <div class="cc-panel" id="custom-cells-panel">
-        <div class="cc-head">
-          <h2>Custom cells <span class="cc-badge">advanced</span></h2>
-          <button class="btn btn-ghost" id="btn-custom-cell-help" title="How custom cell swapping works"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.1 9a3 3 0 1 1 4 2.8c-.9.4-1.6 1-1.6 2.2M12 17h.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/></svg> How it works</button>
-        </div>
-        <p class="hint">Substitute proprietary standard cells or custom drive-strength variants for standard PDK library cells during flow execution. Custom cell definitions are passed through <code>EXTRA_LEFS/LIBS/GDS/SPICE_MODELS/VERILOG_MODELS</code> while excluded library cells are specified in <code>EXTRA_EXCLUDED_CELLS</code>, applied dynamically to GUI runs without modifying the underlying <code>config.json</code>.</p>
-        <div id="custom-cells-body"></div>
+      <div class="an-sec" id="cl-macros">
+        <div class="an-head"><div>
+          <div class="an-eyebrow">Macros</div>
+          <h2 class="an-title">Pre-built blocks</h2>
+          <p class="an-lede">Memories, IP, or a block you hardened in another project, placed as fixed rectangles that the router works around. They are added to this project's runs through LanEx's overlay config; your own config file stays untouched.</p>
+        </div></div>
+        <div id="cl-macros-body"></div>
       </div>
 
-      <h2 id="cells-library">Standard-cell library</h2>
-      <p class="hint">Every cell in the selected PDK's standard-cell library, by kind. Pick the PDK/SCL in Setup.</p>
-      <div id="cells-body"></div>
+      <div class="an-sec" id="cl-rules">
+        <div class="an-head"><div>
+          <div class="an-eyebrow">Flow rules</div>
+          <h2 class="an-title">Which cells the flow may use</h2>
+          <p class="an-lede">What the PDK forbids, what you forbid, what the flow inserts by itself, and your own cells swapped in.</p>
+        </div></div>
+        <div id="cl-rules-body"></div>
+      </div>
     </section>
 
     <!-- MANUAL / ADVANCED -->

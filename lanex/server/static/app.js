@@ -697,8 +697,6 @@ document.querySelectorAll(".side-tab").forEach((t) => {
     if (name === "verify") import("./modules/verify.js").then((m) => m.renderVerify());
     if (name === "dse") import("./modules/dse.js").then((m) => m.renderDse());
     if (name === "cells") {
-      import("./modules/custommacros.js").then((m) => m.renderCustomMacros());
-      import("./modules/customcells.js").then((m) => m.renderCustomCells());
       import("./modules/cells.js").then((m) => m.renderCells());
     }
     if (name === "manual") import("./modules/manual.js").then((m) => m.renderManual());

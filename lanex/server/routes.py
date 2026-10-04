@@ -3457,6 +3457,8 @@ def h_custom_macro_save(handler: Any) -> None:
         instances=body.get("instances") or [],
         views=body.get("views") or {},
         enabled=body.get("enabled", True),
+        power=body.get("power"),
+        source=body.get("source") or ({"kind": "upload", "label": "Uploaded files"} if body.get("views") else None),
     )
     if not result.get("ok"):
         _respond(handler, result.get("error", "save failed"), 400)
@@ -3493,6 +3495,164 @@ def h_cells(handler: Any) -> None:
     pdk = _query_param(handler.path, "pdk")
     scl = _query_param(handler.path, "scl")
     _respond(handler, cells.list_pdk_cells(pdk, scl or None))
+
+
+# ---------------------------------------------------------------------------
+# Cells tab: the library as the flow sees it, and hard macros
+# ---------------------------------------------------------------------------
+
+def _usage_for(design_dir: Optional[str], scl: str) -> Dict[str, Any]:
+    """Cell-by-master counts from the newest run of *design_dir* that used *scl*
+    (and finished synthesis far enough to write the report)."""
+    if not design_dir:
+        return {}
+    try:
+        for r in history.list_runs(design_dir)[:12]:
+            if r.get("scl") and r.get("scl") != scl:
+                continue
+            rows = history.cell_usage(r["run_dir"])
+            named = [x for x in rows if isinstance(x.get("cell"), str) and x.get("count") is not None
+                     and not str(x["cell"]).startswith(("design__", "class:"))]
+            if named:
+                return {"tag": r.get("tag"), "success": r.get("success"), "started_at": r.get("started_at"),
+                        "cells": {x["cell"]: x.get("count") for x in named}}
+    except Exception:
+        _log.exception("cell usage lookup failed")
+    return {}
+
+
+def h_celllib(handler: Any) -> None:
+    """Every cell of a standard-cell library with function, size, speed,
+    leakage, flow exclusions and roles, plus last-run usage for the design."""
+    from ..controller import celllib, configedit
+    pdk = _query_param(handler.path, "pdk")
+    scl = _query_param(handler.path, "scl")
+    dd = _query_param(handler.path, "design_dir") or _get_active_design_dir()
+    res = celllib.library(pdk, scl, dd)
+    if res.get("ok"):
+        res["usage"] = _usage_for(dd, scl)
+        if dd:
+            info = configedit.read_config(dd)
+            res["config"] = {"name": info.get("name"), "editable": bool(info.get("editable")),
+                             "reason": info.get("reason")}
+    _respond(handler, res)
+
+
+def h_celllib_cell(handler: Any) -> None:
+    from ..controller import celllib
+    _respond(handler, celllib.cell_detail(_query_param(handler.path, "pdk"),
+                                          _query_param(handler.path, "scl"),
+                                          _query_param(handler.path, "cell")))
+
+
+def h_celllib_layout(handler: Any) -> None:
+    from ..controller import celllib
+    _respond(handler, celllib.cell_layout(_query_param(handler.path, "pdk"),
+                                          _query_param(handler.path, "scl"),
+                                          _query_param(handler.path, "cell")))
+
+
+def h_macro_catalog(handler: Any) -> None:
+    from ..controller import macrolib
+    _respond(handler, macrolib.catalog(_query_param(handler.path, "pdk"),
+                                       _query_param(handler.path, "scl") or None))
+
+
+def h_macro_projects(handler: Any) -> None:
+    from ..controller import macrolib
+    dd = _query_param(handler.path, "design_dir") or _get_active_design_dir()
+    _respond(handler, macrolib.project_sources(exclude_dir=dd))
+
+
+def h_macro_add(handler: Any) -> None:
+    """Add a macro from the PDK catalog (referenced in place) or from another
+    project's finished run (views copied in)."""
+    from ..controller import custommacros, macrolib
+    body = getattr(handler, "_body", {}) or {}
+    dd = _custom_cells_dir(handler)
+    if not dd:
+        _respond(handler, "no active design dir", 400)
+        return
+    src = body.get("source") or {}
+    kind = src.get("kind")
+    refs = copies = None
+    name = (body.get("name") or "").strip()
+    if kind == "pdk":
+        refs = {k: v for k, v in (src.get("views") or {}).items() if isinstance(v, str)}
+        label = f"{src.get('library') or 'PDK'} ({src.get('pdk') or ''})".strip()
+        source = {"kind": "pdk", "label": label, "pdk": src.get("pdk"), "library": src.get("library")}
+    elif kind == "run":
+        rv = macrolib.run_views(src.get("design_dir") or "", src.get("tag") or "")
+        if not rv.get("ok"):
+            _respond(handler, rv.get("error", "run not found"), 400)
+            return
+        copies = {k: ({c: str(p) for c, p in v.items()} if isinstance(v, dict) else str(v))
+                  for k, v in rv["views"].items()}
+        name = name or rv["module"]
+        source = {"kind": "run", "label": f"{Path(src['design_dir']).name} · {src['tag']}",
+                  "design_dir": src.get("design_dir"), "tag": src.get("tag")}
+    else:
+        _respond(handler, "source.kind must be 'pdk' or 'run'", 400)
+        return
+    result = custommacros.save_macro(dd, name, instances=body.get("instances") or [],
+                                     refs=refs, copies=copies, power=body.get("power"),
+                                     source=source, enabled=body.get("enabled", True))
+    if not result.get("ok"):
+        _respond(handler, result.get("error", "save failed"), 400)
+        return
+    _respond(handler, result)
+
+
+def h_macro_inspect(handler: Any) -> None:
+    """Pins, power pins, size, an instantiation template and the RTL check
+    (instantiated where? behavioural model in the sources?) for the design's
+    macros."""
+    from ..controller import custommacros, macrolib, configedit
+    dd = _custom_cells_dir(handler)
+    if not dd:
+        _respond(handler, "no active design dir", 400)
+        return
+    pdk = _query_param(handler.path, "pdk") or None
+    macros = custommacros.list_macros(dd).get("macros", [])
+    data = configedit.read_config(dd).get("data") or {}
+    scan = macrolib.find_instances(dd, data.get("DESIGN_NAME"), [m["name"] for m in macros])
+    out = {}
+    for m in macros:
+        lef = (m.get("views") or {}).get("lef")
+        p = macrolib.resolve_view(lef if isinstance(lef, str) else "", dd,
+                                  pdk or (m.get("source") or {}).get("pdk") or data.get("PDK"))
+        info = macrolib.macro_pins(p, m["name"]) if p and p.is_file() else {"ok": False, "error": "LEF file not found"}
+        out[m["name"]] = info
+    # The die as the last run drew it, for the floorplan sketch when the config
+    # leaves sizing to LibreLane (FP_SIZING relative).
+    last_die = None
+    try:
+        for r in history.list_runs(dd)[:6]:
+            bb = history._load_metrics(Path(r["run_dir"])).get("design__die__bbox")
+            if bb:
+                last_die = {"tag": r.get("tag"), "bbox": bb}
+                break
+    except Exception:
+        last_die = None
+    _respond(handler, {"ok": True, "macros": out, "scan": scan,
+                       "die_area": data.get("DIE_AREA"), "fp_sizing": data.get("FP_SIZING"),
+                       "last_die": last_die, "top": data.get("DESIGN_NAME"),
+                       "vdd": (data.get("VDD_NETS") or [None])[0] if isinstance(data.get("VDD_NETS"), list) else data.get("VDD_NETS"),
+                       "gnd": (data.get("GND_NETS") or [None])[0] if isinstance(data.get("GND_NETS"), list) else data.get("GND_NETS")})
+
+
+def h_macro_settings(handler: Any) -> None:
+    from ..controller import custommacros
+    body = getattr(handler, "_body", {}) or {}
+    dd = _custom_cells_dir(handler)
+    if not dd:
+        _respond(handler, "no active design dir", 400)
+        return
+    res = custommacros.set_settings(dd, body.get("settings") or {})
+    if not res.get("ok"):
+        _respond(handler, res.get("error", "invalid settings"), 400)
+        return
+    _respond(handler, res)
 
 
 # ---------------------------------------------------------------------------
@@ -3677,6 +3837,14 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/sim/cancel", h_sim_cancel),
     ("/api/waveform", h_waveform),
     ("/api/ide/open-wave", h_ide_open_wave),
+    ("/api/celllib/cell", h_celllib_cell),
+    ("/api/celllib/layout", h_celllib_layout),
+    ("/api/celllib", h_celllib),
+    ("/api/macros/catalog", h_macro_catalog),
+    ("/api/macros/projects", h_macro_projects),
+    ("/api/macros/add", h_macro_add),
+    ("/api/macros/inspect", h_macro_inspect),
+    ("/api/macros/settings", h_macro_settings),
     ("/api/cells", h_cells),
     ("/api/custom-cells/save", h_custom_cell_save),
     ("/api/custom-cells/remove", h_custom_cell_remove),

@@ -29,7 +29,9 @@ macro with the verified-real ``MACROS`` configuration variable, a
 * ``spef`` — per-corner parasitics (``Dict[wildcard, [spef…]]``).
 * ``spice`` — device netlist for LVS.
 * ``instances`` — ``{instance_name: {location, orientation}}``; a fixed
-  placement per instance (leave the location blank for automatic placement).
+  placement per instance. LibreLane's Classic flow has no automatic macro
+  placer (only ``Odb.ManualMacroPlacement``), so every instance needs one; a
+  blank location is stored but flagged (see :func:`merge_warning`).
 
 Why an **overlay config file** and not a ``-c KEY=VALUE`` override: LibreLane
 parses a *string* value for a ``Dict`` variable as a flat Tcl ``key value …``
@@ -59,6 +61,8 @@ _MAX_FILE_BYTES = 256 * 1024 * 1024    # a hardened-macro GDS can be large.
 # A macro module name / instance name is a Verilog identifier. (We also accept a
 # leading-digit-free dotted/hier form some flows use, but keep it conservative.)
 _IDENT_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+# Instance names are flattened paths: ``u_core.u_sram`` or ``mem[0]``.
+_INST_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*(\[\d+\])?(\.[A-Za-z_][A-Za-z0-9_$]*(\[\d+\])?)*$")
 
 # Orientations LibreLane's ``Orientation`` enum accepts (config/variable.py).
 ORIENTATIONS = ("N", "S", "E", "W", "FN", "FS", "FE", "FW")
@@ -72,8 +76,14 @@ _VIEW_SPECS: Dict[str, Dict[str, Any]] = {
     "lib":   {"field": "lib",   "shape": "corner", "exts": (".lib",),                "required": False},
     "nl":    {"field": "nl",    "shape": "list",   "exts": (".v", ".sv", ".nl.v"),   "required": False},
     "spef":  {"field": "spef",  "shape": "corner", "exts": (".spef",),               "required": False},
-    "spice": {"field": "spice", "shape": "list",   "exts": (".spice", ".sp", ".cir"), "required": False},
+    "spice": {"field": "spice", "shape": "list",   "exts": (".spice", ".sp", ".cir", ".cdl"), "required": False},
+    "vh":    {"field": "vh",    "shape": "list",   "exts": (".v", ".vh", ".sv"),     "required": False},
+    "pnl":   {"field": "pnl",   "shape": "list",   "exts": (".v", ".pnl.v"),         "required": False},
 }
+
+# A view reference that is not a GUI upload: a PDK file (``pdk_dir::``) or one
+# already inside the design (``dir::``). Absolute paths are copied in instead.
+_REF_RX = re.compile(r"^(pdk_dir|dir)::[^\s]+$")
 
 
 # --------------------------------------------------------------------------- #
@@ -83,23 +93,38 @@ def _sidecar_path(design_dir: str | Path) -> Path:
     return Path(design_dir).resolve() / _SIDECAR
 
 
-def _load(design_dir: str | Path) -> List[Dict[str, Any]]:
+def _doc(design_dir: str | Path) -> Dict[str, Any]:
     f = _sidecar_path(design_dir)
     if not f.is_file():
-        return []
+        return {}
     try:
         doc = json.loads(f.read_text(encoding="utf-8"))
-        return doc.get("macros", []) if isinstance(doc, dict) else []
+        return doc if isinstance(doc, dict) else {}
     except Exception:
-        return []
+        return {}
 
 
-def _save(design_dir: str | Path, macros: List[Dict[str, Any]]) -> None:
+def _load(design_dir: str | Path) -> List[Dict[str, Any]]:
+    m = _doc(design_dir).get("macros", [])
+    return m if isinstance(m, list) else []
+
+
+def _settings(design_dir: str | Path) -> Dict[str, Any]:
+    st = _doc(design_dir).get("settings", {})
+    return st if isinstance(st, dict) else {}
+
+
+def _save(design_dir: str | Path, macros: List[Dict[str, Any]],
+          settings: Optional[Dict[str, Any]] = None) -> None:
     from . import platform_env
     f = _sidecar_path(design_dir)
+    doc: Dict[str, Any] = {"macros": macros}
+    st = _settings(design_dir) if settings is None else settings
+    if st:
+        doc["settings"] = st
     # Atomic: a crash mid-write must not corrupt the sidecar (a corrupt sidecar
     # reads back as "no macros" and the next save persists the loss).
-    platform_env.atomic_write_text(f, json.dumps({"macros": macros}, indent=2) + "\n")
+    platform_env.atomic_write_text(f, json.dumps(doc, indent=2) + "\n")
 
 
 def _confined(design_dir: Path, target: Path) -> bool:
@@ -112,7 +137,26 @@ def _confined(design_dir: Path, target: Path) -> bool:
 
 def list_macros(design_dir: str | Path) -> Dict[str, Any]:
     """Return the design's saved custom macros (read-only)."""
-    return {"ok": True, "macros": _load(design_dir), "orientations": list(ORIENTATIONS)}
+    return {"ok": True, "macros": _load(design_dir), "settings": _settings(design_dir),
+            "orientations": list(ORIENTATIONS)}
+
+
+def set_settings(design_dir: str | Path, settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Page-wide macro settings: the keep-out halo around every macro (µm)."""
+    clean: Dict[str, Any] = {}
+    for k in ("halo_h", "halo_v"):
+        v = (settings or {}).get(k)
+        if v in (None, ""):
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"{k} must be a number of microns"}
+        if f < 0 or f > 1000:
+            return {"ok": False, "error": f"{k} must be between 0 and 1000 µm"}
+        clean[k] = f
+    _save(design_dir, _load(design_dir), clean)
+    return {"ok": True, "settings": clean}
 
 
 # --------------------------------------------------------------------------- #
@@ -126,8 +170,9 @@ def _clean_instances(instances: Optional[List[Dict[str, Any]]]) -> Tuple[List[Di
         name = (str((inst or {}).get("name") or "")).strip()
         if not name:
             return [], "every instance needs a name (the instance name used in your RTL)"
-        if not _IDENT_RX.match(name):
-            return [], f"instance name '{name}' must be a valid identifier (letters/digits/_/$)"
+        if not _INST_RX.match(name):
+            return [], (f"instance name '{name}' must be the instance's path in your RTL, "
+                        "e.g. u_sram or u_core.u_sram")
         if name in seen:
             return [], f"duplicate instance name '{name}'"
         seen.add(name)
@@ -146,7 +191,7 @@ def _clean_instances(instances: Optional[List[Dict[str, Any]]]) -> Tuple[List[Di
                     raise ValueError
                 location = [float(parts[0]), float(parts[1])]
             except Exception:
-                return [], f"location for '{name}' must be two numbers 'x y' (microns) or blank for auto-place"
+                return [], f"location for '{name}' must be two numbers 'x y' (microns)"
         out.append({"name": name, "location": location, "orientation": orient})
     return out, None
 
@@ -161,13 +206,21 @@ def save_macro(
     instances: Optional[List[Dict[str, Any]]] = None,
     views: Optional[Dict[str, Dict[str, str]]] = None,
     enabled: bool = True,
+    refs: Optional[Dict[str, Any]] = None,
+    copies: Optional[Dict[str, Any]] = None,
+    power: Optional[Dict[str, Any]] = None,
+    source: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Save (or replace) a custom macro for *design_dir*.
 
     *name* is the macro's Verilog **module name** (the ``MACROS`` dict key).
-    *views* maps a kind (``gds``/``lef``/``lib``/``nl``/``spef``/``spice``) to
-    ``{filename, content_b64}``. GDS and LEF are required. *instances* is a list
-    of ``{name, location, orientation}``. Files are written under
+    *views* maps a kind (``gds``/``lef``/``lib``/``nl``/``spef``/``spice``/``vh``)
+    to an upload ``{filename, content_b64}``; *refs* maps a kind to a path used
+    in place (``pdk_dir::…`` for a PDK macro); *copies* maps a kind to an
+    absolute file (or ``{corner: file}`` for lib/spef) to copy in, e.g. another
+    project's finished run. GDS and LEF are required. *instances* is a list of
+    ``{name, location, orientation}``. *power* is ``{vdd_pin, gnd_pin, vdd_net,
+    gnd_net}`` for ``PDN_MACRO_CONNECTIONS``. Files are written under
     ``macros/<name>/`` and recorded as design-relative ``dir::`` paths. Never
     raises; returns ``{ok, macro}`` or ``{ok: False, error}``."""
     d = Path(design_dir).resolve()
@@ -206,10 +259,37 @@ def save_macro(
             return {"ok": False, "error": f"{kind} file exceeds {_MAX_FILE_BYTES // (1024*1024)} MiB"}
         decoded[kind] = (fname, raw)
 
+    clean_refs: Dict[str, Any] = {}
+    for kind, ref in (refs or {}).items():
+        if kind not in _VIEW_SPECS:
+            return {"ok": False, "error": f"unknown macro view '{kind}'"}
+        items = ref.values() if isinstance(ref, dict) else [ref]
+        if not all(isinstance(r, str) and _REF_RX.match(r) for r in items):
+            return {"ok": False, "error": f"{kind} must be a pdk_dir:: or dir:: path"}
+        clean_refs[kind] = dict(ref) if isinstance(ref, dict) else ref
+    copy_plan: Dict[str, Any] = {}
+    for kind, src in (copies or {}).items():
+        if kind not in _VIEW_SPECS:
+            return {"ok": False, "error": f"unknown macro view '{kind}'"}
+        items = src.items() if isinstance(src, dict) else [("", src)]
+        planned = {}
+        for corner, f in items:
+            fp = Path(str(f))
+            if not fp.is_absolute() or not fp.is_file():
+                return {"ok": False, "error": f"{kind} file not found: {f}"}
+            if fp.stat().st_size > _MAX_FILE_BYTES:
+                return {"ok": False, "error": f"{kind} file exceeds {_MAX_FILE_BYTES // (1024*1024)} MiB"}
+            planned[corner] = fp
+        copy_plan[kind] = planned if isinstance(src, dict) else planned[""]
+
     # Carry forward views from a prior save when this save didn't re-upload them,
     # so editing instances/orientation doesn't force re-uploading every file.
     prior = next((m for m in _load(d) if m.get("name") == name), None)
-    saved_views: Dict[str, str] = dict((prior or {}).get("views") or {}) if prior else {}
+    saved_views: Dict[str, Any] = dict((prior or {}).get("views") or {}) if prior else {}
+    if copy_plan or clean_refs:
+        # a new source replaces the whole set, so no stale view lingers
+        saved_views = {}
+    saved_views.update(clean_refs)
 
     macro_dir.mkdir(parents=True, exist_ok=True)
     for kind, (fname, raw) in decoded.items():
@@ -222,6 +302,25 @@ def save_macro(
             return {"ok": False, "error": str(ex)}
         saved_views[kind] = "dir::" + str(target.relative_to(d)).replace("\\", "/")
 
+    import shutil
+
+    def put(fp: Path, kind: str, corner: str = "") -> str:
+        sub = macro_dir / kind / corner if corner else macro_dir
+        sub.mkdir(parents=True, exist_ok=True)
+        target = (sub / re.sub(r"\s+", "_", fp.name)).resolve()
+        if not _confined(d, target):
+            raise ValueError("invalid file name")
+        shutil.copyfile(fp, target)
+        return "dir::" + str(target.relative_to(d)).replace("\\", "/")
+    for kind, plan in copy_plan.items():
+        try:
+            if isinstance(plan, dict):
+                saved_views[kind] = {c: put(fp, kind, "" if c == "*" else c) for c, fp in plan.items()}
+            else:
+                saved_views[kind] = put(plan, kind)
+        except Exception as ex:
+            return {"ok": False, "error": f"could not copy the {kind} view: {ex}"}
+
     if not saved_views.get("gds") or not saved_views.get("lef"):
         return {"ok": False, "error": "a GDS and a LEF view are both required for a macro"}
 
@@ -232,6 +331,18 @@ def save_macro(
         "instances": clean_inst,
         "views": saved_views,
     }
+    pw = power if power is not None else (prior or {}).get("power")
+    if pw:
+        clean_pw = {k: str(pw.get(k) or "").strip() for k in ("vdd_pin", "gnd_pin", "vdd_net", "gnd_net")}
+        if any(clean_pw.values()):
+            bad = [k for k, v in clean_pw.items() if v and not re.match(r"^[\w$\[\]!|.*^]+$", v)]
+            if bad or not all(clean_pw.values()):
+                return {"ok": False, "error": "power hookup needs all four names: the macro's power and "
+                                              "ground pins and the design nets they connect to"}
+            entry["power"] = clean_pw
+    src = source if source is not None else (prior or {}).get("source")
+    if isinstance(src, dict):
+        entry["source"] = {k: src[k] for k in ("kind", "label", "pdk", "library", "design_dir", "tag") if k in src}
     macros.append(entry)
     try:
         _save(d, macros)
@@ -279,19 +390,77 @@ def _macro_to_config(entry: Dict[str, Any]) -> Dict[str, Any]:
         path = views.get(kind)
         if not path:
             continue
-        if spec["shape"] == "list":
+        if isinstance(path, dict):            # {corner: path} (a run's lib/spef)
+            if spec["shape"] == "list":
+                first = next(iter(path.values()), None)
+                if first:
+                    cfg[spec["field"]] = [first]
+            else:
+                cfg[spec["field"]] = {_corner_key(c): [p] for c, p in path.items()}
+        elif spec["shape"] == "list":
             cfg[spec["field"]] = [path]
         else:  # corner-keyed dict, "*" = all corners
             cfg[spec["field"]] = {"*": [path]}
     instances: Dict[str, Any] = {}
     for inst in entry.get("instances") or []:
         instances[inst["name"]] = {
-            "location": inst.get("location"),     # None => automatic placement
+            "location": inst.get("location"),     # None => unplaced (the run stops at PDN)
             "orientation": inst.get("orientation") or "N",
         }
     if instances:
         cfg["instances"] = instances
     return cfg
+
+
+def _corner_key(corner: str) -> str:
+    """A run's ``final/<view>/<dir>`` name as a LibreLane corner wildcard. Lib
+    folders are full timing corners (``max_ss_100C_1v60``) and match as-is;
+    SPEF folders are RC corners (``min``/``nom``/``max``), which must become
+    ``max_*`` to match the timing corners they belong to."""
+    if not corner or corner == "*":
+        return "*"
+    return corner if "_" in corner or "*" in corner else corner + "_*"
+
+
+def _user_config_list(design_dir: Path, key: str) -> List[str]:
+    for ext in ("json", "yaml", "yml"):
+        f = design_dir / f"config.{ext}"
+        if not f.is_file():
+            continue
+        try:
+            if ext == "json":
+                doc = json.loads(f.read_text(encoding="utf-8"))
+            else:
+                import yaml  # type: ignore
+                doc = yaml.safe_load(f.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        v = doc.get(key) if isinstance(doc, dict) else None
+        if isinstance(v, list):
+            return [str(x) for x in v]
+        if isinstance(v, str) and v.strip():
+            return [v]
+        return []
+    return []
+
+
+def _inst_regex(name: str) -> str:
+    """An instance path as the regex PDN_MACRO_CONNECTIONS expects (dots and
+    brackets escaped)."""
+    return re.sub(r"([.\[\]])", r"\\\1", name)
+
+
+def pdn_connections(design_dir: str | Path) -> List[str]:
+    """``PDN_MACRO_CONNECTIONS`` lines for the enabled macros that have a power
+    hookup: one per instance, ``<inst_rx> <vdd_net> <gnd_net> <vdd_pin> <gnd_pin>``."""
+    out = []
+    for m in _load(design_dir):
+        pw = m.get("power")
+        if not m.get("enabled", True) or not pw:
+            continue
+        for inst in m.get("instances") or []:
+            out.append(f"{_inst_regex(inst['name'])} {pw['vdd_net']} {pw['gnd_net']} {pw['vdd_pin']} {pw['gnd_pin']}")
+    return out
 
 
 def _user_config_macros(design_dir: Path) -> Dict[str, Any]:
@@ -326,8 +495,18 @@ def merge_warning(design_dir: str | Path) -> Optional[str]:
     ``MACROS`` (we can't parse Tcl to merge it). ``None`` when there's nothing
     to warn about."""
     d = Path(design_dir).resolve()
-    if not any(m.get("enabled", True) for m in _load(d)):
+    enabled = [m for m in _load(d) if m.get("enabled", True)]
+    if not enabled:
         return None
+    # LibreLane's Classic flow has no automatic macro placer (only
+    # Odb.ManualMacroPlacement): an instance without a location is never
+    # placed and the run stops at GeneratePDN with "Design has unplaced macros".
+    unplaced = [i["name"] for m in enabled for i in (m.get("instances") or []) if not i.get("location")]
+    if unplaced:
+        return ("macro instance" + ("s " if len(unplaced) > 1 else " ") + ", ".join(unplaced[:4]) +
+                (" have" if len(unplaced) > 1 else " has") + " no position. LibreLane places macros only "
+                "where you put them, so the run will stop at the power grid (PDN-0235 unplaced macros). "
+                "Set X/Y on the Cells tab (Macros → Arrange for me).")
     tcl = d / "config.tcl"
     if tcl.is_file() and not any((d / f"config.{e}").is_file() for e in ("json", "yaml", "yml")):
         try:
@@ -361,6 +540,17 @@ def write_overlay(design_dir: str | Path) -> Optional[str]:
     d = Path(design_dir).resolve()
     overlay = d / _OVERLAY
     macros = build_macros_dict(d)
+    extra: Dict[str, Any] = {}
+    if macros:
+        hooks = pdn_connections(d)
+        if hooks:
+            mine = _user_config_list(d, "PDN_MACRO_CONNECTIONS")
+            extra["PDN_MACRO_CONNECTIONS"] = mine + [h for h in hooks if h not in mine]
+        st = _settings(d)
+        if "halo_h" in st:
+            extra["FP_MACRO_HORIZONTAL_HALO"] = st["halo_h"]
+        if "halo_v" in st:
+            extra["FP_MACRO_VERTICAL_HALO"] = st["halo_v"]
     if not macros:
         try:
             overlay.unlink()
@@ -371,7 +561,7 @@ def write_overlay(design_dir: str | Path) -> Optional[str]:
         return None
     try:
         from . import platform_env
-        platform_env.atomic_write_text(overlay, json.dumps({"MACROS": macros}, indent=2) + "\n")
+        platform_env.atomic_write_text(overlay, json.dumps(dict({"MACROS": macros}, **extra), indent=2) + "\n")
     except Exception:
         return None
     return str(overlay)

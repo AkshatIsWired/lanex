@@ -194,16 +194,18 @@ const CATALOG = {
     ],
   },
   cells: {
-    title: "Standard-cell library tab",
-    goal: "Browse standard cells by category, area, and pin count, or configure custom replacement cells for subsequent runs.",
+    title: "Cells & macros tab",
+    goal: "Know the cells your design is built from, add memories and pre-built blocks, and control which cells the flow may use.",
     how: [
-      "Select a PDK and SCL to inspect the cell catalog, with filtering by cell type and cell footprint.",
-      "The Custom cells panel allows uploading cell views (LEF, LIB, GDS, SPICE, Verilog) to replace standard cells via runtime configuration.",
-      "Click the help button in the Custom cells panel for view requirements and exclusion syntax.",
+      "Library: every cell of the project's library, grouped by family with its drive strengths (_1, _2, _4…). Search by name, by function (\"flip-flop\", \"xor\") or paste a name from a report. Green drives were used by the last run; struck-out ones the flow won't use.",
+      "Pick a cell to see what it does (formula, gate diagram, truth table or flip-flop behaviour), its real layout from the PDK's GDS, how each drive strength trades area for speed (delay versus load at the typical corner), its pins and timing arcs, and whether this project's flow may use it.",
+      "Macros: add an SRAM the PDK ships, a block hardened in another LanEx project (its finished run is copied in), or files you were given. Each macro is checked: instantiated in the RTL under the right flattened name, its behavioural model kept out of synthesis, a timing model present, power pins hooked to the grid, and a position inside the die.",
+      "Flow rules: the PDK's own exclusion lists, your EXTRA_EXCLUDED_CELLS (with a live preview of what a wildcard catches), the cells LibreLane inserts by itself (fill, taps, ties, clock buffers) and custom cells swapped in for library ones.",
     ],
     pitfalls: [
-      "An error indicating the SCL LEF was not found means standard-cell libraries are missing for the selected PDK. Install them from the Tools tab.",
-      "Custom standard cells must align with manufacturing pitch grids to prevent routing and placement errors.",
+      "LibreLane has no automatic macro placer: every macro instance needs a position, or the run stops at the power grid with \"Design has unplaced macros\". Use Arrange for me, then drag on the sketch.",
+      "Most designs with macros need FP_SIZING absolute and a DIE_AREA big enough for the blocks and their halos.",
+      "Custom standard cells must be a whole number of placement sites wide and exactly the row height tall.",
     ],
   },
   manual: {

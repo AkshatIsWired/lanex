@@ -211,6 +211,23 @@ def remove_cell(design_dir: str | Path, name: str) -> Dict[str, Any]:
     return {"ok": True}
 
 
+def _config_lists(design_dir: str | Path, keys: List[str]) -> Dict[str, List[str]]:
+    """List values the design's JSON/YAML config sets for *keys* (Tcl: none)."""
+    try:
+        from . import configedit
+        data = configedit.read_config(design_dir).get("data") or {}
+    except Exception:
+        return {}
+    out: Dict[str, List[str]] = {}
+    for k in keys:
+        v = data.get(k)
+        if isinstance(v, list):
+            out[k] = [str(x) for x in v]
+        elif isinstance(v, str) and v.strip():
+            out[k] = v.split()
+    return out
+
+
 def build_overrides(design_dir: str | Path) -> Dict[str, Any]:
     """Aggregate the enabled custom cells into a run-time override dict.
 
@@ -230,6 +247,14 @@ def build_overrides(design_dir: str | Path) -> Dict[str, Any]:
         for cell_name in (c.get("swap_out") or []):
             if cell_name and cell_name not in excluded:
                 excluded.append(cell_name)
+    # A ``-c KEY=VALUE`` override REPLACES the config's own value, so start each
+    # list from what the design's config already sets; otherwise enabling one
+    # swap silently drops the user's own EXTRA_EXCLUDED_CELLS / EXTRA_LEFS.
+    own = _config_lists(design_dir, list(accum) + ["EXTRA_EXCLUDED_CELLS"])
+    for var in list(accum):
+        accum[var] = own.get(var, []) + [p for p in accum[var] if p not in own.get(var, [])]
+    if excluded:
+        excluded = own.get("EXTRA_EXCLUDED_CELLS", []) + [c for c in excluded if c not in own.get("EXTRA_EXCLUDED_CELLS", [])]
     overrides: Dict[str, Any] = {k: " ".join(v) for k, v in accum.items()}
     if excluded:
         overrides["EXTRA_EXCLUDED_CELLS"] = " ".join(excluded)

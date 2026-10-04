@@ -258,6 +258,24 @@ export const api = {
   //  in-browser klayout-render endpoints were removed — see desktop.py.)
   cells: (pdk, scl) =>
     _fetch("/api/cells?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "")),
+  // ---------- Cells tab: library as the flow sees it, and hard macros
+  cellLibrary: (pdk, scl, designDir) =>
+    _fetch("/api/celllib?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") +
+      (designDir ? "&design_dir=" + encodeURIComponent(designDir) : ""), { timeout: 90000 }),
+  cellDetail: (pdk, scl, cell) =>
+    _fetch("/api/celllib/cell?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || "")),
+  cellLayout: (pdk, scl, cell) =>
+    _fetch("/api/celllib/layout?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || "")),
+  macroCatalog: (pdk, scl) =>
+    _fetch("/api/macros/catalog?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "")),
+  macroProjects: (designDir) =>
+    _fetch("/api/macros/projects" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : "")),
+  macroAdd: (payload) =>
+    _fetch("/api/macros/add", { method: "POST", body: JSON.stringify(payload), timeout: 120000 }),
+  macroInspect: (designDir, pdk) =>
+    _fetch("/api/macros/inspect?design_dir=" + encodeURIComponent(designDir || "") + "&pdk=" + encodeURIComponent(pdk || "")),
+  macroSettings: (designDir, settings) =>
+    _fetch("/api/macros/settings", { method: "POST", body: JSON.stringify({ design_dir: designDir, settings }) }),
   // ---------- custom cells (advanced cell swap-out, per run)
   customCells: (designDir) =>
     _fetch("/api/custom-cells" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : "")),

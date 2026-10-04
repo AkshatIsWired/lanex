@@ -1066,6 +1066,79 @@ check("analytics: check strip takes Verify's LibreLane-exact statuses", () => {
   assert.equal(AM.withSignoff(checks, null), checks);
 });
 
+// ---------- Cells tab (cells-model.js) ---------------------------------------------
+const CM = await import(toUrl(resolve(MOD, "cells-model.js")));
+
+check("cells: Liberty functions parse with every operator spelling", () => {
+  const env = { A: true, B: false, C: true };
+  for (const [src, want] of [["A&B", false], ["A*B", false], ["A B", false], ["A|B", true], ["A+B", true],
+    ["A^C", false], ["!A", false], ["A'", false], ["(A&!B)|C", true], ["!((A1&A2)|B1)", null]]) {
+    const ast = CM.parseFunction(src);
+    assert.ok(ast, src);
+    if (want !== null) assert.equal(CM.evalAst(ast, env), want, src);
+  }
+  // malformed input never throws: an unclosed paren still reads, a dangling operator is null
+  assert.doesNotThrow(() => CM.parseFunction("A & (B"));
+  assert.equal(CM.parseFunction("A &"), null);
+});
+
+check("cells: Liberty's (!A)|(!B) reads as the NAND it is", () => {
+  const ast = CM.parseFunction("(!A) | (!B)");
+  assert.equal(CM.astText(ast), "!(A & B)");
+  assert.equal(CM.classify(ast), "2-input NAND");
+  assert.equal(CM.classify(CM.parseFunction("!((A1&A2)|B1)")), "AND-OR-Invert (AOI)");
+  // flattened sum-of-products comes back in the datasheet's AOI shape, same function
+  for (const flat of ["(!A1&!B1) | (!A2&!B1)", "!((A1|B1)&(A2|B1))"]) {
+    const a = CM.parseFunction(flat);
+    assert.equal(CM.astText(a), "!((A1 & A2) | B1)", flat);
+  }
+  const t = (s) => CM.truthTable(["A", "B", "C"], [{ name: "Y", ast: CM.parseFunction(s) }]).map((r) => r.outs[0]).join("");
+  assert.equal(t("(A&B)|(A&C)"), t("A&(B|C)"));
+  assert.equal(CM.astText(CM.parseFunction("(A|B)&(A|B|C)")), "A | B");
+});
+
+check("cells: the PDK header formula wins and matches Liberty's truth table", () => {
+  const hdr = CM.headerFormulas(["Y = !((A1 & A2) | B1)"]).Y;
+  const lib = CM.parseFunction("(!A1&!B1) | (!A2&!B1)");
+  const t1 = CM.truthTable(["A1", "A2", "B1"], [{ name: "Y", ast: hdr }]);
+  const t2 = CM.truthTable(["A1", "A2", "B1"], [{ name: "Y", ast: lib }]);
+  assert.deepEqual(t1, t2);
+  assert.deepEqual(t1.map((r) => r.outs[0]), [1, 0, 1, 0, 1, 0, 0, 0]);
+});
+
+check("cells: tri-state outputs read Z when disabled", () => {
+  const t = CM.truthTable(["A", "TE_B"], [{ name: "Z", ast: CM.parseFunction("A"), z: CM.parseFunction("TE_B") }]);
+  assert.deepEqual(t.map((r) => r.outs[0]), [0, "Z", 1, "Z"]);
+});
+
+check("cells: gate diagram draws one gate per operator and labels every input", () => {
+  const svg = CM.gateDiagram(CM.parseFunction("!((A1&A2)|B1)"), "Y");
+  assert.equal((svg.match(/class='gd-gate'/g) || []).length, 3);   // AND, OR, output bubble
+  for (const p of ["A1", "A2", "B1", "Y"]) assert.ok(svg.includes(">" + p + "<"), p);
+  assert.equal(CM.gateDiagram(CM.parseFunction("A&B&C&D&E&F&G&H&I&J&K&L&M&N&O"), "Y"), "");
+});
+
+check("cells: flip-flop behaviour is spelled out from the ff group", () => {
+  const lines = CM.seqDescription({ kind: "ff", state: ["IQ", "IQ_N"], clocked_on: "CLK", next_state: "D", clear: "!RESET_B" },
+    [{ name: "Q", function: "IQ" }]);
+  assert.match(lines[0], /rising edge of CLK, Q takes D/);
+  assert.match(lines[1], /RESET_B low forces Q to 0/);
+});
+
+check("cells: exclusion wildcards match the way LibreLane's fnmatch does", () => {
+  assert.deepEqual(CM.globMatch("sky130_fd_sc_hd__dlygate4sd3_1", ["*dlygate*", "*buf_16", "sky130_fd_sc_hd__dlygate4sd?_1"]),
+    ["*dlygate*", "sky130_fd_sc_hd__dlygate4sd?_1"]);
+  assert.deepEqual(CM.globMatch("a.b", ["a?b", "a.c"]), ["a?b"]);
+});
+
+check("cells: units format without losing scale", () => {
+  assert.equal(CM.fmtPs(238.1), "238 ps");
+  assert.equal(CM.fmtPs(1088), "1.09 ns");
+  assert.equal(CM.fmtPower(0.00165), "1.65 pW");
+  assert.equal(CM.fmtPower(2500), "2.50 µW");
+  assert.equal(CM.fmtArea(5.0048), "5.00 µm²");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 
