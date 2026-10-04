@@ -530,7 +530,7 @@
                tool's Sources view (design / simulation / constraints). -->
           <aside class="ide-side" aria-label="Project files">
             <div class="ide-side-head">
-              <span class="ide-side-title">Explorer</span>
+              <span class="ide-view-seg" role="tablist" aria-label="Explorer view"><button class="is-on" role="tab" aria-selected="true" data-view="files">Files</button><button role="tab" aria-selected="false" data-view="hier" title="The module hierarchy: the top and every instance under it">Hierarchy</button></span><span class="ide-spacer"></span>
               <button class="iconbtn iconbtn-sm" id="ide-new-file" aria-label="New file" title="New file"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
               <button class="iconbtn iconbtn-sm" id="ide-upload" aria-label="Add files from your computer" title="Add files from your computer"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 8l5-5 5 5M5 20h14"/></svg></button>
             </div>
@@ -545,9 +545,13 @@
               <button class="btn btn-ghost btn-sm" id="ide-find" title="Find and replace (Ctrl F)">Find</button>
               <button class="btn btn-ghost btn-sm" id="ide-save" title="Save (Ctrl S)">Save</button>
               <span class="tb-sep" aria-hidden="true"></span>
-              <label class="ide-autolint" title="Save and check the syntax a moment after you stop typing"><input type="checkbox" id="ide-autolint"/> Auto-check</label>
+              <label class="ide-autolint" title="Run the syntax check each time you save a Verilog file"><input type="checkbox" id="ide-autolint"/> Check on save</label>
               <button class="btn btn-sm" id="ide-lint" title="Check every design and testbench file with Verilator">Check syntax</button>
-              <button class="btn btn-primary btn-sm" id="ide-sim" title="Build and run the selected testbench, then show its waveform"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Simulate</button>
+              <span class="ide-simsplit">
+                <button class="btn btn-primary btn-sm" id="ide-sim" title="Build and run the testbench, then show its waveform"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Simulate</button>
+                <button class="btn btn-primary btn-sm ide-sim-pick" id="ide-sim-pick" aria-haspopup="menu" aria-expanded="false" title="Which testbench Simulate runs"><span id="ide-sim-tbname">no testbench</span><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+                <div class="ide-sim-menu" id="ide-sim-menu" role="menu" hidden></div>
+              </span>
             </div>
             <div class="ide-editor-wrap">
               <div id="ide-editor" class="ide-editor"></div>
@@ -558,16 +562,17 @@
               <div class="ide-panel-bar">
                 <div class="ide-ptabs" role="tablist" aria-label="Output">
                   <button class="ide-ptab is-on" role="tab" data-ptab="problems">Problems <span class="pcount" id="ide-problems-count">not checked</span></button>
-                  <button class="ide-ptab" role="tab" data-ptab="sim">Simulation</button>
+                  <button class="ide-ptab" role="tab" data-ptab="sim">Simulation <span class="pcount" id="ide-sim-count"></span></button>
                   <button class="ide-ptab" role="tab" data-ptab="wave">Waveform
                     <span id="ide-wave-partial" class="wave-partial" hidden title="The simulation hit its time limit before $finish, so this waveform is incomplete. Add $finish to the testbench to capture the whole run.">partial</span></button>
                 </div>
                 <span class="ide-spacer"></span>
+                <button class="iconbtn iconbtn-sm" id="ide-panel-max" aria-pressed="false" aria-label="Give the panel the editor's space" title="Give the panel the editor's space (the file tabs stay)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h16M4 4h16v16H4z"/></svg></button>
                 <button class="iconbtn iconbtn-sm panel-fs-btn" data-fs-target="ide-panel" aria-label="Fullscreen panel" title="Fullscreen (Esc to leave)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
                 <button class="iconbtn iconbtn-sm" id="ide-panel-toggle" aria-label="Hide the panel" title="Hide or show the panel"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
               </div>
               <div class="ide-pane is-on" data-pane="problems" id="ide-problems">
-                <div id="ide-diags" class="ide-diags"><p class="muted">Check syntax lists errors and warnings here, with the file and line. Click one to jump to it.</p></div>
+                <div id="ide-diags" class="ide-diags"></div>
               </div>
               <div class="ide-pane" data-pane="sim">
                 <div class="ide-sim-bar">
@@ -579,27 +584,14 @@
                     <option value="verilator">Verilator</option>
                   </select></label>
                   <button class="btn btn-ghost btn-sm" id="ide-sim-stop" hidden title="Stop the running simulation"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg> Stop</button>
+                  <span class="ide-spacer"></span>
+                  <button class="btn btn-ghost btn-sm" id="ide-log-clear" title="Clear the simulation output">Clear output</button>
                 </div>
-                <pre id="ide-log" class="ide-log"></pre>
+                <div class="ide-sim-status" id="ide-sim-status" hidden></div>
+                <div id="ide-log" class="ide-log" role="log" aria-live="off"></div>
               </div>
               <div class="ide-pane" data-pane="wave">
-                <div class="ide-wave-bar wave-radixes">
-                  <button class="btn btn-ghost btn-sm" id="ide-wave-zoomout" title="Zoom out"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
-                  <button class="btn btn-ghost btn-sm" id="ide-wave-zoomin" title="Zoom in"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
-                  <button class="btn btn-ghost btn-sm" id="ide-wave-fit" title="Fit the whole run">Fit</button>
-                  <span class="wave-seg" role="group" aria-label="Number format">
-                    <button class="btn btn-ghost btn-sm wave-radix" data-radix="hex">hex</button>
-                    <button class="btn btn-ghost btn-sm wave-radix" data-radix="dec">dec</button>
-                    <button class="btn btn-ghost btn-sm wave-radix" data-radix="bin">bin</button>
-                    <button class="btn btn-ghost btn-sm wave-radix" data-radix="signed">signed</button>
-                  </span>
-                  <span class="ide-spacer"></span>
-                  <button class="btn btn-ghost btn-sm" id="ide-wave-png" title="Save the waveform as a PNG image">PNG</button>
-                  <button class="btn btn-ghost btn-sm" id="ide-wave-csv" title="Save the waveform as CSV">CSV</button>
-                  <button class="btn btn-ghost btn-sm" id="ide-wave-gtkwave" title="Open this waveform in GTKWave, signals preloaded"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h3l2-7 4 14 3-10 2 3h4"/></svg> GTKWave</button>
-                </div>
-                <div class="ide-wave-host" id="ide-wave-host"><canvas id="ide-wave"></canvas>
-                  <p class="ide-wave-empty" id="ide-wave-empty">Simulate a testbench that calls <code>$dumpfile</code> and <code>$dumpvars</code>, and its waveform shows here.</p></div>
+                <div class="wv" id="ide-wave-host"></div>
               </div>
             </div>
           </div>

@@ -646,8 +646,7 @@ body:not(.theme-light) .pf-node.is-ok .pf-state { color: var(--met3); }
 .wizard { display: flex; flex-direction: column; max-height: calc(100vh / var(--ll-zoom, 1) - 64px); }
 .wizard .wizard-body { overflow-y: auto; min-height: 0; }
 
-/* New file (RTL IDE) */
-.newfile { display: flex; flex-direction: column; gap: 14px; min-width: min(460px, 78vw); }
+/* New file (RTL IDE): styles live in ide.css, which the pop-out loads too. */
 
 /* ------------------------------------------------------------ Projects list */
 .dlg.dlg-xl.dlg-pm { width: min(720px, calc(96vw / var(--ll-zoom, 1))); }

@@ -537,13 +537,15 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .btn-lg { height: 40px; padding: 0 20px; font-size: 15px; }
 
 input[type="text"], input[type="search"], input[type="number"], input:not([type]), select, textarea {
-  background: var(--surface-3); color: var(--text-strong);
+  background-color: var(--surface-3); color: var(--text-strong);
   border: 1px solid var(--border); border-radius: var(--r-md);
   padding: 7px 11px; font-size: 14px; min-height: 34px;
   box-shadow: none; transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 body.theme-light input[type="text"], body.theme-light input[type="search"], body.theme-light input[type="number"],
-body.theme-light input:not([type]), body.theme-light select, body.theme-light textarea { background: #ffffff; }
+body.theme-light input:not([type]), body.theme-light select, body.theme-light textarea { background-color: #ffffff; }
+/* Keep room for the chevron styles.css draws, so a select reads as a dropdown. */
+select { padding-right: 32px; cursor: pointer; }
 input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 0.8; }
 input:hover, select:hover, textarea:hover { border-color: var(--border-strong); }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }

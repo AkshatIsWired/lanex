@@ -241,6 +241,26 @@ def test_open_wave_launches_with_save_file(_design, monkeypatch):
     assert obj["signals"] == 4  # tb.clk, tb.reset, tb.data, dut.count
 
 
+def test_vcd_signals_keeps_aliases_when_asked(tmp_path):
+    p = tmp_path / "dump.vcd"
+    p.write_text(VCD)
+    names = [n for n, _ in waveview.vcd_signals(p, dedupe=False)]
+    # dut.clk shares tb.clk's id; the IDE can put either on screen.
+    assert "tb.dut.clk" in names and "tb.clk" in names
+
+
+def test_open_wave_preloads_the_ides_signals_in_order(_design, monkeypatch):
+    # GTKWave opens on the same picture as the built-in viewer: the signals it
+    # had on screen, in that order (an alias included), unknown names dropped.
+    (_design / "dump.vcd").write_text(VCD)
+    monkeypatch.setattr(desktop, "open_in_tool", lambda tool, target, **kw: {"ok": True})
+    code, obj = _call({"path": "dump.vcd", "signals": ["tb.dut.count[3:0]", "tb.dut.clk", "tb.nope"]})
+    assert code == 200 and obj["ok"] is True and obj["signals"] == 2
+    body = (_design / ".lanex-wave.gtkw").read_text()
+    assert body.index("tb.dut.count[3:0]") < body.index("tb.dut.clk")
+    assert "tb.data[7:0]" not in body and "tb.nope" not in body
+
+
 def test_open_wave_fst_plain_open_no_save(_design, monkeypatch):
     (_design / "dump.fst").write_bytes(b"binary-fst")
     seen = {}
@@ -256,12 +276,20 @@ def test_open_wave_fst_plain_open_no_save(_design, monkeypatch):
 
 
 def test_frontend_wiring_present():
-    """The button + api method exist in the served static (both IDE surfaces)."""
+    """The button + api method exist in the served static (both IDE surfaces).
+
+    Both pages host the waveform viewer, which builds its own toolbar (the
+    GTKWave button among it, id ide-wave-gtkwave) and hands the click, with
+    the signals on screen, to main.js's openInGtkwave."""
     static = Path(__file__).resolve().parents[1] / "server" / "static"
-    assert 'id="ide-wave-gtkwave"' in (static / "ide.html").read_text()
-    assert 'id="ide-wave-gtkwave"' in (static / "index.html").read_text()
+    assert 'id="ide-wave-host"' in (static / "ide.html").read_text()
+    assert 'id="ide-wave-host"' in (static / "index.html").read_text()
+    waves = (static / "modules" / "ide" / "waves.js").read_text()
+    assert "data-act='gtkwave' id='\" + p + \"gtkwave'" in waves
+    main = (static / "modules" / "ide" / "main.js").read_text()
+    assert 'idPrefix: "ide-wave-"' in main
+    assert "onGtkwave: openInGtkwave" in main
     assert "/api/ide/open-wave" in (static / "modules" / "api.js").read_text()
-    assert "openInGtkwave" in (static / "modules" / "ide" / "main.js").read_text()
 
 
 def test_cli_install_tool_flag_exists():

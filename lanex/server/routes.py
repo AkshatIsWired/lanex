@@ -3016,6 +3016,37 @@ def h_file_delete(handler: Any) -> None:
     _respond(handler, result)
 
 
+def h_file_rename(handler: Any) -> None:
+    """Rename a project file and keep the config pointing at it."""
+    from ..controller import configedit, editor
+    body = getattr(handler, "_body", {})
+    rel = (body.get("rel_path") or "").strip()
+    new_rel = (body.get("new_rel") or "").strip()
+    if not rel or not new_rel:
+        _respond(handler, "missing rel_path or new_rel", 400)
+        return
+    d = _design_dir_or_400(handler)
+    if d is None or _refuse_while_running(handler):
+        return
+    try:
+        before = configedit.resolve_sources(d, configedit.read_config(d)["data"])
+    except Exception:
+        before = None
+    result = editor.rename_file(d, rel, new_rel)
+    if not result.get("ok"):
+        _respond(handler, result.get("error"), 400)
+        return
+    try:
+        cfg = configedit.follow_rename(d, str(Path(d) / rel), result["abs"], before)
+        result["config"] = {"name": cfg.get("name"), "changed": cfg.get("changed") or []}
+    except configedit.ConfigEditError as ex:
+        result["config_error"] = str(ex)
+    except Exception as ex:  # the rename stands; say the config wasn't followed
+        _log.exception("config follow-rename failed")
+        result["config_error"] = str(ex)
+    _respond(handler, result)
+
+
 def h_lint(handler: Any) -> None:
     """Lint the active design with a standalone ``verilator --lint-only`` job.
 
@@ -3266,6 +3297,14 @@ def h_ide_open_wave(handler: Any) -> None:
         try:
             from ..controller import waveview
             sigs = waveview.vcd_signals(target)
+            # The IDE sends the signals on its screen: preload those, in
+            # that order, so GTKWave opens on the same picture.
+            wanted = [s for s in (body.get("signals") or []) if isinstance(s, str)]
+            if wanted:
+                widths = dict(waveview.vcd_signals(target, limit=200000, dedupe=False))
+                picked = [(s, widths[s]) for s in wanted if s in widths]
+                if picked:
+                    sigs = picked
             if sigs:
                 save = waveview.write_gtkw(base / ".lanex-wave.gtkw", target, sigs)
                 n_sigs = len(sigs)
@@ -3595,6 +3634,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/system-resources", h_system_resources),
     ("/api/file/write", h_file_write),
     ("/api/file/delete", h_file_delete),
+    ("/api/file/rename", h_file_rename),
     ("/api/lint", h_lint),
     ("/api/lint-result", h_lint_result),
     ("/api/sim/testbenches", h_sim_testbenches),

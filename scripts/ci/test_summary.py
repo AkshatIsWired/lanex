@@ -66,6 +66,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_server": "HTTP routing, CSRF, and traversal confinement hold (no arbitrary file read).",
     "test_tools": "Tool/engine detection is accurate and its probes can't hang the UI.",
     "test_fsbrowser": "The file browser stays confined to allowed roots (no path traversal).",
+    "test_file_rename": "Renaming a file in the RTL IDE never overwrites or escapes the project, and the config keeps building it.",
     "test_alerts": "Failed-step advisories map to the right plain-language explanation.",
     "test_watch_pin": "Run watch/pin/notes persist and read back correctly.",
     "test_dse_reverify": "DSE sweeps + targeted re-verify launch through the SAME assembly path as a normal run (Fear B).",

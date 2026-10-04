@@ -20,15 +20,23 @@ curl -fsSL \
   "https://cdn.jsdelivr.net/npm/echarts@${ECHARTS_VERSION}/dist/echarts.min.js" \
   -o "$VENDOR/echarts.min.js"
 
-# three.js — used ONLY by the optional 3D GDS viewer (Phase 4 viewer3d.js). The
-# viewer degrades to an honest "not installed" message when this file is absent,
-# so vendoring it is opt-in and keeps the core lean.
-THREE_VERSION="0.160.0"
-echo "==> three.js ${THREE_VERSION} -> $VENDOR/three/three.module.js"
-mkdir -p "$VENDOR/three"
-curl -fsSL \
-  "https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/build/three.module.js" \
-  -o "$VENDOR/three/three.module.js"
+# CodeMirror 6 — the RTL IDE's editor (modules/ide/editor.js). npm packages,
+# bundled by esbuild into one ES module from scripts/vendor/codemirror-entry.js
+# (which lists exactly what the editor imports). MIT; licence copied beside it.
+echo "==> CodeMirror 6 -> $VENDOR/codemirror.js"
+CM_TMP="$(mktemp -d)"
+cp "$(dirname "$0")/vendor/codemirror-entry.js" "$CM_TMP/entry.js"
+(
+  cd "$CM_TMP"
+  npm init -y >/dev/null
+  npm i --silent @codemirror/state@6 @codemirror/view@6 @codemirror/commands@6 @codemirror/language@6 \
+    @codemirror/autocomplete@6 @codemirror/search@6 @codemirror/lint@6 @codemirror/legacy-modes@6 \
+    @codemirror/lang-json@6 @lezer/highlight@1 esbuild
+  npx esbuild entry.js --bundle --format=esm --minify --legal-comments=none --outfile=codemirror.js
+)
+cp "$CM_TMP/codemirror.js" "$VENDOR/codemirror.js"
+cp "$CM_TMP/node_modules/@codemirror/view/LICENSE" "$VENDOR/codemirror.LICENSE"
+rm -rf "$CM_TMP"
 
 echo "==> Done. Files:"
 ls -lh "$VENDOR"

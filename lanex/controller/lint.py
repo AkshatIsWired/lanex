@@ -202,7 +202,7 @@ class LintJob:
             if timeout and timeout > 0:
                 def _on_timeout() -> None:
                     self._timed_out.set()
-                    events.publish("log", {"message":
+                    events.publish("log", {"source": "lint", "message":
                         f"lint exceeded {timeout}s and was stopped (the linter wedged — on WSL a "
                         "Windows verilator on the PATH can hang; install the Linux build)."})
                     self._kill()
@@ -214,13 +214,13 @@ class LintJob:
                 clean = container_run.strip_ansi(line.rstrip("\n"))
                 out_lines.append(clean)
                 if clean:
-                    events.publish("log", {"message": clean})
+                    events.publish("log", {"source": "lint", "message": clean})
             rc = self._proc.wait()
         except FileNotFoundError as ex:
-            events.publish("log", {"message": f"lint failed to launch: {ex}"})
+            events.publish("log", {"source": "lint", "message": f"lint failed to launch: {ex}"})
             rc = 127
         except Exception as ex:  # pragma: no cover - environment dependent
-            events.publish("log", {"message": f"lint error: {ex}"})
+            events.publish("log", {"source": "lint", "message": f"lint error: {ex}"})
             rc = 1
         finally:
             if watchdog is not None:

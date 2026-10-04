@@ -8,8 +8,9 @@
 // RTL-to-GDS run. Shares api.js + SSE; no bundler.
 import { api, sse, fmt } from "../api.js";
 import { Editor } from "./editor.js";
-import { parseVCD, vcdToCSV } from "./vcd.js";
-import { WaveView, defaultLanes } from "./waves.js";
+import { parseVCD, formatTime, parseTimescale, valueAt } from "./vcd.js";
+import { explain, TESTBENCH_STYLE } from "./lintinfo.js";
+import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
 import { applyZoom, currentZoom } from "../zoom.js";
 
@@ -47,16 +48,10 @@ function setupThemeSync() {
 export async function initIde(opts = {}) {
   setupThemeSync();
   if (_inited) {
-    // Re-activated tab: another project means a fresh set of tabs; the same
+    // Re-activated tab: another project means its own set of tabs; the same
     // project just picks up files made elsewhere (Setup's New file, Add files).
-    if (opts.designDir && opts.designDir !== state.designDir) {
-      state.designDir = opts.designDir;
-      state.tabs = [];
-      state.active = null;
-      state.explicitOpen = false;
-      setDesignLabel();
-      renderTabs();
-    }
+    if (opts.runMode) state.runMode = opts.runMode;
+    if (opts.designDir && opts.designDir !== state.designDir) switchProject(opts.designDir);
     await loadTree();
     await loadTestbenches();
     autoOpen();
@@ -75,32 +70,43 @@ export async function initIde(opts = {}) {
 
   setDesignLabel();
   setupFullscreen();   // idempotent; needed on the standalone /ide page too
-  window.ideEditor = new Editor(document.getElementById("ide-editor"));
-  wireEditor();
+  window.ideEditor = new Editor(document.getElementById("ide-editor"), {
+    onChange: onEditorChange, onCursor: showCursor, onSave: saveFile,
+  });
+  window.ideEditor.hoverProvider = valueHover;
   byId("ide-save", (b) => b.addEventListener("click", saveFile));
   byId("ide-lint", (b) => b.addEventListener("click", lint));
   setupAutoLint();
   byId("ide-sim", (b) => b.addEventListener("click", simulate));
   byId("ide-sim-stop", (b) => b.addEventListener("click", stopSim));
   byId("ide-find", (b) => b.addEventListener("click", () => window.ideEditor.openFind()));
-  byId("ide-wave-csv", (b) => b.addEventListener("click", exportWaveCsv));
-  byId("ide-wave-png", (b) => b.addEventListener("click", exportWavePng));
-  byId("ide-wave-gtkwave", (b) => b.addEventListener("click", openInGtkwave));
-  byId("ide-wave-zoomin", (b) => b.addEventListener("click", () => state.wave && state.wave.zoomIn()));
-  byId("ide-wave-zoomout", (b) => b.addEventListener("click", () => state.wave && state.wave.zoomOut()));
-  byId("ide-wave-fit", (b) => b.addEventListener("click", () => state.wave && state.wave.fit()));
+  byId("ide-wave-host", (host) => {
+    state.wave = new WaveView(host, {
+      idPrefix: "ide-wave-",
+      // One saved signal list per project and testbench.
+      layoutKey: () => "ll.wave:" + (state.designDir || "") + "|" + (state.waveTb || ""),
+      onGoto: gotoDeclaration,
+      onGtkwave: openInGtkwave,
+      onSimulate: simulate,
+      onNote: note,
+    });
+  });
   byId("ide-new-file", (b) => b.addEventListener("click", () => newFile()));
   wireUpload();
   wireTree();
   wireTabs();
   wirePanel();
-  document.querySelectorAll(".wave-radix").forEach((b) =>
-    b.addEventListener("click", () => {
-      if (state.wave) state.wave.setRadix(b.dataset.radix);
-      document.querySelectorAll(".wave-radix").forEach((x) => x.classList.toggle("is-on", x === b));
-    }));
-  document.querySelector('.wave-radix[data-radix="hex"]')?.classList.add("is-on");
-  byId("ide-tb", (sel) => sel.addEventListener("change", deriveTopFromTb));
+  byId("ide-tb", (sel) => sel.addEventListener("change", () => { byId("ide-top", (x) => { x.value = ""; }); deriveTopFromTb(); paintSimPick(); }));
+  wireSimPick();
+  wireLog();
+  wireProblems();
+  renderProblems();
+  wireKeys();
+  window.addEventListener("beforeunload", (e) => {
+    if (!unsavedTabs().length) return;
+    e.preventDefault();
+    e.returnValue = "";
+  });
 
   sse.open();
   sse.on(onEvent);
@@ -110,6 +116,75 @@ export async function initIde(opts = {}) {
 }
 
 function byId(id, fn) { const el = document.getElementById(id); if (el) fn(el); }
+
+// Open tabs per project, so going to another project and back finds them as
+// they were, unsaved edits included (the server only writes into the open
+// project, so they can't be saved from elsewhere).
+const _tabsByProject = new Map();
+
+// Another project was opened: nothing of the last one stays on screen (its
+// files, problems, simulation output and waveform belong to it).
+function switchProject(dir) {
+  stash();
+  if (state.designDir) _tabsByProject.set(state.designDir, { tabs: state.tabs, active: state.active });
+  const ed = window.ideEditor;
+  if (ed) { ed.load(null, ""); ed.states.clear(); }
+  state.designDir = dir;
+  const kept = _tabsByProject.get(dir);
+  state.tabs = kept ? kept.tabs : [];
+  state.active = null;
+  state.explicitOpen = false;
+  state.diags = [];
+  state.simDiags = [];
+  state.lintChecked = false;
+  state.lintAt = 0;
+  state.lintFailed = null;
+  state.scopeMap = null;
+  state.lastWavePath = null;
+  state.waveTb = null;
+  state.gtkwaveInstallArmed = false;
+  if (state.simRun && !state.simRun.done) state.simRun.orphan = true;
+  else state.simRun = null;
+  if (state.wave) state.wave.clear();
+  setWavePartial(false);
+  byId("ide-log", (el) => { el.innerHTML = ""; });
+  byId("ide-top", (x) => { x.value = ""; });
+  byId("ide-sim-status", (el) => { el.hidden = true; });
+  byId("ide-sim-count", (el) => { el.textContent = ""; el.className = "pcount"; });
+  byId("ide-open", (el) => { el.textContent = "No file open"; el.title = ""; });
+  setDesignLabel();
+  renderProblems();
+  renderTabs();
+  const back = kept && state.tabs.find((t) => t.abs === kept.active);
+  if (back) activate(back);
+}
+
+// The IDE is on screen: the /ide page, or the cockpit's RTL IDE tab while it
+// is the one showing.
+function ideShowing() {
+  const embed = document.querySelector(".ide-embed");
+  return !!embed && embed.getClientRects().length > 0;
+}
+
+// Ctrl+S saves the open file wherever the focus is in the IDE (the explorer,
+// the waveform, a panel), not only inside the editor, instead of the
+// browser's "Save page as".
+function wireKeys() {
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || (e.key !== "s" && e.key !== "S")) return;
+    if (e.defaultPrevented || !ideShowing() || document.querySelector(".dlg-backdrop")) return;
+    if (e.target && e.target.closest && e.target.closest(".cm-editor")) return;   // the editor's own keymap has it
+    e.preventDefault();
+    if (activeTab()) saveFile();
+  });
+}
+
+// Unsaved edits in any project's tabs: the browser asks before the page goes.
+function unsavedTabs() {
+  const all = state.tabs.concat(...[..._tabsByProject.entries()].filter(([d]) => d !== state.designDir).map(([, v]) => v.tabs));
+  stash();
+  return all.filter((t) => t.text !== t.saved);
+}
 
 // /mnt/c/Users/... is C:\Users\... to a Windows user.
 function shownPath(p) {
@@ -126,50 +201,67 @@ function setDesignLabel() {
 
 // ------------------------------------------------------------------ new files
 
-// Every kind of file a LibreLane project uses. The server writes the starter
-// content (controller/projectfiles.py) and, for the kinds the flow reads
-// through a config variable, points the config at the new file.
+// Every kind of file a LibreLane project uses, most-used first. The server
+// writes the starter content (controller/projectfiles.py) and, for the kinds
+// the flow reads through a config variable, points the config at the new file.
+// Verilog or SystemVerilog is a separate choice, so the list stays short.
 const KINDS = [
-  { group: "Design", items: [
-    { kind: "module_v", label: "Verilog module (.v)", ph: "alu", help: "Goes in src/ and into the chip. A new module joins the config's file list." },
-    { kind: "module_sv", label: "SystemVerilog module (.sv)", ph: "alu", help: "Goes in src/ and into the chip. LibreLane reads it as SystemVerilog." },
-  ] },
-  { group: "Simulation", items: [
-    { kind: "tb_v", label: "Verilog testbench (.v)", ph: "alu_tb", help: "Goes in verify/. Simulation only, never built into the chip." },
-    { kind: "tb_sv", label: "SystemVerilog testbench (.sv)", ph: "alu_tb", help: "Goes in verify/. Simulation only, never built into the chip." },
-  ] },
-  { group: "Constraints", items: [
-    { kind: "sdc", label: "Timing constraints (.sdc)", ph: "timing", use: true,
-      help: "Starts as LibreLane's own default constraints, so nothing changes until you edit it." },
-    { kind: "pins", label: "Pin order (.cfg)", ph: "pin_order", use: true,
-      help: "Lists every port of the top module on a chip edge: clock and reset at the bottom, inputs left, outputs right." },
-  ] },
-  { group: "Other", items: [
-    { kind: "header_vh", label: "Include file (.vh)", ph: "defs", help: "Shared `define macros, pulled in with `include. Not listed in the config." },
-    { kind: "header_svh", label: "SystemVerilog include (.svh)", ph: "defs", help: "Shared `define macros, pulled in with `include. Not listed in the config." },
-    { kind: "memory", label: "Memory contents (.hex)", ph: "rom", help: "Initial contents for a memory, loaded with $readmemh." },
-    { kind: "other", label: "Other text file", ph: "notes.md", help: "Any file LanEx can edit: .md, .txt, .tcl, .json, .yaml …" },
-  ] },
+  { id: "module", label: "Design module", dir: "src/", hdl: true, ph: "alu",
+    help: "Logic that goes into the chip. Joins the config's file list." },
+  { id: "tb", label: "Testbench", dir: "verify/", hdl: true, ph: "alu_tb",
+    help: "Drives and checks a module in simulation. Never built into the chip." },
+  { id: "sdc", label: "Timing constraints", dir: "src/", ext: ".sdc", ph: "timing", use: true,
+    help: "Only for I/O delays, extra clocks or false paths. The clock period alone needs none." },
+  { id: "pins", label: "Pin order", dir: "", ext: ".cfg", ph: "pin_order", use: true,
+    help: "Which chip edge each port sits on. Without it the flow places pins itself." },
+  { id: "header", label: "Include file", dir: "src/", hdl: true, ph: "defs",
+    help: "Shared `define macros and parameters, pulled in with `include." },
+  { id: "memory", label: "Memory contents", dir: "src/", ext: ".hex", ph: "rom",
+    help: "Starting values for a small ROM, loaded with $readmemh." },
+  { id: "other", label: "Other text file", dir: "", ext: "", ph: "notes.md",
+    help: "Notes, scripts or settings: .md, .txt, .tcl, .json, .yaml." },
 ];
-const ALL = KINDS.flatMap((g) => g.items);
-const LEGACY = { src: "module_v", tb: "tb_v" };
+// The server's kind for (what, language).
+function serverKind(id, sv) {
+  if (id === "module") return sv ? "module_sv" : "module_v";
+  if (id === "tb") return sv ? "tb_sv" : "tb_v";
+  if (id === "header") return sv ? "header_svh" : "header_vh";
+  return id;
+}
+const LEGACY = { src: "module", tb: "tb", module_v: "module", module_sv: "module", tb_v: "tb", tb_sv: "tb",
+  header_vh: "header", header_svh: "header" };
+
+// The project's language: the top module's file decides, else whichever
+// extension the design files use most. New projects start in Verilog.
+function projectIsSv() {
+  if (state.topAbs) return /\.sv$/i.test(state.topAbs);
+  const design = state.files.filter((f) => f.role === "design" || f.role === "testbench");
+  const sv = design.filter((f) => /\.sv$/i.test(f.relpath)).length;
+  return sv > design.length - sv;
+}
 
 export async function newFile(kind) {
   if (!state.designDir) { note("Open a project first (Setup tab).", true); return; }
-  kind = LEGACY[kind] || kind || "module_v";
-  if (!ALL.some((k) => k.kind === kind)) kind = "module_v";
+  let id = LEGACY[kind] || kind || "module";
+  if (!KINDS.some((k) => k.id === id)) id = "module";
+  let sv = /_sv$|_svh$/.test(kind || "") ? true : projectIsSv();
   const { customDialog } = await import("../dialog.js");
   let picked = null;
-  const opts = KINDS.map((g) => "<optgroup label='" + g.group + "'>" +
-    g.items.map((k) => "<option value='" + k.kind + "'" + (k.kind === kind ? " selected" : "") + ">" + fmt.escape(k.label) + "</option>").join("") +
-    "</optgroup>").join("");
+  const list = KINDS.map((k, i) =>
+    (i === 2 ? "<div class='nf-sep' aria-hidden='true'></div>" : "") +
+    "<label class='nf-kind'><input type='radio' name='nf-kind' value='" + k.id + "'" + (k.id === id ? " checked" : "") + "/>" +
+    "<span class='nf-kind-t'>" + fmt.escape(k.label) + "</span><span class='nf-kind-d'>" + fmt.escape(k.help) + "</span></label>").join("");
   const res = await customDialog({
     title: "New file",
     bodyHtml:
       "<div class='newfile'>" +
-      "<label class='wiz-field'><span>Kind</span><select id='nf-kind'>" + opts + "</select>" +
-      "<span class='wiz-help' id='nf-help'></span></label>" +
-      "<label class='wiz-field'><span id='nf-name-label'>Name</span><input id='nf-name' type='text' spellcheck='false' autocomplete='off'/></label>" +
+      "<div class='nf-kinds' role='radiogroup' aria-label='Kind of file'>" + list + "</div>" +
+      "<div class='nf-row'>" +
+      "<label class='nf-field nf-grow'><span id='nf-name-label'>Name</span><input id='nf-name' type='text' spellcheck='false' autocomplete='off'/></label>" +
+      "<span class='nf-field' id='nf-lang-field'><span>Language</span><span class='nf-seg' role='group' aria-label='Language'>" +
+      "<button type='button' data-sv='0'>Verilog .v</button><button type='button' data-sv='1'>SystemVerilog .sv</button></span></span>" +
+      "</div>" +
+      "<p class='nf-path'>Creates <code id='nf-path'></code></p>" +
       "<label class='nf-use' id='nf-use-row'><input type='checkbox' id='nf-use' checked/> <span id='nf-use-text'></span></label>" +
       "</div>",
     buttons: [
@@ -177,25 +269,31 @@ export async function newFile(kind) {
       { label: "Create", value: "ok", cls: "btn-primary" },
     ],
     onMount: (back) => {
-      const sel = back.querySelector("#nf-kind");
       const input = back.querySelector("#nf-name");
       const create = back.querySelector(".btn-primary");
+      const cur = () => KINDS.find((k) => k.id === back.querySelector("input[name='nf-kind']:checked").value);
+      const ext = (k) => (k.id === "header" ? (sv ? ".svh" : ".vh") : k.hdl ? (sv ? ".sv" : ".v") : k.ext);
       const paint = () => {
-        const k = ALL.find((x) => x.kind === sel.value);
-        back.querySelector("#nf-help").textContent = k.help;
-        back.querySelector("#nf-name-label").textContent = /^(module|tb)/.test(k.kind) ? "Module name" : "File name";
-        if (!input.dataset.touched) input.value = k.kind.startsWith("tb") && state.top ? state.top + "_tb" : k.ph;
+        const k = cur();
+        back.querySelector("#nf-name-label").textContent = k.id === "module" || k.id === "tb" ? "Module name" : "File name";
+        if (!input.dataset.touched) input.value = k.id === "tb" && state.top ? state.top + "_tb" : k.ph;
+        back.querySelector("#nf-lang-field").hidden = !k.hdl;
+        back.querySelectorAll(".nf-seg button").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.sv === "1") === sv)));
+        const name = (input.value || "").trim() || k.ph;
+        const e = ext(k);
+        back.querySelector("#nf-path").textContent = k.dir + (e && !name.toLowerCase().endsWith(e) ? name + e : name);
         back.querySelector("#nf-use-row").hidden = !k.use;
-        back.querySelector("#nf-use-text").textContent = k.kind === "sdc"
+        back.querySelector("#nf-use-text").textContent = k.id === "sdc"
           ? "Use it for this project's runs (sets PNR_SDC_FILE and SIGNOFF_SDC_FILE in the config)"
           : "Use it for this project's runs (sets IO_PIN_ORDER_CFG in the config)";
       };
-      sel.addEventListener("change", paint);
-      input.addEventListener("input", () => { input.dataset.touched = "1"; });
+      back.querySelectorAll("input[name='nf-kind']").forEach((r) => r.addEventListener("change", paint));
+      back.querySelectorAll(".nf-seg button").forEach((b) => b.addEventListener("click", () => { sv = b.dataset.sv === "1"; paint(); }));
+      input.addEventListener("input", () => { input.dataset.touched = "1"; paint(); });
       paint();
       // Read the fields before the dialog closes and removes them.
       create?.addEventListener("click", () => {
-        picked = { kind: sel.value, name: (input.value || "").trim(), use: back.querySelector("#nf-use").checked };
+        picked = { kind: serverKind(cur().id, sv), name: (input.value || "").trim(), use: back.querySelector("#nf-use").checked };
       }, true);
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") { e.preventDefault(); create?.click(); }
@@ -274,8 +372,10 @@ async function loadTree() {
   try {
     const info = await api.designInfo({});
     state.top = (info.values && info.values.DESIGN_NAME) || info.suggested_top || null;
+    state.configTop = (info.values && info.values.DESIGN_NAME) || null;
     state.topAbs = (state.top && (info.module_files || {})[state.top]) || null;
-  } catch (_e) { state.top = null; state.topAbs = null; }
+    state.moduleFiles = info.module_files || {};
+  } catch (_e) { state.top = null; state.configTop = null; state.topAbs = null; state.moduleFiles = {}; }
   renderTree();
 }
 
@@ -285,61 +385,354 @@ function fileRow(f) {
   const base = f.relpath.slice(cut + 1);
   const out = f.role === "design" && !f.built && state.files.some((x) => x.built);
   const tags = (f.abspath === state.topAbs ? "<span class='tag is-top'>top</span>" : "") +
-    (out ? "<span class='tag' title='Not in the config&#39;s file list, so it isn&#39;t built into the chip. Tick it under Sources on the Setup tab.'>not built</span>" : "");
+    (out ? "<span class='tag' title='Not in the config&#39;s file list, so it isn&#39;t built into the chip. Right-click it and choose Build into the chip, or tick it under Sources on the Setup tab.'>not built</span>" : "");
   return "<div class='ide-file-row" + (f.abspath === state.active ? " is-active" : "") + (out ? " is-out" : "") +
     "' data-abs='" + fmt.escape(f.abspath) + "'>" +
     "<button class='ide-file' data-abs='" + fmt.escape(f.abspath) + "' data-rel='" + fmt.escape(f.relpath) + "' title='" + fmt.escape(f.relpath) + "'>" +
     "<span class='fn'><span class='dir'>" + fmt.escape(dir) + "</span>" + fmt.escape(base) + "</span>" + tags + "</button>" +
-    "<button class='ide-file-del' title='Delete " + fmt.escape(f.relpath) + "' aria-label='Delete " + fmt.escape(f.relpath) +
-    "' data-rel='" + fmt.escape(f.relpath) + "'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M5 7h14M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3'/></svg></button></div>";
+    "<button class='ide-file-more' title='More for " + fmt.escape(f.relpath) + "' aria-label='More for " + fmt.escape(f.relpath) +
+    "' aria-haspopup='menu' data-rel='" + fmt.escape(f.relpath) + "'><svg viewBox='0 0 24 24' width='14' height='14' fill='currentColor' aria-hidden='true'><circle cx='6' cy='12' r='1.6'/><circle cx='12' cy='12' r='1.6'/><circle cx='18' cy='12' r='1.6'/></svg></button></div>";
 }
 
 function renderTree() {
   const tree = document.getElementById("ide-tree");
   if (!tree) return;
+  if (state.explorerView === "hier") { renderHierarchy(); return; }
   tree.innerHTML = GROUPS.map((g) => {
     const files = state.files.filter((f) => g.roles.includes(f.role));
     if (!files.length && !g.empty && g.name !== "Design") return "";
-    const body = files.length ? files.map(fileRow).join("")
-      : "<p class='ide-group-empty'>" + (g.empty || "No design files yet. <button class='linklike' data-new='module_v'>Write a module</button>.") + "</p>";
+    const body = (g.name === "Design" ? topWarning() : "") + (files.length ? files.map(fileRow).join("")
+      : "<p class='ide-group-empty'>" + (g.empty || "No design files yet. <button class='linklike' data-new='module_v'>Write a module</button>.") + "</p>");
     return "<div class='ide-group'><span class='ide-group-name'>" + g.name + "</span>" +
       "<button class='ide-group-add' data-new='" + g.add + "' title='" + g.addLabel + "' aria-label='" + g.addLabel + "'>" + PLUS + "</button></div>" + body;
   }).join("");
 }
 
+// The config names a top module that no design file defines (the starter
+// top.v was replaced by a pasted design, say): the run would stop at synthesis
+// with "module not found". Say so where the files are, with the one-click fix.
+function topWarning() {
+  const want = state.configTop;
+  const mods = state.moduleFiles || {};
+  if (!want || mods[want]) return "";
+  const designAbs = new Set(state.files.filter((f) => f.role === "design").map((f) => f.abspath));
+  const cands = Object.keys(mods).filter((m) => designAbs.has(mods[m])).slice(0, 3);
+  if (!cands.length) return "";
+  return "<div class='ide-top-warn' role='alert'><b>No module named <code>" + fmt.escape(want) + "</code>.</b> " +
+    "The config builds <code>" + fmt.escape(want) + "</code> as the top, but no design file defines it, so a run would stop at synthesis. " +
+    cands.map((m) => "<button class='btn btn-sm' data-maketop='" + fmt.escape(m) + "'>Make " + fmt.escape(m) + " the top</button>").join("") + "</div>";
+}
+
+// ------------------------------------------------------------------ hierarchy
+
+const HDL_WORDS = new Set(("module endmodule input output inout wire reg logic assign always always_ff always_comb " +
+  "initial begin end if else case for while generate function task begin").split(" "));
+
+// Instances inside a module body: "<type> [#(…)] <name> [range] (", where the
+// type is one of the project's modules. Comments blanked out first.
+function instancesIn(body, defs) {
+  const text = body.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
+  const rx = /\b([A-Za-z_]\w*)\s*(?:#\s*\((?:[^()]|\([^()]*\))*\))?\s*([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*\(/g;
+  const out = [];
+  let m;
+  while ((m = rx.exec(text)) !== null) {
+    if (defs.has(m[1]) && !HDL_WORDS.has(m[2]) && m[1] !== m[2]) out.push({ type: m[1], inst: m[2], at: m.index });
+  }
+  return out;
+}
+
+const IC_CHIP = "<svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' aria-hidden='true'><rect x='6' y='6' width='12' height='12' rx='1.5'/><path d='M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3'/></svg>";
+
+// The module tree, like Vivado's or Quartus's Hierarchy: the chip's top with
+// everything it instantiates, and each testbench with the design under it.
+async function renderHierarchy() {
+  const tree = document.getElementById("ide-tree");
+  if (!tree) return;
+  const defs = moduleDefs(await projectTexts());
+  if (state.explorerView !== "hier") return;
+  const kids = new Map([...defs.entries()].map(([n, d]) => [n, instancesIn(d.body, defs)]));
+  const used = new Set([...kids.values()].flat().map((i) => i.type));
+  const isTb = (n) => isTestbenchFile(defs.get(n).rel);
+  const chip = state.top && defs.has(state.top) ? [state.top]
+    : [...defs.keys()].filter((n) => !used.has(n) && !isTb(n));
+  const benches = [...defs.keys()].filter((n) => isTb(n) && !used.has(n));
+  const row = (type, inst, depth, seen) => {
+    const d = defs.get(type);
+    const sub = depth < 12 && !seen.has(type) ? kids.get(type) || [] : [];
+    const next = new Set(seen).add(type);
+    const line = lineOf(d.text, d.offset);
+    return "<div class='ih-node'><button class='ih-row' style='padding-left:" + (8 + depth * 14) + "px' data-abs='" + fmt.escape(d.abs) +
+      "' data-rel='" + fmt.escape(d.rel) + "' data-line='" + line + "' title='" + fmt.escape(type + " in " + d.rel + ", line " + line) + "'>" +
+      (depth === 0 ? "<span class='ih-ic'>" + IC_CHIP + "</span>" : "") +
+      (inst ? "<span class='ih-inst'>" + fmt.escape(inst) + "</span><span class='ih-type'>" + fmt.escape(type) + "</span>"
+        : "<span class='ih-root'>" + fmt.escape(type) + "</span>") +
+      (type === state.top && depth === 0 ? "<span class='tag is-top'>top</span>" : "") + "</button>" +
+      sub.map((k) => row(k.type, k.inst, depth + 1, next)).join("") + "</div>";
+  };
+  const group = (name, roots, empty) =>
+    "<div class='ide-group'><span class='ide-group-name'>" + name + "</span></div>" +
+    (roots.length ? roots.map((r) => row(r, null, 0, new Set())).join("") : "<p class='ide-group-empty'>" + empty + "</p>");
+  tree.innerHTML = !defs.size
+    ? "<p class='ide-group-empty'>No modules yet. Write one, and its instances show here as a tree.</p>"
+    : group("Chip", chip, "No top module found in the design files.") +
+      group("Simulation", benches, "No testbench yet.");
+}
+
+function setExplorerView(v) {
+  state.explorerView = v === "hier" ? "hier" : "files";
+  try { localStorage.setItem("ll.ideView", state.explorerView); } catch (_e) {}
+  document.querySelectorAll(".ide-view-seg button").forEach((b) => {
+    const on = b.dataset.view === state.explorerView;
+    b.classList.toggle("is-on", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  renderTree();
+}
+
 function wireTree() {
   const tree = document.getElementById("ide-tree");
   if (!tree) return;
+  try { state.explorerView = localStorage.getItem("ll.ideView") === "hier" ? "hier" : "files"; } catch (_e) {}
+  document.querySelectorAll(".ide-view-seg button").forEach((b) => {
+    b.addEventListener("click", () => setExplorerView(b.dataset.view));
+    const on = b.dataset.view === (state.explorerView || "files");
+    b.classList.toggle("is-on", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  tree.addEventListener("click", async (e) => {
+    const ih = e.target.closest(".ih-row");
+    if (!ih) return;
+    await openFile(ih.dataset.abs, ih.dataset.rel);
+    window.ideEditor.gotoLine(+ih.dataset.line);
+  });
   tree.addEventListener("click", (e) => {
     const n = e.target.closest("[data-new]");
     if (n) { newFile(n.dataset.new); return; }
-    const del = e.target.closest(".ide-file-del");
-    if (del) { e.stopPropagation(); deleteFile(del.dataset.rel); return; }
+    const mt = e.target.closest("[data-maketop]");
+    if (mt) { makeTop(mt.dataset.maketop); return; }
+    const more = e.target.closest(".ide-file-more");
+    if (more) { e.stopPropagation(); fileMenu(more.dataset.rel, more); return; }
     const f = e.target.closest(".ide-file");
     if (f) openFile(f.dataset.abs, f.dataset.rel);
   });
+  // Keyboard, as in any file explorer: F2 renames, Delete deletes (Undo in the toast).
+  tree.addEventListener("keydown", (e) => {
+    const f = e.target.closest(".ide-file");
+    if (!f || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === "F2") { e.preventDefault(); renameFile(f.dataset.rel); }
+    else if (e.key === "Delete") { e.preventDefault(); deleteFile(f.dataset.rel); }
+  });
+  tree.addEventListener("contextmenu", (e) => {
+    const row = e.target.closest(".ide-file-row");
+    if (!row) return;
+    e.preventDefault();
+    const b = row.querySelector(".ide-file-more");
+    if (b) fileMenu(b.dataset.rel, b, e);
+  });
 }
 
-// Remove a file from the project (guarded server-side delete).
+// The file's menu: make one of its modules the top, put it in or out of the
+// chip build, simulate a testbench, copy the path, delete.
+function fileMenu(rel, anchor, ev) {
+  const f = state.files.find((x) => x.relpath === rel);
+  if (!f) return;
+  let menu = document.getElementById("ide-file-menu");
+  if (!menu) {
+    menu = document.createElement("div");
+    menu.id = "ide-file-menu";
+    menu.className = "ide-sim-menu ide-file-menu";
+    menu.setAttribute("role", "menu");
+    document.querySelector(".ide-side")?.appendChild(menu);
+    menu.addEventListener("keydown", (e) => { if (e.key === "Escape") { menu.hidden = true; } });
+    document.addEventListener("pointerdown", (e) => { if (!menu.hidden && !menu.contains(e.target)) menu.hidden = true; });
+  }
+  const mods = Object.entries(state.moduleFiles || {}).filter(([, abs]) => abs === f.abspath).map(([m]) => m);
+  const hdl = /\.s?v$/i.test(rel);
+  const items = [];
+  if (f.role === "design" && hdl) {
+    for (const m of mods) if (m !== state.top) items.push(["top:" + m, "Make " + m + " the top module"]);
+    if (state.files.some((x) => x.built) || f.built) {
+      // The top module's file, or the last file built, can't leave: the
+      // flow would have nothing (or no top) to build.
+      const last = f.built && !state.files.some((x) => x !== f && x.built && x.role === "design" && /\.s?v$/i.test(x.relpath));
+      const why = !f.built ? "" : f.abspath === state.topAbs ? "it holds the top module" : last ? "it's the only file built" : "";
+      items.push(!f.built ? ["in", "Build into the chip"] : why ? ["-", "Leave out of the chip (" + why + ")"] : ["out", "Leave out of the chip"]);
+    }
+  }
+  if (f.role === "testbench") items.push(["sim", "Simulate this testbench"]);
+  items.push(["rename", "Rename…", "F2"]);
+  items.push(["copy", "Copy path"]);
+  items.push(["delete", "Delete", "Del"]);
+  menu.innerHTML = "<div class='ism-h'>" + fmt.escape(rel) + "</div>" +
+    items.map(([k, label, key]) => (k === "rename" ? "<div class='ism-sep'></div>" : "") +
+      "<button data-fm='" + fmt.escape(k) + "'" + (k === "delete" ? " class='is-danger'" : "") + (k === "-" ? " disabled" : "") + ">" + fmt.escape(label) +
+      (key ? "<span class='ism-key'>" + key + "</span>" : "") + "</button>").join("");
+  menu.hidden = false;
+  const side = menu.parentElement.getBoundingClientRect();
+  const a = anchor.getBoundingClientRect();
+  const z = side.width && menu.parentElement.clientWidth ? side.width / menu.parentElement.clientWidth : 1;
+  const y = ((ev ? ev.clientY : a.bottom) - side.top) / z;
+  menu.style.left = "8px";
+  menu.style.right = "8px";
+  menu.style.top = Math.min(y + 2, menu.parentElement.clientHeight - menu.offsetHeight - 8) + "px";
+  menu.querySelector("button")?.focus();
+  menu.onclick = async (e) => {
+    const b = e.target.closest("[data-fm]");
+    if (!b || b.disabled) return;
+    menu.hidden = true;
+    const k = b.dataset.fm;
+    if (k.startsWith("top:")) await makeTop(k.slice(4));
+    else if (k === "in" || k === "out") await setBuilt(f, k === "in");
+    else if (k === "sim") {
+      byId("ide-tb", (sel) => { sel.value = rel; byId("ide-top", (x) => { x.value = ""; }); deriveTopFromTb(); });
+      paintSimPick();
+      simulate();
+    } else if (k === "copy") {
+      try { await navigator.clipboard.writeText(shownPath(f.abspath)); note("Copied " + shownPath(f.abspath)); }
+      catch (_e) { note(shownPath(f.abspath)); }
+    } else if (k === "rename") renameFile(rel);
+    else if (k === "delete") deleteFile(rel);
+  };
+}
+
+// The config's DESIGN_NAME, as the Setup page's Design row sets it.
+async function makeTop(mod) {
+  try {
+    const r = await api.configSet({ DESIGN_NAME: mod }, []);
+    note("The top module is now " + mod + (r && r.name ? " (saved in " + r.name + ")." : "."));
+    await loadTree();
+    document.dispatchEvent(new CustomEvent("g:config_changed"));
+    document.dispatchEvent(new CustomEvent("g:sources_changed"));
+  } catch (ex) {
+    note("Couldn't set the top module: " + (ex.message || ex), true);
+  }
+}
+
+// In or out of the config's file list (VERILOG_FILES), the same write the
+// Setup page's Sources ticks make.
+async function setBuilt(f, on) {
+  const now = state.files.filter((x) => x.role === "design" && x.built && /\.s?v$/i.test(x.relpath)).map((x) => x.abspath);
+  const files = on ? now.concat([f.abspath]) : now.filter((x) => x !== f.abspath);
+  try {
+    const r = await api.configSources(files);
+    note((on ? "Added " : "Left out ") + f.relpath + (r && r.name ? (on ? " to " : " of ") + r.name + "." : "."));
+    await loadTree();
+    document.dispatchEvent(new CustomEvent("g:config_changed"));
+    document.dispatchEvent(new CustomEvent("g:sources_changed"));
+  } catch (ex) {
+    note("Couldn't change the file list: " + (ex.message || ex), true);
+  }
+}
+
+// Remove a file from the project. No "are you sure": the text is kept in
+// memory and the toast offers Undo, which writes it back (like a mail
+// client's delete). A file that can't be read first still asks.
 async function deleteFile(rel) {
   if (!rel) return;
-  const { confirmDialog } = await import("../dialog.js");
-  const ok = await confirmDialog({
-    title: "Delete file", danger: true, confirmText: "Delete",
-    body: "Delete " + rel + " from the project folder? This cannot be undone.",
-  });
-  if (!ok) return;
+  const f = state.files.find((x) => x.relpath === rel);
+  stash();
+  const t = state.tabs.find((x) => x.rel === rel);
+  let text = t ? t.text : null;
+  if (text === null && f) {
+    try { const r = await api.readText(f.abspath); if (typeof r.text === "string") text = r.text; } catch (_e) { /* asks below */ }
+  }
+  if (text === null) {
+    const { confirmDialog } = await import("../dialog.js");
+    const ok = await confirmDialog({
+      title: "Delete file", danger: true, confirmText: "Delete",
+      body: "Delete " + rel + " from the project folder? This cannot be undone.",
+    });
+    if (!ok) return;
+  }
   try {
     const r = await api.fileDelete(rel);
     if (!r.ok) throw new Error(r.error || "refused");
-    note("Deleted " + rel);
-    const t = state.tabs.find((x) => x.rel === rel);
     if (t) { t.saved = t.text; closeTab(t.abs, { force: true }); }
-    await loadTree();
-    await loadTestbenches();
-    document.dispatchEvent(new CustomEvent("g:sources_changed"));
+    await afterFilesChanged();
+    note("Deleted " + rel);
+    if (text !== null) {
+      const { toast } = await import("../toast.js");
+      toast.show("Deleted " + rel + ".", "info", 12000, { label: "Undo", run: () => undoDelete(rel, text) });
+    }
   } catch (ex) {
     note("Delete failed: " + (ex.message || ex), true);
+  }
+}
+
+async function undoDelete(rel, text) {
+  try {
+    const r = await api.fileWrite(rel, text);
+    if (r && r.ok === false) throw new Error(r.error || "refused");
+    await afterFilesChanged();
+    const f = state.files.find((x) => x.relpath === rel);
+    if (f) await openFile(f.abspath, rel);
+    note("Restored " + rel);
+  } catch (ex) {
+    note("Couldn't restore " + rel + ": " + (ex.message || ex), true);
+  }
+}
+
+async function afterFilesChanged() {
+  await loadTree();
+  await loadTestbenches();
+  document.dispatchEvent(new CustomEvent("g:sources_changed"));
+}
+
+// Rename in place (same folder). The server moves the file and points the
+// config at the new name: the file list, an SDC or pin-order setting.
+async function renameFile(rel) {
+  const f = state.files.find((x) => x.relpath === rel);
+  if (!f) return;
+  const cut = rel.lastIndexOf("/");
+  const dir = cut >= 0 ? rel.slice(0, cut + 1) : "";
+  const base = rel.slice(cut + 1);
+  const dot = base.lastIndexOf(".");
+  const ext = dot > 0 ? base.slice(dot) : "";
+  const { customDialog } = await import("../dialog.js");
+  let name = null;
+  const res = await customDialog({
+    title: "Rename " + base,
+    bodyHtml: "<div class='newfile'><label class='nf-field'><span>New name</span>" +
+      "<input id='rn-name' type='text' spellcheck='false' autocomplete='off' value='" + fmt.escape(base) + "'/></label>" +
+      "<p class='nf-path'>In <code>" + fmt.escape(dir || "the project folder") + "</code>. " +
+      "Only the file is renamed; a module inside keeps its name.</p></div>",
+    buttons: [
+      { label: "Cancel", value: null, cls: "btn-ghost" },
+      { label: "Rename", value: "ok", cls: "btn-primary" },
+    ],
+    onMount: (back) => {
+      const input = back.querySelector("#rn-name");
+      const ok = back.querySelector(".btn-primary");
+      ok?.addEventListener("click", () => { name = (input.value || "").trim(); }, true);
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); ok?.click(); } });
+      setTimeout(() => { input.focus(); input.setSelectionRange(0, dot > 0 ? dot : base.length); }, 0);
+    },
+  });
+  if (res !== "ok" || !name || name === base) return;
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.\-]*$/.test(name)) { note("Use letters, digits, - _ and . in a file name.", true); return; }
+  if (ext && !name.includes(".")) name += ext;
+  // The renamed tab must not lose unsaved edits: save it first.
+  stash();
+  const t = state.tabs.find((x) => x.rel === rel);
+  try {
+    if (t && t.text !== t.saved) {
+      const w = await api.fileWrite(rel, t.text);
+      if (w.ok) t.saved = t.text;
+    }
+    const r = await api.fileRename(rel, dir + name);
+    if (!r.ok) throw new Error(r.error || "refused");
+    const wasActive = t && t.abs === state.active;
+    if (t) closeTab(t.abs, { force: true });
+    await afterFilesChanged();
+    if (r.config && r.config.changed && r.config.changed.length) document.dispatchEvent(new CustomEvent("g:config_changed"));
+    const nf = state.files.find((x) => x.relpath === r.rel);
+    if (nf && (wasActive || !state.active)) await openFile(nf.abspath, r.rel);
+    const cfg = r.config && r.config.changed && r.config.changed.length
+      ? " and updated " + r.config.name + " (" + r.config.changed.join(", ") + ")" : "";
+    note(r.config_error ? "Renamed to " + r.rel + ", but the config still names the old file: " + r.config_error
+      : "Renamed to " + r.rel + cfg + ".", !!r.config_error);
+  } catch (ex) {
+    note("Rename failed: " + (ex.message || ex), true);
   }
 }
 
@@ -383,6 +776,7 @@ async function openFile(abs, rel) {
 
 function activate(t) {
   stash();
+  if (document.querySelector(".ide-center.panel-max")) setPanelMax(false);
   state.active = t.abs;
   const ed = window.ideEditor;
   ed.load(t.rel, t.text);
@@ -395,7 +789,7 @@ function activate(t) {
   const f = state.files.find((x) => x.abspath === t.abs);
   if (f && f.role === "testbench") {
     byId("ide-tb", (sel) => {
-      if ([...sel.options].some((o) => o.value === f.relpath)) { sel.value = f.relpath; byId("ide-top", (x) => { x.value = ""; }); deriveTopFromTb(); }
+      if ([...sel.options].some((o) => o.value === f.relpath)) { sel.value = f.relpath; byId("ide-top", (x) => { x.value = ""; }); deriveTopFromTb(); paintSimPick(); }
     });
   }
 }
@@ -412,11 +806,14 @@ async function closeTab(abs, { force = false } = {}) {
     if (!ok) return;
   }
   state.tabs.splice(i, 1);
+  window.ideEditor.forget(t.rel);
   if (state.active === abs) {
     state.active = null;
     const next = state.tabs[i] || state.tabs[i - 1];
     if (next) activate(next);
     else {
+      // Closed on purpose: coming back to the tab doesn't reopen the top file.
+      state.explicitOpen = true;
       window.ideEditor.load(null, "");
       byId("ide-open", (el) => { el.textContent = "No file open"; el.title = ""; });
       document.querySelectorAll("#ide-tree .ide-file-row").forEach((r) => r.classList.remove("is-active"));
@@ -458,18 +855,19 @@ function wireTabs() {
   });
 }
 
-// Typing marks the tab unsaved; Ctrl+S saves, as anywhere else.
-function wireEditor() {
-  const ed = window.ideEditor;
-  ed.area.addEventListener("input", () => {
-    const t = activeTab();
-    if (!t) return;
-    t.text = ed.getValue();
-    const el = document.querySelector("#ide-tabs .ide-tab.is-on");
-    if (el) el.classList.toggle("is-dirty", t.text !== t.saved);
-  });
-  ed.area.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveFile(); }
+// Typing marks the tab unsaved (Ctrl+S saves, from the editor's keymap).
+function onEditorChange(text) {
+  const t = activeTab();
+  if (!t || window.ideEditor.relPath !== t.rel) return;
+  t.text = text;
+  const el = document.querySelector("#ide-tabs .ide-tab.is-on");
+  if (el) el.classList.toggle("is-dirty", t.text !== t.saved);
+}
+
+function showCursor({ line, col, selected, cursors }) {
+  byId("ide-cursor", (c) => {
+    c.textContent = "Ln " + line + ", Col " + col +
+      (cursors > 1 ? " · " + cursors + " cursors" : selected ? " · " + selected + " selected" : "");
   });
 }
 
@@ -520,7 +918,7 @@ function renderStart() {
 
 // ------------------------------------------------------------------ save
 
-async function saveFile() {
+async function saveFile({ quiet = false } = {}) {
   const ed = window.ideEditor;
   const t = activeTab();
   if (!t || !ed.relPath) { note("Open a file first.", true); return; }
@@ -531,48 +929,51 @@ async function saveFile() {
     t.text = text;
     t.saved = text;
     renderTabs();
+    dropSimDiags([t.rel]);
     note("Saved " + t.rel);
+    if (state.explorerView === "hier") renderHierarchy();
     // The Setup page reads the config and the file list; let it catch up.
     document.dispatchEvent(new CustomEvent("g:sources_changed"));
+    if (!quiet && lintOnSave() && /\.s?v$/i.test(t.rel)) lint({ quiet: true });
   } catch (ex) {
     note("Save failed: " + (ex.message || ex), true);
   }
 }
 
-// Opt-in auto-check: a moment after the user stops typing, save the current
-// Verilog buffer and re-run the standalone Verilator lint so markers stay
-// current. Off by default, persisted. Saving is needed because lint reads files
-// on disk.
-let _autoLintTimer = null;
-function setupAutoLint() {
-  const cb = document.getElementById("ide-autolint");
-  const ed = window.ideEditor;
-  if (!cb || !ed || !ed.area) return;
-  try { cb.checked = localStorage.getItem("ll.autolint") === "1"; } catch (_e) {}
-  cb.addEventListener("change", () => {
-    try { localStorage.setItem("ll.autolint", cb.checked ? "1" : "0"); } catch (_e) {}
-  });
-  ed.area.addEventListener("input", () => {
-    if (!cb.checked) return;
-    if (!ed.relPath || !/\.s?v$/.test(ed.relPath)) return;   // Verilog/SV only
-    clearTimeout(_autoLintTimer);
-    _autoLintTimer = setTimeout(autoLint, 800);
-  });
+// The simulator's compile errors describe the text it compiled: once a file
+// is saved again they are out of date (the next syntax check or simulation
+// says what still stands).
+function dropSimDiags(rels) {
+  const before = (state.simDiags || []).length;
+  state.simDiags = (state.simDiags || []).filter((d) => !rels.some((r) => sameFile(d.file, r)));
+  if (state.simDiags.length !== before) { renderProblems(); applyMarkers(); }
 }
 
-async function autoLint() {
-  const ed = window.ideEditor;
-  const t = activeTab();
-  if (!ed || !ed.relPath || !t) return;
-  try {
-    const text = ed.getValue();
-    const w = await api.fileWrite(t.rel, text);
-    if (!w.ok) return;
-    t.saved = text;
-    renderTabs();
-  } catch (_e) { return; }
-  lint({ quiet: true });
+// Save every changed tab (before a simulation, like an IDE's "save all").
+async function saveAll() {
+  stash();
+  for (const t of state.tabs.filter((x) => x.text !== x.saved)) {
+    try {
+      const r = await api.fileWrite(t.rel, t.text);
+      if (r.ok) t.saved = t.text;
+    } catch (_e) { /* the simulation reports what's wrong */ }
+  }
+  renderTabs();
 }
+
+// Check on save: every save of a Verilog file re-runs the syntax check, so the
+// squiggles stay current without a button press. On by default, remembered.
+function setupAutoLint() {
+  const cb = document.getElementById("ide-autolint");
+  if (!cb) return;
+  let v = null;
+  try { v = localStorage.getItem("ll.lintOnSave"); } catch (_e) {}
+  cb.checked = v === null ? true : v === "1";
+  cb.addEventListener("change", () => {
+    try { localStorage.setItem("ll.lintOnSave", cb.checked ? "1" : "0"); } catch (_e) {}
+  });
+}
+function lintOnSave() { return !!document.getElementById("ide-autolint")?.checked; }
 
 // Add files from the computer: Verilog to src/, testbenches to verify/,
 // anything else at the top of the project. New design files join the config's
@@ -628,7 +1029,6 @@ function setPanel(name) {
   });
   document.querySelectorAll(".ide-pane").forEach((p) => p.classList.toggle("is-on", p.dataset.pane === name));
   setPanelOpen(true);
-  if (name === "wave") requestAnimationFrame(fitWave);
 }
 
 function setPanelOpen(open) {
@@ -639,9 +1039,32 @@ function setPanelOpen(open) {
   try { localStorage.setItem("ll.idePanelOpen", open ? "1" : "0"); } catch (_e) {}
 }
 
+// A waveform needs room: give the panel at least ~60% of the height unless
+// the person has sized it themselves.
+function growPanelFor() {
+  const c = document.querySelector(".ide-center");
+  if (!c) return;
+  let sized = false;
+  try { sized = !!localStorage.getItem("ll.idePanelH"); } catch (_e) {}
+  const cur = parseFloat(getComputedStyle(c).getPropertyValue("--ide-panel-h")) || 36;
+  if (!sized && cur < 58) c.style.setProperty("--ide-panel-h", "60%");
+}
+
+function setPanelMax(on) {
+  const c = document.querySelector(".ide-center");
+  if (!c) return;
+  c.classList.toggle("panel-max", !!on);
+  byId("ide-panel-max", (b) => {
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.title = on ? "Give the editor its space back" : "Give the panel the editor's space (the file tabs stay)";
+  });
+  if (on) setPanelOpen(true);
+}
+
 function wirePanel() {
   const center = document.querySelector(".ide-center");
   if (!center) return;
+  byId("ide-panel-max", (b) => b.addEventListener("click", () => setPanelMax(!center.classList.contains("panel-max"))));
   document.querySelectorAll(".ide-ptab").forEach((b) => b.addEventListener("click", () => setPanel(b.dataset.ptab)));
   byId("ide-panel-toggle", (b) => b.addEventListener("click", () =>
     setPanelOpen(center.classList.contains("panel-closed"))));
@@ -656,7 +1079,6 @@ function wirePanel() {
       pct = Math.max(15, Math.min(80, pct));
       center.style.setProperty("--ide-panel-h", pct.toFixed(1) + "%");
       try { localStorage.setItem("ll.idePanelH", pct.toFixed(1)); } catch (_e) {}
-      fitWave();
     };
     split.addEventListener("pointerdown", (e) => {
       e.preventDefault();
@@ -670,9 +1092,13 @@ function wirePanel() {
         split.classList.remove("is-drag");
         split.removeEventListener("pointermove", move);
         split.removeEventListener("pointerup", up);
+        split.removeEventListener("pointercancel", up);
+        split.removeEventListener("lostpointercapture", up);
       };
       split.addEventListener("pointermove", move);
       split.addEventListener("pointerup", up);
+      split.addEventListener("pointercancel", up);
+      split.addEventListener("lostpointercapture", up);
     });
     split.addEventListener("keydown", (e) => {
       const cur = parseFloat(getComputedStyle(center).getPropertyValue("--ide-panel-h")) || 36;
@@ -680,25 +1106,27 @@ function wirePanel() {
       if (e.key === "ArrowDown") { e.preventDefault(); setPct(cur - 5); }
     });
   }
-  const host = document.getElementById("ide-wave-host");
-  if (host && "ResizeObserver" in window) {
-    let raf = 0;
-    new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(fitWave); }).observe(host);
-  }
 }
 
 // ------------------------------------------------------------------ syntax check
 
 async function lint({ quiet = false } = {}) {
-  note("Checking the syntax with Verilator…");
-  setLintBusy(true);
-  armLintSafety();
-  if (!quiet) setPanel("problems");
-  // Every design and testbench file (a testbench is linted as a source too) —
+  if (state.linting) { if (!quiet) note("A syntax check is already running."); return; }
+  // Every design and testbench file (a testbench is linted as a source too):
   // a standalone verilator --lint-only job, not the hardening flow.
   const sources = state.files.filter((f) => /\.s?v$/.test(f.relpath)).map((f) => f.relpath);
+  if (!sources.length) { note("There's no Verilog file to check yet.", true); return; }
+  // Verilator reads the files on disk: an unsaved tab would be checked as it
+  // was last saved (a pasted module against a bench that uses its new ports
+  // reads as a page of "Pin not found"). Save everything first, as Simulate does.
+  setLintBusy(true);
+  await saveAll();
+  note("Checking the syntax with Verilator…");
+  state.lintLines = [];
+  armLintSafety();
+  if (!quiet) setPanel("problems");
   try {
-    const start = await api.lintStart({ run_mode: state.runMode, sources });
+    const start = await api.lintStart({ run_mode: state.runMode, sources, include_dirs: includeDirs() });
     if (!start.ok) { note("Lint refused: " + (start.reason || start.error || "?"), true); setLintBusy(false); }
   } catch (ex) {
     // A 400 "a lint is already running" throws here too: reset so the button is
@@ -708,56 +1136,197 @@ async function lint({ quiet = false } = {}) {
   }
 }
 
+function sameFile(a, b) {
+  a = String(a || "").replace(/^\.\//, "");
+  b = String(b || "").replace(/^\.\//, "");
+  return a === b || a.endsWith("/" + b) || b.endsWith("/" + a);
+}
+function projectFile(file) { return state.files.find((f) => sameFile(f.relpath, file)) || null; }
+function isTestbenchFile(file) {
+  const f = projectFile(file);
+  return f ? f.role === "testbench" : /(^|\/)(tb_[^/]*|[^/]*_tb\.s?v|[^/]*testbench[^/]*)$/i.test(file);
+}
+// Style warnings in simulation-only code: folded away, not counted.
+function isNoise(d) {
+  return d.severity === "warning" && TESTBENCH_STYLE.has(d.code) && isTestbenchFile(d.file);
+}
+function allDiags() {
+  return (state.diags || []).map((d) => ({ ...d, src: "Verilator" }))
+    .concat((state.simDiags || []).map((d) => ({ ...d, src: state.simEngineLabel || "Simulator" })));
+}
+
 function applyMarkers() {
   const ed = window.ideEditor;
-  if (!ed) return;
-  const mine = state.diags.filter((d) => ed.relPath && (d.file.endsWith(ed.relPath) || ed.relPath.endsWith(d.file)));
-  ed.setMarkers(mine.map((d) => ({ line: d.line, col: d.col, severity: d.severity, msg: d.msg })));
+  if (!ed || !ed.relPath) return;
+  const mine = allDiags().filter((d) => !isNoise(d) && sameFile(d.file, ed.relPath));
+  ed.setMarkers(mine.map((d) => ({ line: d.line, col: d.col, severity: d.severity, msg: d.msg, code: d.code })));
 }
 
 // Apply diagnostics straight from the lint_done event payload (falls back to a
 // fetch of the last result if called without one).
-async function applyLint(diags) {
+async function applyLint(diags, ev) {
   try {
     if (!Array.isArray(diags)) {
       const r = await fetch("/api/lint-result", { headers: { "X-Requested-With": "XMLHttpRequest" } });
       const body = await r.json();
       diags = (body.data && body.data.diagnostics) || [];
     }
+    // Verilator that didn't run (not found, crashed, stopped at the time
+    // limit) finds nothing, which is not the same as finding nothing wrong.
+    const hasError = diags.some((d) => d.severity === "error");
+    const broke = !!ev && (ev.timed_out || (ev.returncode !== undefined && ev.returncode !== 0 && !hasError));
+    const lines = state.lintLines || [];
+    state.lintLines = [];
+    if (broke) {
+      state.lintFailed = { timedOut: !!ev.timed_out, rc: ev.returncode,
+        tail: lines.filter((l) => l.trim()).slice(-12) };
+      renderProblems();
+      if (!ev.timed_out) note("The syntax check couldn't run (Verilator exit code " + ev.returncode + "). See Problems.", true);
+      return;
+    }
+    state.lintFailed = null;
     state.diags = diags;
+    state.lintChecked = true;
+    state.lintAt = Date.now();
     applyMarkers();
-    const errors = diags.filter((d) => d.severity === "error").length;
-    const warnings = diags.filter((d) => d.severity === "warning").length;
-    note(errors || warnings ? "Syntax check: " + errors + " error" + (errors === 1 ? "" : "s") + ", " +
-      warnings + " warning" + (warnings === 1 ? "" : "s") : "Syntax check: no problems.", errors > 0);
-    renderDiagnostics(diags);
+    const real = diags.filter((d) => !isNoise(d));
+    const errors = real.filter((d) => d.severity === "error").length;
+    const warnings = real.filter((d) => d.severity === "warning").length;
+    note(errors || warnings ? "Syntax check: " + plural(errors, "error") + ", " + plural(warnings, "warning") + "."
+      : "Syntax check: no problems.", errors > 0);
+    renderProblems();
+    recordRtlStatus();
   } catch (_e) {}
 }
 
-function renderDiagnostics(diags) {
+function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
+
+const IC_ERR = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' aria-hidden='true'><circle cx='12' cy='12' r='8.5'/><path d='M9 9l6 6M15 9l-6 6'/></svg>";
+const IC_WARN = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 4l9 16H3z'/><path d='M12 10v4M12 17.5v.01'/></svg>";
+const IC_CARET = "<svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 9l6 6 6-6'/></svg>";
+
+function diagRow(d) {
+  const why = d.code ? explain(d.code) : "";
+  return "<div class='pb-item pb-" + d.severity + "' role='button' tabindex='0' data-file='" + fmt.escape(d.file) +
+    "' data-line='" + (d.line || 1) + "' data-col='" + (d.col || 1) + "'>" +
+    "<span class='pb-ic'>" + (d.severity === "error" ? IC_ERR : IC_WARN) + "</span>" +
+    "<span class='pb-msg'>" + fmt.escape(d.msg) +
+      (d.code ? " <span class='pb-code' title='" + fmt.escape(why || "Verilator code " + d.code) + "'>" + fmt.escape(d.code) + "</span>" : "") +
+      (d.src !== "Verilator" ? " <span class='pb-src'>" + fmt.escape(d.src) + "</span>" : "") + "</span>" +
+    "<span class='pb-loc'>Ln " + (d.line || 1) + (d.col ? ", Col " + d.col : "") + "</span>" +
+    (why ? "<span class='pb-why'>" + fmt.escape(why) + "</span>" : "") + "</div>";
+}
+
+function fileGroups(list) {
+  const by = new Map();
+  for (const d of list) {
+    const k = d.file;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(d);
+  }
+  return [...by.entries()].sort((a, b) =>
+    (b[1].some((d) => d.severity === "error") - a[1].some((d) => d.severity === "error")) || a[0].localeCompare(b[0]))
+    .map(([file, ds]) => {
+      ds.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1) || a.line - b.line);
+      const cut = file.lastIndexOf("/");
+      return "<div class='pb-group'><button class='pb-fhead' aria-expanded='true'>" + IC_CARET +
+        "<span class='pb-fname'><span class='pb-dir'>" + fmt.escape(file.slice(0, cut + 1)) + "</span>" + fmt.escape(file.slice(cut + 1)) + "</span>" +
+        "<span class='pb-fcount'>" + ds.length + "</span></button><div class='pb-items'>" + ds.map(diagRow).join("") + "</div></div>";
+    }).join("");
+}
+
+// Problems: grouped by file, errors first, each with its Verilator code and,
+// on click, a plain explanation. Style notes in testbenches sit folded below.
+function renderProblems() {
   const host = document.getElementById("ide-diags");
   const count = document.getElementById("ide-problems-count");
-  const errors = diags.filter((d) => d.severity === "error").length;
-  const warnings = diags.filter((d) => d.severity === "warning").length;
+  const all = allDiags();
+  const noise = all.filter(isNoise);
+  const real = all.filter((d) => !isNoise(d));
+  const errors = real.filter((d) => d.severity === "error").length;
+  const warnings = real.length - errors;
+  const checked = state.lintChecked || (state.simDiags || []).length;
   if (count) {
     count.className = "pcount" + (errors ? " pcount-err" : warnings ? " pcount-warn" : "");
-    count.textContent = diags.length ? errors + " · " + warnings : "0";
-    count.title = errors + " error" + (errors === 1 ? "" : "s") + ", " + warnings + " warning" + (warnings === 1 ? "" : "s");
+    count.textContent = !checked ? "" : errors || warnings ? errors + " · " + warnings : "0";
+    count.title = !checked ? "Not checked yet" : plural(errors, "error") + ", " + plural(warnings, "warning") +
+      (noise.length ? " (and " + noise.length + " testbench style notes)" : "");
   }
   if (!host) return;
-  host.innerHTML = diags.length
-    ? diags.map((d) =>
-        "<div class='ide-diag ide-diag-" + d.severity + "' data-line='" + d.line +
-        "' data-file='" + fmt.escape(d.file) + "'>" +
-        fmt.escape(d.file) + ":" + d.line + ": " + fmt.escape(d.msg) + "</div>").join("")
-    : "<p class='muted'>No problems. Verilator read every design and testbench file without an error or warning.</p>";
-  host.querySelectorAll(".ide-diag").forEach((el) =>
-    el.addEventListener("click", async () => {
-      const ln = parseInt(el.dataset.line, 10);
-      const f = state.files.find((x) => el.dataset.file.endsWith(x.relpath) || x.relpath.endsWith(el.dataset.file));
-      if (f && f.abspath !== state.active) await openFile(f.abspath, f.relpath);
-      if (ln && window.ideEditor) window.ideEditor.gotoLine(ln);
-    }));
+  if (state.lintFailed && !state.linting) {
+    const lf = state.lintFailed;
+    host.innerHTML = "<div class='pb-empty pb-failed'><p><b>" + (lf.timedOut ? "The syntax check took too long and was stopped."
+      : "The syntax check couldn't run.") + "</b> " + (lf.timedOut
+      ? "Verilator didn't finish within 90 s. On WSL, a Windows Verilator on the PATH can hang; install the Linux one from the Tools tab."
+      : "Verilator stopped (exit code " + fmt.escape(String(lf.rc)) + ") without listing a problem, so nothing was checked. Its last output:") + "</p>" +
+      (lf.tail.length ? "<pre class='pb-tail'>" + fmt.escape(lf.tail.join("\n")) + "</pre>" : "") +
+      "<button class='btn btn-sm' data-pb='lint'>Try again</button></div>";
+    return;
+  }
+  if (!checked) {
+    host.innerHTML = "<div class='pb-empty'><p><b>Not checked yet.</b> Check syntax runs Verilator over every design and testbench " +
+      "file. It takes seconds and catches most mistakes before you simulate.</p>" +
+      "<button class='btn btn-sm' data-pb='lint'>Check syntax</button></div>";
+    return;
+  }
+  const f = state.pbFilter || (state.pbFilter = { error: true, warning: true });
+  const shown = real.filter((d) => f[d.severity]);
+  const files = new Set(state.files.filter((x) => /\.s?v$/.test(x.relpath)).map((x) => x.relpath)).size;
+  const when = state.lintAt ? new Date(state.lintAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  host.innerHTML =
+    "<div class='pb-bar'>" +
+      "<button class='pb-filter pb-f-error' data-sev='error' aria-pressed='" + f.error + "'>" + IC_ERR + "Errors <b>" + errors + "</b></button>" +
+      "<button class='pb-filter pb-f-warning' data-sev='warning' aria-pressed='" + f.warning + "'>" + IC_WARN + "Warnings <b>" + warnings + "</b></button>" +
+      "<span class='pb-meta'>" + (state.lintChecked ? "Verilator, " + plural(files, "file") + (when ? ", checked at " + when : "") : "From the last simulation") + "</span>" +
+      "<span class='ide-spacer'></span>" +
+      "<button class='btn btn-ghost btn-sm' data-pb='lint'" + (state.linting ? " disabled" : "") + ">Check again</button>" +
+    "</div>" +
+    "<div class='pb-list'>" +
+      (shown.length ? fileGroups(shown)
+        : "<p class='pb-clean'>" + (real.length ? "Nothing to show with these filters."
+          : "No problems. Verilator read " + plural(files, "file") + " without an error or warning.") + "</p>") +
+      (noise.length ? "<details class='pb-noise'" + (state.pbNoiseOpen ? " open" : "") + "><summary>" + plural(noise.length, "style note") +
+        " in testbench files <span>Unused outputs, delays and initial values are normal in code that only simulates, so these aren't counted.</span></summary>" +
+        fileGroups(noise) + "</details>" : "") +
+    "</div>";
+}
+
+function wireProblems() {
+  const host = document.getElementById("ide-diags");
+  if (!host) return;
+  const jump = async (item) => {
+    item.classList.toggle("is-open");
+    const ln = parseInt(item.dataset.line, 10), col = parseInt(item.dataset.col, 10);
+    const f = projectFile(item.dataset.file);
+    if (!f) { note(item.dataset.file + " isn't one of this project's files.", true); return; }
+    if (f.abspath !== state.active) await openFile(f.abspath, f.relpath);
+    if (ln && window.ideEditor) window.ideEditor.gotoLine(ln, col || undefined);
+  };
+  host.addEventListener("click", (e) => {
+    if (e.target.closest("[data-pb='lint']")) { lint(); return; }
+    const flt = e.target.closest(".pb-filter");
+    if (flt) {
+      const f = state.pbFilter || (state.pbFilter = { error: true, warning: true });
+      f[flt.dataset.sev] = !f[flt.dataset.sev];
+      renderProblems();
+      return;
+    }
+    const head = e.target.closest(".pb-fhead");
+    if (head) {
+      const open = head.getAttribute("aria-expanded") !== "false";
+      head.setAttribute("aria-expanded", open ? "false" : "true");
+      return;
+    }
+    const item = e.target.closest(".pb-item");
+    if (item) jump(item);
+  });
+  host.addEventListener("keydown", (e) => {
+    const item = e.target.closest(".pb-item");
+    if (item && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); jump(item); }
+  });
+  host.addEventListener("toggle", (e) => {
+    if (e.target.classList && e.target.classList.contains("pb-noise")) state.pbNoiseOpen = e.target.open;
+  }, true);
 }
 
 // ------------------------------------------------------------------ simulation
@@ -765,22 +1334,69 @@ function renderDiagnostics(diags) {
 async function loadTestbenches() {
   const sel = document.getElementById("ide-tb");
   if (!sel) return;
-  if (!state.designDir) { sel.innerHTML = "<option value=''>(no project)</option>"; return; }
+  if (!state.designDir) { sel.innerHTML = "<option value=''>(no project)</option>"; paintSimPick(); return; }
   try {
     const prev = sel.value;
     const r = await api.simTestbenches(state.designDir);
     const tbs = r.testbenches || [];
+    state.testbenches = tbs;
     sel.innerHTML = tbs.map((t) => "<option value='" + fmt.escape(t) + "'>" + fmt.escape(t) + "</option>").join("")
       || "<option value=''>(no testbench yet)</option>";
     if (prev && tbs.includes(prev)) sel.value = prev;
     deriveTopFromTb();
+    paintSimPick();
   } catch (_e) {}
+}
+
+// The Simulate button names the testbench it runs; its arrow switches it.
+function paintSimPick() {
+  const sel = document.getElementById("ide-tb");
+  const tb = sel ? sel.value : "";
+  byId("ide-sim-tbname", (el) => { el.textContent = tb ? tb.split("/").pop().replace(/\.s?v$/i, "") : "no testbench"; });
+  byId("ide-sim-pick", (b) => { b.title = tb ? "Simulate runs " + tb + ". Click to pick another testbench." : "No testbench yet"; });
+  byId("ide-sim", (b) => { b.title = tb ? "Build and run " + tb + ", then show its waveform" : "Write a testbench first"; });
+}
+
+function wireSimPick() {
+  const pick = document.getElementById("ide-sim-pick");
+  const menu = document.getElementById("ide-sim-menu");
+  if (!pick || !menu) return;
+  const close = () => { menu.hidden = true; pick.setAttribute("aria-expanded", "false"); };
+  pick.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!menu.hidden) { close(); return; }
+    const sel = document.getElementById("ide-tb");
+    const tbs = state.testbenches || [];
+    const eng = document.getElementById("ide-sim-engine");
+    menu.innerHTML = "<div class='ism-h'>Testbench</div>" +
+      (tbs.length ? tbs.map((t) => "<button role='menuitemradio' aria-checked='" + (sel && sel.value === t) + "' data-tb='" + fmt.escape(t) + "'>" + fmt.escape(t) + "</button>").join("")
+        : "<p class='ism-none'>No testbench yet.</p>") +
+      "<div class='ism-sep'></div>" +
+      "<button data-ism='new'>New testbench…</button>" +
+      "<button data-ism='settings'>Simulator: " + fmt.escape(eng ? eng.options[eng.selectedIndex].text.replace(/ \(.*\)$/, "") : "Auto") + "…</button>";
+    menu.hidden = false;
+    pick.setAttribute("aria-expanded", "true");
+    menu.querySelector("button")?.focus();
+  });
+  menu.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    close();
+    if (b.dataset.tb) {
+      byId("ide-tb", (sel) => { sel.value = b.dataset.tb; byId("ide-top", (x) => { x.value = ""; }); deriveTopFromTb(); });
+      paintSimPick();
+    } else if (b.dataset.ism === "new") newFile("tb_v");
+    else if (b.dataset.ism === "settings") { setPanel("sim"); document.getElementById("ide-sim-engine")?.focus(); }
+  });
+  menu.addEventListener("keydown", (e) => { if (e.key === "Escape") { close(); pick.focus(); } });
+  document.addEventListener("pointerdown", (e) => { if (!menu.hidden && !menu.contains(e.target) && e.target !== pick && !pick.contains(e.target)) close(); });
 }
 
 // Toggle the Simulate / Stop buttons. While a sim runs Simulate is disabled so
 // a second run can't race the first (the server rejects it anyway), and Stop
 // appears so a runaway bench can be killed.
 function setSimBusy(busy) {
+  state.simRunning = !!busy;
   const run = document.getElementById("ide-sim");
   const stop = document.getElementById("ide-sim-stop");
   if (run) {
@@ -788,14 +1404,17 @@ function setSimBusy(busy) {
     run.innerHTML = busy ? "Simulating…"
       : "<svg viewBox='0 0 24 24' width='13' height='13' fill='currentColor' aria-hidden='true'><path d='M7 4l13 8-13 8z'/></svg> Simulate";
   }
+  byId("ide-sim-pick", (b) => { b.disabled = !!busy; });
   if (stop) stop.hidden = !busy;
 }
 
 // Toggle the Check-syntax (lint) button so a wedged lint shows progress and a
 // second click can't pile up before the first finishes.
 function setLintBusy(busy) {
+  state.linting = !!busy;
   const b = document.getElementById("ide-lint");
   if (b) { b.disabled = !!busy; b.textContent = busy ? "Checking…" : "Check syntax"; }
+  document.querySelector("#ide-diags [data-pb='lint']")?.toggleAttribute("disabled", !!busy);
 }
 
 // Client-side safety nets. The server always emits sim_done / lint_done (the job
@@ -811,6 +1430,7 @@ function armSimSafety() {
   clearTimeout(_simSafety);
   _simSafety = setTimeout(() => {
     if (!document.getElementById("ide-sim")?.disabled) return;
+    if (state.simRun) state.simRun.done = true;
     setSimBusy(false);
     note("No result received. The simulation process may be unresponsive. Try again or check the logs.", true);
   }, SIM_SAFETY_MS);
@@ -823,7 +1443,24 @@ function armLintSafety() {
   }, LINT_SAFETY_MS);
 }
 
+const ENGINE_LABEL = { iverilog: "Icarus Verilog", verilator: "Verilator" };
+
+// Folders that hold HDL files, for `include lookups (src/defs.vh from a
+// testbench in verify/, say). Paths relative to the project.
+function includeDirs() {
+  const dirs = new Set(["."]);
+  for (const f of state.files) {
+    if (!/\.(s?v|vh|svh)$/i.test(f.relpath)) continue;
+    const cut = f.relpath.lastIndexOf("/");
+    if (cut > 0) dirs.add(f.relpath.slice(0, cut));
+  }
+  return [...dirs];
+}
+
 async function simulate() {
+  // One simulation at a time: a second press (the waveform's Simulate, a
+  // file menu) while one runs would only be refused and reset the buttons.
+  if (state.simRunning) { setPanel("sim"); note("A simulation is already running. Stop it first, or wait for it to finish."); return; }
   const tb = (document.getElementById("ide-tb") || {}).value;
   // The top is the *testbench* module; if the user left it blank the server
   // auto-derives it from the testbench (the common case), so it's optional.
@@ -831,32 +1468,47 @@ async function simulate() {
   const simEngine = (document.getElementById("ide-sim-engine") || {}).value || "auto";
   setPanel("sim");
   if (!tb) {
+    simStatus({ verdict: "none" });
     note("There's no testbench to simulate yet. Use + next to Simulation in the explorer to write one.", true);
     return;
   }
-  // Simulate what's on screen: save the open file first if it changed.
-  const t = activeTab();
-  stash();
-  if (t && t.text !== t.saved) await saveFile();
-  const sources = state.files.filter((f) => /\.s?v$/.test(f.relpath) && f.relpath !== tb && f.role !== "testbench")
+  // Simulate what's on screen: save every changed file first.
+  await saveAll();
+  // The design, plus simulation-only helpers (a bus model or memory model in
+  // verify/), but not the other testbenches: each of those is a top of its own.
+  const benches = new Set(state.testbenches || []);
+  const sources = state.files.filter((f) => /\.s?v$/i.test(f.relpath) && f.relpath !== tb &&
+      (f.role !== "testbench" || !benches.has(f.relpath)))
     .map((f) => f.relpath);
-  appendLog((document.getElementById("ide-log")?.textContent ? "\n" : "") + "── simulate " + tb + " ──");
+  state.waveTb = tb;
+  state.simDiags = [];
+  state.simRun = { tb, started: Date.now(), lines: [], engine: null, top: null, done: false };
+  appendLog("── simulate " + tb + " · " + new Date().toLocaleTimeString() + " ──", "ll-head");
   note("Building and running the simulation…");
   setSimBusy(true);
+  simStatus({ verdict: "running" });
   armSimSafety();
   try {
     const r = await api.simStart({
       top, testbench: tb, sources, trace: "vcd", run_mode: state.runMode, sim_engine: simEngine,
+      include_dirs: includeDirs(),
     });
-    if (!r.ok) { note("Sim refused: " + (r.error || "?"), true); setSimBusy(false); }
+    if (!r.ok) { state.simRun.done = true; clearTimeout(_simSafety); note("Sim refused: " + (r.error || "?"), true); setSimBusy(false); simStatus({ verdict: "refused", error: r.error }); }
     else {
       if (r.top) { const x = document.getElementById("ide-top"); if (x && !x.value) x.placeholder = r.top; }
-      note("Simulating with " + (r.sim_engine || simEngine) + " (top: " + (r.top || top) + ")…");
+      state.simRun.engine = r.sim_engine || simEngine;
+      state.simRun.top = r.top || top;
+      state.simEngineLabel = ENGINE_LABEL[state.simRun.engine] || state.simRun.engine;
+      note("Simulating with " + state.simEngineLabel + " (top: " + (r.top || top) + ")…");
+      simStatus({ verdict: "running" });
     }
   } catch (ex) {
     // A 400 "already running" lands here too — surface it and reset the button.
+    state.simRun.done = true;
+    clearTimeout(_simSafety);
     note("Sim failed: " + (ex.message || ex), true);
     setSimBusy(false);
+    simStatus({ verdict: "refused", error: ex.message || String(ex) });
   }
 }
 
@@ -879,35 +1531,250 @@ function deriveTopFromTb() {
   topEl.placeholder = base || "from the testbench";
 }
 
+// Compile errors from the simulator's output, as diagnostics for Problems and
+// the editor. Icarus: "file.v:12: syntax error" / "file.v:12: error: …";
+// Verilator: "%Error: file.v:12:5: …".
+const VLT_RX = /^%(Error|Warning)(?:-([A-Z0-9_]+))?:\s*([^:\s][^:]*):(\d+):(?:(\d+):)?\s*(.*)$/;
+const IV_RX = /^((?:[\w.\-]+\/)*[\w.\-]+\.(?:s?v|vh|svh)):(\d+):\s*(?:(error|warning|sorry):\s*)?(.+)$/i;
+function parseSimDiags(lines) {
+  const out = [];
+  for (const l of lines) {
+    let m = l.match(VLT_RX);
+    if (m && projectFile(m[3])) { out.push({ file: projectFile(m[3]).relpath, line: +m[4], col: m[5] ? +m[5] : 1, severity: m[1].toLowerCase(), code: m[2] || "", msg: m[6] }); continue; }
+    m = l.match(IV_RX);
+    if (m && projectFile(m[1]) && !/\$finish|\$stop/.test(m[4])) {
+      const sev = (m[3] || "").toLowerCase() === "warning" ? "warning" : "error";
+      // Runtime prints (e.g. a $display that starts with a path) aren't compile errors.
+      if (!m[3] && !/syntax|error|unknown|undeclared|not declared|unable|illegal|expect|malformed|invalid/i.test(m[4])) continue;
+      out.push({ file: projectFile(m[1]).relpath, line: +m[2], col: 1, severity: sev, code: "", msg: m[4] });
+    }
+  }
+  // Icarus often repeats a message for one line; show each once.
+  const seen = new Set();
+  return out.filter((d) => { const k = d.file + ":" + d.line + ":" + d.msg; if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+const FAIL_RX = /\b(FAIL|FAILED|FAILURE|MISMATCH|ERROR)\b|\bassert(ion)? fail/i;
+const PASS_RX = /\b(PASS|PASSED|SUCCESS)\b/i;
+const TOOLISH_RX = /^(%Warning|%Error|VCD info:|- V e r i l a t|- Verilator|\s*(g\+\+|ccache|make)\b|make\[|── )/;
+
+// Where the run ended: Icarus prints "$finish called at 242000 (1ps)".
+function parseFinish(lines) {
+  for (const l of lines) {
+    const m = l.match(/\$finish called at (\d+) \((\d+\s*[munpf]?s)\)/);
+    if (m) return { ticks: +m[1], tick: parseTimescale(m[2].replace(/\s+/g, "")) };
+    if (/Verilog \$finish/.test(l)) return { ticks: null };
+  }
+  return null;
+}
+
+function finishSim(ev) {
+  const run = state.simRun;
+  // Not this window's run (the pop-out and the cockpit share the server), or
+  // already finished: nothing to report here.
+  if (!run || run.done) return;
+  run.done = true;
+  clearTimeout(_simSafety);
+  setSimBusy(false);
+  if (run.orphan) {
+    // Started in the project that was open before; its result belongs there.
+    state.simRun = null;
+    note("The previous project's simulation finished. Its result belongs to that project, so it isn't shown here.");
+    return;
+  }
+  run.ms = Date.now() - run.started;
+  state.simDiags = ev.cancelled ? [] : parseSimDiags(run.lines);
+  renderProblems();
+  applyMarkers();
+  const out = run.lines.filter((l) => !TOOLISH_RX.test(l));
+  run.fails = out.filter((l) => FAIL_RX.test(l)).length;
+  run.passes = out.filter((l) => PASS_RX.test(l)).length;
+  run.finish = parseFinish(run.lines);
+  run.vcd = ev.vcd || null;
+  run.rc = ev.returncode;
+  const buildErrors = state.simDiags.filter((d) => d.severity === "error").length;
+  run.verdict = ev.cancelled ? "stopped"
+    : ev.timed_out ? (ev.vcd ? "timeout-partial" : "timeout")
+    : !ev.ok ? (buildErrors ? "build" : "failed")
+    : run.fails ? "reported-fail"
+    : !ev.vcd ? "nowave"
+    : run.passes ? "passed" : "ran";
+  run.buildErrors = buildErrors;
+  simStatus(run);
+  if (!ev.vcd && state.wave && state.wave.vcd) setWavePartial("old");
+  if (ev.cancelled) note("Simulation stopped.", true);
+  else if (ev.vcd) {
+    loadWaveform(ev.vcd, ev.partial);
+    if (ev.timed_out)
+      note("Simulation reached the time limit (free-running clock without $finish). Displaying "
+           + "partial waveform. Add $finish to your testbench for a complete run.", true);
+  }
+  else if (ev.timed_out)
+    note("Simulation reached the time limit with no waveform generated. Add $finish to your "
+         + "testbench so the simulation can terminate.", true);
+  else if (ev.ok)
+    note("Simulation ran but produced no waveform. Verify the testbench invokes "
+         + "$dumpfile and $dumpvars, and that top is set to the testbench module.", true);
+  else note(buildErrors ? "The simulation didn't build: " + plural(buildErrors, "error") + " (see Problems)."
+    : "Simulation finished with errors. Review the log below for details.", true);
+  recordRtlStatus();
+}
+
+const SS_ICON = {
+  ok: "<svg viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='12' cy='12' r='9'/><path d='M8 12.5l2.6 2.6L16 9.5'/></svg>",
+  warn: IC_WARN.replace(/width='14' height='14'/, "width='18' height='18'"),
+  fail: IC_ERR.replace(/width='14' height='14'/, "width='18' height='18'"),
+  info: "<svg viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' aria-hidden='true'><circle cx='12' cy='12' r='9'/><path d='M12 11v5M12 8v.01'/></svg>",
+  run: "<span class='ss-spin' aria-hidden='true'></span>",
+};
+
+let _ssTimer = 0;
+// The result of the last simulation, in words, with what to do next.
+function simStatus(run) {
+  const el = document.getElementById("ide-sim-status");
+  const badge = document.getElementById("ide-sim-count");
+  if (!el) return;
+  clearInterval(_ssTimer);
+  const r = run || {};
+  const tbName = (r.tb || (state.simRun && state.simRun.tb) || "").split("/").pop();
+  const engine = state.simEngineLabel || "";
+  const secs = !r.ms ? "" : r.ms < 1000 ? r.ms + " ms" : (r.ms < 10000 ? (r.ms / 1000).toFixed(1) : Math.round(r.ms / 1000)) + " s";
+  // Icarus reports "(1s)" when no file sets a `timescale: those are plain
+  // simulation time units, not seconds.
+  const noScale = r.finish && r.finish.tick && r.finish.tick.unit === "s" && r.finish.tick.mult === 1;
+  const ended = r.finish && r.finish.ticks !== null && r.finish.ticks !== undefined
+    ? (noScale ? "$finish at time " + r.finish.ticks + " (no `timescale, so plain time units)" : "$finish at " + formatTime(r.finish.ticks, r.finish.tick))
+    : r.finish ? "$finish reached" : "";
+  const facts = [ended, engine, secs].filter(Boolean).join(" · ");
+  const embedded = !!document.querySelector('.side-tab[data-tab="setup"]');
+  const next = embedded ? "<button class='btn btn-ghost btn-sm' data-ss='flow'>Next: run the flow</button>" : "";
+  const wave = r.vcd ? "<button class='btn btn-sm' data-ss='wave'>Show the waveform</button>" : "";
+  const V = {
+    running: ["run", "Simulating " + (tbName || "the testbench") + "…", engine ? engine + " · building, then running" : "Starting the simulator", ""],
+    passed: ["ok", "Passed", "The testbench printed PASS and ran to the end. " + facts, wave + next],
+    ran: ["ok", "Ran to the end", facts + (facts ? ". " : "") + "Check the waveform and the output against what you expect.", wave + next],
+    "reported-fail": ["warn", "The testbench reported " + plural(r.fails || 0, "failure"), facts, "<button class='btn btn-sm' data-ss='first-fail'>Show the first one</button>" + wave],
+    build: ["fail", "Didn't build: " + plural(r.buildErrors || 0, "error"), "They're listed in Problems and underlined in the editor.", "<button class='btn btn-sm' data-ss='first-error'>Show the first error</button>"],
+    failed: ["fail", "The simulator stopped with an error", "Exit code " + r.rc + ". The output below says why." + (secs ? " " + secs : ""), ""],
+    "timeout-partial": ["warn", "Stopped at the time limit", "No $finish within 120 s, so the waveform is partial. Add $finish at the end of the testbench's initial block.", wave + "<button class='btn btn-ghost btn-sm' data-ss='open-tb'>Open the testbench</button>"],
+    timeout: ["fail", "Stopped at the time limit, no waveform", "Add $finish at the end of the testbench's initial block, and $dumpfile/$dumpvars to write a waveform.", "<button class='btn btn-ghost btn-sm' data-ss='open-tb'>Open the testbench</button>"],
+    nowave: ["warn", "Ran, but wrote no waveform", "The testbench needs $dumpfile and $dumpvars. " + facts, "<button class='btn btn-sm' data-ss='add-dump'>Add them to " + fmt.escape(tbName) + "</button>"],
+    stopped: ["info", "Stopped", "You stopped the simulation.", ""],
+    refused: ["fail", "Couldn't start the simulation", fmt.escape(r.error || ""), ""],
+    none: ["info", "No testbench yet", "A testbench drives your design with inputs and shows what comes out.", "<button class='btn btn-primary btn-sm' data-ss='new-tb'>Write a testbench</button>"],
+  }[r.verdict] || null;
+  if (!V) { el.hidden = true; return; }
+  el.hidden = false;
+  el.className = "ide-sim-status ss-" + V[0];
+  el.innerHTML = "<span class='ss-ic'>" + SS_ICON[V[0]] + "</span><div class='ss-text'><b>" + fmt.escape(V[1]) + "</b><span>" +
+    fmt.escape(V[2]).replace(/\$finish|\$dumpfile|\$dumpvars/g, (m) => "<code>" + m + "</code>") + "</span></div><div class='ss-acts'>" + V[3] + "</div>";
+  if (badge) {
+    const b = { build: ["build failed", "pcount-err"], failed: ["failed", "pcount-err"], timeout: ["timed out", "pcount-err"],
+      "timeout-partial": ["partial", "pcount-warn"], "reported-fail": [plural(r.fails || 0, "fail"), "pcount-warn"],
+      nowave: ["no wave", "pcount-warn"], running: ["running", ""] }[r.verdict];
+    badge.textContent = b ? b[0] : "";
+    badge.className = "pcount" + (b && b[1] ? " " + b[1] : "");
+  }
+  if (r.verdict === "running") {
+    const t0 = (state.simRun && state.simRun.started) || Date.now();
+    _ssTimer = setInterval(() => {
+      const sp = el.querySelector(".ss-text span");
+      if (!state.simRunning || !sp) { clearInterval(_ssTimer); return; }
+      sp.textContent = (state.simEngineLabel ? state.simEngineLabel + " · " : "") + Math.round((Date.now() - t0) / 1000) + " s";
+    }, 1000);
+  }
+  if (!el._wired) {
+    el._wired = true;
+    el.addEventListener("click", async (e) => {
+      const b = e.target.closest("[data-ss]");
+      if (!b) return;
+      const act = b.dataset.ss;
+      const run2 = state.simRun || {};
+      if (act === "wave") setPanel("wave");
+      else if (act === "flow") {
+        document.querySelector('.side-tab[data-tab="setup"]')?.click();
+        setTimeout(() => document.getElementById("setup-run")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+      } else if (act === "first-error") {
+        const d = (state.simDiags || []).find((x) => x.severity === "error");
+        const f = d && projectFile(d.file);
+        if (f) { await openFile(f.abspath, f.relpath); window.ideEditor.gotoLine(d.line, d.col > 1 ? d.col : undefined); }
+      } else if (act === "first-fail") {
+        // The first failing line of the latest run (runs are separated by a header line).
+        const all = [...document.querySelectorAll("#ide-log .ll")];
+        const start = all.findLastIndex((x) => x.classList.contains("ll-head"));
+        const hit = all.slice(Math.max(0, start)).find((x) => x.classList.contains("ll-err"));
+        if (hit) { hit.scrollIntoView({ block: "center" }); hit.classList.add("ll-flash"); setTimeout(() => hit.classList.remove("ll-flash"), 1600); }
+      } else if (act === "open-tb" || act === "add-dump") {
+        const f = projectFile(run2.tb);
+        if (!f) return;
+        await openFile(f.abspath, f.relpath);
+        if (act === "add-dump") addDumpBlock(run2.top || f.relpath.split("/").pop().replace(/\.s?v$/i, ""));
+      } else if (act === "new-tb") newFile("tb_v");
+    });
+  }
+}
+
+// Put the waveform block into the open testbench, just before its endmodule.
+function addDumpBlock(tbModule) {
+  const ed = window.ideEditor;
+  const text = ed.getValue();
+  const at = text.lastIndexOf("endmodule");
+  if (at < 0) { note("Couldn't find endmodule in this file. Add $dumpfile/$dumpvars inside the testbench module.", true); return; }
+  const block = "    // Write every signal to dump.vcd for the waveform viewer.\n    initial begin\n        $dumpfile(\"dump.vcd\");\n        $dumpvars(0, " + tbModule + ");\n    end\n\n";
+  const line = text.slice(0, at).split("\n").length;
+  ed.gotoLine(line, 1);
+  ed.insert(block);
+  note("Added a $dumpfile/$dumpvars block. Save, then Simulate again.");
+}
+
+// A simulation keeps at most this many output lines for its verdict and its
+// Problems; a bench that prints millions would otherwise fill the page's memory.
+const SIM_LINES_MAX = 50000;
+
 function onEvent(ev) {
   if (!ev || !ev.type) return;
-  if (ev.type === "log" && ev.message) appendLog(ev.message);
+  if (ev.type === "log" && ev.message) {
+    // Only the simulation's own output belongs in its log: never a syntax
+    // check's or a flow run's that happens at the same time. (A server from
+    // before the source tag sends none; then only the lint can be told apart.)
+    const src = ev.source || (ev.payload && ev.payload.source) || "";
+    if (src === "lint" && state.linting) { (state.lintLines || (state.lintLines = [])).push(ev.message); return; }
+    const mine = src ? src === "sim" : !state.linting;
+    const run = state.simRun;
+    if (mine && run && !run.done && !run.orphan && state.simRunning) {
+      if (run.lines.length < SIM_LINES_MAX) run.lines.push(ev.message);
+      appendLog(ev.message);
+    }
+  }
   else if (ev.type === "lint_done") {                  // standalone lint finished
+    if (!state.linting) return;                        // someone else's (another window's) check
     clearTimeout(_lintSafety);
     setLintBusy(false);
-    if (ev.timed_out)
+    if (ev.timed_out) {
       note("Lint exceeded the time limit and was stopped. If running on WSL with Windows Verilator on PATH, "
            + "install the Linux binary from Tools.", true);
-    applyLint(ev.diagnostics);
-  }
-  else if (ev.type === "sim_done") {
-    clearTimeout(_simSafety);
-    setSimBusy(false);                 // re-enable Simulate no matter the outcome
-    if (ev.cancelled) note("Simulation stopped.", true);
-    else if (ev.vcd) {
-      loadWaveform(ev.vcd, ev.partial);
-      if (ev.timed_out)
-        note("Simulation reached the time limit (free-running clock without $finish). Displaying "
-             + "partial waveform. Add $finish to your testbench for a complete run.", true);
     }
-    else if (ev.timed_out)
-      note("Simulation reached the time limit with no waveform generated. Add $finish to your "
-           + "testbench so the simulation can terminate.", true);
-    else if (ev.ok)
-      note("Simulation ran but produced no waveform. Verify the testbench invokes "
-           + "$dumpfile and $dumpvars, and that top is set to the testbench module.", true);
-    else note("Simulation finished with errors. Review the log below for details.", true);
+    applyLint(ev.diagnostics, ev);
   }
+  else if (ev.type === "sim_done") finishSim(ev);
+}
+
+// What the IDE last found, per project, for the Setup page's "Write and
+// simulate" step.
+function recordRtlStatus() {
+  if (!state.designDir) return;
+  const key = "ll.rtl:" + state.designDir;
+  let prev = {};
+  try { prev = JSON.parse(localStorage.getItem(key) || "{}") || {}; } catch (_e) {}
+  const real = allDiags().filter((d) => !isNoise(d));
+  const st = {
+    lint: state.lintChecked ? { errors: real.filter((d) => d.severity === "error").length,
+      warnings: real.filter((d) => d.severity === "warning").length, at: state.lintAt } : prev.lint,
+    sim: state.simRun && state.simRun.verdict && state.simRun.verdict !== "running"
+      ? { tb: state.simRun.tb, verdict: state.simRun.verdict, at: Date.now() } : prev.sim,
+  };
+  try { localStorage.setItem(key, JSON.stringify(st)); } catch (_e) {}
+  document.dispatchEvent(new CustomEvent("g:rtl_status", { detail: { designDir: state.designDir, ...st } }));
 }
 
 // Open the last simulation's dump in the desktop GTKWave (server pre-generates a
@@ -915,11 +1782,11 @@ function onEvent(ev) {
 // GTKWave isn't installed, the first click explains and arms the button; the
 // second click starts the install through the normal Tools machinery (progress
 // streams to the Install logs / log drawer).
-async function openInGtkwave() {
+async function openInGtkwave(signals) {
   const path = state.lastWavePath;
   if (!path) { note("Run a simulation first. No waveform available to open.", true); return; }
   try {
-    const r = await api.openWave(path);
+    const r = await api.openWave(path, Array.isArray(signals) ? signals : []);
     if (r && r.ok) {
       state.gtkwaveInstallArmed = false;
       note("GTKWave launched on " + path + (r.signals ? " (" + r.signals + " signals preloaded)." : "."));
@@ -947,82 +1814,236 @@ async function openInGtkwave() {
 // Show/hide the durable "partial waveform" badge on the Waveform tab. Kept
 // separate from the transient note() so the disclosure survives later toasts and
 // is visible in a screenshot of the pane (N2).
-function setWavePartial(isPartial) {
+// The same badge says when the waveform on screen is an earlier run's (the
+// latest one didn't build or wrote no dump), so it isn't read as the new result.
+const WAVE_BADGE = {
+  partial: ["partial", "The simulation hit its time limit before $finish, so this waveform is incomplete. Add $finish to the testbench to capture the whole run."],
+  old: ["earlier run", "The last simulation produced no waveform, so this is the one before it."],
+};
+function setWavePartial(kind) {
   const badge = document.getElementById("ide-wave-partial");
-  if (badge) badge.hidden = !isPartial;
+  if (!badge) return;
+  const b = WAVE_BADGE[kind === true ? "partial" : kind];
+  badge.hidden = !b;
+  if (b) { badge.textContent = b[0]; badge.title = b[1]; badge.classList.toggle("is-old", kind === "old"); }
 }
 
-// Size the canvas to its pane: the full panel width, and tall enough for every
-// visible signal (the pane scrolls past that).
-function fitWave() {
-  const host = document.getElementById("ide-wave-host");
-  const canvas = document.getElementById("ide-wave");
-  if (!host || !canvas || !host.clientWidth) return;
-  const rows = state.wave && state.wave.visible ? state.wave.visible.length : 0;
-  const w = host.clientWidth;
-  const h = Math.max(host.clientHeight - 2, rows * 26 + 24);
-  if (canvas.width === w && canvas.height === h) return;
-  canvas.width = w;
-  canvas.height = h;
-  if (state.wave && state.wave.vcd) state.wave.draw();
-}
+// A dump this big would stall the page while it parses; GTKWave reads it fine.
+const WAVE_MAX_BYTES = 200 * 1024 * 1024;
 
 async function loadWaveform(vcdRel, partial) {
   state.lastWavePath = vcdRel;
-  state.wavePartial = !!partial;
+  const dir = state.designDir;
+  if (/\.fst$/i.test(vcdRel)) {
+    setPanel("wave");
+    if (state.wave) state.wave.showFst(vcdRel);
+    note(vcdRel + " is an FST dump; GTKWave opens it.", true);
+    return;
+  }
   note("Loading waveform " + vcdRel + "…");
   try {
     const r = await fetch(api.waveformUrl(vcdRel), { headers: { "X-Requested-With": "XMLHttpRequest" } });
-    const text = await r.text();
-    const vcd = parseVCD(text);
+    if (!r.ok) throw new Error("the server answered " + r.status + " for " + vcdRel);
+    if (state.designDir !== dir) return;          // another project was opened meanwhile
+    const size = +(r.headers.get("Content-Length") || 0);
+    if (size > WAVE_MAX_BYTES) {
+      setPanel("wave");
+      if (state.wave) state.wave.showTooBig(Math.round(size / 1048576));
+      note("The dump is " + Math.round(size / 1048576) + " MB, too big to show here. GTKWave opens it.", true);
+      return;
+    }
+    const vcd = parseVCD(await r.text());
+    if (state.designDir !== dir) return;
     setPanel("wave");
-    const canvas = document.getElementById("ide-wave");
-    byId("ide-wave-empty", (el) => { el.hidden = true; });
-    if (!state.wave) state.wave = new WaveView(canvas);
-    state.wave.visible = vcd.signals.length ? defaultLanes(vcd) : [];
-    fitWave();
-    state.wave.load(vcd, state.wave.visible);
+    growPanelFor("wave");
+    if (state.wave) state.wave.load(vcd);
     // A full (non-partial) load clears any prior badge; a partial load pins it.
     setWavePartial(!!partial);
-    note("Waveform: " + vcd.signals.length + " signals, " + vcd.end + " " + (vcd.timescale || "ticks"));
+    note("Waveform: " + vcd.signals.length + " signals over " + formatTime(vcd.end, vcd.tick) + ".");
   } catch (ex) {
     note("Could not load waveform: " + (ex.message || ex), true);
   }
 }
 
-function exportWavePng() {
-  if (!state.wave || !state.wave.vcd) { note("Run a simulation first. No waveform available to export.", true); return; }
-  const url = state.wave.toPNG();
-  if (!url) { note("Could not export the waveform image.", true); return; }
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "waveform.png";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  note("Exported waveform.png");
+// ------------------------------------------------------------------ waveform → code
+
+// Every HDL file's text: the open tab's (it may be unsaved) or the file on disk.
+async function projectTexts() {
+  const hdl = state.files.filter((f) => /\.(s?v|vh|svh)$/i.test(f.relpath));
+  return Promise.all(hdl.map(async (f) => {
+    const t = state.tabs.find((x) => x.rel === f.relpath);
+    if (t) return { rel: f.relpath, abs: f.abspath, text: t.text };
+    try { const r = await api.readText(f.abspath); return { rel: f.relpath, abs: f.abspath, text: r.text || "" }; }
+    catch (_e) { return { rel: f.relpath, abs: f.abspath, text: "" }; }
+  }));
 }
 
-function exportWaveCsv() {
-  if (!state.wave || !state.wave.vcd) { note("Run a simulation first. No waveform available to export.", true); return; }
-  const csv = vcdToCSV(state.wave.vcd, state.wave.visible, state.wave.radix);
-  const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "waveform.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
-  note("Exported waveform.csv (" + state.wave.visible.length + " signals)");
+// module name -> { rel, abs, body, offset (char index of the body), text }
+function moduleDefs(texts) {
+  const defs = new Map();
+  for (const f of texts) {
+    const rx = /^[ \t]*(?:module|macromodule)\s+(?:automatic\s+)?([A-Za-z_]\w*)/gm;
+    let m;
+    while ((m = rx.exec(f.text)) !== null) {
+      const endRx = /\bendmodule\b/g;
+      endRx.lastIndex = m.index;
+      const e = endRx.exec(f.text);
+      const stop = e ? e.index : f.text.length;
+      if (!defs.has(m[1])) defs.set(m[1], { ...f, body: f.text.slice(m.index, stop), offset: m.index });
+    }
+  }
+  return defs;
 }
 
-function appendLog(line) {
+// The module type of instance `inst` inside module `def` (null if none).
+function instanceType(def, inst, defs) {
+  const rx = new RegExp("\\b([A-Za-z_]\\w*)\\s*(?:#\\s*\\((?:[^()]|\\([^()]*\\))*\\))?\\s*" + inst.replace(/[[\]]/g, "\\$&") + "\\s*(?:\\[[^\\]]*\\])?\\s*\\(", "g");
+  let m;
+  while ((m = rx.exec(def.body)) !== null) if (defs.has(m[1])) return m[1];
+  return null;
+}
+
+function lineOf(text, index) {
+  return text.slice(0, index).split("\n").length;
+}
+
+// ------------------------------------------------------------------ code → waveform
+
+// Which module each scope of the dump is an instance of, from the project's
+// own instantiations (fifo_tb → dut is a fifo). Built once per waveform.
+async function scopeModules() {
+  const w = state.wave;
+  if (!w || !w.vcd) return null;
+  if (state.scopeMap && state.scopeMap.vcd === w.vcd) return state.scopeMap;
+  const defs = moduleDefs(await projectTexts());
+  const map = new Map();
+  const walk = (node, path, mod) => {
+    for (const c of node.children) {
+      const p = path.concat([c.name]);
+      const m = !path.length ? (defs.has(c.name) ? c.name : null)
+        : mod ? (instanceType(defs.get(mod), c.name.replace(/\[\d+\]$/, ""), defs) || mod) : null;
+      if (m) map.set(p.join("."), m);
+      walk(c, p, m);
+    }
+  };
+  walk(w.vcd.scopes, [], null);
+  state.scopeMap = { vcd: w.vcd, map, defs };
+  return state.scopeMap;
+}
+
+// Hovering a name in the code shows its value in the loaded simulation at the
+// waveform's cursor (every instance of this file's module), and puts it on
+// the waveform with one click, the way Verdi and SimVision annotate source.
+async function valueHover(word, relPath) {
+  const w = state.wave;
+  if (!w || !w.vcd || !relPath) return null;
+  const sm = await scopeModules();
+  if (!sm) return null;
+  const mods = new Set([...sm.defs.entries()].filter(([, d]) => d.rel === relPath).map(([n]) => n));
+  if (!mods.size) return null;
+  const hits = w.vars.filter((v) => (v.base || v.name) === word && mods.has(sm.map.get((v.scope || []).join("."))));
+  if (!hits.length) return null;
+  const t = w.cursor === null || w.cursor === undefined ? null : w.cursor;
+  const at = t === null ? w.vcd.end : t;
+  const dom = document.createElement("div");
+  dom.className = "cm-wavetip";
+  const head = document.createElement("div");
+  head.className = "cm-wavetip-h";
+  head.textContent = t === null ? "End of the simulation, " + formatTime(Math.round(at), w.vcd.tick)
+    : "At the waveform cursor, " + formatTime(Math.round(at), w.vcd.tick);
+  dom.appendChild(head);
+  for (const v of hits.slice(0, 6)) {
+    const row = w.rows.find((r) => r.path === v.path);
+    const line = document.createElement("div");
+    line.className = "cm-wavetip-row";
+    const name = document.createElement("span");
+    name.className = "cm-wavetip-n";
+    name.textContent = (v.scope || []).slice(1).concat([v.name]).join(".");
+    const val = document.createElement("b");
+    val.textContent = w._fmt({ path: v.path, radix: row ? row.radix : null }, valueAt(w.vcd.byId[v.id], at));
+    const btn = document.createElement("button");
+    btn.className = "cm-wavetip-b";
+    btn.textContent = row ? "Show" : "Add to waveform";
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      w.addSignal(v.path);
+      setPanel("wave");
+    });
+    line.append(name, val, btn);
+    dom.appendChild(line);
+  }
+  return dom;
+}
+
+// Double-click a signal in the waveform: open the file that declares it, on
+// the declaration. The scope path in the dump names instances (tb → dut), so
+// walk the instantiations down from the testbench to find the module.
+async function gotoDeclaration(v) {
+  if (!v) return;
+  const scope = v.scope || [];
+  const name = (v.base || v.name || "").replace(/\[.*$/, "");
+  const defs = moduleDefs(await projectTexts());
+  let mod = defs.has(scope[0]) ? scope[0] : null;
+  for (const inst of scope.slice(1)) {
+    if (!mod) break;
+    // Named generate blocks and begin/end scopes stay in the same module.
+    mod = instanceType(defs.get(mod), inst.replace(/\[\d+\]$/, ""), defs) || mod;
+  }
+  const def = mod && defs.get(mod);
+  if (!def) { note("Couldn't find the module that declares " + v.path + " in this project's files.", true); return; }
+  const id = name.replace(/[$]/g, "\\$&");
+  const decl = new RegExp("\\b(?:input|output|inout|wire|reg|logic|bit|byte|int|integer|genvar|parameter|localparam|tri|var|real|time)\\b[^;]*?\\b" + id + "\\b");
+  let idx = -1;
+  const m = decl.exec(def.body);
+  if (m) idx = m.index + m[0].lastIndexOf(name);
+  else {
+    const any = new RegExp("\\b" + id + "\\b").exec(def.body);
+    if (any) idx = any.index;
+  }
+  await openFile(def.abs, def.rel);
+  const line = idx >= 0 ? lineOf(def.text, def.offset + idx) : lineOf(def.text, def.offset);
+  if (window.ideEditor) window.ideEditor.gotoLine(line);
+  note(idx >= 0 ? v.path + " is declared in " + def.rel + ", line " + line + "."
+    : "Opened module " + mod + " (" + def.rel + "); " + name + " isn't declared there by name.", idx < 0);
+}
+
+// The simulation's output, a line at a time: errors red, warnings amber, the
+// tools' own chatter dimmed, and every file:line a link into the editor.
+const LOG_MAX = 5000;
+const LOC_RX = /((?:[\w.\-]+\/)*[\w.\-]+\.(?:s?v|vh|svh)):(\d+)(?::(\d+))?/g;
+function classifyLine(s) {
+  if (/^── /.test(s)) return "ll-head";
+  if (/^%Error|\berror\b[:\s]|\bERROR\b|\bFATAL\b|\bFAIL(ED|URE)?\b|syntax error|I give up|MISMATCH/i.test(s)) return "ll-err";
+  if (/^%Warning|\bwarning\b[:\s]|\bWARN(ING)?\b/i.test(s)) return "ll-warn";
+  if (TOOLISH_RX.test(s)) return "ll-dim";
+  if (/\$finish|\bPASS(ED)?\b/i.test(s)) return "ll-ok";
+  return "";
+}
+function appendLog(line, cls) {
   const el = document.getElementById("ide-log");
   if (!el) return;
-  el.textContent += line + "\n";
-  el.scrollTop = el.scrollHeight;
+  const stick = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  const div = document.createElement("div");
+  div.className = "ll " + (cls || classifyLine(line));
+  div.innerHTML = fmt.escape(line).replace(LOC_RX, (m, file, ln, col) =>
+    projectFile(file) ? "<button class='ll-loc' data-file='" + file + "' data-line='" + ln + "'" + (col ? " data-col='" + col + "'" : "") + ">" + m + "</button>" : m);
+  el.appendChild(div);
+  while (el.childElementCount > LOG_MAX) el.firstElementChild.remove();
+  if (stick) el.scrollTop = el.scrollHeight;
+}
+
+function wireLog() {
+  const el = document.getElementById("ide-log");
+  if (!el) return;
+  el.addEventListener("click", async (e) => {
+    const b = e.target.closest(".ll-loc");
+    if (!b) return;
+    const f = projectFile(b.dataset.file);
+    if (!f) return;
+    await openFile(f.abspath, f.relpath);
+    window.ideEditor.gotoLine(+b.dataset.line, b.dataset.col ? +b.dataset.col : undefined);
+  });
+  byId("ide-log-clear", (b) => b.addEventListener("click", () => { el.innerHTML = ""; }));
 }
 
 function note(msg, bad) {

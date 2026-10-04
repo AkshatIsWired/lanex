@@ -145,7 +145,8 @@ function renderStep2(body, tpl) {
     "<span class='wiz-help' id='wiz-where-help'></span></div>" +
     "<div class='wiz-field'><label for='wiz-top'>Top module</label>" +
     "<span class='wiz-top-row'><input id='wiz-top' type='text' value='" + fmt.escape(tpl.top) + "' spellcheck='false' />" +
-    "<select id='wiz-lang' aria-label='Language'><option value='verilog'>Verilog .v</option>" +
+    "<select id='wiz-lang' aria-label='Language' title='The language of the starter files. Verilog .v is what LibreLane&#39;s own examples and Tiny Tapeout use.'>" +
+    "<option value='verilog'>Verilog .v</option>" +
     "<option value='systemverilog'>SystemVerilog .sv</option></select></span>" +
     "<span class='wiz-help' id='wiz-top-help'></span></div>" +
     "<label class='wiz-field'><span>Clock period</span>" +
@@ -198,7 +199,10 @@ function renderStep2(body, tpl) {
     const h = $("wiz-top-help");
     if (!h) return;
     const n = ($("wiz-top").value.trim() || tpl.top) + ($("wiz-lang").value === "systemverilog" ? ".sv" : ".v");
-    h.innerHTML = "Your top-level module. LanEx starts <code>src/" + fmt.escape(n) + "</code> with a small module of that name.";
+    const sv = $("wiz-lang").value === "systemverilog";
+    h.innerHTML = "Your top-level module. LanEx starts <code>src/" + fmt.escape(n) + "</code> with a small module of that name. " +
+      (sv ? "SystemVerilog is for code that uses <code>logic</code>, <code>always_ff</code> and the like; the open flow supports its common subset."
+        : "Verilog is the open flow's native language: LibreLane's examples and Tiny Tapeout designs use it.");
   };
   if ($("wiz-top")) {
     $("wiz-top").addEventListener("input", paintTop);

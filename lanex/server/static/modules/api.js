@@ -240,6 +240,8 @@ export const api = {
     _fetch("/api/file/write", { method: "POST", body: JSON.stringify({ rel_path, content }) }),
   fileDelete: (rel_path) =>
     _fetch("/api/file/delete", { method: "POST", body: JSON.stringify({ rel_path }) }),
+  fileRename: (rel_path, new_rel) =>
+    _fetch("/api/file/rename", { method: "POST", body: JSON.stringify({ rel_path, new_rel }) }),
   lintStart: (payload) =>
     _fetch("/api/lint", { method: "POST", body: JSON.stringify(payload || {}) }),
   simTestbenches: (designDir) =>
@@ -247,8 +249,8 @@ export const api = {
   simStart: (payload) => _fetch("/api/sim/start", { method: "POST", body: JSON.stringify(payload) }),
   simCancel: () => _fetch("/api/sim/cancel", { method: "POST", body: "{}" }),
   waveformUrl: (path) => "/api/waveform?path=" + encodeURIComponent(path),
-  openWave: (path) =>
-    _fetch("/api/ide/open-wave", { method: "POST", body: JSON.stringify({ path }) }),
+  openWave: (path, signals) =>
+    _fetch("/api/ide/open-wave", { method: "POST", body: JSON.stringify({ path, signals: signals || [] }) }),
 
   // ---------- Phase 4: viewers + cells
   // (2D/3D layout = the flow's KLayout PNG + "Open in desktop tool"; the old

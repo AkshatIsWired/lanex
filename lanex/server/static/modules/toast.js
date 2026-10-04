@@ -18,7 +18,9 @@ export const toast = {
     this.container = c;
   },
 
-  show(message, type = "info", duration) {
+  // ``action`` adds one button (e.g. {label: "Undo", run}) that runs and
+  // dismisses the toast; hovering keeps it up.
+  show(message, type = "info", duration, action) {
     if (!this.container) this.init();
     // Cap the stack — drop the oldest so a burst can't wallpaper the screen.
     while (this.container.children.length >= MAX) {
@@ -41,7 +43,15 @@ export const toast = {
     close.className = "toast-close";
     close.setAttribute("aria-label", "Dismiss");
     close.innerHTML = icon("x", { size: 13 });
-    el.append(ic, msg, close);
+    el.append(ic, msg);
+    let act = null;
+    if (action && action.label && typeof action.run === "function") {
+      act = document.createElement("button");
+      act.className = "toast-act";
+      act.textContent = action.label;
+      el.append(act);
+    }
+    el.append(close);
     this.container.appendChild(el);
     requestAnimationFrame(() => el.classList.add("is-in"));
 
@@ -55,6 +65,7 @@ export const toast = {
     };
     const arm = () => { if (ttl > 0) timer = setTimeout(dismiss, ttl); };
     close.addEventListener("click", dismiss);
+    act?.addEventListener("click", () => { dismiss(); action.run(); });
     el.addEventListener("mouseenter", () => { if (timer) clearTimeout(timer); });
     el.addEventListener("mouseleave", arm);
     arm();

@@ -252,6 +252,73 @@ check("vcd.js: the counter VALUES on screen equal what the simulator wrote", () 
   for (let i = 1; i < clkVals.length; i++) assert.notEqual(clkVals[i], clkVals[i - 1]);
 });
 
+// ------------------------------------------- waveform viewer: what it prints
+// The value column, bus labels and CSV all go through formatValue/formatTime;
+// a wrong digit here is a wrong reading of the simulation.
+const { formatValue, formatTime, parseTimescale, valueAt } = await import(toUrl(resolve(MOD, "ide", "vcd.js")));
+const { defaultLanes } = await import(toUrl(resolve(MOD, "ide", "waves.js")));
+
+check("vcd.js: radix formatting is exact, padded, and keeps x/z visible", () => {
+  assert.equal(formatValue("1010", "hex", 8), "0A");               // VCD drops leading zeros
+  assert.equal(formatValue("x1", "hex", 8), "xx");                  // x extends left (IEEE 1364)
+  assert.equal(formatValue("zzzz", "hex", 4), "z");
+  assert.equal(formatValue("1x0000", "hex", 8), "x0");              // only the unknown nibble
+  assert.equal(formatValue("11111111", "signed", 8), "-1");
+  assert.equal(formatValue("1".repeat(64), "dec", 64), "18446744073709551615");   // no float rounding
+  assert.equal(formatValue("1" + "0".repeat(63), "signed", 64), "-9223372036854775808");
+  assert.equal(formatValue("0100100001101001", "ascii", 16), '"Hi"');
+  assert.equal(formatValue("101", "bin", 8), "00000101");
+  assert.equal(formatValue("x", "dec", 8), "x");
+});
+
+check("vcd.js: times read in real units, exact to the dump's resolution", () => {
+  const ps = parseTimescale("1ps");
+  assert.deepEqual(ps, { mult: 1, unit: "ps", exp: -12 });
+  assert.equal(formatTime(87402, ps), "87.402 ns");
+  assert.equal(formatTime(242000, ps), "242 ns");
+  assert.equal(formatTime(1500000000, ps), "1.5 ms");
+  assert.equal(formatTime(5, parseTimescale("10ns")), "50 ns");
+  assert.equal(formatTime(120020, ps, 20), "120.02 ns");            // ruler label, decimals from the step
+  assert.equal(formatTime(0, ps), "0");
+});
+
+check("vcd.js: aliases stay addressable; values come from the shared stream", () => {
+  const vcd = parseVCD(GOLDEN_VCD);
+  const paths = vcd.vars.map((v) => v.path);
+  assert.ok(paths.includes("tb_counter.dut.clk") && paths.includes("tb_counter.clk"));
+  const alias = vcd.vars.find((v) => v.path === "tb_counter.dut.clk");
+  const own = vcd.vars.find((v) => v.path === "tb_counter.clk");
+  assert.equal(alias.id, own.id);
+  assert.equal(valueAt(vcd.byId[alias.id], 5), "1");
+  assert.equal(valueAt(vcd.byId[alias.id], 4), "0");
+});
+
+check("vcd.js: several changes on one line read the same as one per line", () => {
+  // VCD only asks for whitespace between changes; some writers put a whole
+  // $dumpvars block, or a time and its changes, on one line.
+  const head = ["$timescale 1ns $end", "$scope module tb $end", "$var wire 1 ! clk $end",
+    "$var wire 4 \" q [3:0] $end", "$var real 64 # r $end", "$upscope $end", "$enddefinitions $end"];
+  const one = parseVCD(head.concat(["#0", "$dumpvars", "0!", "b0 \"", "r0.5 #", "$end", "#5", "1!", "b1010 \"", "#10", "0!"]).join("\n"));
+  const packed = parseVCD(head.concat(["#0 $dumpvars 0! b0 \" r0.5 # $end", "#5 1! b1010 \"", "#10 0!"]).join("\n"));
+  for (const v of [one, packed]) {
+    assert.equal(v.end, 10);
+    assert.deepEqual(v.byId["!"].changes, [[0, "0"], [5, "1"], [10, "0"]]);
+    assert.deepEqual(v.byId["\""].changes, [[0, "0"], [5, "1010"]]);
+    assert.deepEqual(v.byId["#"].changes, [[0, "0.5"]]);
+  }
+});
+
+check("waves.js: the first view shows the bench's signals, clock and reset first, no parameters", () => {
+  const vcd = parseVCD([
+    "$timescale 1ns $end", "$scope module tb $end",
+    "$var wire 8 ! q [7:0] $end", "$var reg 1 \" rst $end", "$var reg 1 # clk $end",
+    "$var parameter 32 $ WIDTH $end",
+    "$scope module dut $end", "$var wire 1 # clk $end", "$var reg 4 % state [3:0] $end", "$upscope $end",
+    "$upscope $end", "$enddefinitions $end", "#0", "0#", "1\"", "b0 !", "b0 %",
+  ].join("\n"));
+  assert.deepEqual(defaultLanes(vcd), ["tb.clk", "tb.rst", "tb.q[7:0]", "tb.dut.state[3:0]"]);
+});
+
 // ------------------------------- LibreLane-output → on-screen display fidelity
 // goldens/display_run/metrics.json is a REAL SPM container run's final
 // metrics.json (305 metrics: ints, floats, sub-milli magnitudes, +Infinity,

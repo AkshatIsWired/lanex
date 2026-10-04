@@ -109,3 +109,23 @@ def delete_file(design_dir: str | Path, rel_path: str) -> Dict[str, Any]:
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
     return {"ok": True, "deleted": rel_path}
+
+
+def rename_file(design_dir: str | Path, rel_path: str, new_rel: str) -> Dict[str, Any]:
+    """Rename/move a file inside the design dir. Never overwrites, never leaves it."""
+    src = _resolve_inside(design_dir, rel_path)
+    dst = _resolve_inside(design_dir, new_rel)
+    if src is None or dst is None:
+        return {"ok": False, "error": "path escapes the design directory"}
+    if not src.is_file():
+        return {"ok": False, "error": "not a file"}
+    if dst.suffix.lower() not in EDITABLE_EXTS:
+        return {"ok": False, "error": f"extension '{dst.suffix}' is not editable"}
+    if dst.exists() and not (os.path.normcase(str(dst)) == os.path.normcase(str(src))):
+        return {"ok": False, "error": f"{new_rel} already exists"}
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(src, dst)
+    except Exception as ex:
+        return {"ok": False, "error": str(ex)}
+    return {"ok": True, "old": rel_path, "rel": Path(new_rel).as_posix(), "abs": str(dst)}

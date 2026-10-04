@@ -20,6 +20,10 @@ redistribute their source code.
 LanEx is an independent project. It is not affiliated with, sponsored by, or
 endorsed by the LibreLane project or its maintainers.
 
+LanEx ships CodeMirror 6 (https://codemirror.net, MIT License, Copyright (C)
+2018-2021 Marijn Haverbeke and others) as lanex/server/static/vendor/codemirror.js
+for its RTL editor; the licence text is in vendor/codemirror.LICENSE.
+
 --------------------------------------------------------------------------------
 Disclaimer
 --------------------------------------------------------------------------------

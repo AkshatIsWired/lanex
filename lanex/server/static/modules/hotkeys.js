@@ -31,6 +31,23 @@ export const SHORTCUTS = [
   { keys: "Esc", desc: "Close a menu, panel or dialog" },
 ];
 
+// The RTL IDE's own keys (editor and waveform). Listed in the help sheet; the
+// editor and the waveform viewer handle them, so they never reach the app.
+export const IDE_SHORTCUTS = [
+  { keys: "Ctrl S", desc: "Save (and check the syntax, with Check on save)" },
+  { keys: "Ctrl F / Ctrl H", desc: "Find, find and replace" },
+  { keys: "Ctrl /", desc: "Comment or uncomment the line" },
+  { keys: "Alt ↑ / Alt ↓", desc: "Move the line up or down" },
+  { keys: "Ctrl D", desc: "Add the next match to the selection" },
+  { keys: "Ctrl Space", desc: "Suggest keywords, blocks and names" },
+  { keys: "Ctrl Z / Ctrl Y", desc: "Undo, redo (each file keeps its own history)" },
+  { keys: "← / →", desc: "Waveform: previous or next change of the selected signals" },
+  { keys: "+ / − / F", desc: "Waveform: zoom in, out, show the whole run" },
+  { keys: "M", desc: "Waveform: put the marker at the cursor" },
+  { keys: "Delete", desc: "Waveform: remove the selected signals" },
+  { keys: "Esc", desc: "Waveform: let the selected signals go, then drop the marker" },
+];
+
 export function setupHotkeys() {
   window.addEventListener("keydown", (e) => {
     const tag = (e.target && e.target.tagName) || "";
@@ -38,7 +55,16 @@ export function setupHotkeys() {
       if (e.key === "Escape") e.target.blur();
       return;
     }
+    // Typing in the code editor (a contenteditable, not a textarea) and keys the
+    // waveform viewer uses (f, m, arrows, digits) are never app shortcuts: a
+    // stray "r" there must not start a run.
+    if (e.defaultPrevented || (e.target && (e.target.isContentEditable ||
+        (e.target.closest && e.target.closest(".cm-editor, .wv"))))) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // In the RTL IDE (its explorer, tabs, panels) a press meant for the code
+    // easily lands on a button instead; there r and s must not start or stop
+    // the RTL-to-GDS run.
+    if ((e.key === "r" || e.key === "s") && e.target && e.target.closest && e.target.closest(".ide-embed")) return;
     if (e.key === "?") {
       import("./shell.js").then((m) => m.openHelp("keys"));
       e.preventDefault();

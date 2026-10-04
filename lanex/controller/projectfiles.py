@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import configedit
 from .editor import EDITABLE_EXTS, _resolve_inside
 
-_SKIP_DIRS = {".git", "runs", "tmp", "__pycache__", "build", "node_modules"}
+_SKIP_DIRS = {".git", "runs", "tmp", "__pycache__", "build", "node_modules", "sim_build", "obj_dir"}
 _TB_DIR_RX = re.compile(r"(^|/)(verify|tb|tbs|test|tests|sim|testbench|testbenches)/", re.I)
 _TB_NAME_RX = re.compile(r"(^tb_|_tb\.|^test_|testbench)", re.I)
 # Config variables that name a single project file, and what the UI calls them.

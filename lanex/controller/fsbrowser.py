@@ -108,7 +108,7 @@ def walk_sources(
     if p is None or not p.is_dir():
         return {"ok": False, "error": "not a directory"}
     exts = {e.lower() for e in (DEFAULT_SOURCE_EXTS | (extra_exts or set()))}
-    skip_dirs = {".git", "runs", "tmp", "__pycache__", "build", "node_modules"}
+    skip_dirs = {".git", "runs", "tmp", "__pycache__", "build", "node_modules", "sim_build", "obj_dir"}
     hits: List[Dict[str, Any]] = []
     for root, dirs, files in os.walk(str(p)):
         # Prune skip-dirs in-place to avoid descending into them.

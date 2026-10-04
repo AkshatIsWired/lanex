@@ -7,7 +7,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
-import { SHORTCUTS } from "./hotkeys.js";
+import { SHORTCUTS, IDE_SHORTCUTS } from "./hotkeys.js";
 
 // ------------------------------------------------------------ overlay manager
 // One open overlay at a time; outside pointerdown or Esc closes it.
@@ -444,7 +444,9 @@ function renderKeys(body) {
   body.innerHTML =
     "<h2>Keyboard shortcuts</h2>" +
     "<p class='muted'>Single-letter keys work anywhere except while you're typing in a field.</p>" +
-    "<div class='keys'>" + SHORTCUTS.map((s) => row(s.keys, s.desc)).join("") + "</div>";
+    "<div class='keys'>" + SHORTCUTS.map((s) => row(s.keys, s.desc)).join("") + "</div>" +
+    "<h3>RTL IDE</h3>" +
+    "<div class='keys'>" + IDE_SHORTCUTS.map((s) => row(s.keys, s.desc)).join("") + "</div>";
 }
 
 async function renderAbout(body) {

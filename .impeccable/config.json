@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "lanex/server/static/modules/ide/editor.js"
+        ],
+        "createdAt": "2026-10-03T10:23:05.276Z",
+        "reason": "Claude triage: lint tooltip severity stripe on .cm-diagnostic-error/-warning is CodeMirror's own convention (its base theme draws a 5px left border); kept, thinned to 3px"
+      }
+    ]
+  }
+}

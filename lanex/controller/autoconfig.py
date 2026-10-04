@@ -209,7 +209,7 @@ def scan_sources(
     tb_files: set = set()
     combined = ""
     errors: List[str] = []
-    skip_dirs = {".git", "runs", "tmp", "__pycache__", "build", "node_modules"}
+    skip_dirs = {".git", "runs", "tmp", "__pycache__", "build", "node_modules", "sim_build", "obj_dir"}
 
     files: List[Path] = []
     try:

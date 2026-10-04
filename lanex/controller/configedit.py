@@ -423,3 +423,56 @@ def set_sources(design_dir: str | Path, files: List[str]) -> Dict[str, Any]:
     res = set_keys(design_dir, {"VERILOG_FILES": sources_entries(design_dir, ordered)})
     res["kept_glob"] = False
     return res
+
+
+def follow_rename(design_dir: str | Path, old_abs: str, new_abs: str,
+                  before: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Point the config at a file that was just renamed.
+
+    Every top-level string (or list of strings) that names the old file, as
+    ``dir::<rel>``, ``<rel>``, ``./<rel>`` or its absolute path, is rewritten to
+    the new name (PNR_SDC_FILE, IO_PIN_ORDER_CFG, an explicit VERILOG_FILES …).
+    *before* is :func:`resolve_sources` taken before the rename: a design file
+    the build included through a glob that no longer matches it (``.v`` renamed
+    to ``.sv`` under ``dir::src/*.v``) is listed explicitly so it stays in.
+    Returns :func:`set_keys`' result; raises :class:`ConfigEditError`.
+    """
+    d = Path(design_dir).resolve()
+    old_p, new_p = Path(old_abs).resolve(), Path(new_abs).resolve()
+    try:
+        old_rel, new_rel = old_p.relative_to(d).as_posix(), new_p.relative_to(d).as_posix()
+    except ValueError:
+        raise ConfigEditError("The file isn't inside the project folder.")
+    info = read_config(design_dir)
+    if not info["path"]:
+        return {"changed": [], "name": None}
+    if not info["editable"]:
+        # Only a problem if that file actually names the renamed one.
+        try:
+            named = old_rel in Path(info["path"]).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            named = True
+        if named:
+            raise ConfigEditError(info["reason"])
+        return {"changed": [], "name": info["name"]}
+    forms = {"dir::" + old_rel: "dir::" + new_rel, old_rel: new_rel,
+             "./" + old_rel: "./" + new_rel, str(old_p): str(new_p)}
+    data = info["data"]
+    sets: Dict[str, Any] = {}
+    for k, v in data.items():
+        if not _KEY_RX.match(str(k)):
+            continue
+        if isinstance(v, str) and v in forms:
+            sets[k] = forms[v]
+        elif isinstance(v, list) and all(isinstance(x, str) for x in v) and any(x in forms for x in v):
+            sets[k] = [forms.get(x, x) for x in v]
+    if before and before.get("mode") == "list" and str(old_p) in before.get("files", []):
+        after = resolve_sources(design_dir, {**data, **sets})
+        if after["mode"] == "list" and str(new_p) not in after["files"]:
+            files = [str(new_p) if f == str(old_p) else f for f in before["files"]]
+            sets["VERILOG_FILES"] = sources_entries(design_dir, files)
+    if not sets:
+        return {"changed": [], "name": info["name"]}
+    res = set_keys(design_dir, sets)
+    res.pop("text", None)
+    return res

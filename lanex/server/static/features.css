@@ -33,6 +33,9 @@
 .toast-close { flex: none; background: none; border: 0; cursor: pointer;
   color: var(--text-muted); padding: 0; display: inline-flex; line-height: 1; }
 .toast-close:hover { color: var(--text-strong); }
+.toast-act { flex: none; align-self: center; height: 26px; margin: -4px 0; padding: 0 10px; border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm); background: var(--surface-3); color: var(--text-strong); font: inherit; font-weight: 600; cursor: pointer; }
+.toast-act:hover { border-color: var(--accent); }
 
 /* ---- E4.3 timing compare Δ ------------------------------------------------ */
 .tp-pos { color: var(--pass); }
@@ -281,10 +284,10 @@
 .v3d-info .v3d-list { margin: var(--s-2) 0; padding-left: var(--s-4); line-height: 1.7; }
 /* Cells PDK/SCL picker. */
 .cells-pick { display: flex; gap: var(--s-4); align-items: center; flex-wrap: wrap; margin-bottom: var(--s-3); }
-.cells-pick select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 8px; }
 .v3d-canvas { width: 100%; height: 480px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); cursor: grab; }
 .v3d-canvas:active { cursor: grabbing; }
 .v3d-note { font-size: var(--t-xs); margin-bottom: var(--s-2); }
+.cells-pick select { background-color: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 30px 4px 8px; }
 
 /* ---- Wizard --------------------------------------------------------------- */
 .wizard { max-width: 640px; }

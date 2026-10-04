@@ -80,7 +80,7 @@ no numbers itself.**
 |  | |
 |---|---|
 | **▸ Runs the flow for real** | Not a mock-up. Drives `librelane`, streams true per-step status over SSE, parses the real `metrics.json`. |
-| **▸ RTL IDE** | Edit Verilog with syntax highlighting; lint and simulate (Verilator / Icarus) with a built-in VCD waveform viewer. |
+| **▸ RTL IDE** | A real code editor for Verilog/SystemVerilog (completion, folding, find/replace, multi-cursor); Verilator lint as squiggles with each warning explained; one-click simulation (Icarus / Verilator) with a result in words; a waveform viewer with signal tree, cursor and marker, zoom, and jump-to-source. |
 | **▸ Verification Center** | DRC / LVS / antenna / timing roll-up by signoff stage, with an honest **3-state** verdict — it never flashes green "tape-out ready" for an incomplete run. |
 | **▸ Provenance everywhere** | Every displayed number and setting traces to the tool's own file — one click opens the raw `metrics.json` / `resolved.json` / report with the exact line highlighted. A **Final settings** preview shows what a run will send (your overrides vs your config's lines vs defaults), and Analytics' **Final settings used** lists every variable a run resolved with its source. |
 | **▸ Analytics &amp; DSE** | Metric trends, run comparison, and design-space sweeps. |
@@ -197,7 +197,7 @@ lanex --host 0.0.0.0 --allow-remote    # expose on your network (no auth — tak
 |-----|--------------|
 | **Setup** | Pick design, PDK/SCL, flow; auto-generate a config. Every constraint field shows LibreLane's default AND what your config file sets (exact line, scoped sections labelled); a **Final settings** dialog previews everything the run will send and why. |
 | **Pipeline** | Live per-step run timeline + logs + step output. |
-| **RTL IDE** | Edit / lint / simulate Verilog; VCD waveform viewer + one-click GTKWave. |
+| **RTL IDE** | Edit / lint / simulate Verilog; files or module hierarchy; VCD waveform viewer (signal tree, cursor/marker, values in the code on hover) + one-click GTKWave with the same signals. |
 | **Verification** | DRC / LVS / antenna / timing signoff verdict — every check carries a source button opening the raw tool report with the verdict line highlighted. |
 | **Analytics** | Metric trends, run comparison, cell usage. Every metric has a source button opening the run's own `metrics.json` at the exact line the number came from. **Final settings used** lists all ~400 variables the run resolved — values verbatim from `resolved.json`, each attributed to your override, your config line, or a default — filterable and CSV-exportable. |
 | **DSE** | Design-space sweeps and result viewer. |
