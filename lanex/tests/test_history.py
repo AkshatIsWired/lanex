@@ -72,7 +72,11 @@ def test_list_runs_summarises(tmp_path: Path):
     assert s["step_count"] >= 2
     assert s["steps_done"] >= 1
     assert s["key_metrics"]["timing__setup__ws"] == -1.23
-    assert s["success"] is True
+    # Step 2 began (state_in.json) and never finished: in LibreLane that is a
+    # step that raised (a checker's deferred error leaves exactly this behind
+    # while the run still completes), so the run is not a success.
+    assert s["steps_failed"] == 1
+    assert s["success"] is False
 
 
 def test_get_run_returns_state_and_metrics(tmp_path: Path):

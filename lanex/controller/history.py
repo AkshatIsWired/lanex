@@ -70,12 +70,13 @@ def _read_config(run_dir: Path) -> Dict[str, Any]:
 
 
 def _completed(run_dir: Path) -> bool:
-    """A flow that finished writes its output views to ``<run>/final/``.
+    """A flow that reached its end writes its output views to ``<run>/final/``.
 
-    LibreLane only saves ``final/`` on a clean completion (a failing step
-    raises and aborts first), so its presence is the authoritative
-    "this run finished" signal. We also accept a run-root ``state_out.json``
-    for layouts/older flows that write completion state there.
+    A step that raises an immediate error aborts before ``final/`` is saved.
+    Deferred checker errors (DRC, LVS, XOR, timing…) do NOT: LibreLane saves
+    ``final/`` and then fails the run, so ``final/`` means "reached the end",
+    not "passed" (``_success_from_metrics`` looks for the raised checkers). We
+    also accept a run-root ``state_out.json`` for older flows.
     """
     return (run_dir / "final").is_dir() or (run_dir / "state_out.json").is_file()
 
@@ -99,9 +100,10 @@ _FAIL_METRICS = (
     "design__lint_error__count",
     "synthesis__check_error__count",
     "magic__drc_error__count",
-    # The KLayout/routing DRC count is `route__drc_errors` — `klayout__drc_error__count`
-    # is NOT a real metric (verified against introspect.list_metrics()), so the old
-    # key never matched and a run with KLayout DRC violations could be marked success.
+    # KLayout.DRC writes klayout__drc_error__count (librelane/steps/klayout.py);
+    # Checker.KLayoutDRC and Checker.XOR fail the run on these by default.
+    "klayout__drc_error__count",
+    "design__xor_difference__count",
     "route__drc_errors",
     "design__lvs_error__count",
     "design__critical_disconnected_pin__count",
@@ -115,6 +117,11 @@ def _success_from_metrics(metrics: Dict[str, Any], *, run_dir: Optional[Path] = 
     # abort the flow), but we still honour explicit error counts when present.
     if run_dir is not None and not _completed(run_dir):
         return False
+    # A step dir that began (state_in.json) but never finished (no
+    # state_out.json) is a step that raised: a checker's deferred error leaves
+    # exactly this behind while final/ is still written. That run failed.
+    if run_dir is not None and _has_unfinished_step(run_dir):
+        return False
     for key in _FAIL_METRICS:
         v = metrics.get(key)
         if isinstance(v, dict):
@@ -122,23 +129,24 @@ def _success_from_metrics(metrics: Dict[str, Any], *, run_dir: Optional[Path] = 
                 return False
         elif v is not None and v:
             return False
-    # No metrics but completed -> still a success (e.g. a partial -F/-T run) —
-    # but only when every step dir actually finished (has state_out.json). A
-    # final/ dir sitting next to an aborted step means the run dir is mangled;
-    # claiming green there would let the Runs list disagree with Verify.
-    if run_dir is not None and not metrics:
-        try:
-            for entry in run_dir.iterdir():
-                if not entry.is_dir():
-                    continue
-                prefix, sep, _ = entry.name.partition("-")
-                if not prefix.isdigit() or not sep:
-                    continue
-                if (entry / "state_in.json").is_file() and not (entry / "state_out.json").is_file():
-                    return False
-        except Exception:
-            pass
+    # No metrics but completed (e.g. a partial -F/-T run) -> still a success;
+    # unfinished steps were ruled out above.
     return True if run_dir is not None else bool(metrics)
+
+
+def _has_unfinished_step(run_dir: Path) -> bool:
+    try:
+        for entry in run_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            prefix, sep, _ = entry.name.partition("-")
+            if not prefix.isdigit() or not sep:
+                continue
+            if (entry / "state_in.json").is_file() and not (entry / "state_out.json").is_file():
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def list_runs(design_dir: str | Path) -> List[Dict[str, Any]]:

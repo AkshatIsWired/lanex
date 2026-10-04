@@ -144,15 +144,21 @@ const CATALOG = {
     ],
   },
   verify: {
-    title: "Verification Center tab",
-    goal: "Review consolidated signoff reports: lint, logic equivalence, static timing analysis, DRC, LVS, and antenna checks.",
+    title: "Verify tab",
+    goal: "See whether a run passes sign-off, and if not, which check failed, why, and what to change. Every verdict is LibreLane's own, judged with that run's settings.",
     how: [
-      "Select a run from the dropdown. Stage cards display verdicts evaluated directly from that run's metrics.",
-      "Expand any card to view detailed diagnostics, download report files, or open matching logs.",
-      "A green verdict indicates that all signoff checks passed without violations for the selected run. Expand each card to review underlying reports.",
+      "Pick a run. The top banner gives the verdict; the strip of squares is every check in flow order (click one to jump to it).",
+      "Compare with picks an earlier run: checks that broke or got fixed since then are called out.",
+      "The four tiles (Timing, Design rules, Layout matches netlist, Antenna & power) open their detail sections.",
+      "In Checks, click a row to see what it checks, why it matters, what to try, the exact value (with the source file one click away), the step that checked it, and the report.",
+      "Timing shows every corner: setup and hold slack, violations, and which corners fail the run versus only warn.",
+      "DRC lists each broken rule with the PDK's description and a location in µm; Open in KLayout loads the layout with the markers.",
+      "Copy summary puts a plain-text checklist on the clipboard for an issue or a review.",
     ],
     pitfalls: [
-      "Stages marked 'No data' indicate steps omitted from the run (such as a bounded From/To execution) rather than passing checks.",
+      "Not checked is not a pass: the run stopped first, or the step isn't in this flow. Turned off means a RUN_ setting disabled it.",
+      "Warning only means LibreLane prints a warning and carries on (for example max slew, or anything whose ERROR_ON_ switch is off). Check them anyway.",
+      "LanEx is not a sign-off tool. Before fabrication, verify with the foundry's own rule decks.",
     ],
   },
   dse: {

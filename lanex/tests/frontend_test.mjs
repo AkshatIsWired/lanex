@@ -1017,6 +1017,55 @@ check("analytics: steps get a stage label and running metrics", () => {
   assert.equal(AM.stepName({ id: "OpenROAD.ResizerTimingPostCTS" }), "Resizer timing post CTS");
 });
 
+// ---------- Verify tab (verify-model.js) -------------------------------------------
+const VM = await import(toUrl(resolve(MOD, "verify-model.js")));
+
+check("verify: worst status lets nothing that failed hide", () => {
+  assert.equal(VM.worstStatus([{ status: "pass" }, { status: "warn" }, { status: "fail" }]), "fail");
+  assert.equal(VM.worstStatus([{ status: "pass" }, { status: "warn" }]), "warn");
+  assert.equal(VM.worstStatus([{ status: "pass" }, { status: "info" }]), "pass");
+});
+
+check("verify: a stage with unrun checks is never plain 'pass'", () => {
+  assert.equal(VM.worstStatus([{ status: "pass" }, { status: "not_run" }]), "partial");
+  assert.equal(VM.worstStatus([{ status: "not_run" }]), "not_run");
+  assert.equal(VM.worstStatus([]), "not_run");
+});
+
+check("verify: status diff finds new problems and fixes vs. the baseline", () => {
+  const cur = { checks: [{ id: "lvs", status: "fail", value: 2 }, { id: "setup", status: "pass", value: 0 }, { id: "slew", status: "warn", value: 3 }] };
+  const base = { checks: [{ id: "lvs", status: "pass", value: 0 }, { id: "setup", status: "fail", value: 4 }, { id: "slew", status: "warn", value: 1 }] };
+  const d = VM.statusDiff(cur, base);
+  assert.deepEqual(d.regressed.map((c) => c.id), ["lvs"]);
+  assert.deepEqual(d.fixed.map((c) => c.id), ["setup"]);
+  assert.ok(d.changed.has("slew"), "a moved value is a change even when the state is the same");
+  assert.equal(VM.statusDiff(cur, null).regressed.length, 0);
+});
+
+check("verify: corner order is nom, min, max RC then tt, ss, ff", () => {
+  const names = ["max_ff_n40C_1v95", "nom_ss_100C_1v60", "min_tt_025C_1v80", "nom_tt_025C_1v80"];
+  assert.deepEqual([...names].sort((a, b) => VM.cornerSortKey(a) - VM.cornerSortKey(b)),
+    ["nom_tt_025C_1v80", "nom_ss_100C_1v60", "min_tt_025C_1v80", "max_ff_n40C_1v95"]);
+});
+
+check("verify: every check id has a one-line description and help", () => {
+  const ids = ["lint_errors", "lint_timing_constructs", "lint_warnings", "unmapped", "synth_check", "assign", "latch", "eqy",
+    "pdn", "route_drc", "disc_pin", "wire_length", "antenna", "setup", "hold", "slew", "cap", "fanout",
+    "xor", "magic_drc", "klayout_drc", "overlap", "lvs"];
+  for (const id of ids) {
+    assert.ok(VM.SHORT[id], "no short text for " + id);
+    assert.ok(VM.HELP[id] && VM.HELP[id].what && VM.HELP[id].fix.length, "no help for " + id);
+  }
+});
+
+check("analytics: check strip takes Verify's LibreLane-exact statuses", () => {
+  const checks = [{ label: "Max slew", status: "fail" }, { label: "LVS", status: "pass" }, { label: "Lint", status: "pass" }];
+  const rep = { checks: [{ id: "slew", status: "warn" }, { id: "lvs", status: "not_run" }] };
+  const out = AM.withSignoff(checks, rep);
+  assert.deepEqual(out.map((c) => c.status), ["warn", "absent", "pass"]);
+  assert.equal(AM.withSignoff(checks, null), checks);
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

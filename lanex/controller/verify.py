@@ -11,252 +11,1189 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Verification Center (Phase 1) — surface the signoff the flow already ran.
+"""Verification Center: the signoff checks a LibreLane run already made.
 
-The ``Classic`` flow runs the full signoff suite on every RTL→GDS run (lint →
-EQY → STA → DRC/LVS/antenna/XOR). This module **reads the artifacts that run
-already wrote** and organizes them by stage with a single tape-out verdict. It
-re-runs nothing and adds no dependency — pure stdlib + the existing
-``history``/``reports`` controllers.
+Every check here is one of LibreLane's own ``Checker.*`` steps (or, where
+LibreLane has no checker, a metric its manufacturability report or STA
+writes), judged the way LibreLane judges it:
+
+* the same metric and threshold as the checker class (``steps/checker.py``),
+* the same ``ERROR_ON_*`` switch deciding error vs. warning, read from the
+  run's ``resolved.json`` (LibreLane's defaults when a key is absent),
+* the same corner wildcards for setup/hold/slew/cap (``TIMING_VIOLATION_CORNERS``
+  and friends, matched with ``fnmatch`` like ``librelane.common.Filter``),
+* the same ``RUN_*`` gates that skip a step in the Classic flow.
+
+The checker step's own outcome is read too: a checker dir with
+``state_out.json`` finished; one with only ``state_in.json`` raised (a deferred
+error, or the flow stopped there). If that disagrees with the metric, the
+step's outcome wins and the disagreement is reported, never hidden.
+
+Nothing is re-run. The report files each tool wrote (KLayout/Magic report
+databases, the Netgen JSON, the XOR database, the antenna and IR-drop
+reports) are summarised so the page can show *which* rule failed and where.
+Pure stdlib.
 """
 from __future__ import annotations
 
+import fnmatch
+import json
 import math
+import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from . import history
 
-# Stages that must have produced data before a run can be called tape-out ready.
-# If either is ``absent`` the run did not reach signoff → the verdict is
-# ``incomplete`` (never a green "ready"), not silently ready.
-_GATING_STAGES = ("timing", "physical")
+_PASS, _FAIL, _WARN, _INFO = "pass", "fail", "warn", "info"
+_SKIPPED, _NOT_RUN = "skipped", "not_run"
+# Kept for callers of the old API: "absent" meant "no data".
+_ABSENT = "absent"
+
+# LibreLane 3 defaults for the switches a run's resolved.json may omit
+# (steps/checker.py and flows/classic.py).
+_DEFAULTS: Dict[str, Any] = {
+    "ERROR_ON_LINTER_ERRORS": True,
+    "ERROR_ON_LINTER_WARNINGS": False,
+    "ERROR_ON_LINTER_TIMING_CONSTRUCTS": True,
+    "ERROR_ON_UNMAPPED_CELLS": True,
+    "ERROR_ON_SYNTH_CHECKS": True,
+    "ERROR_ON_NL_ASSIGN_STATEMENTS": True,
+    "ERROR_ON_PDN_VIOLATIONS": True,
+    "ERROR_ON_TR_DRC": True,
+    "ERROR_ON_DISCONNECTED_PINS": True,
+    "ERROR_ON_LONG_WIRE": True,
+    "ERROR_ON_XOR_ERROR": True,
+    "ERROR_ON_MAGIC_DRC": True,
+    "ERROR_ON_KLAYOUT_DRC": True,
+    "ERROR_ON_ILLEGAL_OVERLAPS": True,
+    "ERROR_ON_LVS_ERROR": True,
+    "ERROR_ON_KLAYOUT_DENSITY": True,
+    "ERROR_ON_KLAYOUT_ANTENNA": True,
+    "RUN_LINTER": True,
+    "RUN_EQY": False,
+    "RUN_DRT": True,
+    "RUN_MCSTA": True,
+    "RUN_IRDROP_REPORT": True,
+    "RUN_LVS": True,
+    "RUN_MAGIC_STREAMOUT": True,
+    "RUN_KLAYOUT_STREAMOUT": True,
+    "RUN_KLAYOUT_XOR": True,
+    "RUN_MAGIC_DRC": True,
+    "RUN_KLAYOUT_DRC": True,
+    "RUN_ANTENNA_REPAIR": True,
+    "HOLD_VIOLATION_CORNERS": ["*"],
+    "MAX_SLEW_VIOLATION_CORNERS": [""],
+    "MAX_CAP_VIOLATION_CORNERS": [""],
+}
+
+# Report-database summaries are capped so a run with a million markers
+# cannot stall the request; counts stay exact, samples are truncated.
+_MAX_CATEGORIES = 60
+_MAX_SAMPLES = 6
 
 
-# Status values a check can carry.
-_PASS, _FAIL, _WARN, _ABSENT = "pass", "fail", "warn", "absent"
-
-
+# ---------------------------------------------------------------- small helpers
 def _num(v: Any) -> Optional[float]:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
     return float(v)
 
 
-def _check(cid: str, name: str, status: str, *, metric_keys: Optional[List[str]] = None,
-           values: Optional[Dict[str, Any]] = None, detail: str = "",
-           step_id: Optional[str] = None) -> Dict[str, Any]:
-    return {
-        "id": cid,
-        "name": name,
-        "status": status,
-        "metric_keys": metric_keys or [],
-        "values": values or {},
-        "detail": detail,
-        "step_id": step_id,
-    }
+def _finite(v: Any) -> Optional[float]:
+    n = _num(v)
+    return n if n is not None and math.isfinite(n) else None
 
 
-def _count_status(metrics: Dict[str, Any], key: str) -> str:
-    """pass if count==0, fail if >0, absent if the metric isn't present.
-
-    A non-finite count (NaN/inf) is not a real count → ``absent`` (never coerced
-    into a pass/fail), so a garbage value can't read as "0 violations".
-    """
-    v = _num(metrics.get(key))
-    if v is None or not math.isfinite(v):
-        return _ABSENT
-    return _PASS if v == 0 else _FAIL
-
-
-def _stage_status(checks: List[Dict[str, Any]]) -> str:
-    statuses = [c["status"] for c in checks]
-    if _FAIL in statuses:
-        return _FAIL
-    present = [s for s in statuses if s != _ABSENT]
-    if not present:
-        return _ABSENT
-    if _WARN in statuses:
-        return _WARN
-    return _PASS
-
-
-def _rtl_stage(metrics: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
-    checks: List[Dict[str, Any]] = []
-    err = _num(metrics.get("design__lint_error__count"))
-    warn = _num(metrics.get("design__lint_warning__count"))
-    tc = _num(metrics.get("design__lint_timing_construct__count"))
-    if err is not None:
-        checks.append(_check("lint_errors", "Lint errors", _PASS if err == 0 else _FAIL,
-                             metric_keys=["design__lint_error__count"],
-                             values={"design__lint_error__count": err}, step_id="Verilator.Lint"))
-    if warn is not None:
-        checks.append(_check("lint_warnings", "Lint warnings", _PASS if warn == 0 else _WARN,
-                             metric_keys=["design__lint_warning__count"],
-                             values={"design__lint_warning__count": warn}, step_id="Verilator.Lint"))
-    if tc is not None:
-        checks.append(_check("lint_timing_constructs", "Timing constructs in RTL",
-                             _PASS if tc == 0 else _WARN,
-                             metric_keys=["design__lint_timing_construct__count"],
-                             values={"design__lint_timing_construct__count": tc},
-                             step_id="Verilator.Lint"))
-    return {"status": _stage_status(checks), "checks": checks}
-
-
-def _synth_stage(metrics: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
-    checks: List[Dict[str, Any]] = []
-    # EQY equivalence: a completed step dir is the verdict (no failure metric).
-    eqy_dir = _find_step_dir(run_dir, "Yosys.EQY")
-    if eqy_dir is not None:
-        ok = (eqy_dir / "state_out.json").is_file()
-        checks.append(_check("eqy", "RTL ↔ netlist equivalence (formal)",
-                             _PASS if ok else _FAIL, step_id="Yosys.EQY",
-                             detail="Yosys EQY proves the gate netlist matches the RTL."))
-    for key, name, cid in (
-        ("design__instance_unmapped__count", "Unmapped cells", "unmapped"),
-        ("synthesis__check_error__count", "Synthesis check errors", "synth_check"),
-        ("design__inferred_latch__count", "Inferred latches", "latch"),
-    ):
-        st = _count_status(metrics, key)
-        if st != _ABSENT:
-            # latches/unmapped are warnings unless they're errors that gate.
-            status = st
-            if cid in ("latch",) and st == _FAIL:
-                status = _WARN
-            checks.append(_check(cid, name, status, metric_keys=[key],
-                                 values={key: metrics.get(key)}))
-    cell_count = _num(metrics.get("design__instance__count"))
-    if cell_count is not None:
-        checks.append(_check("cell_count", "Cell count", _PASS,
-                             metric_keys=["design__instance__count"],
-                             values={"design__instance__count": cell_count}))
-    return {"status": _stage_status(checks), "checks": checks}
-
-
-def _timing_stage(metrics: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
-    checks: List[Dict[str, Any]] = []
-
-    def slack(cid: str, name: str, key: str) -> None:
-        v = _num(metrics.get(key))
-        # NaN slack = no value → omit (the stage reports it as absent), never a
-        # false "fail". +inf slack = no constraining path → met (pass).
-        if v is None or math.isnan(v):
-            return
-        status = _PASS if v >= 0 else _FAIL
-        checks.append(_check(cid, name, status, metric_keys=[key], values={key: metrics.get(key)}))
-
-    slack("setup_ws", "Worst setup slack", "timing__setup__ws")
-    slack("setup_tns", "Total setup slack", "timing__setup__tns")
-    slack("hold_ws", "Worst hold slack", "timing__hold__ws")
-    slack("hold_tns", "Total hold slack", "timing__hold__tns")
-
-    for key, name, cid in (
-        ("timing__setup_vio__count", "Setup violations", "setup_vio"),
-        ("timing__hold_vio__count", "Hold violations", "hold_vio"),
-        ("design__max_slew_violation__count", "Max-slew violations", "slew_vio"),
-        ("design__max_cap_violation__count", "Max-cap violations", "cap_vio"),
-    ):
-        st = _count_status(metrics, key)
-        if st != _ABSENT:
-            checks.append(_check(cid, name, st, metric_keys=[key], values={key: metrics.get(key)}))
-    return {"status": _stage_status(checks), "checks": checks}
-
-
-def _physical_stage(metrics: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
-    checks: List[Dict[str, Any]] = []
-    for key, name, cid, step in (
-        ("magic__drc_error__count", "Magic DRC", "magic_drc", "Magic.DRC"),
-        ("route__drc_errors", "Routing DRC", "route_drc", "OpenROAD.DetailedRouting"),
-        ("klayout__drc_error__count", "KLayout DRC", "klayout_drc", "KLayout.DRC"),
-        ("design__lvs_error__count", "LVS", "lvs", "Netgen.LVS"),
-        ("design__disconnected_pin__count", "Disconnected pins", "disc_pin", None),
-        ("design__xor_difference__count", "Mask XOR", "xor", "KLayout.XOR"),
-    ):
-        st = _count_status(metrics, key)
-        if st != _ABSENT:
-            checks.append(_check(cid, name, st, metric_keys=[key],
-                                 values={key: metrics.get(key)}, step_id=step))
-    # Antenna: violations may be repaired; non-zero remaining is a warn/fail.
-    ant = _num(metrics.get("route__antenna_violation__count"))
-    if ant is not None:
-        checks.append(_check("antenna", "Antenna violations", _PASS if ant == 0 else _FAIL,
-                             metric_keys=["route__antenna_violation__count"],
-                             values={"route__antenna_violation__count": ant},
-                             step_id="OpenROAD.CheckAntennas"))
-    return {"status": _stage_status(checks), "checks": checks}
-
-
-def _manufacturability_stage(metrics: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
-    checks: List[Dict[str, Any]] = []
-    step = _find_step_dir(run_dir, "Misc.ReportManufacturability")
-    if step is not None:
-        checks.append(_check("manufacturability", "Manufacturability report",
-                             _PASS if (step / "state_out.json").is_file() else _WARN,
-                             step_id="Misc.ReportManufacturability",
-                             detail="See the step report for density/manufacturability notes."))
-    return {"status": _stage_status(checks), "checks": checks}
-
-
-def _find_step_dir(run_dir: Path, step_id: str) -> Optional[Path]:
-    want = step_id.lower().replace(".", "-")
+def _read_json(p: Path) -> Any:
     try:
-        for e in sorted(run_dir.iterdir(), key=lambda d: d.name):
-            if e.is_dir() and history._is_step_dir(e.name):
-                suffix = "-".join(e.name.split("-")[1:])
-                if suffix.lower() == want:
-                    return e
+        return json.loads(p.read_text(encoding="utf-8", errors="replace"))
     except Exception:
-        pass
+        return None
+
+
+def _rel(run: Path, p: Optional[Path]) -> Optional[str]:
+    if p is None:
+        return None
+    try:
+        return p.relative_to(run).as_posix()
+    except Exception:
+        return None
+
+
+def _corner_of(key: str) -> Optional[str]:
+    """``…__corner:nom_tt_025C_1v80`` -> ``nom_tt_025C_1v80`` (METRICS2.1)."""
+    parts = key.split("__")
+    while parts and ":" in parts[-1]:
+        k, v = parts.pop().split(":", 1)
+        if k == "corner":
+            return v
     return None
 
 
-def _verdict(stages: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    """Roll the per-check statuses up into a single tape-out verdict.
+def _by_corner(metrics: Dict[str, Any], base: str) -> Dict[str, Any]:
+    pre = base + "__corner:"
+    return {k[len(pre):]: v for k, v in metrics.items() if k.startswith(pre)}
 
-    Three outcomes, never two: ``ready`` (green) requires no failing check AND the
-    gating signoff stages (timing, physical) to be PRESENT; if a gating stage has
-    no data the run hasn't reached signoff → ``incomplete`` (neutral), which is NOT
-    ready. A failing check → not ready (and not incomplete). This is what stops an
-    empty/partial/corrupt run from reading as "Tape-out ready".
-    """
-    blockers: List[str] = []
-    warnings: List[str] = []
-    for stage in stages.values():
-        for c in stage["checks"]:
-            if c["status"] == _FAIL:
-                blockers.append(c["name"])
-            elif c["status"] == _WARN:
-                warnings.append(c["name"])
-    missing = [s for s in _GATING_STAGES if stages.get(s, {}).get("status") == _ABSENT]
-    incomplete = bool(missing)
+
+def _by_mod(metrics: Dict[str, Any], base: str, mod: str) -> Dict[str, Any]:
+    pre = base + "__" + mod + ":"
+    return {k[len(pre):]: v for k, v in metrics.items() if k.startswith(pre)}
+
+
+class _Run:
+    """One run directory: config, metrics and its step dirs, read once."""
+
+    def __init__(self, run_dir: Path):
+        self.dir = run_dir
+        self.cfg = history._read_config(run_dir)
+        self.has_cfg = bool(self.cfg)
+        self.metrics = history._load_metrics(run_dir)
+        self.completed = history._completed(run_dir)
+        ids = history._step_ids_from_flow_log(run_dir)
+        steps: List[Dict[str, Any]] = []
+        try:
+            entries = [e for e in run_dir.iterdir() if e.is_dir() and history._is_step_dir(e.name)]
+        except Exception:
+            entries = []
+        for e in sorted(entries, key=lambda d: int(d.name.split("-", 1)[0])):
+            if (e / "state_out.json").is_file():
+                status = "done"
+            elif (e / "state_in.json").is_file():
+                status = "stopped"
+            else:
+                status = "unknown"
+            steps.append({"n": int(e.name.split("-", 1)[0]), "dir": e.name,
+                          "id": ids.get(e.name), "status": status, "path": e})
+        self.steps = steps
+        # A run that stopped has no final/metrics.json, but every finished
+        # step saved the metrics as of that point: use the last one, and say so.
+        self.metrics_from: Optional[Dict[str, Any]] = None
+        if not self.metrics:
+            for st in reversed(steps):
+                if st["status"] != "done":
+                    continue
+                doc = _read_json(st["path"] / "state_out.json")
+                if isinstance(doc, dict) and isinstance(doc.get("metrics"), dict) and doc["metrics"]:
+                    self.metrics = doc["metrics"]
+                    self.metrics_from = {"n": st["n"], "dir": st["dir"], "id": st["id"]}
+                    break
+        gui = _read_json(run_dir / "gui-run.json")
+        self.gui = gui if isinstance(gui, dict) else {}
+
+    def conf(self, name: str) -> Any:
+        if name in self.cfg:
+            return self.cfg[name]
+        return _DEFAULTS.get(name)
+
+    def step(self, step_id: str) -> Optional[Dict[str, Any]]:
+        """The LAST dir of a step (a re-run appends a new one)."""
+        want = step_id.lower().replace(".", "-")
+        hit = None
+        for s in self.steps:
+            if s["id"]:
+                # flow.log names a repeated step "<Id>-1", "<Id>-2"…
+                if s["id"] == step_id or re.sub(r"-\d+$", "", s["id"]) == step_id:
+                    hit = s
+                continue
+            suffix = s["dir"].split("-", 1)[1] if "-" in s["dir"] else ""
+            # A repeated step gets "-1", "-2"… appended to its dir name.
+            base = re.sub(r"-\d+$", "", suffix)
+            if suffix.lower() == want or base.lower() == want:
+                hit = s
+        return hit
+
+    def file(self, step_id: str, *globs: str) -> Optional[Path]:
+        s = self.step(step_id)
+        if s is None:
+            return None
+        for g in globs:
+            hits = sorted(p for p in s["path"].glob(g) if p.is_file())
+            if hits:
+                return hits[0]
+        return None
+
+
+# ---------------------------------------------------------------- check records
+def _rec(cid: str, group: str, name: str, **kw: Any) -> Dict[str, Any]:
+    r = {
+        "id": cid, "group": group, "name": name,
+        "status": _NOT_RUN,
+        # blocks: an error stops LibreLane (or fails its manufacturability
+        # report); warns: LibreLane only warns; info: LibreLane does not check it.
+        "gate": "blocks",
+        "gate_note": "",
+        "value": None, "unit": "", "limit": "",
+        "metric": None, "metric_keys": [], "values": {},
+        "checker": None, "tool": None, "rerun": None,
+        "reports": [], "corners": [], "breakdown": [],
+        "note": "", "detail": "",
+        "step_id": None,
+    }
+    r.update(kw)
+    return r
+
+
+def _step_ref(run: _Run, step_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not step_id:
+        return None
+    s = run.step(step_id)
+    if s is None:
+        return {"id": step_id, "dir": None, "n": None, "status": "absent"}
+    return {"id": step_id, "dir": s["dir"], "n": s["n"], "status": s["status"]}
+
+
+def _gated(run: _Run, gates: Iterable[str]) -> Optional[str]:
+    for g in gates:
+        if run.has_cfg and run.conf(g) is False:
+            return g
+    return None
+
+
+def _no_data_reason(run: _Run, checker_ref: Optional[Dict[str, Any]],
+                    tool_ref: Optional[Dict[str, Any]]) -> str:
+    stopped = next((s for s in run.steps if s["status"] == "stopped"), None)
+    if not run.completed and stopped is not None:
+        return (f"Not reached: the flow stopped at step {stopped['n']} "
+                f"({stopped['id'] or stopped['dir']}) before this check.")
+    if tool_ref and tool_ref.get("status") == "absent" and checker_ref and checker_ref.get("status") == "absent":
+        return "This flow did not run the step that produces this check."
+    return "No value recorded in this run's metrics."
+
+
+def _apply_checker_outcome(rec: Dict[str, Any], exceeded: bool, error_on: bool) -> None:
+    """Fold the checker step's real outcome into the record."""
+    ck = rec.get("checker")
+    if not ck or ck.get("status") == "absent":
+        return
+    if ck["status"] == "done":
+        ck["outcome"] = "warned" if (exceeded and not error_on) else "passed"
+        if exceeded and error_on:
+            # The checker saw a clean value; the metric changed after (re-run).
+            rec["note"] = ("LibreLane's checker passed when it ran, but the value has changed since "
+                           "(a step was probably re-run afterwards). Re-run the flow to confirm.")
+    elif ck["status"] == "stopped":
+        ck["outcome"] = "raised"
+        if rec["status"] in (_PASS, _WARN, _INFO):
+            rec["status"] = _FAIL
+            rec["gate"] = "blocks"
+            rec["note"] = ("LibreLane's checker stopped with an error in this run even though the value "
+                           "now reads clean (a step was probably re-run afterwards). Re-run the flow to confirm.")
+
+
+def _metric_checker(run: _Run, rec: Dict[str, Any], *, metric: str, error_var: Optional[str],
+                    checker: str, tool: Optional[str], gates: Iterable[str] = (),
+                    threshold: float = 0.0, always_error: bool = False,
+                    rerun: bool = True) -> Dict[str, Any]:
+    """LibreLane's MetricChecker: value > threshold -> error (or a warning when
+    the ``ERROR_ON_*`` switch is off). Missing metric -> the checker warns and
+    passes; here it is "no data"."""
+    rec["metric"] = metric
+    rec["metric_keys"] = [metric]
+    rec["checker"] = _step_ref(run, checker)
+    rec["tool"] = _step_ref(run, tool)
+    rec["step_id"] = tool or checker
+    # Only steps whose re-run stands alone are offered (a lone synthesis
+    # re-run would leave every later step stale).
+    rec["rerun"] = tool if rerun else None
+    error_on = True if always_error else bool(run.conf(error_var)) if error_var else True
+    rec["limit"] = "0" if threshold == 0 else f"≤ {threshold:g}"
+    if error_var:
+        rec["gate_note"] = f"{error_var} = {'true' if error_on else 'false'}"
+    elif always_error:
+        rec["gate_note"] = "always an error in LibreLane"
+    g = _gated(run, gates)
+    v = run.metrics.get(metric)
+    n = _num(v)
+    if v is not None:
+        rec["values"] = {metric: v}
+        rec["value"] = v
+    if g:
+        rec["status"] = _SKIPPED
+        rec["detail"] = f"Turned off for this run ({g} = false)."
+        return rec
+    if n is None or not math.isfinite(n):
+        rec["status"] = _NOT_RUN
+        rec["detail"] = _no_data_reason(run, rec["checker"], rec["tool"])
+        ck = rec["checker"]
+        if ck and ck.get("status") == "stopped":
+            ck["outcome"] = "raised"
+            rec["status"] = _FAIL
+            rec["detail"] = "LibreLane's checker stopped with an error."
+        return rec
+    exceeded = n > threshold
+    if not exceeded:
+        rec["status"] = _PASS
+    elif error_on:
+        rec["status"] = _FAIL
+    else:
+        rec["status"] = _WARN
+        rec["gate"] = "warns"
+    _apply_checker_outcome(rec, exceeded, error_on)
+    return rec
+
+
+def _corner_rule(run: _Run, specific: str) -> Tuple[Optional[List[str]], str]:
+    """The wildcards a TimingViolations checker errors on, and the variable
+    they came from (``SETUP_VIOLATION_CORNERS`` falls back to
+    ``TIMING_VIOLATION_CORNERS``)."""
+    w = run.cfg.get(specific) if specific in run.cfg else _DEFAULTS.get(specific)
+    src = specific
+    if not w:
+        w = run.cfg.get("TIMING_VIOLATION_CORNERS")
+        src = "TIMING_VIOLATION_CORNERS"
+    if w is None:
+        return None, src
+    return [x for x in w if x != ""], src
+
+
+def _timing_checker(run: _Run, rec: Dict[str, Any], *, base: str, specific_var: str,
+                    checker: str, what: str) -> Dict[str, Any]:
+    """LibreLane's TimingViolations: a violation count per corner; corners
+    matching the wildcards are errors, the rest only warnings."""
+    rec["metric"] = base
+    rec["checker"] = _step_ref(run, checker)
+    rec["tool"] = _step_ref(run, "OpenROAD.STAPostPNR")
+    rec["step_id"] = "OpenROAD.STAPostPNR"
+    rec["rerun"] = "OpenROAD.STAPostPNR"
+    rec["limit"] = "0"
+    per = {c: _finite(v) for c, v in _by_corner(run.metrics, base).items()}
+    wild, src = _corner_rule(run, specific_var)
+    rec["corner_var"] = src
+    rec["corner_wildcards"] = wild
+    total = run.metrics.get(base)
+    if total is not None:
+        rec["values"] = {base: total}
+        rec["value"] = total
+    rec["metric_keys"] = [base] + [base + "__corner:" + c for c in sorted(per)]
+    if wild is None:
+        rec["gate_note"] = "corner rule unknown: every corner treated as blocking"
+    elif not wild:
+        rec["gate_note"] = f"{src} matches no corner, so LibreLane only warns"
+    else:
+        rec["gate_note"] = f"{src} = {', '.join(wild)}"
+
+    if not per:
+        n = _finite(total)
+        if n is None:
+            rec["status"] = _NOT_RUN
+            rec["detail"] = _no_data_reason(run, rec["checker"], rec["tool"])
+            ck = rec["checker"]
+            if ck and ck.get("status") == "stopped":
+                ck["outcome"] = "raised"
+                rec["status"] = _FAIL
+            return rec
+        # Only the all-corner total exists (older or imported runs): the
+        # corner split is unknown, so judge conservatively.
+        blocking = wild is None or bool(wild)
+        rec["status"] = _PASS if n == 0 else (_FAIL if blocking else _WARN)
+        if n and not blocking:
+            rec["gate"] = "warns"
+        rec["note"] = "This run recorded only the all-corner total, not each corner."
+        _apply_checker_outcome(rec, n > 0, blocking)
+        return rec
+
+    unmatched: List[str] = []
+    if wild:
+        for w in wild:
+            if not any(fnmatch.fnmatchcase(c, w) for c in per):
+                unmatched.append(w)
+    err_corners, warn_corners = [], []
+    for c, v in sorted(per.items()):
+        gating = True if wild is None else any(fnmatch.fnmatchcase(c, w) for w in wild)
+        rec["corners"].append({"corner": c, "value": v, "gating": gating})
+        if v is not None and v > 0:
+            (err_corners if gating else warn_corners).append(c)
+    if err_corners or unmatched:
+        rec["status"] = _FAIL
+    elif warn_corners:
+        rec["status"] = _WARN
+        rec["gate"] = "warns"
+    else:
+        rec["status"] = _PASS
+    if unmatched:
+        rec["detail"] = (f"{src} has wildcards that match no analysed corner ({', '.join(unmatched)}); "
+                         "LibreLane raises an error for that.")
+    elif err_corners:
+        rec["detail"] = f"{what} in blocking corners: {', '.join(err_corners)}."
+    elif warn_corners:
+        rec["detail"] = (f"{what} only in corners LibreLane warns about: {', '.join(warn_corners)}.")
+    _apply_checker_outcome(rec, bool(err_corners or warn_corners), bool(err_corners or unmatched))
+    return rec
+
+
+def _worst(run: _Run, base: str) -> Optional[float]:
+    return _num(run.metrics.get(base))
+
+
+# ---------------------------------------------------------------- the checks
+def _checks(run: _Run) -> List[Dict[str, Any]]:
+    m = run.metrics
+    out: List[Dict[str, Any]] = []
+
+    # --- RTL lint (Verilator) ------------------------------------------------
+    out.append(_metric_checker(run, _rec("lint_errors", "rtl", "Lint errors"),
+               metric="design__lint_error__count", error_var="ERROR_ON_LINTER_ERRORS",
+               checker="Checker.LintErrors", tool="Verilator.Lint", gates=["RUN_LINTER"]))
+    out.append(_metric_checker(run, _rec("lint_timing_constructs", "rtl", "Timing constructs in RTL"),
+               metric="design__lint_timing_construct__count", error_var=None, always_error=True,
+               checker="Checker.LintTimingConstructs", tool="Verilator.Lint", gates=["RUN_LINTER"]))
+    out.append(_metric_checker(run, _rec("lint_warnings", "rtl", "Lint warnings"),
+               metric="design__lint_warning__count", error_var="ERROR_ON_LINTER_WARNINGS",
+               checker="Checker.LintWarnings", tool="Verilator.Lint", gates=["RUN_LINTER"]))
+
+    # --- Synthesis -----------------------------------------------------------
+    out.append(_metric_checker(run, _rec("unmapped", "synth", "Unmapped cells"),
+               metric="design__instance_unmapped__count", error_var="ERROR_ON_UNMAPPED_CELLS",
+               checker="Checker.YosysUnmappedCells", tool="Yosys.Synthesis", rerun=False))
+    out.append(_metric_checker(run, _rec("synth_check", "synth", "Synthesis check errors"),
+               metric="synthesis__check_error__count", error_var="ERROR_ON_SYNTH_CHECKS",
+               checker="Checker.YosysSynthChecks", tool="Yosys.Synthesis", rerun=False))
+    # Assign statements: the checker scans the netlist text; no metric.
+    rec = _rec("assign", "synth", "Assign statements in netlist", limit="",
+               checker=_step_ref(run, "Checker.NetlistAssignStatements"),
+               tool=_step_ref(run, "Yosys.Synthesis"), step_id="Checker.NetlistAssignStatements")
+    err = bool(run.conf("ERROR_ON_NL_ASSIGN_STATEMENTS"))
+    rec["gate_note"] = f"ERROR_ON_NL_ASSIGN_STATEMENTS = {'true' if err else 'false'}"
+    ck = rec["checker"]
+    if ck["status"] == "done":
+        rec["status"] = _PASS
+        ck["outcome"] = "passed"
+        rec["value"] = "none" if err else None
+        if not err:
+            rec["detail"] = "The checker only warns in this run; any assign lines are listed in warning.log."
+    elif ck["status"] == "stopped":
+        rec["status"] = _FAIL
+        ck["outcome"] = "raised"
+        rec["value"] = "found"
+    else:
+        rec["detail"] = _no_data_reason(run, ck, rec["tool"])
+    out.append(rec)
+    # Latches: LibreLane has no checker; Yosys reports the count.
+    rec = _rec("latch", "synth", "Inferred latches", gate="info", metric="design__inferred_latch__count",
+               metric_keys=["design__inferred_latch__count"], limit="0 expected",
+               gate_note="LibreLane does not stop on latches", tool=_step_ref(run, "Yosys.Synthesis"),
+               rerun=None, step_id="Yosys.Synthesis")
+    v = _finite(m.get("design__inferred_latch__count"))
+    if v is None:
+        rec["detail"] = _no_data_reason(run, None, rec["tool"])
+    else:
+        rec["value"] = m.get("design__inferred_latch__count")
+        rec["values"] = {"design__inferred_latch__count": rec["value"]}
+        rec["status"] = _PASS if v == 0 else _WARN
+    out.append(rec)
+    # Formal equivalence (off by default in Classic).
+    rec = _rec("eqy", "synth", "RTL ↔ netlist equivalence (formal)", limit="proven",
+               tool=_step_ref(run, "Yosys.EQY"), rerun="Yosys.EQY", step_id="Yosys.EQY")
+    t = rec["tool"]
+    if _gated(run, ["RUN_EQY"]) and t["status"] == "absent":
+        rec["status"] = _SKIPPED
+        rec["gate"] = "info"
+        rec["gate_note"] = "RUN_EQY = false (LibreLane's default)"
+        rec["detail"] = "Formal equivalence is off by default. Set RUN_EQY to true to prove the netlist matches the RTL."
+    elif t["status"] == "done":
+        rec["status"] = _PASS
+        rec["value"] = "equivalent"
+    elif t["status"] == "stopped":
+        rec["status"] = _FAIL
+        rec["value"] = "not proven"
+    else:
+        rec["gate"] = "info"
+        rec["detail"] = _no_data_reason(run, None, t)
+    out.append(rec)
+
+    # --- Floorplan & power grid -----------------------------------------------
+    rec = _metric_checker(run, _rec("pdn", "pnr", "Power-grid connections"),
+                          metric="design__power_grid_violation__count", error_var="ERROR_ON_PDN_VIOLATIONS",
+                          checker="Checker.PowerGridViolations", tool="OpenROAD.GeneratePDN")
+    rec["rerun"] = None
+    rec["breakdown"] = [{"label": "net " + k, "metric": "design__power_grid_violation__count__net:" + k, "value": v}
+                        for k, v in sorted(_by_mod(m, "design__power_grid_violation__count", "net").items())]
+    out.append(rec)
+
+    # --- Routing ---------------------------------------------------------------
+    rec = _metric_checker(run, _rec("route_drc", "pnr", "Routing DRC"),
+                          metric="route__drc_errors", error_var="ERROR_ON_TR_DRC",
+                          checker="Checker.TrDRC", tool="OpenROAD.DetailedRouting", gates=["RUN_DRT"])
+    rec["rerun"] = None  # re-routing in place is a full re-run of routing onward
+    iters = sorted(((int(k), v) for k, v in _by_mod(m, "route__drc_errors", "iter").items() if k.isdigit()))
+    rec["breakdown"] = [{"label": f"iteration {i}", "metric": f"route__drc_errors__iter:{i}", "value": v} for i, v in iters]
+    out.append(rec)
+    rec = _metric_checker(run, _rec("disc_pin", "pnr", "Disconnected pins"),
+                          metric="design__critical_disconnected_pin__count", error_var="ERROR_ON_DISCONNECTED_PINS",
+                          checker="Checker.DisconnectedPins", tool="Odb.ReportDisconnectedPins")
+    rec["rerun"] = None
+    allp = m.get("design__disconnected_pin__count")
+    if allp is not None:
+        rec["breakdown"] = [
+            {"label": "critical (checked)", "metric": "design__critical_disconnected_pin__count",
+             "value": m.get("design__critical_disconnected_pin__count")},
+            {"label": "all, including harmless ones", "metric": "design__disconnected_pin__count", "value": allp},
+        ]
+    out.append(rec)
+    # Wire length: the threshold comes from the PDK; None -> checker skips.
+    thr = _num(run.conf("WIRE_LENGTH_THRESHOLD"))
+    rec = _rec("wire_length", "pnr", "Longest wire")
+    if thr is None:
+        rec.update(status=_INFO if m.get("route__wirelength__max") is not None else _NOT_RUN, gate="info",
+                   metric="route__wirelength__max", metric_keys=["route__wirelength__max"],
+                   value=m.get("route__wirelength__max"), unit="µm", limit="no limit set",
+                   values={"route__wirelength__max": m.get("route__wirelength__max")}
+                   if m.get("route__wirelength__max") is not None else {},
+                   checker=_step_ref(run, "Checker.WireLength"), tool=_step_ref(run, "Odb.ReportWireLength"),
+                   gate_note="WIRE_LENGTH_THRESHOLD is not set, so LibreLane skips this check",
+                   step_id="Odb.ReportWireLength")
+        if rec["checker"].get("status") == "done":
+            rec["checker"]["outcome"] = "skipped"
+    else:
+        rec = _metric_checker(run, rec, metric="route__wirelength__max", error_var="ERROR_ON_LONG_WIRE",
+                              checker="Checker.WireLength", tool="Odb.ReportWireLength", threshold=thr)
+        rec["unit"] = "µm"
+        rec["limit"] = f"≤ {thr:g} µm"
+        rec["rerun"] = None
+    out.append(rec)
+    # Antenna: no checker step; LibreLane's manufacturability report marks
+    # any violating net or pin as "Failed".
+    rec = _rec("antenna", "pnr", "Antenna violations", limit="0",
+               gate_note="LibreLane's manufacturability report marks this Failed; the flow itself continues",
+               tool=_step_ref(run, "OpenROAD.CheckAntennas"), rerun="OpenROAD.CheckAntennas",
+               step_id="OpenROAD.CheckAntennas")
+    nets, pins = _finite(m.get("antenna__violating__nets")), _finite(m.get("antenna__violating__pins"))
+    if nets is None and pins is None:
+        legacy = _finite(m.get("route__antenna_violation__count"))
+        if legacy is None:
+            rec["detail"] = _no_data_reason(run, None, rec["tool"])
+        else:
+            rec.update(value=m.get("route__antenna_violation__count"), metric="route__antenna_violation__count",
+                       metric_keys=["route__antenna_violation__count"],
+                       values={"route__antenna_violation__count": m.get("route__antenna_violation__count")},
+                       status=_PASS if legacy == 0 else _FAIL)
+    else:
+        rec.update(value=(nets or 0), metric="antenna__violating__nets",
+                   metric_keys=["antenna__violating__nets", "antenna__violating__pins"],
+                   values={"antenna__violating__nets": m.get("antenna__violating__nets"),
+                           "antenna__violating__pins": m.get("antenna__violating__pins")},
+                   status=_PASS if (nets or 0) + (pins or 0) == 0 else _FAIL)
+        rec["breakdown"] = [
+            {"label": "violating nets", "metric": "antenna__violating__nets", "value": m.get("antenna__violating__nets")},
+            {"label": "violating pins", "metric": "antenna__violating__pins", "value": m.get("antenna__violating__pins")},
+        ]
+        if m.get("antenna_diodes_count") is not None:
+            rec["breakdown"].append({"label": "diodes inserted", "metric": "antenna_diodes_count",
+                                     "value": m.get("antenna_diodes_count")})
+    out.append(rec)
+
+    # --- Timing sign-off (multi-corner STA) -------------------------------------
+    rec = _timing_checker(run, _rec("setup", "timing", "Setup violations"),
+                          base="timing__setup_vio__count", specific_var="SETUP_VIOLATION_CORNERS",
+                          checker="Checker.SetupViolations", what="Setup violations")
+    rec["worst"] = _worst(run, "timing__setup__ws")
+    rec["tns"] = _worst(run, "timing__setup__tns")
+    if rec["status"] == _NOT_RUN and rec["worst"] is not None and math.isfinite(rec["worst"]):
+        # No violation counts at all, but a worst slack: judge on its sign.
+        rec["status"] = _PASS if rec["worst"] >= 0 else _FAIL
+        rec["metric"] = "timing__setup__ws"
+        rec["metric_keys"] = ["timing__setup__ws"]
+        rec["values"] = {"timing__setup__ws": run.metrics.get("timing__setup__ws")}
+        rec["note"] = "This run recorded no violation counts; judged on the worst setup slack instead."
+        rec["detail"] = ""
+    out.append(rec)
+    rec = _timing_checker(run, _rec("hold", "timing", "Hold violations"),
+                          base="timing__hold_vio__count", specific_var="HOLD_VIOLATION_CORNERS",
+                          checker="Checker.HoldViolations", what="Hold violations")
+    rec["worst"] = _worst(run, "timing__hold__ws")
+    rec["tns"] = _worst(run, "timing__hold__tns")
+    if rec["status"] == _NOT_RUN and rec["worst"] is not None and math.isfinite(rec["worst"]):
+        rec["status"] = _PASS if rec["worst"] >= 0 else _FAIL
+        rec["metric"] = "timing__hold__ws"
+        rec["metric_keys"] = ["timing__hold__ws"]
+        rec["values"] = {"timing__hold__ws": run.metrics.get("timing__hold__ws")}
+        rec["note"] = "This run recorded no violation counts; judged on the worst hold slack instead."
+        rec["detail"] = ""
+    out.append(rec)
+    out.append(_timing_checker(run, _rec("slew", "timing", "Max slew violations"),
+               base="design__max_slew_violation__count", specific_var="MAX_SLEW_VIOLATION_CORNERS",
+               checker="Checker.MaxSlewViolations", what="Slew violations"))
+    out.append(_timing_checker(run, _rec("cap", "timing", "Max capacitance violations"),
+               base="design__max_cap_violation__count", specific_var="MAX_CAP_VIOLATION_CORNERS",
+               checker="Checker.MaxCapViolations", what="Capacitance violations"))
+    # Fanout: STA reports it; LibreLane has no checker for it.
+    rec = _rec("fanout", "timing", "Max fanout violations", gate="info", limit="0 expected",
+               gate_note="LibreLane does not check fanout", tool=_step_ref(run, "OpenROAD.STAPostPNR"),
+               step_id="OpenROAD.STAPostPNR", metric="design__max_fanout_violation__count",
+               metric_keys=["design__max_fanout_violation__count"])
+    fv = _finite(m.get("design__max_fanout_violation__count"))
+    if fv is None:
+        rec["detail"] = _no_data_reason(run, None, rec["tool"])
+    else:
+        rec["value"] = m.get("design__max_fanout_violation__count")
+        rec["values"] = {"design__max_fanout_violation__count": rec["value"]}
+        rec["status"] = _PASS if fv == 0 else _WARN
+        rec["corners"] = [{"corner": c, "value": _finite(v), "gating": False}
+                          for c, v in sorted(_by_corner(m, "design__max_fanout_violation__count").items())]
+    out.append(rec)
+
+    # --- Physical verification -----------------------------------------------
+    xor_gates = ["RUN_KLAYOUT_XOR", "RUN_MAGIC_STREAMOUT", "RUN_KLAYOUT_STREAMOUT"]
+    out.append(_metric_checker(run, _rec("xor", "physical", "Mask XOR"),
+               metric="design__xor_difference__count", error_var="ERROR_ON_XOR_ERROR",
+               checker="Checker.XOR", tool="KLayout.XOR", gates=xor_gates))
+    out.append(_metric_checker(run, _rec("magic_drc", "physical", "Magic DRC"),
+               metric="magic__drc_error__count", error_var="ERROR_ON_MAGIC_DRC",
+               checker="Checker.MagicDRC", tool="Magic.DRC", gates=["RUN_MAGIC_DRC"]))
+    out.append(_metric_checker(run, _rec("klayout_drc", "physical", "KLayout DRC"),
+               metric="klayout__drc_error__count", error_var="ERROR_ON_KLAYOUT_DRC",
+               checker="Checker.KLayoutDRC", tool="KLayout.DRC", gates=["RUN_KLAYOUT_DRC"]))
+    rec = _metric_checker(run, _rec("overlap", "physical", "Illegal overlaps"),
+                          metric="magic__illegal_overlap__count", error_var="ERROR_ON_ILLEGAL_OVERLAPS",
+                          checker="Checker.IllegalOverlap", tool="Magic.SpiceExtraction", gates=["RUN_LVS"])
+    rec["rerun"] = None
+    out.append(rec)
+    rec = _metric_checker(run, _rec("lvs", "physical", "LVS"),
+                          metric="design__lvs_error__count", error_var="ERROR_ON_LVS_ERROR",
+                          checker="Checker.LVS", tool="Netgen.LVS", gates=["RUN_LVS"])
+    rec["breakdown"] = [
+        {"label": lbl, "metric": k, "value": m.get(k)} for lbl, k in (
+            ("unmatched pins", "design__lvs_unmatched_pin__count"),
+            ("unmatched nets", "design__lvs_unmatched_net__count"),
+            ("unmatched devices", "design__lvs_unmatched_device__count"),
+            ("net count difference", "design__lvs_net_difference__count"),
+            ("device count difference", "design__lvs_device_difference__count"),
+            ("property mismatches", "design__lvs_property_fail__count"),
+        ) if m.get(k) is not None]
+    out.append(rec)
+    # Optional KLayout checks other flows add (not in Classic by default).
+    for cid, name, metric, var, ck, tool in (
+        ("klayout_density", "KLayout density", "klayout__density_error__count", "ERROR_ON_KLAYOUT_DENSITY",
+         "Checker.KLayoutDensity", "KLayout.Density"),
+        ("klayout_antenna", "KLayout antenna", "klayout__antenna_error__count", "ERROR_ON_KLAYOUT_ANTENNA",
+         "Checker.KLayoutAntenna", "KLayout.Antenna"),
+    ):
+        if m.get(metric) is not None or run.step(ck) is not None:
+            out.append(_metric_checker(run, _rec(cid, "physical", name), metric=metric, error_var=var,
+                                       checker=ck, tool=tool))
+
+    # A run that stopped: a check whose step never ran must not be judged on
+    # whatever an earlier step estimated (e.g. mid-flow STA before routing).
+    if not run.completed:
+        for r in out:
+            ck, tl = r.get("checker"), r.get("tool")
+            ref = ck if ck else tl
+            if not ref or ref.get("status") != "absent":
+                continue
+            if r["status"] in (_PASS, _WARN, _FAIL, _INFO):
+                r["interim"] = r["value"]
+                r["status"] = _NOT_RUN
+                r["value"] = None
+                r["corners"] = []
+                r["detail"] = _no_data_reason(run, ck, tl)
+                if r["interim"] is not None and run.metrics_from:
+                    r["detail"] += (f" The last value LibreLane recorded (after step {run.metrics_from['n']}, "
+                                    f"an earlier estimate) was {r['interim']}.")
+
+    # Report files that back each check (relative to the run).
+    rep = {
+        "lint_errors": [("Verilator.Lint", "*.log")],
+        "lint_warnings": [("Verilator.Lint", "*.log")],
+        "lint_timing_constructs": [("Verilator.Lint", "*.log")],
+        "unmapped": [("Yosys.Synthesis", "reports/stat.rpt", "reports/*.rpt")],
+        "synth_check": [("Yosys.Synthesis", "reports/pre_synth_chk.rpt", "reports/*chk*.rpt")],
+        "pdn": [("OpenROAD.GeneratePDN", "*.log")],
+        "route_drc": [("OpenROAD.DetailedRouting", "*.drc", "*.log")],
+        "disc_pin": [("Odb.ReportDisconnectedPins", "*.log", "reports/*")],
+        "antenna": [("OpenROAD.CheckAntennas", "reports/antenna_summary.rpt", "reports/antenna.rpt")],
+        "setup": [("OpenROAD.STAPostPNR", "summary.rpt")],
+        "hold": [("OpenROAD.STAPostPNR", "summary.rpt")],
+        "slew": [("OpenROAD.STAPostPNR", "summary.rpt")],
+        "cap": [("OpenROAD.STAPostPNR", "summary.rpt")],
+        "fanout": [("OpenROAD.STAPostPNR", "summary.rpt")],
+        "xor": [("KLayout.XOR", "*.log", "xor.xml")],
+        "magic_drc": [("Magic.DRC", "reports/drc.magic.rpt")],
+        "klayout_drc": [("KLayout.DRC", "reports/drc.klayout.json", "*.log")],
+        "overlap": [("Magic.SpiceExtraction", "*.log")],
+        "lvs": [("Netgen.LVS", "reports/lvs.netgen.rpt")],
+    }
+    for r in out:
+        for spec in rep.get(r["id"], []):
+            p = run.file(spec[0], *spec[1:])
+            rel = _rel(run.dir, p)
+            if rel:
+                r["reports"].append({"label": p.name, "rel": rel})
+    return out
+
+
+# ---------------------------------------------------------------- report details
+def _rdb_summary(path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    """Summarise a KLayout report database (``.lyrdb``/``.xml``): every
+    category with its marker count and description, plus a few sample marker
+    locations each. Streams the file so big databases stay cheap."""
+    if path is None or not path.is_file():
+        return None
+    descs: Dict[str, str] = {}
+    order: List[str] = []
+    counts: Dict[str, int] = {}
+    samples: Dict[str, List[List[float]]] = {}
+    total = 0
+    path_stack: List[str] = []
+    cat_name: List[Optional[str]] = []
+    try:
+        for ev, el in ET.iterparse(str(path), events=("start", "end")):
+            tag = el.tag
+            if ev == "start":
+                # An item's <category> is a reference, not a definition.
+                if tag == "category" and (path_stack[-1] if path_stack else "") != "item":
+                    cat_name.append(None)
+                path_stack.append(tag)
+                continue
+            path_stack.pop()
+            parent = path_stack[-1] if path_stack else ""
+            if tag == "name" and parent == "category" and cat_name:
+                nm = (el.text or "").strip()
+                # Nested categories get dotted names, as KLayout shows them.
+                outer = [c for c in cat_name[:-1] if c]
+                cat_name[-1] = ".".join(outer + [nm]) if outer else nm
+                if cat_name[-1] not in descs:
+                    descs[cat_name[-1]] = ""
+                    order.append(cat_name[-1])
+            elif tag == "description" and parent == "category" and cat_name and cat_name[-1]:
+                descs[cat_name[-1]] = (el.text or "").strip()
+            elif tag == "category" and parent != "item":
+                if cat_name:
+                    cat_name.pop()
+            elif tag == "item":
+                total += 1
+                cat = (el.findtext("category") or "").strip().strip("'").replace("'.'", ".")
+                counts[cat] = counts.get(cat, 0) + 1
+                s = samples.setdefault(cat, [])
+                if len(s) < _MAX_SAMPLES:
+                    for val in el.iter("value"):
+                        box = _bbox_of(val.text or "")
+                        if box:
+                            s.append(box)
+                            break
+                el.clear()
+    except Exception:
+        return {"ok": False, "total": None, "categories": []}
+    cats = [{"name": c, "description": descs.get(c, ""), "count": counts.get(c, 0),
+             "samples": samples.get(c, [])} for c in order]
+    for c, n in counts.items():
+        if c not in descs:
+            cats.append({"name": c, "description": "", "count": n, "samples": samples.get(c, [])})
+    cats.sort(key=lambda c: -c["count"])
+    failing = [c for c in cats if c["count"]]
+    return {"ok": True, "total": total, "rules": len(cats),
+            "categories": failing[:_MAX_CATEGORIES], "more": max(0, len(failing) - _MAX_CATEGORIES)}
+
+
+_NUM = r"-?\d+(?:\.\d+)?(?:e-?\d+)?"
+
+
+def _bbox_of(text: str) -> Optional[List[float]]:
+    """``polygon: (x,y;x,y;…)`` / ``box: (x,y;x,y)`` / ``edge-pair: …`` -> bbox µm."""
+    pts = re.findall(r"(" + _NUM + r"),(" + _NUM + r")", text)
+    if not pts:
+        return None
+    xs = [float(a) for a, _ in pts]
+    ys = [float(b) for _, b in pts]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _klayout_drc(run: _Run) -> Optional[Dict[str, Any]]:
+    js = run.file("KLayout.DRC", "reports/drc.klayout.json")
+    rdb = run.file("KLayout.DRC", "reports/*.lyrdb")
+    if js is None and rdb is None:
+        return None
+    summary = _rdb_summary(rdb) or {"ok": False, "categories": []}
+    counts = _read_json(js) if js else None
+    if isinstance(counts, dict):
+        # The JSON is the per-rule count LibreLane totals into the metric.
+        descs = {c["name"]: c for c in summary.get("categories", [])}
+        rules = [{"name": k, "count": v, "description": (descs.get(k) or {}).get("description", ""),
+                  "samples": (descs.get(k) or {}).get("samples", [])}
+                 for k, v in counts.items() if isinstance(v, (int, float)) and v]
+        rules.sort(key=lambda r: -r["count"])
+        summary = {"ok": True, "rules": len(counts), "total": sum(v for v in counts.values()
+                                                                 if isinstance(v, (int, float))),
+                   "categories": rules[:_MAX_CATEGORIES], "more": max(0, len(rules) - _MAX_CATEGORIES)}
+    summary["report"] = _rel(run.dir, js or rdb)
+    summary["markers"] = _rel(run.dir, rdb)
+    return summary
+
+
+def _magic_drc(run: _Run) -> Optional[Dict[str, Any]]:
+    rdb = run.file("Magic.DRC", "reports/*.lyrdb")
+    rpt = run.file("Magic.DRC", "reports/drc.magic.rpt", "reports/*.rpt")
+    if rdb is None and rpt is None:
+        return None
+    s = _rdb_summary(rdb) or {"ok": False, "categories": []}
+    s["report"] = _rel(run.dir, rpt or rdb)
+    s["markers"] = _rel(run.dir, rdb)
+    return s
+
+
+def _route_drc(run: _Run) -> Optional[Dict[str, Any]]:
+    s = run.step("OpenROAD.DetailedRouting")
+    if s is None:
+        return None
+    drc = next((p for p in sorted(s["path"].glob("*.drc")) if p.is_file()), None)
+    by_type: Dict[str, Dict[str, Any]] = {}
+    total = 0
+    if drc is not None:
+        cur = None
+        try:
+            with drc.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("violation type:"):
+                        cur = line.split(":", 1)[1].strip()
+                    elif line.startswith("bbox") and cur:
+                        total += 1
+                        mm = re.search(r"\((" + _NUM + r"), (" + _NUM + r")\) - \((" + _NUM + r"), (" + _NUM +
+                                       r")\) on Layer (\S+)", line)
+                        layer = mm.group(5) if mm else ""
+                        e = by_type.setdefault(cur + "|" + layer, {"name": cur, "layer": layer, "count": 0, "samples": []})
+                        e["count"] += 1
+                        if mm and len(e["samples"]) < _MAX_SAMPLES:
+                            e["samples"].append([float(mm.group(i)) for i in range(1, 5)])
+        except Exception:
+            pass
+    cats = sorted(by_type.values(), key=lambda c: -c["count"])
+    iters = sorted(((int(k), v) for k, v in _by_mod(run.metrics, "route__drc_errors", "iter").items()
+                    if k.isdigit()))
+    xml = next((p for p in sorted(s["path"].glob("*.drc.xml")) if p.is_file()), None)
+    return {"ok": drc is not None, "total": total, "categories": cats[:_MAX_CATEGORIES],
+            "iterations": [{"iter": i, "count": v} for i, v in iters],
+            "report": _rel(run.dir, drc), "markers": _rel(run.dir, xml)}
+
+
+def _lvs(run: _Run) -> Optional[Dict[str, Any]]:
+    js = run.file("Netgen.LVS", "reports/lvs.netgen.json")
+    rpt = run.file("Netgen.LVS", "reports/lvs.netgen.rpt")
+    if js is None and rpt is None:
+        return None
+    out: Dict[str, Any] = {"report": _rel(run.dir, rpt), "json": _rel(run.dir, js)}
+    if rpt is not None:
+        try:
+            text = rpt.read_text(encoding="utf-8", errors="replace")
+            mm = re.findall(r"^Final result:\s*(.+?)\s*$", text, flags=re.M)
+            if mm:
+                out["result"] = mm[-1].rstrip(".")
+        except Exception:
+            pass
+    doc = _read_json(js) if js else None
+    if isinstance(doc, list) and doc and isinstance(doc[-1], dict):
+        top = doc[-1]
+        names = top.get("name") or ["", ""]
+
+        def side(i: int) -> Dict[str, Any]:
+            d: Dict[str, Any] = {"name": names[i] if i < len(names) else ""}
+            devs = top.get("devices")
+            if isinstance(devs, list) and len(devs) > i:
+                d["devices"] = sum(int(x[1]) for x in devs[i] if isinstance(x, list) and len(x) > 1)
+            nets = top.get("nets")
+            if isinstance(nets, list) and len(nets) > i:
+                d["nets"] = nets[i]
+            pins = top.get("pins")
+            if isinstance(pins, list) and len(pins) > i and isinstance(pins[i], list):
+                d["pins"] = len(pins[i])
+            return d
+
+        # Netgen's circuit 1 is the extracted layout, circuit 2 the netlist.
+        out["layout"] = side(0)
+        out["netlist"] = side(1)
+        dev_diff = []
+        devs = top.get("devices")
+        if isinstance(devs, list) and len(devs) == 2:
+            for a, b in zip(devs[0], devs[1]):
+                try:
+                    if a[1] != b[1] or a[0] != b[0]:
+                        dev_diff.append({"layout": a[0], "layout_n": a[1], "netlist": b[0], "netlist_n": b[1]})
+                except Exception:
+                    continue
+        out["device_diffs"] = dev_diff[:40]
+        out["bad_nets"] = len(top.get("badnets") or [])
+        out["bad_devices"] = len(top.get("badelements") or [])
+        pin_diff = []
+        pins = top.get("pins")
+        if isinstance(pins, list) and len(pins) == 2:
+            for a, b in zip(pins[0], pins[1]):
+                if re.sub("!$", "", str(a).lower()) != re.sub("!$", "", str(b).lower()) \
+                        and "(no pin)" not in (str(a).lower(), str(b).lower()):
+                    pin_diff.append({"layout": a, "netlist": b})
+        out["pin_diffs"] = pin_diff[:40]
+    return out
+
+
+def _xor(run: _Run) -> Optional[Dict[str, Any]]:
+    x = run.file("KLayout.XOR", "xor.xml", "*.xml")
+    if x is None:
+        return None
+    s = _rdb_summary(x) or {"ok": False, "categories": []}
+    # Count layers compared (all categories, not only differing ones).
+    try:
+        layers = 0
+        for ev, el in ET.iterparse(str(x), events=("start", "end")):
+            if ev == "start" and el.tag == "items":
+                break
+            if ev == "end" and el.tag == "category":
+                layers += 1
+        s["layers"] = layers
+    except Exception:
+        pass
+    s["report"] = _rel(run.dir, x)
+    s["markers"] = _rel(run.dir, x)
+    return s
+
+
+def _antenna(run: _Run) -> Optional[Dict[str, Any]]:
+    rpt = run.file("OpenROAD.CheckAntennas", "reports/antenna_summary.rpt")
+    if rpt is None:
+        return None
+    rows: List[Dict[str, str]] = []
+    try:
+        for line in rpt.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.startswith("│"):
+                continue
+            cells = [c.strip() for c in line.strip("│").split("│")]
+            if len(cells) >= 6 and cells[0] and cells[0] != "P / R":
+                rows.append({"ratio": cells[0], "partial": cells[1], "required": cells[2],
+                             "net": cells[3], "pin": cells[4], "layer": cells[5]})
+    except Exception:
+        pass
+    return {"rows": rows[:100], "more": max(0, len(rows) - 100), "report": _rel(run.dir, rpt)}
+
+
+def _ir(run: _Run) -> Optional[Dict[str, Any]]:
+    rpt = run.file("OpenROAD.IRDropReport", "irdrop.rpt", "*.rpt")
+    if rpt is None:
+        return None
+    nets: List[Dict[str, Any]] = []
+    cur: Optional[Dict[str, Any]] = None
+    fields = {
+        "Net": "net", "Corner": "corner", "Supply voltage": "supply", "Worstcase voltage": "worst_voltage",
+        "Average voltage": "avg_voltage", "Average IR drop": "avg_drop", "Worstcase IR drop": "worst_drop",
+        "Percentage drop": "pct",
+    }
+    try:
+        for line in rpt.read_text(encoding="utf-8", errors="replace").splitlines():
+            if ":" not in line:
+                continue
+            k, _, v = line.partition(":")
+            key = fields.get(k.strip())
+            if not key:
+                continue
+            v = v.strip()
+            if key == "net":
+                cur = {"net": v}
+                nets.append(cur)
+                continue
+            if cur is None:
+                continue
+            if key == "corner":
+                cur[key] = v
+            else:
+                mm = re.match(r"(" + _NUM + r")", v.replace("E", "e"))
+                if mm:
+                    cur[key] = float(mm.group(1))
+    except Exception:
+        pass
+    return {"nets": nets, "report": _rel(run.dir, rpt)}
+
+
+def _timing_table(run: _Run, checks: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    m = run.metrics
+    bases = {
+        "setup_ws": "timing__setup__ws", "setup_tns": "timing__setup__tns", "setup_vio": "timing__setup_vio__count",
+        "setup_r2r": "timing__setup_r2r__ws",
+        "hold_ws": "timing__hold__ws", "hold_tns": "timing__hold__tns", "hold_vio": "timing__hold_vio__count",
+        "hold_r2r": "timing__hold_r2r__ws",
+        "slew": "design__max_slew_violation__count", "cap": "design__max_cap_violation__count",
+        "fanout": "design__max_fanout_violation__count",
+    }
+    per: Dict[str, Dict[str, Any]] = {}
+    for col, base in bases.items():
+        for c, v in _by_corner(m, base).items():
+            per.setdefault(c, {"corner": c})[col] = v
+    gate = {}
+    for cid in ("setup", "hold", "slew", "cap"):
+        for row in checks.get(cid, {}).get("corners", []):
+            gate.setdefault(row["corner"], {})[cid] = row["gating"]
+    rows = []
+    for c in sorted(per):
+        r = per[c]
+        r["gates"] = gate.get(c, {})
+        rows.append(r)
+    clk = run.cfg.get("CLOCK_PERIOD")
+    sta = run.step("OpenROAD.STAPostPNR")
     return {
-        "ready": (not blockers) and not incomplete,
-        "incomplete": incomplete,
-        "missing_stages": missing,
-        "blockers": blockers,
-        "warnings": warnings,
+        # "signoff" when the post-route STA step finished; otherwise these are
+        # the last estimates an earlier STA step left in the metrics.
+        "source": "signoff" if sta and sta["status"] == "done" else ("estimate" if per else "none"),
+        "corners": rows,
+        "default_corner": run.cfg.get("DEFAULT_CORNER"),
+        "clock_period": clk,
+        "clock_port": run.cfg.get("CLOCK_PORT"),
+        "setup_rule": {"var": checks.get("setup", {}).get("corner_var"),
+                       "wildcards": checks.get("setup", {}).get("corner_wildcards")},
+        "hold_rule": {"var": checks.get("hold", {}).get("corner_var"),
+                      "wildcards": checks.get("hold", {}).get("corner_wildcards")},
+        "totals": {k: m.get(v) for k, v in bases.items() if m.get(v) is not None},
+    }
+
+
+# ---------------------------------------------------------------- flow + verdict
+def _flow_state(run: _Run) -> Dict[str, Any]:
+    stopped = [s for s in run.steps if s["status"] == "stopped"]
+    raised_checkers = [s for s in stopped if (s["id"] or "").startswith("Checker.")
+                       or s["dir"].split("-", 1)[-1].startswith("checker-")]
+    err_lines: List[str] = []
+    try:
+        el = run.dir / "error.log"
+        if el.is_file():
+            err_lines = [ln.rstrip() for ln in el.read_text(encoding="utf-8", errors="replace").splitlines()
+                         if ln.strip()][:30]
+    except Exception:
+        pass
+    partial = bool(run.gui.get("frm") or run.gui.get("to"))
+    if run.completed and not stopped:
+        state = "complete"
+    elif run.completed and stopped and len(raised_checkers) == len(stopped):
+        state = "deferred_errors"
+    elif run.completed:
+        state = "complete_with_errors"
+    elif stopped:
+        state = "stopped"
+    else:
+        state = "unknown"
+    first_stop = stopped[0] if stopped else None
+    last = run.steps[-1] if run.steps else None
+    return {
+        "state": state,
+        "partial": partial,
+        "frm": run.gui.get("frm"), "to": run.gui.get("to"),
+        "steps_total": len(run.steps),
+        "steps_done": sum(1 for s in run.steps if s["status"] == "done"),
+        "stopped_step": ({"n": first_stop["n"], "dir": first_stop["dir"], "id": first_stop["id"]}
+                         if first_stop else None),
+        "raised_checkers": [{"n": s["n"], "dir": s["dir"], "id": s["id"]} for s in raised_checkers],
+        "last_step": ({"n": last["n"], "dir": last["dir"], "id": last["id"]} if last else None),
+        "error_log": err_lines,
+    }
+
+
+# Checks that must have data before a run can be called ready.
+_CORE = ("setup", "hold", "lvs")
+_CORE_DRC = ("magic_drc", "klayout_drc")
+_GROUPS = [
+    {"id": "rtl", "title": "RTL lint", "tool": "Verilator"},
+    {"id": "synth", "title": "Synthesis", "tool": "Yosys"},
+    {"id": "pnr", "title": "Place & route", "tool": "OpenROAD"},
+    {"id": "timing", "title": "Timing sign-off", "tool": "OpenSTA, every corner"},
+    {"id": "physical", "title": "Physical verification", "tool": "Magic, KLayout, Netgen"},
+]
+_LEGACY_STAGE = {"rtl": "rtl", "synth": "synth", "pnr": "physical", "timing": "timing", "physical": "physical"}
+
+
+def _legacy_status(checks: List[Dict[str, Any]]) -> str:
+    st = [c["status"] for c in checks]
+    if _FAIL in st:
+        return _FAIL
+    present = [s for s in st if s in (_PASS, _WARN, _INFO)]
+    if not present:
+        return _ABSENT
+    return _WARN if _WARN in st else _PASS
+
+
+def _verdict(checks: List[Dict[str, Any]], flow: Dict[str, Any]) -> Dict[str, Any]:
+    by = {c["id"]: c for c in checks}
+    blockers = [c for c in checks if c["status"] == _FAIL]
+    warnings = [c for c in checks if c["status"] == _WARN]
+    has = lambda c: c and c["status"] in (_PASS, _FAIL, _WARN)  # noqa: E731
+    missing_core = [cid for cid in _CORE if not has(by.get(cid))]
+    if not any(has(by.get(cid)) for cid in _CORE_DRC):
+        missing_core.append("drc")
+    skipped_core = [cid for cid in _CORE + _CORE_DRC if by.get(cid, {}).get("status") == _SKIPPED]
+    stopped = flow["state"] == "stopped"
+    if blockers:
+        state = "blocked"
+    elif stopped:
+        state = "stopped"
+    elif missing_core:
+        state = "incomplete"
+    else:
+        state = "ready"
+    counts: Dict[str, int] = {}
+    for c in checks:
+        counts[c["status"]] = counts.get(c["status"], 0) + 1
+    # Old-API fields (stages by tool family) kept for existing callers.
+    missing_stages = []
+    if not any(has(by.get(c)) for c in ("setup", "hold", "slew", "cap")):
+        missing_stages.append("timing")
+    if not any(has(c) for c in checks if c["group"] in ("physical", "pnr")):
+        missing_stages.append("physical")
+    return {
+        "state": state,
+        "ready": state == "ready",
+        "incomplete": state in ("incomplete", "stopped"),
+        "missing_core": missing_core,
+        "skipped_core": skipped_core,
+        "missing_stages": missing_stages,
+        "blockers": [c["name"] for c in blockers],
+        "warnings": [c["name"] for c in warnings],
+        "blocker_ids": [c["id"] for c in blockers],
+        "warning_ids": [c["id"] for c in warnings],
+        "counts": counts,
+        "total": len(checks),
     }
 
 
 def verify_report(run_dir: str | Path) -> Dict[str, Any]:
-    """Aggregate signoff status for a completed run, organized by stage.
+    """The signoff picture of one run, organised by flow stage.
 
-    Reads ``final/metrics.json`` + the run's step dirs; never re-runs anything.
-    A stage with no present data reports ``absent`` (not a crash). The verdict
-    is ``ready`` when no check failed.
+    Reads ``final/metrics.json``, ``resolved.json``, ``flow.log``,
+    ``error.log`` and the step dirs; never re-runs anything.
     """
-    run = Path(run_dir).resolve()
-    metrics = history._load_metrics(run)
-    stages = {
-        "rtl": _rtl_stage(metrics, run),
-        "synth": _synth_stage(metrics, run),
-        "timing": _timing_stage(metrics, run),
-        "physical": _physical_stage(metrics, run),
-        "manufacturability": _manufacturability_stage(metrics, run),
-    }
+    run = _Run(Path(run_dir).resolve())
+    checks = _checks(run)
+    flow = _flow_state(run)
+    by = {c["id"]: c for c in checks}
+    groups = []
+    for g in _GROUPS:
+        gc = [c for c in checks if c["group"] == g["id"]]
+        groups.append({**g, "status": _legacy_status(gc), "checks": [c["id"] for c in gc]})
+    stages: Dict[str, Dict[str, Any]] = {}
+    for gid, sid in _LEGACY_STAGE.items():
+        stages.setdefault(sid, {"checks": []})["checks"].extend(c for c in checks if c["group"] == gid)
+    for s in stages.values():
+        s["status"] = _legacy_status(s["checks"])
+    cfg = run.cfg
+    meta = cfg.get("meta") if isinstance(cfg.get("meta"), dict) else {}
+    details: Dict[str, Any] = {"timing": _timing_table(run, by)}
+    for key, fn in (("klayout_drc", _klayout_drc), ("magic_drc", _magic_drc), ("route_drc", _route_drc),
+                    ("lvs", _lvs), ("xor", _xor), ("antenna", _antenna), ("ir", _ir)):
+        try:
+            details[key] = fn(run)
+        except Exception:
+            details[key] = None
+    ir_m = {k: run.metrics.get(k) for k in ("ir__drop__worst", "ir__drop__avg", "ir__voltage__worst")
+            if run.metrics.get(k) is not None}
+    if ir_m:
+        details["ir_metrics"] = ir_m
     return {
-        "run_dir": str(run),
-        "tag": run.name,
+        "run_dir": str(run.dir),
+        "tag": run.dir.name,
+        "design": cfg.get("DESIGN_NAME"),
+        "pdk": cfg.get("PDK"),
+        "scl": cfg.get("STD_CELL_LIBRARY"),
+        "flow": (meta or {}).get("flow") or run.gui.get("flow") or "",
+        "librelane_version": (meta or {}).get("librelane_version"),
+        "has_config": run.has_cfg,
+        "metrics_from": run.metrics_from,
+        "flow_state": flow,
+        "checks": checks,
+        "groups": groups,
         "stages": stages,
-        "verdict": _verdict(stages),
+        "details": details,
+        "verdict": _verdict(checks, flow),
     }
