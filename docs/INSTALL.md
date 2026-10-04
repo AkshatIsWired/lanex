@@ -682,6 +682,21 @@ GL rendering overrides (set in your environment before launching):
 `LANEX_HW_GL=1` forces hardware GL everywhere (skips the WSL software-GL
 default, native *and* container launches); `LANEX_SOFTWARE_GL=1` forces
 software GL even outside WSL (broken native GPU stacks, remote X, VNC).
+
+**Tiny viewer windows on a HiDPI screen (4K laptop, 150-200 % scaling).**
+WSLg draws Linux X11 apps 1:1 in physical pixels at 96 DPI, so without help
+they open at about half the size of the Windows UI. LanEx reads the Windows
+display scale (from WSLg's own log, falling back to the registry) at every
+launch and sets each toolkit's scale: `QT_SCALE_FACTOR` for KLayout and the
+OpenROAD GUI, `GDK_SCALE` + `GDK_DPI_SCALE` for GTKWave, a startup script that
+enlarges the fonts for Magic and Netgen (Tk has no variable), and
+`XCURSOR_SIZE`. Apps re-render at the larger size, so text stays sharp, and
+nothing global changes (no `.wslgconfig`, no `wsl --shutdown`). Native Linux
+desktops keep their own scale settings, which container launches now inherit.
+GDS3D draws with fixed X11 bitmap fonts and a fixed 1024x768 window, so it is
+not scaled; maximize it. Override with `LANEX_VIEWER_SCALE=1.5` (or `150`),
+or turn scaling off with `LANEX_VIEWER_SCALE=1`. Your own `GDK_SCALE` /
+`QT_SCALE_FACTOR` always win.
 </details>
 
 <details>

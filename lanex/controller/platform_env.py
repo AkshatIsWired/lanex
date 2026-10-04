@@ -153,7 +153,205 @@ def wsl_gui_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         # Without the variable, X11/XWayland is the only transport left.
         if env.get("DISPLAY"):
             env.pop("WAYLAND_DISPLAY", None)
+    return viewer_scale_env(env)
+
+
+# ------------------------------------------------------------ HiDPI scaling --
+# WSLg presents X11 apps 1:1 in physical pixels. Its Weston compositor learns
+# the Windows display scale (it logs ``desktopScaleFactor:175``) but keeps
+# ``scale:1`` unless the user hand-edits a global .wslgconfig, and XWayland then
+# reports 96 DPI. So on a 4K / 150-200 % laptop every viewer (KLayout, GTKWave,
+# Magic, the OpenROAD GUI) opens at roughly half the size of the Windows UI
+# around it. The fix is the toolkit's own scale knob, set per launch: the app
+# re-renders at the larger size (sharp text), nothing global changes, and the
+# user's other WSL distros are untouched.
+_WESTON_LOG = Path("/mnt/wslg/weston.log")
+_SCALE_MIN, _SCALE_MAX = 1.0, 4.0
+
+# Environment that already expresses a scale choice. If the user (or their
+# desktop session) set any of a group, LanEx leaves that whole group alone.
+_GDK_SCALE_VARS = ("GDK_SCALE", "GDK_DPI_SCALE")
+_QT_SCALE_VARS = ("QT_SCALE_FACTOR", "QT_SCREEN_SCALE_FACTORS")
+VIEWER_SCALE_VARS = _GDK_SCALE_VARS + _QT_SCALE_VARS + (
+    "QT_AUTO_SCREEN_SCALE_FACTOR", "QT_ENABLE_HIGHDPI_SCALING", "XCURSOR_SIZE")
+
+
+def _clamp_scale(value: float) -> float:
+    return round(min(max(value, _SCALE_MIN), _SCALE_MAX), 2)
+
+
+def parse_weston_scale(text: str) -> Optional[float]:
+    """Residual scale X11 apps need, from WSLg's ``weston.log`` text.
+
+    The RDP backend logs each monitor layout the Windows client sends::
+
+        rdpMonitor[0]: x:0, y:0, width:2880, height:1800, is_primary:1
+        rdpMonitor[0]: desktopScaleFactor:175, deviceScaleFactor:180
+        rdpMonitor[0]: scale:1, clientScale:1.00
+
+    Weston re-logs the layout it applied with ``desktopScaleFactor:0``, so the
+    last NON-zero factor per monitor is the Windows setting. The primary
+    monitor wins (X11 has one DPI for the whole screen). If the compositor
+    already magnifies (a .wslgconfig with WESTON_RDP_HI_DPI_SCALING), only the
+    remainder is returned, so apps are never scaled twice. None when the log
+    has no usable layout.
+    """
+    factor: Dict[int, int] = {}
+    compositor: Dict[int, float] = {}
+    primary: Optional[int] = None
+    for line in text.splitlines():
+        m = re.search(r"rdpMonitor\[(\d+)\]:.*is_primary:(\d)", line)
+        if m:
+            if m.group(2) == "1":
+                primary = int(m.group(1))
+            continue
+        m = re.search(r"rdpMonitor\[(\d+)\]:\s*desktopScaleFactor:(\d+)", line)
+        if m:
+            if int(m.group(2)) > 0:
+                factor[int(m.group(1))] = int(m.group(2))
+            continue
+        m = re.search(r"rdpMonitor\[(\d+)\]:\s*scale:(\d+),\s*client\s*scale\s*:\s*([\d.]+)",
+                      line, re.IGNORECASE)
+        if m:
+            try:
+                compositor[int(m.group(1))] = max(float(m.group(2)), float(m.group(3)))
+            except ValueError:
+                pass
+    idx = primary if primary in factor else (min(factor) if factor else None)
+    if idx is None:
+        return None
+    return _clamp_scale(factor[idx] / 100.0 / max(compositor.get(idx, 1.0), 1.0))
+
+
+def _windows_applied_dpi_scale() -> Optional[float]:
+    """Windows' sign-in display scale via ``reg.exe`` (WSL interop), or None.
+
+    Fallback for WSLg builds whose log lacks the monitor layout. AppliedDPI is
+    96 at 100 %, 144 at 150 %, 192 at 200 %."""
+    reg = shutil.which("reg.exe")
+    if not reg and os.path.exists("/mnt/c/Windows/System32/reg.exe"):
+        reg = "/mnt/c/Windows/System32/reg.exe"   # appendWindowsPath=false
+    if not reg:
+        return None
+    import subprocess
+    try:
+        r = subprocess.run(
+            [reg, "query", r"HKCU\Control Panel\Desktop\WindowMetrics", "/v", "AppliedDPI"],
+            capture_output=True, text=True, timeout=3)
+    except Exception:
+        return None
+    m = re.search(r"AppliedDPI\s+REG_DWORD\s+0x([0-9a-fA-F]+)", r.stdout or "")
+    if not m:
+        return None
+    dpi = int(m.group(1), 16)
+    return _clamp_scale(dpi / 96.0) if dpi > 0 else None
+
+
+def viewer_scale() -> float:
+    """How much desktop viewers must be enlarged to match the host's UI scale.
+
+    1.0 means leave them alone. ``LANEX_VIEWER_SCALE`` overrides everything
+    (``1`` turns scaling off; ``1.5`` forces 150 %). Otherwise only WSL is
+    measured: a native Linux desktop already exports its own scale settings
+    (GNOME/KDE set Xft.dpi, GDK_SCALE, QT_*), and those reach the viewers as-is.
+    Read at each launch, so moving to a monitor with a different scale applies
+    to the next viewer opened.
+    """
+    override = (os.environ.get("LANEX_VIEWER_SCALE") or "").strip().rstrip("%")
+    if override:
+        try:
+            value = float(override)
+        except ValueError:
+            _log.warning("ignoring LANEX_VIEWER_SCALE=%r (expected e.g. 1.5)", override)
+        else:
+            # "150" reads as a percentage, like the Windows setting.
+            return _clamp_scale(value / 100.0 if value >= 10 else value)
+    if not is_wsl():
+        return 1.0
+    scale: Optional[float] = None
+    try:
+        with open(_WESTON_LOG, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 512 * 1024))
+            scale = parse_weston_scale(fh.read().decode("utf-8", errors="replace"))
+    except OSError:
+        scale = None
+    if scale is None:
+        scale = _windows_applied_dpi_scale()
+    return scale or 1.0
+
+
+def viewer_scale_env(base: Optional[Dict[str, str]] = None,
+                     scale: Optional[float] = None) -> Dict[str, str]:
+    """Return *base* plus the toolkit variables that enlarge a viewer by *scale*.
+
+    * Qt 5/6 (KLayout, OpenROAD GUI): ``QT_SCALE_FACTOR`` takes fractions, so
+      175 % is exactly 175 %.
+    * GTK 3 (GTKWave): ``GDK_SCALE`` is integer only, so round it and correct
+      the text with ``GDK_DPI_SCALE`` (175 % = 2 x 0.875). Text lands at the
+      exact size; icons and padding at the nearest whole step.
+    * ``XCURSOR_SIZE`` so the pointer over a viewer is not a speck.
+
+    Tk (Magic, Netgen) has no such variable; see :func:`tk_scale_tcl`. GDS3D
+    draws with fixed X11 bitmap fonts and cannot be scaled. A group the base
+    env already sets is left untouched.
+    """
+    env: Dict[str, str] = dict(base) if base else {}
+    s = viewer_scale() if scale is None else scale
+    if s < 1.1:
+        return env
+    if not any(env.get(k) for k in _QT_SCALE_VARS):
+        env["QT_SCALE_FACTOR"] = f"{s:g}"
+    if not any(env.get(k) for k in _GDK_SCALE_VARS):
+        whole = max(1, int(s + 0.5))
+        env["GDK_SCALE"] = str(whole)
+        env["GDK_DPI_SCALE"] = f"{s / whole:.3g}"
+    env.setdefault("XCURSOR_SIZE", str(int(round(24 * s))))
     return env
+
+
+def tk_scale_tcl(scale: float) -> str:
+    """Tcl that enlarges a Tk app's fonts by *scale* (empty when no scaling).
+
+    Tk sizes its fonts from the X screen's reported DPI, which WSLg pins at 96,
+    and its default fonts are in pixels, so neither ``tk scaling`` alone nor
+    any environment variable helps. This rescales every named font in place
+    (widgets using them update live) and raises ``tk scaling`` for fonts made
+    later. Magic and Netgen run their command console (tkcon) in a second
+    interpreter of the same process, reached with ``tkcon master eval``.
+
+    ``tk scaling`` is process-wide, and Tk implements it by rewriting the
+    screen's millimetre size, so only the first interpreter can read the
+    original value: it changes the scaling once and hands that base to the
+    console, which only resizes its own fonts. Idempotent per interpreter.
+    """
+    if scale < 1.1:
+        return ""
+    s = f"{scale:g}"
+    fonts = (
+        "foreach _lx_f [font names] {\n"
+        "  catch {\n"
+        "    set _lx_z [font configure $_lx_f -size]\n"
+        "    if {$_lx_z < 0} {\n"
+        f"      font configure $_lx_f -size [expr {{int(round($_lx_z * {s}))}}]\n"
+        "    } elseif {$_lx_z > 0} {\n"
+        f"      font configure $_lx_f -size [expr {{-int(round($_lx_z * $::_lx_base * {s}))}}]\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    guarded = "if {![info exists ::lanex_tk_scaled]} {\nset ::lanex_tk_scaled 1\n" + fonts + "}\n"
+    return (
+        "# LanEx: enlarge this Tk app to match the display scale.\n"
+        "if {![info exists ::lanex_tk_scaled] && [info commands tk] ne \"\"} {\n"
+        "  set ::_lx_base [tk scaling]\n"
+        f"  catch {{tk scaling [expr {{$::_lx_base * {s}}}]}}\n"
+        "  catch {tkcon master eval [list set ::_lx_base $::_lx_base]}\n"
+        # ``tkcon master`` runs its arguments as one command, hence ``eval``.
+        "  catch {tkcon master eval {" + guarded + "}}\n"
+        + guarded
+        + "}\n"
+    )
 
 
 # Multi-arch DRI driver locations (Debian/Ubuntu multiarch, Fedora/RHEL lib64,

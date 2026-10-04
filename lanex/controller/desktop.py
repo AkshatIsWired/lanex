@@ -179,6 +179,43 @@ def find_magicrc(libs_tech: Path, pdk: str) -> Optional[Path]:
     return None
 
 
+def magic_scaled_rcfile(rcfile: Optional[str], scale: float, dest_dir: Path) -> Optional[str]:
+    """A Magic startup file that enlarges Magic's Tk UI by *scale*, then loads
+    *rcfile* (the PDK magicrc) — or, without one, the ``.magicrc`` files Magic
+    would read by itself, since ``-rcfile`` replaces those.
+
+    Tk has no scale environment variable, so the scaling has to run inside
+    Magic. Written into *dest_dir* under a content-hash name: concurrent
+    launches with the same PDK share one file and never see a half-written
+    one. None (launch unchanged) when no scaling is needed or the write fails.
+    """
+    from . import platform_env
+    snippet = platform_env.tk_scale_tcl(scale)
+    if not snippet:
+        return None
+    if rcfile:
+        load = f"source {{{rcfile}}}\n"
+    else:
+        load = (
+            "set _lx_home [expr {[info exists ::env(HOME)] ? $::env(HOME) : [pwd]}]\n"
+            "foreach _lx_rc [lsort -unique [list [file join $_lx_home .magicrc] [file join [pwd] .magicrc]]] {\n"
+            "  if {[file readable $_lx_rc]} { source $_lx_rc }\n"
+            "}\n"
+        )
+    text = snippet + load
+    try:
+        import hashlib
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f".lanex-magic-{hashlib.sha1(text.encode()).hexdigest()[:12]}.tcl"
+        if not dest.is_file():
+            tmp = dest.with_name(dest.name + f".{os.getpid()}.tmp")
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, dest)
+        return str(dest)
+    except OSError:
+        return None
+
+
 def _latest_step_dir(run_dir: Path, pattern: str) -> Optional[Path]:
     """The highest-ordinal step dir matching *pattern* (``NN-step-name`` layout).
 
@@ -289,6 +326,9 @@ def _build_argv(tool: str, binary: str, f: str, tech: Dict[str, Any], use_tech: 
     e.g. KLayout's plain colours vs the PDK layer-properties). *binary* is the
     resolved executable (e.g. ``gds3d`` may actually be ``GDS3D``)."""
     if tool == "magic":
+        # The display-scaling startup file already sources the PDK magicrc.
+        if tech.get("magic_startup"):
+            return [binary, "-rcfile", tech["magic_startup"], f]
         if use_tech and tech.get("magicrc"):
             return [binary, "-rcfile", tech["magicrc"], f]
         return [binary, f]
@@ -434,6 +474,18 @@ def open_in_tool(tool: str, file_path: str | Path, *,
                     tech["marker_dbs"] = dbs
         except Exception:
             pass
+    # Magic is Tk: no environment variable scales it, so on a HiDPI display it
+    # starts through a small script that enlarges its fonts first.
+    if tool == "magic":
+        try:
+            from . import platform_env
+            startup = magic_scaled_rcfile(
+                tech.get("magicrc") if use_tech else None,
+                platform_env.viewer_scale(), platform_env.home() / "viewer-scale")
+            if startup:
+                tech["magic_startup"] = startup
+        except Exception:
+            pass
     argv = _build_argv(tool, binary, str(f), tech, use_tech)
     # Magic's magicrc resolves $PDK_ROOT/$PDK/$PDKPATH; export them so it doesn't
     # error out with the 'minimum' tech and close immediately.
@@ -448,7 +500,8 @@ def open_in_tool(tool: str, file_path: str | Path, *,
     # AND pin GTK/Qt to the X11 transport — GTK3 (GTKWave) otherwise picks
     # WSLg's Wayland path, whose copy-mode degradation shows a blank
     # taskbar-only window titled [WARN: COPY MODE]. No-op off WSL; opt out with
-    # LIBRELANE_GUI_WSL_HW_GL=1 (GL) / LANEX_WAYLAND=1 (transport).
+    # LIBRELANE_GUI_WSL_HW_GL=1 (GL) / LANEX_WAYLAND=1 (transport). Also sizes
+    # Qt/GTK viewers to the Windows display scale (LANEX_VIEWER_SCALE overrides).
     try:
         from . import platform_env
         launch_env = platform_env.wsl_gui_env(launch_env)
