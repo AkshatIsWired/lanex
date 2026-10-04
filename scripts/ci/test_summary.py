@@ -66,6 +66,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_server": "HTTP routing, CSRF, and traversal confinement hold (no arbitrary file read).",
     "test_tools": "Tool/engine detection is accurate and its probes can't hang the UI.",
     "test_fsbrowser": "The file browser stays confined to allowed roots (no path traversal).",
+    "test_layoutview": "The Layout tab draws what the run wrote: the right step for each flow stage, the PDK's layer names and colours, every DRC/XOR marker where the report puts it, and the 3D stack at the process file's heights.",
     "test_file_rename": "Renaming a file in the RTL IDE never overwrites or escapes the project, and the config keeps building it.",
     "test_alerts": "Failed-step advisories map to the right plain-language explanation.",
     "test_watch_pin": "Run watch/pin/notes persist and read back correctly.",

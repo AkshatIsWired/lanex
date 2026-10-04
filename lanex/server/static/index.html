@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="/static/setup.css" />
   <link rel="stylesheet" href="/static/analytics.css" />
   <link rel="stylesheet" href="/static/verify.css" />
+  <link rel="stylesheet" href="/static/layout.css" />
   <link rel="stylesheet" href="/static/cells.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
@@ -158,19 +159,16 @@
           <span class="ico"></span><span class="label">DSE</span>
         </button>
       </div>
-      <div class="rail-group" style="--n:4">
+      <div class="rail-group" style="--n:3">
         <span class="rail-label">Results</span>
-        <button class="side-tab" data-tab="preview" data-tip="Rendered GDS and DEF">
-          <span class="ico"></span><span class="label">Preview</span>
+        <button class="side-tab" data-tab="layout" data-tip="See your chip: every flow stage, every layer, and the desktop viewers">
+          <span class="ico"></span><span class="label">Layout</span>
         </button>
         <button class="side-tab" data-tab="analytics" data-tip="How a run went: timing, area, power, routing and every metric">
           <span class="ico"></span><span class="label">Analytics</span>
         </button>
         <button class="side-tab" data-tab="verify" data-tip="DRC, LVS, antenna and timing sign-off checks">
           <span class="ico"></span><span class="label">Verify</span>
-        </button>
-        <button class="side-tab" data-tab="layout" data-tip="Open the layout in KLayout, Magic, OpenROAD or 3D">
-          <span class="ico"></span><span class="label">Layout</span>
         </button>
       </div>
       <div class="rail-group rail-foot" style="--n:2">
@@ -494,30 +492,6 @@
       <ul id="runs-list" class="runs-list"></ul>
     </section>
 
-    <!-- PREVIEW -->
-    <section class="section" id="sec-preview">
-      <div class="bar">
-        <select id="view-tag"></select>
-        <select id="view-format"></select>
-        <button id="view-render" class="btn btn-primary">Show layout</button>
-        <a id="view-download" class="btn btn-ghost" download hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg> Download</a>
-      </div>
-      <nav class="section-jump" id="preview-jump" aria-label="Jump to section">
-        <button class="chip chip-clickable" data-jump="view-render-area">Layout</button>
-        <button class="chip chip-clickable" data-jump="view-text">Raw text</button>
-        <button class="chip chip-clickable" data-jump="view-diagrams">Diagrams</button>
-        <button class="chip chip-clickable" data-jump="view-outputs">Output files</button>
-      </nav>
-      <div id="view-render-area"></div>
-      <div id="view-text" class="code"></div>
-      <h2 class="section-h2">Synthesis diagrams</h2>
-      <p class="hint">Yosys block-hierarchy and gate-level schematics. Generated when <code>SYNTH_SHOW</code> is enabled in configuration and rendered from <code>.dot</code> graph files using Graphviz.</p>
-      <div id="view-diagrams"></div>
-      <h2 class="section-h2">Output files</h2>
-      <p class="hint">Every deliverable LibreLane wrote to <code>runs/&lt;tag&gt;/final/</code>. Download any file, or reveal it in your file manager (works when the GUI runs on your own machine). Intermediate per-step files live in the <strong>Files</strong> button on the Runs tab.</p>
-      <div id="view-outputs"></div>
-    </section>
-
     <!-- RTL IDE (embedded) -->
     <section class="section" id="sec-ide">
       <div class="ide-embed">
@@ -784,22 +758,126 @@
       <div id="dse-body"></div>
     </section>
 
-    <!-- LAYOUT viewers -->
+    <!-- LAYOUT: see the chip (modules/layout.js, layoutcanvas.js, runfiles.js). One
+         page for what Preview and Layout used to split: KLayout draws the run live
+         in the app, every flow stage is one click away, and the desktop viewers
+         open from the same place. -->
     <section class="section" id="sec-layout">
-      <h2>Layout viewers</h2>
-      <div class="bar">
-        <label>Run <select id="layout-run"></select></label>
-        <button class="btn" id="btn-view2d">2D view</button>
-        <button class="btn" id="btn-view3d">3D (desktop viewer)</button>
-        <label title="On: open with the PDK's layer colours (.lyp / magicrc). Off: the tool's default view (e.g. KLayout's plain palette).">
-          <input type="checkbox" id="layout-pdk-colors" checked/> PDK layer colours
-        </label>
+      <div class="an-runbar lx-runbar">
+        <div class="an-pick">
+          <label for="layout-run">Run</label>
+          <select id="layout-run"></select>
+        </div>
+        <span class="bar-spacer"></span>
+        <div class="lx-split" id="lx-openin">
+          <button class="btn btn-primary btn-sm lx-split-main" id="lx-open-main" title="Open this run in a desktop viewer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M10 5H5v14h14v-5"/></svg> <span id="lx-open-label">Open in KLayout</span></button>
+          <button class="btn btn-primary btn-sm lx-split-pick" id="lx-open-pick" aria-haspopup="menu" aria-expanded="false" aria-label="Choose a desktop viewer"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+          <div class="lx-menu" id="lx-open-menu" role="menu" hidden></div>
+        </div>
+        <div class="lx-split">
+          <button class="btn btn-ghost btn-sm" id="lx-save" aria-haspopup="menu" aria-expanded="false" title="Save a picture of the layout"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg> Save image</button>
+          <div class="lx-menu" id="lx-save-menu" role="menu" hidden>
+            <button role="menuitem" data-save="view">This view<span>PNG at screen resolution</span></button>
+            <button role="menuitem" data-save="chip4k">Whole chip, 4K<span>3840 px, smoothed: good for slides and posts</span></button>
+            <button role="menuitem" data-save="chip8k">Whole chip, 8K<span>7680 px, for printing</span></button>
+          </div>
+        </div>
+        <div class="lx-split">
+          <button class="btn btn-ghost btn-sm" id="lx-cmd" aria-haspopup="menu" aria-expanded="false" title="The terminal commands that open this run, as in a plain LibreLane workflow"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg> Command</button>
+          <div class="lx-menu lx-menu-wide" id="lx-cmd-menu" role="menu" hidden></div>
+        </div>
       </div>
-      <!-- Desktop layout tools (KLayout / Magic / GDS3D) at the top level so they're
-           always reachable — not buried inside the 3D sub-view. -->
-      <div id="layout-tools" class="layout-tools"></div>
-      <div id="viewer2d-body"></div>
-      <div id="viewer3d-body"></div>
+
+      <div class="an-empty empty" id="lx-empty" hidden>
+        <span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h18v18H3zM3 9h18M9 21V9"/></svg></span>
+        <h3>No runs yet</h3>
+        <p>Run the flow once and your chip shows up here: the floorplan, the placed cells, the clock tree, the routed wires and the final GDS, layer by layer.</p>
+        <button class="btn btn-primary" data-an-go="setup">Go to Setup</button>
+      </div>
+
+      <div class="lx-page" id="lx-page" hidden>
+        <ol class="lx-stages" id="lx-stages" aria-label="Flow stages"></ol>
+
+        <div class="lx-ws" id="lx-ws">
+          <aside class="lx-side" id="lx-side" aria-label="Layout panels">
+            <div class="lx-side-tabs" role="tablist">
+              <button role="tab" class="is-on" aria-selected="true" data-lx-pane="layers">Layers</button>
+              <button role="tab" aria-selected="false" data-lx-pane="cells">Cells</button>
+              <button role="tab" aria-selected="false" data-lx-pane="find">Find</button>
+              <button role="tab" aria-selected="false" data-lx-pane="checks">Checks<span class="lx-tab-n" id="lx-checks-n" hidden></span></button>
+            </div>
+            <div class="lx-pane" id="lx-pane-layers" role="tabpanel"></div>
+            <div class="lx-pane" id="lx-pane-cells" role="tabpanel" hidden></div>
+            <div class="lx-pane" id="lx-pane-find" role="tabpanel" hidden>
+              <div class="lx-find">
+                <input type="search" id="lx-find-q" placeholder="Pin, label or cell name" autocomplete="off" spellcheck="false" aria-label="Find a pin, label or cell"/>
+              </div>
+              <div class="lx-find-res" id="lx-find-res"></div>
+            </div>
+            <div class="lx-pane" id="lx-pane-checks" role="tabpanel" hidden></div>
+          </aside>
+
+          <div class="lx-view" id="lx-view">
+            <div class="lx-tools" role="toolbar" aria-label="View">
+              <button class="lx-tb" data-lx="side" aria-pressed="true" title="Show or hide the side panel" aria-label="Side panel"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4zM9 4v16"/></svg></button>
+              <span class="lx-tb-sep"></span>
+              <button class="lx-tb" data-lx="fit" title="Fit the whole chip (F)" aria-label="Fit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+              <button class="lx-tb" data-lx="zout" title="Zoom out (-)" aria-label="Zoom out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+              <button class="lx-tb" data-lx="zin" title="Zoom in (+)" aria-label="Zoom in"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+              <span class="lx-tb-sep"></span>
+              <button class="lx-tb" data-lx="measure" aria-pressed="false" title="Measure: drag to draw a ruler (M). Esc clears them." aria-label="Measure"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2"/></svg></button>
+              <button class="lx-tb" data-lx="labels" aria-pressed="true" title="Pin and net labels (L)" aria-label="Labels"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg></button>
+              <button class="lx-tb" data-lx="detail" aria-pressed="false" title="Cell outlines: draw each standard cell as a named box instead of its insides (O)" aria-label="Cell outlines"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h8v6H3zM13 5h8v6h-8zM3 13h5v6H3zM10 13h11v6H10z"/></svg></button>
+              <button class="lx-tb lx-tb-3d" data-lx="3d" aria-pressed="false" title="3D: the layer stack at its real heights (3). Zoomed in, it shows the area on screen." aria-label="3D view"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></button>
+              <button class="lx-tb" data-lx="bg" title="Dark or white background" aria-label="Background"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg></button>
+              <span class="lx-tb-sep"></span>
+              <button class="lx-tb" data-lx="full" title="Full screen" aria-label="Full screen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
+            </div>
+            <div class="lx-badge" id="lx-badge"></div>
+            <div class="lx-busy" id="lx-busy" hidden><span></span></div>
+            <div class="lx-hud" id="lx-hud">
+              <div class="lx-scale" id="lx-scale"><i></i><span></span></div>
+              <div class="lx-xy" id="lx-xy"></div>
+            </div>
+            <canvas class="lx-mini" id="lx-mini" width="180" height="120" aria-label="Overview map: click to move there"></canvas>
+            <div class="lx-3dctl" id="lx-3dctl" hidden>
+              <label>Height <input type="range" id="lx-3d-z" min="1" max="16" step="0.5" value="4"/><output id="lx-3d-zv">×4</output></label>
+              <label>Spread layers <input type="range" id="lx-3d-s" min="0" max="8" step="0.25" value="0"/></label>
+              <button class="btn btn-ghost btn-sm" id="lx-3d-reset" title="Back to the starting angle (double-click also works)">Reset view</button>
+            </div>
+            <div class="lx-inspect" id="lx-inspect" hidden></div>
+            <div class="lx-msg" id="lx-msg" hidden></div>
+            <div class="lx-hint" id="lx-hint">Drag to pan · scroll to zoom · click anything to see what it is · <kbd>F</kbd> fits</div>
+          </div>
+        </div>
+        <p class="lx-note" id="lx-note"></p>
+
+        <div class="lx-desk">
+          <div class="lx-desk-h">
+            <h3>Desktop viewers</h3>
+            <p class="muted">The same run in the full tools, for editing and deep analysis. Each opens in its own window.</p>
+          </div>
+          <div class="lx-desk-grid" id="lx-desk"></div>
+        </div>
+
+        <details class="lx-files" id="lx-files">
+          <summary><span>Run files</span><span class="muted">Every output in <code>final/</code>, any format as text, and the synthesis diagrams</span></summary>
+          <div class="lx-files-body">
+            <div class="ide-view-seg rf-seg" role="tablist" aria-label="Run files">
+              <button class="is-on" role="tab" aria-selected="true" data-rf-pane="outputs">Output files</button><button role="tab" aria-selected="false" data-rf-pane="raw">View as text</button><button role="tab" aria-selected="false" data-rf-pane="diagrams">Synthesis diagrams</button>
+            </div>
+            <div class="rf-pane" id="rf-outputs"></div>
+            <div class="rf-pane" id="rf-raw" hidden>
+              <div class="bar">
+                <select id="rf-format" aria-label="Design format"></select>
+                <a id="rf-download" class="btn btn-ghost btn-sm" download hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg> Download</a>
+              </div>
+              <div id="rf-text" class="code"></div>
+            </div>
+            <div class="rf-pane" id="rf-diagrams" hidden></div>
+          </div>
+        </details>
+      </div>
     </section>
 
     <!-- CELLS & MACROS (modules/cells.js, cells-macros.js, cells-rules.js) -->

@@ -14,7 +14,6 @@ import { setupRunMode } from "./modules/runmode.js";
 import { renderConfig } from "./modules/config.js";
 import { renderRuntimeline, noteStepEvent, resetTimeline, notePhase } from "./modules/runtimeline.js";
 import { renderRuns } from "./modules/runs.js";
-import { renderPreview } from "./modules/preview.js";
 import { renderTools, updatePullProgress, finishPull } from "./modules/tools.js";
 import { renderAdvisor } from "./modules/advisor.js";
 import { renderTimingAdvisor } from "./modules/timingAdvisor.js";
@@ -32,7 +31,7 @@ import { setupTooltips } from "./modules/tooltip.js";
 
 // Map each side-nav tab to a line-style SVG icon (replaces per-OS emoji glyphs).
 const TAB_ICONS = {
-  setup: "folder", pipeline: "flow", runs: "clock", preview: "image",
+  setup: "folder", pipeline: "flow", runs: "clock",
   ide: "code", tools: "tools", analytics: "chart", verify: "check",
   dse: "beaker", layout: "grid", cells: "layers", manual: "command",
 };
@@ -105,10 +104,6 @@ async function boot() {
       const dd = state.designDir ? "?design_dir=" + encodeURIComponent(state.designDir) : "";
       window.open("/ide" + dd, "_blank", "noopener");
     });
-    document.getElementById("btn-view2d")?.addEventListener("click", () =>
-      import("./modules/viewer2d.js").then((m) => m.renderViewer2d(layoutRunTag())));
-    document.getElementById("btn-view3d")?.addEventListener("click", () =>
-      import("./modules/viewer3d.js").then((m) => m.renderViewer3d(layoutRunTag())));
     document.getElementById("tools-icon")?.addEventListener("click", () => {
       document.querySelector('.side-tab[data-tab="tools"]')?.click();
     });
@@ -395,7 +390,7 @@ function handle(ev) {
       } else {
         pill.classList.add("pill-pass");
         pill.textContent = "done";
-        toast.show("Flow completed. Generated GDS is available in Preview.", "success");
+        toast.show("Flow completed. Your chip is in the Layout tab.", "success");
       }
     }
     try {
@@ -412,7 +407,7 @@ function handle(ev) {
       renderAdvisorAndRefreshMetrics();
       renderRuns();
       renderRuntimeline();
-      renderPreview();
+      import("./modules/layout.js").then((m) => m.refreshAfterRun()).catch(() => {});
       paintOnboardChecklist();
       if (!ev.error && !ev.cancelled) {
         maybeShowPostRunPanel();
@@ -434,63 +429,6 @@ async function renderAdvisorAndRefreshMetrics() {
     populateReportsList(state.designDir, target);
     renderTimingAdvisor();
   } catch (_e) {}
-}
-
-// The run tag chosen on the Layout tab (falls back to the global selection).
-function layoutRunTag() {
-  const sel = document.getElementById("layout-run");
-  return (sel && sel.value) || state.selectedRunTag || "";
-}
-
-// Fill the Layout tab's run dropdown, default to the most recent, and render the
-// 2D view for it — so the viewers work without first clicking Open on a run.
-async function populateLayoutRuns() {
-  const sel = document.getElementById("layout-run");
-  if (!sel) return;
-  const { gatherRunsScoped, getRunScope, runOptionsHtml, scopeToggleHtml, wireScopeToggle, ensureActiveDesignFor } =
-    await import("./modules/runscope.js");
-  let runs = [];
-  try { runs = await gatherRunsScoped(); } catch (_e) {}
-  if (getRunScope() === "design") state.runs = runs;
-  const idx = {};
-  for (const r of runs) idx[r.tag] = r;
-  sel._idx = idx;   // the once-wired change listener reads the latest index here
-  // Scope toggle next to the run select (shared global pref).
-  if (!sel.parentNode.querySelector("#layout-run-scope")) {
-    sel.insertAdjacentHTML("afterend", " " + scopeToggleHtml("layout-run-scope"));
-    wireScopeToggle("layout-run-scope", () => populateLayoutRuns());
-  }
-  const prev = sel.value || state.selectedRunTag;
-  sel.innerHTML = runs.length
-    ? runOptionsHtml(runs, prev, (s) => fmt.escape(s))
-    : "<option value=''>(no runs yet; run the flow first)</option>";
-  if (prev && idx[prev]) sel.value = prev;
-  else if (runs.length) sel.value = runs[0].tag;
-  if (!sel._wired) {
-    sel._wired = true;
-    sel.addEventListener("change", async () => {
-      await ensureActiveDesignFor((sel._idx || {})[sel.value]);
-      state.selectedRunTag = sel.value;
-      import("./modules/viewer2d.js").then((m) => m.renderViewer2d(sel.value));
-      renderLayoutTools(sel.value);
-    });
-  }
-  if (sel.value) {
-    await ensureActiveDesignFor(idx[sel.value]);
-    state.selectedRunTag = state.selectedRunTag || sel.value;
-    import("./modules/viewer2d.js").then((m) => m.renderViewer2d(sel.value));
-  }
-  renderLayoutTools(sel.value);
-}
-
-// Top-level unified tool row on the Layout bar: ONE button per tool (KLayout /
-// Magic / GDS3D / OpenROAD), each routing container→host→install. GDS3D is no
-// longer buried in the 3D sub-view, and KLayout/Magic aren't listed three times.
-async function renderLayoutTools(tag) {
-  const host = document.getElementById("layout-tools");
-  if (!host) return;
-  const { renderLayoutTools: render } = await import("./modules/layouttools.js");
-  await render(host, tag);
 }
 
 function setRunProgress(done, total, current) {
@@ -598,7 +536,7 @@ function maybeShowPostRunPanel() {
     "<button class='postrun-close' aria-label='Dismiss'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "<span class='muted'>See the layout, check sign-off, or dig into the numbers.</span>" +
     "<div class='postrun-actions'>" +
-      "<button class='btn btn-ghost' data-go='preview'>View GDS</button>" +
+      "<button class='btn btn-ghost' data-go='layout'>See your chip</button>" +
       "<button class='btn btn-ghost' data-go='verify'>Check sign-off</button>" +
       "<button class='btn btn-ghost' data-go='analytics'>See metrics</button>" +
     "</div>";
@@ -688,10 +626,9 @@ document.querySelectorAll(".side-tab").forEach((t) => {
     const name = t.dataset.tab;
     document.dispatchEvent(new CustomEvent("g:tab_activated", { detail: { tab: name } }));
     if (name === "runs") renderRuns();
-    if (name === "preview") renderPreview();
     if (name === "ide") import("./modules/ide/main.js").then((m) =>
       m.initIde({ designDir: state.designDir, runMode: state.runMode }));
-    if (name === "layout") populateLayoutRuns();
+    if (name === "layout") import("./modules/layout.js").then((m) => m.renderLayout());
     // tools + analytics are rendered by the g:tab_activated listener above; don't
     // double-render them here.
     if (name === "verify") import("./modules/verify.js").then((m) => m.renderVerify());

@@ -488,14 +488,6 @@ select {
 .runs-list .row1 { display: flex; gap: var(--s-3); align-items: center; font-family: var(--mono); font-size: var(--t-md); flex-wrap: wrap; }
 .runs-list .row2 { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-muted); }
 
-/* ---------- preview ---------- */
-#view-render-area img {
-  max-width: 100%;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--canvas);
-  box-shadow: var(--sh-2);
-}
 .code {
   font-family: var(--mono);
   font-size: var(--t-sm);
@@ -1006,16 +998,6 @@ body.density-compact .steps-3 { margin-bottom: var(--s-4); }
   line-height: 1.45; color: var(--text); white-space: pre-wrap; word-break: break-word;
 }
 
-/* Preview image gallery (final render + any per-stage renders). */
-.view-gallery { margin-bottom: var(--s-4); }
-.view-gallery-grid {
-  display: grid; gap: var(--s-3);
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-}
-.view-thumb { margin: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
-.view-thumb img { display: block; width: 100%; height: auto; background: var(--canvas-dark); }
-.view-thumb figcaption { padding: var(--s-2); font-size: var(--t-xs); color: var(--text-muted); font-family: var(--mono); word-break: break-word; }
-
 /* Runs list: per-run action buttons + files modal rows. */
 .run-actions { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
 .run-act { padding: 2px 10px; font-size: var(--t-sm); }
@@ -1054,27 +1036,7 @@ body.density-compact .steps-3 { margin-bottom: var(--s-4); }
 .summary-val .unit { font-size: var(--t-xs); color: var(--text-muted); font-weight: 400; margin-left: 2px; }
 .summary-label { font-family: var(--mono); font-weight: 500; font-size: var(--t-xs); color: var(--text-muted); margin-top: var(--s-1); text-transform: uppercase; letter-spacing: 0.14em; }
 
-/* ---- Preview: output-file browser ---- */
-.out-cat { margin-bottom: var(--s-3); }
-.out-list { display: flex; flex-direction: column; }
-.out-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-3);
-  padding: var(--s-2) 0;
-  border-bottom: 1px solid var(--border);
-}
-.out-row:last-child { border-bottom: 0; }
-.out-meta { min-width: 0; flex: 1; }
-.out-label { font-weight: 600; color: var(--text); }
-.out-sub { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-muted); overflow-wrap: anywhere; }
-.out-variant { color: var(--accent); }
-.out-path { word-break: break-all; }
-.out-actions { display: flex; gap: var(--s-2); flex-shrink: 0; }
-.out-actions .btn { padding: 2px 10px; font-size: var(--t-sm); }
-
-/* ---- Preview: synthesis diagrams ---- */
+/* ---- Layout > Run files: synthesis diagrams ---- */
 .diagram-card {
   margin: 0 0 var(--s-3);
   background: var(--surface);

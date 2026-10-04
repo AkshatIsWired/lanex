@@ -1,103 +1,76 @@
-// layouttools.js — ONE button per layout tool on the Layout bar, with a
-// hierarchical open decision (no more KLayout/Magic listed three times).
+// layouttools.js — open a run in a desktop layout tool (KLayout, Magic, GDS3D,
+// OpenROAD GUI), choosing where it runs.
 //
 // For each tool we merge host availability (desktop-tools) with container
-// availability (container-tools + a reachable display). Clicking a button:
-//   1. opens it in the version-matched CONTAINER if that's available (preferred —
-//      the tool is guaranteed compatible with the PDK techfiles), else
-//   2. opens the INSTALLED host tool, else
-//   3. tells the user it isn't installed and jumps to the Tools tab.
-//
-// GDS3D is host-only (not in the image); OpenROAD is container-only. The merge
-// makes each appear exactly once and routes to whichever backend can serve it.
+// availability (container-tools + a reachable display):
+//   1. the version-matched CONTAINER when it can (preferred: the tool is
+//      guaranteed compatible with the PDK techfiles), else
+//   2. the INSTALLED host tool, else
+//   3. say it isn't installed and go to the Tools tab.
+// GDS3D is host-only (not in the image); OpenROAD is container-only. Both
+// launch paths open the PDK's layer colours and load the run's DRC/XOR markers.
 
-import { api, fmt } from "./api.js";
+import { api } from "./api.js";
 import { toast } from "./toast.js";
 
-// Layout-relevant tools, in display order. Netgen (LVS) deliberately omitted —
-// it's a signoff console, not a layout viewer.
-const TOOLS = [
-  { key: "klayout", label: "KLayout" },
-  { key: "magic", label: "Magic" },
-  { key: "gds3d", label: "GDS3D" },
-  { key: "openroad", label: "OpenROAD GUI" },
-];
+const LABEL = { klayout: "KLayout", magic: "Magic", gds3d: "GDS3D", openroad: "OpenROAD GUI" };
 
-export async function renderLayoutTools(host, tag) {
-  if (!host) return;
-  if (!tag) { host.innerHTML = ""; return; }
-
+// { tool: { where: "container"|"host"|"nodisplay"|"install", title } }
+export async function toolRoutes() {
   let desktop = [];
   let container = { engine_ready: false, display: {}, tools: [] };
   try { desktop = (await api.desktopTools()).tools || []; } catch (_e) {}
   try { container = (await api.containerTools()) || container; } catch (_e) {}
-
-  const hostByKey = {};
-  for (const t of desktop) hostByKey[t.key] = t;
   const contKeys = new Set((container.tools || []).map((t) => t.key));
-  const contReady = !!container.engine_ready && !!(container.display && container.display.ok);
-
-  const cells = TOOLS.map((t) => {
-    const hostTool = hostByKey[t.key];
-    const hostOk = !!(hostTool && hostTool.available);
-    const contOk = contReady && contKeys.has(t.key);
-    let where, title, disabled = "";
-    if (contOk) { where = "container"; title = "Open in the version-matched container (recommended)"; }
-    else if (hostOk) { where = "host"; title = "Open with your installed " + t.label; }
-    else if (container.engine_ready && contKeys.has(t.key) && !(container.display && container.display.ok)) {
-      // NOT disabled: a disabled button can't be clicked, so the user never
-      // saw the remedy (the exact XQuartz/WSLg fix lives in display.reason).
-      where = "nodisplay"; title = (container.display && container.display.reason) || "no display reachable";
-    }
-    else { where = "install"; title = t.label + " is not installed; click to set it up in Tools"; }
-    const badge = { container: "container", host: "installed", nodisplay: "no display", install: "not installed" }[where];
-    return "<button class='btn btn-ghost layout-tool' data-tool='" + fmt.escape(t.key) +
-      "' data-where='" + where + "'" + disabled + " title='" + fmt.escape(title) + "'>" +
-      fmt.escape(t.label) + " <span class='layout-tool-badge lt-" + where + "'>" + badge + "</span></button>";
-  }).join("");
-
-  host.innerHTML = "<span class='muted'>Open this run in:</span> " + cells;
-  host.querySelectorAll(".layout-tool").forEach((b) =>
-    b.addEventListener("click", () => launch(b, tag)));
+  const displayOk = !!(container.display && container.display.ok);
+  const out = {};
+  for (const key of Object.keys(LABEL)) {
+    const hostOk = desktop.some((t) => t.key === key && t.available);
+    const inCont = !!container.engine_ready && contKeys.has(key);
+    if (inCont && displayOk) out[key] = { where: "container", title: "Opens in the version-matched LibreLane container" };
+    else if (hostOk) out[key] = { where: "host", title: "Opens your installed " + LABEL[key] };
+    // Not disabled: the remedy (the exact WSLg / XQuartz fix) lives in display.reason.
+    else if (inCont) out[key] = { where: "nodisplay", title: (container.display && container.display.reason) || "no display reachable" };
+    else out[key] = { where: "install", title: LABEL[key] + " is not installed; set it up in the Tools tab" };
+  }
+  return out;
 }
 
-async function launch(btn, tag) {
-  const tool = btn.dataset.tool;
-  const where = btn.dataset.where;
-  if (where === "install") {
-    toast.show("Install " + tool + " from the Tools tab first.", "warn");
+// Open one run in one viewer. `path` (run-relative) opens a specific file, e.g.
+// a stage's .odb in OpenROAD; without it the tool gets the run's final GDS/ODB.
+export async function launchTool(tool, tag, { path } = {}) {
+  const routes = await toolRoutes();
+  const r = routes[tool] || { where: "install" };
+  const label = LABEL[tool] || tool;
+  if (r.where === "install") {
+    toast.show(label + " isn't installed yet. Set it up in the Tools tab.", "warn");
     document.querySelector('.side-tab[data-tab="tools"]')?.click();
     return;
   }
-  if (where === "nodisplay") {
-    // Sticky (duration 0): the remedy is a multi-step command the user must
-    // copy — a 4s auto-dismiss made it unreadable.
-    toast.show("No display reachable for the container GUI. " + (btn.title || ""), "warn", 0);
+  if (r.where === "nodisplay") {
+    // Sticky: the remedy is a multi-step command the user must be able to read.
+    toast.show("No display is reachable for windows from the container. " + (r.title || ""), "warn", 0);
     return;
   }
-  btn.disabled = true;
   try {
-    let r;
-    if (where === "container") {
-      r = await api.openInContainerTool(tool, tag);
-      if (r && r.ok) toast.show("Launched " + (r.label || tool) + " in the container" +
-        (r.hint ? " (" + r.hint + ")" : "") + ". The window may take a few seconds to appear.", "success");
+    let res;
+    if (r.where === "container") {
+      res = await api.openInContainerTool(tool, tag, path);
+      if (res && res.ok) toast.show("Opening " + (res.label || label) + (res.hint ? " (" + res.hint + ")" : "") +
+        ". The window can take a few seconds to appear.", "success");
     } else {
-      // Host launch honours the Layout bar's "PDK layer colours" toggle.
-      const colorsEl = document.getElementById("layout-pdk-colors");
-      const useTech = colorsEl ? colorsEl.checked : true;
-      r = await api.openInTool(tool, tag, undefined, useTech);
-      if (r && r.ok) toast.show("Launched " + (r.label || tool) +
-        (tool !== "gds3d" ? (useTech && r.used_tech ? " (PDK colours)" : " (default view)") : ""), "success");
+      res = await api.openInTool(tool, tag, path, true);
+      if (res && res.ok) toast.show("Opening " + (res.label || label) + ". The window can take a few seconds to appear.", "success");
       // Provenance: tech files resolved from a different PDK root than the run's.
-      if (r && r.ok && r.tech_note) toast.show(r.tech_note, "warn");
+      if (res && res.ok && res.tech_note) toast.show(res.tech_note, "warn");
     }
-    if (!(r && r.ok)) {
-      const msg = (r && (r.error || r.need)) || "could not launch";
-      toast.show(msg, "warn");
-    }
+    if (!(res && res.ok)) toast.show((res && (res.error || res.need)) || ("Couldn't open " + label), "warn");
   } catch (ex) {
-    toast.show("Launch failed: " + (ex.message || ex), "error");
+    toast.show("Couldn't open " + label + ": " + (ex.message || ex), "error");
   }
-  btn.disabled = false;
+}
+
+// Open one run in one viewer from anywhere (e.g. Verify's "Open in KLayout").
+export async function openRunInTool(tool, tag) {
+  await launchTool(tool, tag);
 }

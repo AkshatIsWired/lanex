@@ -510,9 +510,9 @@ async function openRun(tag, designDir) {
     state.metrics = view.metrics?.values || {};
     const modA = await import("./timingAdvisor.js");
     modA.renderTimingAdvisor();
-    document.querySelector(".side-tab[data-tab='preview']")?.click();
-    const modP = await import("./preview.js");
-    modP.selectRun(tag);
+    document.querySelector(".side-tab[data-tab='layout']")?.click();
+    const modL = await import("./layout.js");
+    modL.selectRun(tag);
     const modV = await import("./violations.js");
     modV.populateReportsList(view.design_dir || state.designDir, tag);
   } catch (ex) {

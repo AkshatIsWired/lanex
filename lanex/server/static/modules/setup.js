@@ -234,17 +234,17 @@ export async function adoptDesignDir(designDir, opts = {}) {
   paintDesignPill(fmt.shortPath(designDir));
   await loadFilesFor(designDir);
   const { renderRuns } = await import("./runs.js");
-  const { renderPreview } = await import("./preview.js");
   try { state.runs = await api.runs(designDir); } catch (_e) { state.runs = []; }
   // Default the run selection to the most recent run so run-scoped views
-  // (Preview/Analytics/Verify/Layout) have something selected without the user
+  // (Layout/Analytics/Verify) have something selected without the user
   // first clicking Open on the Runs tab.
   if (state.runs && state.runs.length &&
       !state.runs.some((r) => r.tag === state.selectedRunTag)) {
     state.selectedRunTag = state.runs[0].tag;
   }
   renderRuns();
-  renderPreview();
+  // The Layout tab follows the newly opened design next time it is shown.
+  import("./layout.js").then((m) => m.refreshAfterRun()).catch(() => {});
   paintRunButton();
   renderPreflight();
   // Offer to auto-generate a config when the folder has sources but no config.

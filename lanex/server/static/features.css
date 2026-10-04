@@ -249,20 +249,8 @@
 .cell-card { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); padding: var(--s-2); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); }
 .cell-card code { overflow-wrap: anywhere; }
 
-/* ---- 2D / 3D viewers ------------------------------------------------------ */
-.v2d-wrap { display: flex; gap: var(--s-3); }
-.v2d-layers { display: flex; flex-direction: column; gap: var(--s-1); min-width: 160px; }
-.v2d-stage { position: relative; background: var(--canvas, #fff); border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; height: calc(60vh / var(--ll-zoom, 1)); }
-.v2d-layer { position: absolute; top: 0; left: 0; max-width: 100%; mix-blend-mode: multiply; }
-.v2d-img { display: block; will-change: transform; }
-/* "Open in desktop tool" row (2D + 3D). */
-.v-open { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; margin-top: var(--s-3); }
-.v3d-info .v3d-list { margin: var(--s-2) 0; padding-left: var(--s-4); line-height: 1.7; }
 /* Cells PDK/SCL picker. */
 .cells-pick { display: flex; gap: var(--s-4); align-items: center; flex-wrap: wrap; margin-bottom: var(--s-3); }
-.v3d-canvas { width: 100%; height: 480px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); cursor: grab; }
-.v3d-canvas:active { cursor: grabbing; }
-.v3d-note { font-size: var(--t-xs); margin-bottom: var(--s-2); }
 .cells-pick select { background-color: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 30px 4px 8px; }
 
 /* ---- Wizard --------------------------------------------------------------- */
@@ -526,13 +514,7 @@
 /* ---- scroll-spy: highlight the jump chip for the section in view -------- */
 
 /* ---- Layout: one unified tool button per tool (incl. GDS3D/OpenROAD) ---- */
-.layout-tools { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin: var(--s-2) 0 var(--s-3); }
-.layout-tools:empty { display: none; }
-.layout-tool { display: inline-flex; align-items: center; gap: var(--s-2); }
-.layout-tool-badge { font-size: var(--t-xs); padding: 1px 6px; border-radius: var(--r-sm); border: 1px solid var(--border); color: var(--text-muted); }
-.layout-tool-badge.lt-container { color: var(--on-accent, #fff); background: var(--accent); border-color: var(--accent); }
-.layout-tool-badge.lt-host { color: var(--text); }
-.layout-tool-badge.lt-install, .layout-tool-badge.lt-nodisplay { color: var(--text-muted); opacity: .8; }
+
 
 /* ---- DRC/LVS report parser (Analytics → Advisor & reports) ------------- */
 .report-picker { display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--s-3); }

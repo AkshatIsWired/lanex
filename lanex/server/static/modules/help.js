@@ -51,7 +51,7 @@ const CATALOG = {
     goal: "Review historical flow runs and load detailed metrics and deliverables.",
     how: [
       "Each row reports the PDK, SCL, completed steps, final status, and elapsed execution time.",
-      "Click Open to load a run's signoff metrics into Analytics and preview its generated layouts.",
+      "Click Open to show that run's chip in the Layout tab; Analytics and Verify follow the same run.",
       "Select multiple runs in the Analytics Compare card to view delta tables and configuration differences.",
       "Use Import to adopt external run directories or LanEx bundles; each row also provides Files, Notes, Bundle, and Reproduce actions.",
     ],
@@ -62,16 +62,22 @@ const CATALOG = {
       "A passed run indicates flow checkers completed without error flags; review the Advisor and Verify tabs to inspect timing and signoff margins.",
     ],
   },
-  preview: {
-    title: "Preview tab",
-    goal: "Inspect generated GDS layouts, DEF floorplans, and rendered preview images.",
+  layout: {
+    title: "Layout tab",
+    goal: "See the chip a run built, stage by stage and layer by layer, and open it in the desktop viewers.",
     how: [
-      "Select a run and choose a DesignFormat (render, gds, def, nl, lef).",
-      "Click Render Layout to execute KLayout.Render for the selected run. Rendered PNGs stream back upon completion.",
-      "Netlist and constraint files display syntax-highlighted text; layout images render inline.",
+      "Pick a run at the top. The layout is drawn by KLayout itself, with the PDK's layer colours, at any zoom. Drag to pan, scroll to zoom, double-click to zoom in, right-drag to zoom to a box. F fits the chip.",
+      "The strip above the view steps through the flow: Floorplan, Power grid, Placement, Clock tree, Routing and the Final GDS. Your zoom stays put when you switch, so you can watch one spot change. Play the flow animates them; Other snapshot opens any step that wrote a DEF.",
+      "Click anything to see what it is: the layer in plain words, its size, and the standard cell it belongs to, with buttons to highlight every copy of that cell or open it in the Cells tab.",
+      "Layers: tick layers on and off, Alt-click (or 'only') to see one alone, or use the presets Wiring and Transistors. Cells: every cell type placed, grouped by what it does; click one to highlight all of them. Find: jump to a pin or label by name. Checks: DRC and XOR markers from the run, drawn on the layout; click one to zoom to it.",
+      "M measures (rulers snap to straight and 45-degree lines; Alt for any angle), L hides labels, O draws cells as named outlines, [ and ] step through the stages.",
+      "Open in KLayout / OpenROAD GUI / Magic / GDS3D starts the full tool in its own window, inside the LibreLane container when possible. OpenROAD opens the stage on screen. Command copies the LibreLane or KLayout command that does the same from a terminal. Save image writes this view, or the whole chip at 4K or 8K.",
+      "Run files, under the viewer, lists every output in final/, shows any design format as text, and renders the Yosys synthesis diagrams.",
     ],
     pitfalls: [
-      "If final/gds/ contains no files, the flow did not reach detailed routing or streaming out. Inspect the Pipeline tab to identify failures.",
+      "Stage snapshots before the final GDS come from each step's DEF, so cells are drawn as their LEF outlines and pins. Only the Final GDS has the transistor-level shapes.",
+      "A run that stopped early shows the last stage it reached. If there is no stage at all, the run stopped before the floorplan; the Pipeline tab says where.",
+      "The picture is what the tools wrote. It is not a sign-off; check Verify and the foundry decks before tape-out.",
     ],
   },
   tools: {

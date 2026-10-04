@@ -102,9 +102,19 @@ export const api = {
   openInTool: (tool, tag, path, useTech, location) =>
     _fetch("/api/open-in-tool", { method: "POST", body: JSON.stringify({
       tool, tag, path, use_tech: useTech !== false, location: location || "host" }) }),
-  openInContainerTool: (tool, tag) =>
+  openInContainerTool: (tool, tag, path) =>
     _fetch("/api/open-in-tool", { method: "POST", body: JSON.stringify({
-      tool, tag, location: "container" }) }),
+      tool, tag, path, location: "container" }) }),
+  // Layout tab: KLayout draws the run in-process (controller/layoutview.py).
+  layoutSources: (tag) => _fetch("/api/layout/sources?tag=" + encodeURIComponent(tag)),
+  layoutOpen: (tag, source) =>
+    _fetch("/api/layout/open?tag=" + encodeURIComponent(tag) + "&source=" + encodeURIComponent(source || "final"), { timeout: 120000 }),
+  layoutProbe: (sid, x, y, r) =>
+    _fetch("/api/layout/probe?sid=" + encodeURIComponent(sid) + "&x=" + x + "&y=" + y + "&r=" + r),
+  layoutInstances: (sid, cell) =>
+    _fetch("/api/layout/instances?sid=" + encodeURIComponent(sid) + "&cell=" + encodeURIComponent(cell)),
+  layoutMarkers: (tag) => _fetch("/api/layout/markers?tag=" + encodeURIComponent(tag)),
+  layoutCommands: (tag) => _fetch("/api/layout/commands?tag=" + encodeURIComponent(tag)),
   runFileUrl: (tag, path) =>
     "/api/run-file?tag=" + encodeURIComponent(tag) + "&path=" + encodeURIComponent(path),
   deleteRun: (tag) => _fetch("/api/run-delete", { method: "POST", body: JSON.stringify({ tag }) }),

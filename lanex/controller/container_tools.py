@@ -491,9 +491,19 @@ def _write_startup_script(tool: str, work_dir: Path, *, odb: Optional[Path],
                          f"liberty loaded ({Path(lib).name})", "read_liberty failed")
             if tf["sdc"] is not None:
                 _try(f"read_sdc {{{tf['sdc']}}}", f"constraints loaded ({tf['sdc'].name})", "read_sdc failed")
-            if tf["spef"] is not None and tf["libs"]:
+            # The run's SPEF is extracted from the FINAL layout; on an earlier
+            # stage's database (Layout tab: "open this stage") its nets and
+            # instances don't match, so timing there stays on estimates.
+            try:
+                final_db = odb.resolve().relative_to(work_dir.resolve()).parts[:1] == ("final",)
+            except ValueError:
+                final_db = False
+            if tf["spef"] is not None and tf["libs"] and final_db:
                 _try(f"read_spef -corner {_tcl_word(corner)} {{{tf['spef']}}}",
                      f"parasitics loaded ({tf['spef'].name})", "read_spef failed")
+            elif tf["spef"] is not None and tf["libs"]:
+                lines.append("puts \"LanEx: this is a stage before extraction, so timing uses wire estimates "
+                             "(the run's SPEF belongs to the final layout)\"\n")
             # ---- DRC / marker inventory ------------------------------------
             # Modern OpenROAD stores DRC results as marker categories INSIDE the
             # OpenDB (the old gui::load_drc tcl command no longer exists — the

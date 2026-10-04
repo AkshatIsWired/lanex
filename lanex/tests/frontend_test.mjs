@@ -178,16 +178,19 @@ check("zoom: stylesheets compensate viewport units via --ll-zoom", () => {
   }
 });
 
-check("layouttools: 'no display' buttons stay clickable (remedy on click)", () => {
-  // A disabled button can never be clicked, so the user never saw the
+check("layouttools: 'no display' still answers a click with the remedy", () => {
+  // A disabled control can never be clicked, so the user never saw the
   // XQuartz/WSLg remedy carried in display.reason (round-59 macOS bug). The
-  // nodisplay branch must not emit a disabled attribute.
+  // nodisplay route must carry the reason and launchTool must show it sticky;
+  // the Layout tab's viewer buttons are never disabled.
   const src = readFileSync(resolve(MOD, "layouttools.js"), "utf8");
-  const start = src.indexOf('where = "nodisplay"');
-  assert.ok(start >= 0, "nodisplay branch not found");
-  const branch = src.slice(start, src.indexOf('where = "install"', start));
-  assert.ok(!/disabled\s*=/.test(branch),
-    "the nodisplay branch disables the button again — remedy becomes unreachable");
+  assert.match(src, /where: "nodisplay", title: \(container\.display && container\.display\.reason\)/,
+    "nodisplay route must carry the display remedy");
+  assert.match(src, /r\.where === "nodisplay"[\s\S]{0,300}toast\.show\([^;]*r\.title[^;]*"warn", 0\)/,
+    "nodisplay click must show the remedy in a sticky toast");
+  const page = readFileSync(resolve(MOD, "layout.js"), "utf8");
+  const desk = page.slice(page.indexOf("async function renderDesk"), page.indexOf("function paintOpenMain"));
+  assert.ok(desk.length > 0 && !/disabled/.test(desk), "desktop viewer buttons must never be disabled");
 });
 
 check("tools: engine-not-usable card is platform-aware with a Start action", () => {
@@ -1137,6 +1140,43 @@ check("cells: units format without losing scale", () => {
   assert.equal(CM.fmtPower(0.00165), "1.65 pW");
   assert.equal(CM.fmtPower(2500), "2.50 µW");
   assert.equal(CM.fmtArea(5.0048), "5.00 µm²");
+});
+
+// ---------- Layout tab (layout.js, layoutcanvas.js) ------------------------------
+const LC = await import(toUrl(resolve(MOD, "layoutcanvas.js")));
+const LX = await import(toUrl(resolve(MOD, "layout.js")));
+
+check("layout: rulers and the scale bar speak in the natural unit", () => {
+  assert.equal(LC.fmtUm(0.14), "140 nm");
+  assert.equal(LC.fmtUm(0.045), "45 nm");
+  assert.equal(LC.fmtUm(2.5), "2.5 µm");
+  assert.equal(LC.fmtUm(96.6), "96.6 µm");
+  assert.equal(LC.fmtUm(1500), "1.5 mm");
+  assert.equal(LC.niceLength(7.3), 5);
+  assert.equal(LC.niceLength(0.031), 0.02);
+  assert.equal(LC.niceLength(180), 100);
+});
+
+check("layout: standard cells are named in plain words", () => {
+  assert.equal(LX.describeCell("sky130_fd_sc_hd__dfrtp_2"), "D flip-flop with reset, drive strength 2");
+  assert.equal(LX.describeCell("sky130_fd_sc_hd__nand3_1"), "3-input NAND, drive strength 1");
+  assert.equal(LX.describeCell("sky130_fd_sc_hd__a21oi_1"), "AND-OR-invert (21), drive strength 1");
+  assert.equal(LX.describeCell("sky130_fd_sc_hd__clkbuf_16"), "clock buffer, drive strength 16");
+  assert.equal(LX.describeCell("sky130_fd_sc_hd__dlygate4sd3_1"), "delay cell (fixes hold timing), drive strength 1");
+  assert.equal(LX.describeCell("my_macro"), "");
+});
+
+check("layout: one Layout tab; Preview is gone everywhere", () => {
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  assert.ok(!/data-tab="preview"|id="sec-preview"/.test(html), "the Preview tab must be gone");
+  assert.equal((html.match(/data-tab="layout"/g) || []).length, 1, "exactly one Layout rail button");
+  assert.ok(html.includes('href="/static/layout.css"'), "layout.css must be linked");
+  for (const f of ["hotkeys.js", "palette.js", "runs.js", "setup.js"]) {
+    const src = readFileSync(resolve(MOD, f), "utf8");
+    assert.ok(!/["']preview["']|preview\.js/.test(src), f + " still points at the old Preview tab");
+  }
+  const app = readFileSync(resolve(MOD, "..", "app.js"), "utf8");
+  assert.ok(!/preview\.js|data-go='preview'/.test(app), "app.js still points at the old Preview tab");
 });
 
 console.log(`\nfrontend_test: ${passed} checks passed` +

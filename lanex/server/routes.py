@@ -2150,7 +2150,16 @@ def h_open_in_tool(handler: Any) -> None:
                                "file types."}, 200)
             return
         gds = target if (target and target.suffix.lower() in (".gds", ".gz")) else _final_gds(run_dir)
-        odb = _final_odb(run_dir) if tool == "openroad" else None
+        odb = None
+        if tool == "openroad":
+            # A stage's own database (Layout tab: "open this stage"), else the final one.
+            if target is not None and target.suffix.lower() == ".odb":
+                if not target.is_file():
+                    _respond(handler, {"ok": False, "error": f"this step wrote no OpenROAD database ({target.name})"}, 200)
+                    return
+                odb = target
+            else:
+                odb = _final_odb(run_dir)
         if tool in ("magic", "klayout") and gds is None:
             _respond(handler, {"ok": False, "error": "this run has no final GDS to open"}, 200)
             return
@@ -2186,6 +2195,198 @@ def _run_pdk(run_dir: "Path") -> Tuple[Optional[str], Optional[str]]:
         except Exception:
             continue
     return None, None
+
+
+# --------------------------------------------------------------------------- Layout tab
+# The live layout viewer (controller/layoutview.py): KLayout's own renderer in
+# this process draws whatever viewport the browser asks for.
+
+def _float_param(path: str, key: str, default: Optional[float] = None) -> Optional[float]:
+    raw = _query_param(path, key, "")
+    try:
+        return float(raw) if raw != "" else default
+    except ValueError:
+        return default
+
+
+def h_layout_sources(handler: Any) -> None:
+    """Stage snapshots + final GDS a run can show, and whether KLayout can draw them."""
+    from ..controller import layoutview
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag)
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    data = layoutview.sources(run_dir)
+    data["tag"] = tag
+    data["engine"] = layoutview.available()
+    _respond(handler, data)
+
+
+def h_layout_open(handler: Any) -> None:
+    """Load one source of a run; returns layers, cells, labels and the bbox."""
+    from ..controller import layoutview
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag)
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    _respond(handler, layoutview.open_session(run_dir, _query_param(handler.path, "source", "final")))
+
+
+def h_layout_render(handler: Any) -> None:
+    """PNG of a viewport: ?sid=&box=x1,y1,x2,y2&w=&h=&vis=1,2,..|all&depth=&labels=&bg=&os=&res=&dl="""
+    from ..controller import layoutview
+    p = handler.path
+    sid = _query_param(p, "sid")
+    box = None
+    raw = _query_param(p, "box")
+    if raw:
+        try:
+            box = [float(x) for x in raw.split(",")][:4]
+            if len(box) != 4:
+                box = None
+        except ValueError:
+            box = None
+    vis_raw = _query_param(p, "vis", "all")
+    visible = None
+    if vis_raw != "all":
+        try:
+            visible = [int(x) for x in vis_raw.split(",") if x != ""]
+        except ValueError:
+            visible = None
+    depth_raw = _query_param(p, "depth", "")
+    depth = int(depth_raw) if depth_raw.lstrip("-").isdigit() else None
+    bg = _query_param(p, "bg", "#06080d")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", bg):
+        bg = "#06080d"
+    try:
+        png = layoutview.render(
+            sid, box=box, w=int(_float_param(p, "w", 800) or 800), h=int(_float_param(p, "h", 600) or 600),
+            visible=visible, depth=depth, labels=_query_param(p, "labels", "1") != "0", bg=bg,
+            boxes=_query_param(p, "boxes", "1") != "0",
+            oversampling=int(_float_param(p, "os", 1) or 1), resolution=_float_param(p, "res", 0.0) or 0.0)
+    except Exception as ex:
+        _log.exception("layout render failed")
+        _respond(handler, "render failed: " + str(ex), 500)
+        return
+    if png is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    name = _query_param(p, "dl")
+    handler.send_response(200)
+    handler.send_header("Content-Type", "image/png")
+    handler.send_header("Content-Length", str(len(png)))
+    handler.send_header("Cache-Control", "no-store")
+    if name:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)[:120] or "layout.png"
+        handler.send_header("Content-Disposition", 'attachment; filename="' + safe + '"')
+    handler.end_headers()
+    handler.wfile.write(png)
+
+
+def h_layout_thumb(handler: Any) -> None:
+    """Small fit-to-window PNG of one stage (stage strip)."""
+    from ..controller import layoutview
+    p = handler.path
+    run_dir = _resolve_run_dir(_query_param(p, "tag"))
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    bg = _query_param(p, "bg", "#06080d")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", bg):
+        bg = "#06080d"
+    w = max(32, min(640, int(_float_param(p, "w", 240) or 240)))
+    h = max(32, min(640, int(_float_param(p, "h", 160) or 160)))
+    try:
+        png = layoutview.thumbnail(run_dir, _query_param(p, "source", "final"), w, h, bg)
+    except Exception as ex:
+        _log.exception("layout thumbnail failed")
+        _respond(handler, str(ex), 500)
+        return
+    if png is None:
+        _respond(handler, "no layout for that stage", 404)
+        return
+    handler._send_bytes(png, 200, "image/png")
+
+
+def h_layout_probe(handler: Any) -> None:
+    """What is under a click: shapes on visible layers, top of the stack first."""
+    from ..controller import layoutview
+    p = handler.path
+    hits = layoutview.probe(_query_param(p, "sid"), _float_param(p, "x", 0.0) or 0.0,
+                            _float_param(p, "y", 0.0) or 0.0, max(0.0, _float_param(p, "r", 0.05) or 0.05))
+    if hits is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    _respond(handler, {"hits": hits})
+
+
+def h_layout_instances(handler: Any) -> None:
+    """Where every placement of one cell type sits (for highlighting)."""
+    from ..controller import layoutview
+    res = layoutview.instances(_query_param(handler.path, "sid"), _query_param(handler.path, "cell"))
+    if res is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    _respond(handler, res)
+
+
+def h_layout_mesh(handler: Any) -> None:
+    """3D mesh of a session (binary: u32 header length, JSON header, float32 data)."""
+    from ..controller import layoutview
+    p = handler.path
+    box = None
+    raw = _query_param(p, "box")
+    if raw:
+        try:
+            box = [float(x) for x in raw.split(",")][:4]
+            box = box if len(box) == 4 else None
+        except ValueError:
+            box = None
+    vis_raw = _query_param(p, "vis", "all")
+    visible = None
+    if vis_raw != "all":
+        try:
+            visible = [int(x) for x in vis_raw.split(",") if x != ""]
+        except ValueError:
+            visible = None
+    try:
+        blob = layoutview.mesh(_query_param(p, "sid"), box, visible)
+    except ValueError as ex:
+        if str(ex) == "too_big":
+            _respond(handler, "too much geometry for 3D here; zoom in to a smaller area first", 413)
+            return
+        raise
+    except Exception as ex:
+        _log.exception("layout mesh failed")
+        _respond(handler, "3D failed: " + str(ex), 500)
+        return
+    if blob is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    handler._send_bytes(blob, 200, "application/octet-stream")
+
+
+def h_layout_markers(handler: Any) -> None:
+    """DRC / routing-DRC / XOR markers of a run, with their geometry."""
+    from ..controller import layoutview
+    run_dir = _resolve_run_dir(_query_param(handler.path, "tag"))
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    _respond(handler, layoutview.markers(run_dir))
+
+
+def h_layout_commands(handler: Any) -> None:
+    """The terminal commands that open this run in KLayout / OpenROAD."""
+    from ..controller import layoutview
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag)
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    _respond(handler, layoutview.viewer_commands(run_dir, tag))
 
 
 def h_run_note(handler: Any) -> None:
@@ -3886,6 +4087,15 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/container-tools", h_container_tools),
     ("/api/container-tools/open", h_container_tool_open),
     ("/api/open-in-tool", h_open_in_tool),
+    ("/api/layout/sources", h_layout_sources),
+    ("/api/layout/open", h_layout_open),
+    ("/api/layout/render", h_layout_render),
+    ("/api/layout/thumb", h_layout_thumb),
+    ("/api/layout/probe", h_layout_probe),
+    ("/api/layout/instances", h_layout_instances),
+    ("/api/layout/mesh", h_layout_mesh),
+    ("/api/layout/markers", h_layout_markers),
+    ("/api/layout/commands", h_layout_commands),
     ("/api/runs/", h_run),
     ("/api/tools", h_tools),
     ("/api/metrics-catalog", h_metrics_catalog),

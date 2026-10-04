@@ -8,20 +8,20 @@ const TAB_KEYS = {
   "1": ["setup", "Setup"],
   "2": ["pipeline", "Pipeline"],
   "3": ["runs", "Runs"],
-  "4": ["preview", "Preview"],
+  "4": ["layout", "Layout"],
   "5": ["tools", "Tools"],
   "6": ["analytics", "Analytics"],
   "7": ["verify", "Verify"],
   "8": ["dse", "DSE"],
-  "9": ["layout", "Layout"],
+  "9": ["ide", "RTL IDE"],
   "0": ["cells", "Cells"],
 };
 
 // Rendered verbatim into the help sheet's Shortcuts tab. Kept next to the handlers.
 export const SHORTCUTS = [
   { keys: "Ctrl K", desc: "Search every command and setting" },
-  { keys: "1 / 2 / 3 / 4 / 5", desc: "Setup, Pipeline, Runs, Preview, Tools" },
-  { keys: "6 / 7 / 8 / 9 / 0", desc: "Analytics, Verify, DSE, Layout, Cells" },
+  { keys: "1 / 2 / 3 / 4 / 5", desc: "Setup, Pipeline, Runs, Layout, Tools" },
+  { keys: "6 / 7 / 8 / 9 / 0", desc: "Analytics, Verify, DSE, RTL IDE, Cells" },
   { keys: "r", desc: "Start a run" },
   { keys: "s", desc: "Stop the running flow" },
   { keys: "/", desc: "Filter the pipeline log" },
