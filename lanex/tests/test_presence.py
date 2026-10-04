@@ -126,7 +126,9 @@ def test_busy_lists_an_install_in_progress():
 
 
 def test_page_requests_reset_idle_but_launcher_probes_do_not(server):
-    urllib.request.urlopen(f"http://127.0.0.1:{server}/api/about", timeout=2).read()
+    # A cheap page request: idle time counts from when it arrived, so a slow
+    # endpoint (/api/about reads versions, ~2 s cold) would fail this on its own.
+    urllib.request.urlopen(f"http://127.0.0.1:{server}/", timeout=2).read()
     assert _presence(server)["idleSeconds"] < 1.0
     time.sleep(1.2)
     # The launcher polls presence and health; those must not look like a page.
