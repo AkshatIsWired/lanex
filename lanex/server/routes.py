@@ -2718,6 +2718,20 @@ def h_cell_usage(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_run_stages(handler: Any) -> None:
+    """Per-step metrics, runtime and peak memory for a run (Analytics)."""
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        _respond(handler, history.run_stages(run_dir))
+    except Exception as ex:
+        _log.exception("run_stages failed")
+        _respond(handler, str(ex), 500)
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 — targeted re-verify + DSE
 # ---------------------------------------------------------------------------
@@ -3626,6 +3640,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/verify", h_verify),
     ("/api/compare", h_compare),
     ("/api/cell-usage", h_cell_usage),
+    ("/api/run-stages", h_run_stages),
     ("/api/timing-paths", h_timing_paths),
     ("/api/dse/start", h_dse_start),
     ("/api/dse/cancel", h_dse_cancel),

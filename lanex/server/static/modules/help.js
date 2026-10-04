@@ -93,15 +93,19 @@ const CATALOG = {
   },
   analytics: {
     title: "Analytics tab",
-    goal: "Examine flow metrics from metrics.json grouped by physical design stage.",
+    goal: "See how a run went, from \"is it clean?\" down to every number LibreLane recorded.",
     how: [
-      "Select runs from the dropdown to update metric tables and trend charts.",
-      "Tiles indicate status based on standard signoff criteria: WNS \u2265 0, LVS errors == 0, and valid density ranges.",
-      "Multi-corner and directional metrics are presented as structured key-value pairs.",
-      "The metric reference table explains each category with sample values to assist in diagnosing failed bounds.",
+      "Pick a run at the top. Compare with picks a second run of the same design (by default the previous clean one); every change on the page is measured against it.",
+      "Overview: the verdict, each check LibreLane ran (hover a chip for what it means), and the four headline numbers: setup slack, area, power and wirelength.",
+      "Timing shows setup and hold side by side, slack in every PVT corner (the outlined row is the worst), and how slack moved at each timing check from synthesis to signoff.",
+      "Area, Power and Routing break those numbers down: floorplan to scale, area by cell type, the cells used, power split, IR drop per supply net, wire and router convergence.",
+      "Flow shows the design at the end of each stage, where the runtime went, and tool warnings by message code. History plots the same numbers over this design's runs; click a point to open that run.",
+      "All metrics lists every value with its raw key. Rows with corners or nets open with the arrow. The magnifier opens the tool's own file at that line.",
     ],
     pitfalls: [
-      "A red metric indicator denotes an out-of-bound value, which may be non-blocking. Check the step log in the Pipeline tab for context.",
+      "Green and red deltas follow LibreLane's own direction for each metric. Metrics without a known direction are never coloured.",
+      "A run that stopped has no final metrics.json; the page then shows the metrics saved by the last step that finished, and says so.",
+      "Power is OpenSTA's estimate with default switching activity, and none of this is a sign-off. Check Verify and the foundry decks before tape-out.",
     ],
   },
   files: {

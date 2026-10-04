@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/static/ide.css" />
   <link rel="stylesheet" href="/static/shell.css" />
   <link rel="stylesheet" href="/static/setup.css" />
+  <link rel="stylesheet" href="/static/analytics.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
        real icon (zero extra deps; static manifest, no service worker). -->
@@ -160,7 +161,7 @@
         <button class="side-tab" data-tab="preview" data-tip="Rendered GDS and DEF">
           <span class="ico"></span><span class="label">Preview</span>
         </button>
-        <button class="side-tab" data-tab="analytics" data-tip="Every metric LibreLane recorded, by stage">
+        <button class="side-tab" data-tab="analytics" data-tip="How a run went: timing, area, power, routing and every metric">
           <span class="ico"></span><span class="label">Analytics</span>
         </button>
         <button class="side-tab" data-tab="verify" data-tip="DRC, LVS, antenna and timing sign-off checks">
@@ -649,55 +650,63 @@
     <section class="section" id="sec-analytics">
       <nav class="section-jump" id="analytics-jump" aria-label="Jump to section">
         <span class="muted">Jump to:</span>
-        <button class="chip chip-clickable" data-jump="analytics-summary">Summary</button>
-        <button class="chip chip-clickable" data-jump="analytics-cells">Cell usage</button>
-        <button class="chip chip-clickable" data-jump="analytics-sections">All metrics</button>
-        <button class="chip chip-clickable" data-jump="analytics-trends">Trends</button>
-        <button class="chip chip-clickable" data-jump="analytics-compare">Compare runs</button>
-        <button class="chip chip-clickable" data-jump="analytics-glossary">Metric reference</button>
+        <button class="chip chip-clickable" data-jump="an-overview">Overview</button>
+        <button class="chip chip-clickable" data-jump="an-timing">Timing</button>
+        <button class="chip chip-clickable" data-jump="an-area">Area</button>
+        <button class="chip chip-clickable" data-jump="an-power">Power</button>
+        <button class="chip chip-clickable" data-jump="an-routing">Routing</button>
+        <button class="chip chip-clickable" data-jump="an-flow">Flow</button>
+        <button class="chip chip-clickable" data-jump="an-history">History</button>
+        <button class="chip chip-clickable" data-jump="analytics-compare">Compare</button>
+        <button class="chip chip-clickable" data-jump="an-all">All metrics</button>
       </nav>
-      <h2>Full metrics from the latest run</h2>
-      <p class="hint">Every value LibreLane persisted in <code>runs/<tag>/metrics.json</code>, grouped by stage. Click a metric for the full path. The advisor below describes what each group means and why a non-passing value matters.</p>
-      <div class="bar">
-        <select id="analytics-run-select"></select>
-        <button class="btn btn-ghost" id="btn-refresh-analytics"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Refresh</button>
-        <button class="btn btn-ghost" id="btn-analytics-csv" title="Download this run's metrics as CSV"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg> CSV</button>
-        <button class="btn btn-ghost" id="btn-analytics-settings" title="All resolved variables from this run (verbatim resolved.json including empty parameters), noting whether each value originated from an override, a configuration line, or a PDK default."><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></svg> Final settings used</button>
-        <input type="search" id="analytics-search" class="grow" placeholder="Filter metrics (e.g. timing, area, lvs)…" autocomplete="off" />
-        <span class="muted" id="analytics-count"></span>
-      </div>
-      <div id="analytics-summary"></div>
-      <details class="card" id="analytics-cells" open style="margin-top:var(--s-6)">
-        <summary><strong>Cell usage</strong><span class="hint">Standard cell placement distribution and instance counts, extracted from the run's Cells by Master report.</span></summary>
-        <div class="card-body">
-          <div id="cells-usage-body"></div>
+      <div class="an-runbar">
+        <div class="an-pick">
+          <label for="analytics-run-select">Run</label>
+          <select id="analytics-run-select"></select>
         </div>
-      </details>
-      <div id="analytics-sections"></div>
-      <details class="card" id="analytics-trends" open style="margin-top:var(--s-6)">
-        <summary><strong>Trends</strong><span class="hint">Tracks key metric progression across design runs over time to identify regressions.</span></summary>
-        <div class="card-body">
-          <div class="row" style="gap:var(--s-2);align-items:center;flex-wrap:wrap">
-            <label class="muted" for="trend-metric">Metric:</label>
-            <select id="trend-metric"></select>
-          </div>
-          <div id="trends-chart" style="height:260px;margin-top:var(--s-3)"></div>
-          <details class="card" id="watch-card" style="margin-top:var(--s-4)">
-            <summary><strong>Metric watch</strong><span class="hint">Get warned when a finished run breaks a bound you set (e.g. worst-slack must stay ≥ 0). Evaluated only against metrics the run actually produced.</span></summary>
+        <div class="an-pick">
+          <label for="an-base-select" data-tip="Every change shown on this page is measured against this run">Compare with</label>
+          <select id="an-base-select"></select>
+        </div>
+        <span class="bar-spacer"></span>
+        <button class="btn btn-ghost btn-sm" id="btn-analytics-settings" title="Every variable this run used (its resolved.json), and where each value came from: an override, your config, or a PDK default"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></svg> Settings used</button>
+        <button class="btn btn-ghost btn-sm" id="btn-analytics-csv" title="Download every metric of this run (and the baseline) as CSV"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 11l5 4 5-4M5 21h14"/></svg> CSV</button>
+        <button class="btn btn-ghost btn-sm" id="btn-refresh-analytics" title="Reload runs and metrics"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Refresh</button>
+      </div>
+      <div class="an-empty empty" id="an-empty" hidden>
+        <span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span>
+        <h3>No runs yet</h3>
+        <p>Run the flow once and this page shows how it went: timing, area, power, routing and every metric LibreLane recorded.</p>
+        <button class="btn btn-primary" data-an-go="setup">Go to Setup</button>
+      </div>
+      <div id="an-body">
+        <div class="an-sec" id="an-overview"></div>
+        <div class="an-sec" id="an-timing"></div>
+        <div class="an-sec" id="an-area"></div>
+        <div class="an-sec" id="an-power"></div>
+        <div class="an-sec" id="an-routing"></div>
+        <div class="an-sec" id="an-flow"></div>
+        <div class="an-sec" id="an-history">
+          <header class="an-head"><div><div class="an-eyebrow">History</div><h2 class="an-title">How is this design trending?</h2>
+            <p class="an-lede">The same numbers across this design's recent runs, so a change that made things worse stands out.</p></div></header>
+          <div id="an-history-body"></div>
+          <details class="card an-watch" id="watch-card">
+            <summary><strong>Metric watch</strong><span class="hint">Get a warning when a finished run breaks a limit you set, for example setup slack must stay at or above 0. Checked only against metrics the run produced.</span></summary>
             <div class="card-body" id="watch-body"></div>
           </details>
         </div>
-      </details>
-      <details class="card" id="analytics-compare" style="margin-top:var(--s-6)">
-        <summary><strong>Compare runs</strong><span class="hint">Config differences, a colored metric-delta table, and comparison charts across runs.</span></summary>
-        <div class="card-body">
-          <div id="compare-body"></div>
+        <div class="an-sec" id="analytics-compare">
+          <header class="an-head"><div><div class="an-eyebrow">Compare</div><h2 class="an-title">Put several runs side by side</h2>
+            <p class="an-lede">Pick two or more runs, from any design you have opened, to see which settings differ and how every metric moved.</p></div></header>
+          <div class="an-card an-card-wide" id="compare-body"><p class="muted">Loading runs from every design you have opened…</p></div>
         </div>
-      </details>
-
-      <h2 style="margin-top:var(--s-6)">Metric reference</h2>
-      <p class="hint">Metrics catalog defined by LibreLane, categorized by flow stage with expected pass/fail directions, retrieved dynamically from the LibreLane metric registry.</p>
-      <div id="analytics-glossary"></div>
+        <div class="an-sec" id="an-all">
+          <header class="an-head"><div><div class="an-eyebrow">All metrics</div><h2 class="an-title">Every number LibreLane recorded</h2>
+            <p class="an-lede">Grouped by topic. Rows with a count open to show each corner, net or iteration.</p></div></header>
+          <div id="an-all-body"></div>
+        </div>
+      </div>
     </section>
 
     <!-- VERIFY -->

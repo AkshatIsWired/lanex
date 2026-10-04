@@ -206,7 +206,18 @@ export function summaryCellHtml(row) {
   if (!row) return "<td>—</td>";
   const unit = row.unit ? " " + fmt.escape(row.unit) : "";
   const cls = row.status ? " class='" + (row.status === "pass" ? "cmp-num pass" : row.status === "fail" ? "cmp-num fail" : "cmp-num") + "'" : " class='cmp-num'";
-  return "<td" + cls + fmt.titleAttr(row.value) + ">" + fmt.escape(fmt.metric(row.value)) + unit + "</td>";
+  return "<td" + cls + fmt.titleAttr(row.value) + ">" + fmt.escape(shortMetric(row.value)) + unit + "</td>";
+}
+
+// fmt.metric() pads to 3 decimals, which turns a count of 64 into "64.000".
+// When the value has no more digits than that, show it as written (64, 66.4);
+// otherwise keep the rounded display (the exact value is in the title).
+function shortMetric(v) {
+  const r = fmt.metric(v);
+  if (typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 100 && Number(r) === v) {
+    return v.toLocaleString("en-US", { maximumFractionDigits: 3 });
+  }
+  return r;
 }
 
 // Curated key metrics to chart across runs (one small bar chart each). Only the

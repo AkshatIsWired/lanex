@@ -1683,6 +1683,109 @@ def metric_trends(design_dir: str | Path, keys: Optional[List[str]] = None,
     return {"ok": True, "runs": runs_meta, "series": series, "keys": list(series.keys())}
 
 
+def _mib(text: Any) -> Optional[float]:
+    """``"198MiB"`` / ``"1.2GiB"`` / ``"512KiB"`` (process_stats.json) -> MiB."""
+    if not isinstance(text, str):
+        return None
+    s = text.strip()
+    for unit, scale in (("GiB", 1024.0), ("MiB", 1.0), ("KiB", 1 / 1024.0), ("B", 1 / 1048576.0)):
+        if s.endswith(unit):
+            try:
+                return round(float(s[: -len(unit)]) * scale, 1)
+            except ValueError:
+                return None
+    return None
+
+
+def _step_ids_from_flow_log(run_dir: Path) -> Dict[str, str]:
+    """Step dir name -> LibreLane step id, from the run's ``flow.log`` lines
+    ``Running '<Step.Id>' at '<...>/<NN-dir>'``. Empty when the log is absent."""
+    out: Dict[str, str] = {}
+    log = run_dir / "flow.log"
+    if not log.is_file():
+        return out
+    try:
+        with log.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if not line.startswith("Running '") or "' at '" not in line:
+                    continue
+                sid, _, rest = line[len("Running '"):].partition("' at '")
+                where = rest.split("'", 1)[0].rstrip("/")
+                name = where.rsplit("/", 1)[-1]
+                if sid and name:
+                    out[name] = sid
+    except Exception:
+        return {}
+    return out
+
+
+def run_stages(run_dir: str | Path) -> Dict[str, Any]:
+    """Per-step view of one run, for the Analytics "through the flow" charts.
+
+    Reads only what LibreLane already wrote: each ``<NN-step>/state_out.json``
+    carries the run's metrics *as of that step*, ``runtime.txt`` the step's
+    wall time and ``*.process_stats.json`` its peak memory. To keep the payload
+    small each step lists only the metrics that changed since the previous step
+    (``changed``); the UI rebuilds the running totals. ``status`` is ``done``
+    (state_out.json written) or ``stopped`` (state_in.json only: the step began
+    and never finished). Nothing is computed beyond unit conversion.
+    """
+    run = Path(run_dir).resolve()
+    try:
+        entries = sorted(
+            (e for e in run.iterdir() if e.is_dir() and _is_step_dir(e.name)),
+            key=lambda e: int(e.name.split("-", 1)[0]),
+        )
+    except Exception:
+        entries = []
+    ids = _step_ids_from_flow_log(run)
+    prev: Dict[str, Any] = {}
+    steps: List[Dict[str, Any]] = []
+    for e in entries:
+        out_doc = _read_json(e / "state_out.json")
+        if isinstance(out_doc, dict):
+            status = "done"
+        elif (e / "state_in.json").is_file():
+            status = "stopped"
+        else:
+            status = "unknown"
+        changed: Dict[str, Any] = {}
+        if isinstance(out_doc, dict) and isinstance(out_doc.get("metrics"), dict):
+            cur = out_doc["metrics"]
+            changed = {k: v for k, v in cur.items() if k not in prev or prev[k] != v}
+            prev = cur
+        peak = None
+        for ps in e.glob("*.process_stats.json"):
+            doc = _read_json(ps)
+            if isinstance(doc, dict):
+                m = _mib(((doc.get("peak_resources") or {}).get("memory_rss")))
+                if m is not None:
+                    peak = m if peak is None else max(peak, m)
+        rt = e / "runtime.txt"
+        steps.append({
+            "n": int(e.name.split("-", 1)[0]),
+            "dir": e.name,
+            "id": ids.get(e.name),
+            "status": status,
+            "runtime_s": _parse_runtime_txt(rt) if rt.is_file() else None,
+            "peak_rss_mib": peak,
+            "changed": changed,
+        })
+    cfg = _read_config(run)
+    meta = cfg.get("meta") if isinstance(cfg.get("meta"), dict) else {}
+    return {
+        "tag": run.name,
+        "completed": _completed(run),
+        "design_name": cfg.get("DESIGN_NAME"),
+        "pdk": cfg.get("PDK"),
+        "scl": cfg.get("STD_CELL_LIBRARY"),
+        "flow": (meta or {}).get("flow") or "",
+        "clock_period": cfg.get("CLOCK_PERIOD"),
+        "clock_port": cfg.get("CLOCK_PORT"),
+        "steps": steps,
+    }
+
+
 def diff_runs(run_dir_a: str | Path, run_dir_b: str | Path) -> Dict[str, Any]:
     """Diff two runs by metrics."""
     a = get_run(Path(run_dir_a).resolve())

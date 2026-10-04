@@ -945,6 +945,78 @@ await checkAsync("tools: full fixture renders 10 tools, 7 PDK cards, 14 GF180 li
   }
 });
 
+// ------------------------------------------------ Analytics: the tool's numbers, shown honestly
+const AM = await import(toUrl(resolve(MOD, "analytics-model.js")));
+
+check("analytics: counts stay integers, units come from the metric", () => {
+  assert.equal(AM.show("design__instance__count", 1226).text, "1,226");
+  assert.equal(AM.show("design__instance__count__class:sequential_cell", 64).text, "64");
+  assert.equal(AM.show("design__instance__area", 7214.42).text, "7,214.42");
+  const p = AM.show("power__total", 0.0014772084541618824);
+  assert.deepEqual([p.text, p.unit], ["1.477", "mW"]);
+  assert.match(p.title, /0\.0014772084541618824 W/, "exact value must stay one hover away");
+  assert.deepEqual([AM.show("design__instance__utilization", 0.630246).text, AM.show("design__instance__utilization", 0.630246).unit], ["63.0", "%"]);
+  assert.equal(AM.show("timing__setup__ws", 4.10025980329734).text, "+4.100");
+  assert.equal(AM.show("timing__hold__ws", -0.02).text, "\u22120.020");
+});
+
+check("analytics: OpenSTA's 1e30 'no path' sentinel and +inf are never spelled out", () => {
+  assert.equal(AM.show("timing__setup_r2r__ws", 1e30).text, "+1.00e+30");
+  assert.equal(AM.show("timing__setup_r2r__ws", "Infinity").text, "\u221e");
+  assert.equal(AM.num(null), "\u2014", "absent stays an em-dash, never 0");
+});
+
+check("analytics: drop__average is a voltage (OpenROAD's IR report), never converted as a drop", () => {
+  const avg = AM.show("design_powergrid__drop__average__net:VPWR__corner:nom_tt_025C_1v80", 1.79997);
+  assert.deepEqual([avg.text, avg.unit], ["1.79997", "V"]);
+  const worst = AM.show("design_powergrid__drop__worst__net:VPWR", 0.000233556);
+  assert.deepEqual([worst.text, worst.unit], ["0.2336", "mV"]);
+  assert.equal(AM.show("design_powergrid__voltage__worst__net:VPWR", 1.79977).text, "1.79977");
+});
+
+check("analytics: metric keys split into base + modifiers", () => {
+  assert.deepEqual(AM.parseKey("timing__setup__ws__corner:max_ss_100C_1v60"), { base: "timing__setup__ws", mods: { corner: "max_ss_100C_1v60" } });
+  assert.deepEqual(AM.parseKey("flow__warnings__count:DRT-0349"), { base: "flow__warnings__count", mods: { code: "DRT-0349" } });
+  assert.deepEqual(AM.parseKey("design__rows:unithd"), { base: "design__rows", mods: { code: "unithd" } });
+  assert.equal(AM.cornerShort("nom_tt_025C_1v80"), "TT 25 \u00b0C 1.80 V \u00b7 nom RC");
+  assert.equal(AM.cornerShort("odd-corner"), "odd-corner", "unknown corner names are shown raw");
+});
+
+check("analytics: deltas are coloured only when the registry knows the direction", () => {
+  const meta = new Map([["timing__setup__ws", { higher_is_better: true }], ["power__total", { higher_is_better: false }]]);
+  assert.equal(AM.delta(3.2, 4.1, AM.directionOf(meta, "timing__setup__ws")).verdict, "worse");
+  assert.equal(AM.delta(0.00141, 0.00148, AM.directionOf(meta, "power__total")).verdict, "better");
+  assert.equal(AM.delta(4790, 4546, AM.directionOf(meta, "design__instance__area__stdcell")).verdict, "neutral");
+  assert.equal(AM.delta(5, 5, 1).verdict, "same");
+  assert.equal(AM.delta("Infinity", 4, 1), null, "non-finite values get no delta");
+});
+
+check("analytics: checks pass at zero, warn when not critical, absent when not run", () => {
+  const meta = new Map([["design__lvs_error__count", { critical: true }], ["design__inferred_latch__count", { critical: false }]]);
+  const by = (vals) => Object.fromEntries(AM.evalChecks(vals, meta).map((c) => [c.label, c.status]));
+  const st = by({ design__lvs_error__count: 1, design__inferred_latch__count: 2, magic__drc_error__count: 0, klayout__drc_error__count: 3 });
+  assert.equal(st.LVS, "fail");
+  assert.equal(st.Latches, "warn");
+  assert.equal(st["DRC Magic"], "pass");
+  assert.equal(st["DRC KLayout"], "fail", "a DRC count is an error even without a registry entry");
+  assert.equal(st.XOR, "absent");
+});
+
+check("analytics: steps get a stage label and running metrics", () => {
+  const steps = AM.accumulate(AM.stageSteps([
+    { n: 6, id: "Yosys.Synthesis", changed: { design__instance__count: 222 } },
+    { n: 13, id: "OpenROAD.Floorplan", changed: { design__instance__utilization: 0.47 } },
+    { n: 31, id: "OpenROAD.STAMidPNR", changed: { timing__setup__ws: 6.6 } },
+    { n: 35, id: "OpenROAD.CTS", changed: {} },
+    { n: 36, id: "OpenROAD.STAMidPNR-1", changed: { timing__setup__ws: 6.0 } },
+  ]));
+  assert.deepEqual(steps.map((s) => s.stage), ["Synthesis", "Floorplan", "Floorplan", "CTS", "CTS"]);
+  assert.equal(steps[4].metrics.design__instance__count, 222);
+  assert.equal(steps[2].metrics.timing__setup__ws, 6.6);
+  assert.equal(AM.stepName({ id: "OpenROAD.STAMidPNR-3" }), "STA mid-PnR (4)");
+  assert.equal(AM.stepName({ id: "OpenROAD.ResizerTimingPostCTS" }), "Resizer timing post CTS");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

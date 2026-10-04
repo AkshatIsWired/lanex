@@ -222,6 +222,7 @@ export const api = {
   compare: (tags, runDirs) => _fetch("/api/compare", { method: "POST",
     body: JSON.stringify({ tags, run_dirs: runDirs || [] }) }),
   cellUsage: (tag) => _fetch("/api/cell-usage?tag=" + encodeURIComponent(tag)),
+  runStages: (tag) => _fetch("/api/run-stages?tag=" + encodeURIComponent(tag)),
   timingPaths: (tag, kind, limit) =>
     _fetch("/api/timing-paths?kind=" + encodeURIComponent(kind || "setup") +
       (tag ? "&tag=" + encodeURIComponent(tag) : "") +
