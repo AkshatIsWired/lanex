@@ -479,6 +479,9 @@ select {
 .bar-spacer { flex: 1; }
 
 /* ---------- runs ---------- */
+/* Runs: the filter is a normal-sized field; the cards fill the page. */
+#sec-runs .runs-filter { flex: 0 1 340px; width: 340px; min-width: 0; }
+#sec-runs #runs-status-filter { flex: 0 0 auto; width: auto; min-width: 140px; }
 .runs-list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s-3); }
 .runs-list li {
   padding: var(--s-3) var(--s-4);

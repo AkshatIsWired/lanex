@@ -350,20 +350,31 @@
             <div class="pdk-row">
               <label class="field"><span>Process (PDK)</span><select id="pdk-select"></select></label>
               <label class="field"><span>Standard-cell library</span><select id="scl-select"></select></label>
+              <p class="pdk-about" id="pdk-about"></p>
             </div>
-            <p class="pdk-about" id="pdk-about"></p>
           </div>
 
-          <!-- Most used settings: the handful of LibreLane variables real
-               projects change, saved into the project's config (mostused.js). -->
-          <div class="picker" id="setup-settings">
-            <h2 class="picker-head"><span><svg class="h2ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><path d="M16 4v4M10 10v4M18 16v4"/></svg>Settings</span>
-              <span class="ms-where" id="ms-where"></span>
-              <span class="block-actions"><button class="btn btn-sm btn-ghost" data-jump-to="cfg-card">All settings</button></span>
-            </h2>
-            <p class="hint">Most designs only change a few of LibreLane's 400+ settings. These are the usual ones, with when to change them. Leave a field empty to use the default.</p>
-            <div class="ms-body" id="ms-body"><p class="muted">Open a project to see its settings.</p></div>
-          </div>
+          <!-- Common settings: the handful of LibreLane variables real projects
+               change, saved into the project's config (mostused.js). Folded by
+               default; the bar says what is set, so nothing hides behind it. -->
+          <details class="picker ms-card" id="setup-settings">
+            <summary class="ms-sum">
+              <span class="ms-sum-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><path d="M16 4v4M10 10v4M18 16v4"/></svg></span>
+              <span class="ms-sum-main">
+                <span class="ms-sum-top"><h2 class="ms-title">Common settings</h2><span class="ms-tag">Most used</span></span>
+                <span class="ms-sum-line" id="ms-sum-line">The handful of settings most designs change, saved in the project's config.</span>
+              </span>
+              <span class="ms-sum-side">
+                <span class="ms-where" id="ms-where"></span>
+                <span class="ms-count" id="ms-count" hidden></span>
+                <span class="ms-chev" aria-hidden="true"><span class="ms-chev-show">Show</span><span class="ms-chev-hide">Hide</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+              </span>
+            </summary>
+            <div class="ms-open">
+              <p class="hint">Saved in the project's config, so a terminal run builds the same chip. Leave a field empty to use LibreLane's default. The other 400+ settings are in <button type="button" class="linklike" data-jump-to="cfg-card">All settings</button>.</p>
+              <div class="ms-body" id="ms-body"><p class="muted">Open a project to see its settings.</p></div>
+            </div>
+          </details>
 
           <!-- Ready to run: three checkpoints on one trace, then the launch. -->
           <div class="picker launch" id="setup-preflight">
@@ -394,7 +405,7 @@
       <details class="card" id="cfg-card">
         <summary>
           <strong>All settings</strong>
-          <span class="hint">Every LibreLane variable, by flow stage. Values set here apply to runs started from LanEx and leave <code>config.json</code> as it is; the Settings card above saves into it.</span>
+          <span class="hint">Every LibreLane variable, by flow stage. Values set here apply to runs started from LanEx and leave <code>config.json</code> as it is; Common settings above saves into it.</span>
         </summary>
         <div class="card-body">
           <!-- Category tabs: sticky under the page header while you scroll the settings. -->
@@ -821,6 +832,11 @@
             <div class="lx-tools" role="toolbar" aria-label="View">
               <button class="lx-tb" data-lx="side" aria-pressed="true" title="Show or hide the side panel" aria-label="Side panel"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4zM9 4v16"/></svg></button>
               <span class="lx-tb-sep"></span>
+              <span class="lx-mode" role="group" aria-label="2D or 3D">
+                <button class="lx-mode-b" data-lx="2d" aria-pressed="true" title="The flat layout, layer on layer">2D</button>
+                <button class="lx-mode-b lx-tb-3d" data-lx="3d" aria-pressed="false" title="3D: the layer stack at its real heights (3). Zoomed in, it shows the area on screen."><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>3D</button>
+              </span>
+              <span class="lx-tb-sep"></span>
               <button class="lx-tb" data-lx="fit" title="Fit the whole chip (F)" aria-label="Fit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
               <button class="lx-tb" data-lx="zout" title="Zoom out (-)" aria-label="Zoom out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
               <button class="lx-tb" data-lx="zin" title="Zoom in (+)" aria-label="Zoom in"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -828,23 +844,26 @@
               <button class="lx-tb" data-lx="measure" aria-pressed="false" title="Measure: drag to draw a ruler (M). Esc clears them." aria-label="Measure"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2"/></svg></button>
               <button class="lx-tb" data-lx="labels" aria-pressed="true" title="Pin and net labels (L)" aria-label="Labels"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg></button>
               <button class="lx-tb" data-lx="detail" aria-pressed="false" title="Cell outlines: draw each standard cell as a named box instead of its insides (O)" aria-label="Cell outlines"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h8v6H3zM13 5h8v6h-8zM3 13h5v6H3zM10 13h11v6H10z"/></svg></button>
-              <button class="lx-tb lx-tb-3d" data-lx="3d" aria-pressed="false" title="3D: the layer stack at its real heights (3). Zoomed in, it shows the area on screen." aria-label="3D view"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></button>
               <button class="lx-tb" data-lx="bg" title="Dark or white background" aria-label="Background"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg></button>
               <span class="lx-tb-sep"></span>
               <button class="lx-tb" data-lx="full" title="Full screen" aria-label="Full screen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
             </div>
-            <div class="lx-badge" id="lx-badge"></div>
+            <!-- Top right: what is on screen, and in 3D the controls that shape it. -->
+            <div class="lx-corner">
+              <div class="lx-badge" id="lx-badge"></div>
+              <div class="lx-3dctl" id="lx-3dctl" hidden>
+                <label><span>Height</span><output id="lx-3d-zv">×4</output><input type="range" id="lx-3d-z" min="1" max="16" step="0.5" value="4" aria-label="Height exaggeration"/></label>
+                <label><span>Spread layers</span><input type="range" id="lx-3d-s" min="0" max="8" step="0.25" value="0" aria-label="Spread the layers apart"/></label>
+                <p class="lx-3d-how">Drag to turn · right-drag to move · scroll to zoom</p>
+                <button class="btn btn-ghost btn-sm" id="lx-3d-reset" title="Back to the starting angle (double-click also works)">Reset view</button>
+              </div>
+            </div>
             <div class="lx-busy" id="lx-busy" hidden><span></span></div>
             <div class="lx-hud" id="lx-hud">
               <div class="lx-scale" id="lx-scale"><i></i><span></span></div>
               <div class="lx-xy" id="lx-xy"></div>
             </div>
             <canvas class="lx-mini" id="lx-mini" width="180" height="120" aria-label="Overview map: click to move there"></canvas>
-            <div class="lx-3dctl" id="lx-3dctl" hidden>
-              <label>Height <input type="range" id="lx-3d-z" min="1" max="16" step="0.5" value="4"/><output id="lx-3d-zv">×4</output></label>
-              <label>Spread layers <input type="range" id="lx-3d-s" min="0" max="8" step="0.25" value="0"/></label>
-              <button class="btn btn-ghost btn-sm" id="lx-3d-reset" title="Back to the starting angle (double-click also works)">Reset view</button>
-            </div>
             <div class="lx-inspect" id="lx-inspect" hidden></div>
             <div class="lx-msg" id="lx-msg" hidden></div>
             <div class="lx-hint" id="lx-hint">Drag to pan · scroll to zoom · click anything to see what it is · <kbd>F</kbd> fits</div>
@@ -888,23 +907,22 @@
         <button class="chip chip-clickable" data-jump="cl-macros">Macros</button>
         <button class="chip chip-clickable" data-jump="cl-rules">Flow rules</button>
       </nav>
-      <div class="an-runbar cl-bar">
-        <div class="an-pick">
-          <label for="cl-libpick">Standard-cell library</label>
-          <select id="cl-libpick"></select>
-        </div>
-        <div class="cl-libnote" id="cl-libnote"></div>
-        <span class="bar-spacer"></span>
-        <button class="btn btn-ghost btn-sm" id="cl-refresh" title="Re-read the PDK files and this project's config"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Refresh</button>
-      </div>
-      <div id="cl-summary"></div>
-
       <div class="an-sec" id="cl-library">
         <div class="an-head"><div>
           <div class="an-eyebrow">Library</div>
           <h2 class="an-title">The cells your design is built from</h2>
           <p class="an-lede">Synthesis turns your RTL into these. Pick one to see what it does, what it looks like on silicon, how each drive strength trades area for speed, and whether this project's flow may use it.</p>
         </div></div>
+        <div class="an-runbar cl-bar">
+          <div class="an-pick">
+            <label for="cl-libpick">Standard-cell library</label>
+            <select id="cl-libpick"></select>
+          </div>
+          <div class="cl-libnote" id="cl-libnote"></div>
+          <span class="bar-spacer"></span>
+          <button class="btn btn-ghost btn-sm" id="cl-refresh" title="Re-read the PDK files and this project's config"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg> Refresh</button>
+        </div>
+        <div id="cl-summary"></div>
         <div id="cl-lib"></div>
       </div>
 

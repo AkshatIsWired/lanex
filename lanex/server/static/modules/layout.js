@@ -588,7 +588,7 @@ function stageControls(stages, extra, eng) {
   if (!eng.ok) return "";
   const play = stages.length > 1
     ? "<button class='btn btn-ghost btn-sm' id='lx-play' title='Step through every stage, keeping the current view'>" +
-      "<svg viewBox='0 0 24 24' width='13' height='13' fill='currentColor' aria-hidden='true'><path d='M7 4l13 8-13 8z'/></svg> Play the flow</button>"
+      "<svg viewBox='0 0 24 24' width='13' height='13' fill='currentColor' aria-hidden='true'><path d='M7 4l13 8-13 8z'/></svg> <span>Play<span class='lx-play-x'> the flow</span></span></button>"
     : "";
   const more = extra.length
     ? "<select id='lx-more' class='lx-more' aria-label='Any step snapshot' title='Any step that wrote a DEF, or the separate KLayout and Magic stream-outs'>" +
@@ -637,7 +637,7 @@ function stopPlay() {
   clearTimeout(S.playing);
   S.playing = 0;
   const btn = $("lx-play");
-  if (btn) btn.innerHTML = "<svg viewBox='0 0 24 24' width='13' height='13' fill='currentColor' aria-hidden='true'><path d='M7 4l13 8-13 8z'/></svg> Play the flow";
+  if (btn) btn.innerHTML = "<svg viewBox='0 0 24 24' width='13' height='13' fill='currentColor' aria-hidden='true'><path d='M7 4l13 8-13 8z'/></svg> <span>Play<span class='lx-play-x'> the flow</span></span>";
 }
 
 // ------------------------------------------------------------------ layers pane
@@ -1025,6 +1025,7 @@ function toggle3d(on) {
   $("lx-view").classList.toggle("is-3d", want);
   $("lx-3dctl").hidden = !want;
   document.querySelector("[data-lx='3d']")?.setAttribute("aria-pressed", want ? "true" : "false");
+  document.querySelector("[data-lx='2d']")?.setAttribute("aria-pressed", want ? "false" : "true");
   hideInspector();
   if (want) {
     S.three.show(true);
@@ -1153,7 +1154,7 @@ function onToolbar(e) {
   else if (a === "bg") toggleBg();
   else if (a === "side") toggleSide();
   else if (a === "full") toggleFull();
-  else if (a === "3d") { toggle3d(); return; }
+  else if (a === "3d" || a === "2d") { if ((a === "3d") !== !!S.mode3d) toggle3d(a === "3d"); return; }
   (S.mode3d && S.three ? S.three.cv : S.canvas.over).focus({ preventScroll: true });
 }
 

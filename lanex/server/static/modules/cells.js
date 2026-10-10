@@ -452,11 +452,16 @@ async function paintDetail(name) {
   if (!host) return;
   const c = S.byName.get(name);
   const fam = familyOf(name);
+  // Two stacks, not rows: each card is as tall as what it holds, so a short
+  // card never sits in a box stretched to its neighbour's height.
   host.innerHTML = headHtml(c, fam) + "<div class='cl-cards'>" +
+    "<div class='cl-col'>" +
     "<section class='cl-card' id='cl-c-fn'>" + functionHtml(c) + "</section>" +
-    "<section class='cl-card' id='cl-c-layout'><div class='cl-card-h'>Layout <span class='muted'>loading…</span></div><div class='cl-lay-skel'></div></section>" +
     "<section class='cl-card' id='cl-c-drive'><div class='cl-card-h'>Drive strengths</div><div class='cl-lay-skel short'></div></section>" +
+    "</div><div class='cl-col'>" +
+    "<section class='cl-card' id='cl-c-layout'><div class='cl-card-h'>Layout <span class='muted'>loading…</span></div><div class='cl-lay-skel'></div></section>" +
     "<section class='cl-card' id='cl-c-flow'>" + flowHtml(c) + "</section>" +
+    "</div>" +
     "<section class='cl-card cl-card-pro' id='cl-c-pins'><div class='cl-card-h'>Pins &amp; timing arcs</div><div class='cl-lay-skel short'></div></section>" +
     "</div>";
   wireDetail(host, c);
@@ -541,25 +546,35 @@ function functionHtml(c, det) {
     const hdr = M.headerFormulas(c.formula);
     const parsed = outs.map((o) => ({ name: o.name, ast: hdr[o.name] || M.parseFunction(o.function), z: o.three_state ? M.parseFunction(o.three_state) : null, raw: o.function }));
     const main = parsed[0];
-    body += parsed.map((p) => "<div class='cl-formula'><code>" + esc(p.name) + " = " + esc(p.ast ? M.astText(p.ast) : (p.raw || "?")) + "</code>" +
+    let eq = parsed.map((p) => "<div class='cl-formula'><code>" + esc(p.name) + " = " + esc(p.ast ? M.astText(p.ast) : (p.raw || "?")) + "</code>" +
       (p.z ? "<span class='muted'> · floats (Z) when " + esc(M.astWords(p.z)) + "</span>" : "") + "</div>").join("");
+    let gd = "";
     if (main.ast) {
-      body += "<p class='cl-words'>" + esc(main.name) + " = " + esc(M.astWords(main.ast)) + " <span class='cl-class'>" + esc(M.classify(main.ast)) + "</span></p>";
+      eq += "<p class='cl-words'>" + esc(main.name) + " = " + esc(M.astWords(main.ast)) + " <span class='cl-class'>" + esc(M.classify(main.ast)) + "</span></p>";
       const svg = parsed.length === 1 ? M.gateDiagram(main.ast, main.name) : "";
-      if (svg) body += "<div class='cl-gd'>" + svg + "</div>";
+      // --gw: the drawing's own width, so it can grow to fill the card without
+      // ballooning a two-input gate.
+      const gw = svg ? +(/viewBox='0 0 ([\d.]+)/.exec(svg) || [0, 300])[1] : 0;
+      if (svg) gd = "<div class='cl-gd' style='--gw:" + gw + "'>" + svg + "</div>";
     }
     const vars = ins.length ? ins : [...new Set(parsed.flatMap((p) => [...M.astVars(p.ast)]))];
     const tt = parsed.every((p) => p.ast) ? M.truthTable(vars, parsed) : null;
+    // A short truth table (up to 8 rows) stands open beside the drawing; a long
+    // one folds under it, and the drawing gets the room.
+    const small = !!tt && tt.length <= 8;
+    let ttHtml = "";
     if (tt && vars.length) {
-      body += "<details class='cl-tt'" + (vars.length <= 3 ? " open" : "") + "><summary>Truth table <span class='muted'>" + tt.length + " rows</span></summary>" +
+      ttHtml = "<details class='cl-tt'" + (small ? " open" : "") + "><summary>Truth table <span class='muted'>" + tt.length + " rows</span></summary>" +
         "<div class='cl-tt-wrap'><table><thead><tr>" + vars.map((v) => "<th>" + esc(v) + "</th>").join("") +
         "<th class='cl-tt-sep'></th>" + parsed.map((p) => "<th class='cl-tt-o'>" + esc(p.name) + "</th>").join("") + "</tr></thead><tbody>" +
         tt.map((r) => "<tr>" + r.ins.map((v) => "<td>" + v + "</td>").join("") + "<td class='cl-tt-sep'></td>" +
           r.outs.map((v) => "<td class='cl-tt-o v" + v + "'>" + v + "</td>").join("") + "</tr>").join("") +
         "</tbody></table></div></details>";
     } else if (vars.length > 6) {
-      body += "<p class='muted cl-p'>" + vars.length + " inputs: a truth table would have " + (1 << vars.length) + " rows, so it is left out.</p>";
+      ttHtml = "<p class='muted cl-p'>" + vars.length + " inputs: a truth table would have " + (1 << vars.length) + " rows, so it is left out.</p>";
     }
+    body += "<div class='cl-fn-eq'>" + eq + "</div>" +
+      (gd || ttHtml ? "<div class='cl-fn-vis" + (gd && small && ttHtml ? " is-pair" : "") + "'>" + gd + ttHtml + "</div>" : "");
   }
   return "<div class='cl-card-h'>What it does</div>" + body;
 }

@@ -324,6 +324,13 @@ function paintCount() {
     : "No design files yet.";
 }
 
+function column(root) {
+  const c = document.createElement("div");
+  c.className = "src-col";
+  root.appendChild(c);
+  return c;
+}
+
 function groupHead(text, note) {
   const h = document.createElement("div");
   h.className = "filesel-group";
@@ -334,10 +341,8 @@ function groupHead(text, note) {
 
 function designNote() {
   const cfg = "<code>" + fmt.escape(_cfg.name) + "</code>";
-  if (_cfg.mode === "list" && _cfg.globbed) {
-    return "Every file matching <code>" + fmt.escape(_cfg.entries.join(" ")) + "</code> in " + cfg +
-      ". Unticking one switches the config to a list of files.";
-  }
+  // What unticking does to a glob is on the checkbox itself (tickTitle).
+  if (_cfg.mode === "list" && _cfg.globbed) return "Matched by <code>" + fmt.escape(_cfg.entries.join(" ")) + "</code> in " + cfg;
   if (_cfg.mode === "list") return "The files " + cfg + " builds into the chip.";
   if (_cfg.mode === "none") return cfg + " doesn't list any yet. Ticking a file adds it.";
   if (_cfg.mode === "unknown") return fmt.escape(_cfg.reason || "LanEx can't edit this config.") + " Ticks apply to runs started from LanEx.";
@@ -378,25 +383,32 @@ function renderFileSelector() {
       "<span>Use <b>New file</b> to write a module in the RTL IDE, or <b>Add files</b> to bring in ones you already have.</span>";
     root.appendChild(empty);
   }
-  if (design.length) {
-    root.appendChild(groupHead("Design files", designNote()));
-    for (const f of design) root.appendChild(srcRow(f, true));
-  }
-  if (tbs.length) {
-    root.appendChild(groupHead("Testbenches", "simulation only, never built into the chip"));
-    for (const f of tbs) root.appendChild(srcRow(f, false));
+  // Two columns on a wide page: the Verilog (what goes into the chip and what
+  // tests it) and the project's other files (config, constraints, pins), so a
+  // row's Edit sits next to its name instead of across the screen.
+  if (design.length || tbs.length) {
+    const col = column(root);
+    if (design.length) {
+      col.appendChild(groupHead("Design files", designNote()));
+      for (const f of design) col.appendChild(srcRow(f, true));
+    }
+    if (tbs.length) {
+      col.appendChild(groupHead("Testbenches", "simulation only, never built into the chip"));
+      for (const f of tbs) col.appendChild(srcRow(f, false));
+    }
   }
   const usesSdc = _files.some((f) => (f.used_by || []).some((v) => /SDC/.test(v)));
   if (others.length || !usesSdc) {
-    root.appendChild(groupHead("Project files", ""));
+    const col = column(root);
+    col.appendChild(groupHead("Project files", ""));
     if (!usesSdc) {
       const t = document.createElement("div");
       t.className = "src-row src-note";
       t.innerHTML = "<span class='name'>Timing</span><span class='src-desc'>LibreLane's default constraints, built from your clock.</span>" +
         "<span class='src-acts'><button type='button' class='btn btn-sm btn-ghost' data-src-act='new-sdc'>Create SDC file</button></span>";
-      root.appendChild(t);
+      col.appendChild(t);
     }
-    for (const f of others) root.appendChild(srcRow(f, false));
+    for (const f of others) col.appendChild(srcRow(f, false));
   }
   const foot = document.getElementById("filesel-foot");
   if (foot) foot.hidden = design.length <= 6;
@@ -412,6 +424,9 @@ function srcRow(f, tickable) {
     cb.type = "checkbox";
     cb.checked = _checked.has(f.abs);
     cb.setAttribute("aria-label", "Build " + f.rel + " into the chip");
+    if (_cfg.mode === "list" && _cfg.globbed) {
+      cb.title = "Untick to leave it out of the chip. " + (_cfg.name || "The config") + " then lists its design files by name.";
+    }
     cb.addEventListener("change", () => {
       if (cb.checked) _checked.add(f.abs); else _checked.delete(f.abs);
       onTicksChanged();

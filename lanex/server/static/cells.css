@@ -102,7 +102,7 @@ body.theme-light #sec-cells {
 .cl-usebar { position: absolute; left: 10px; bottom: 2px; height: 2px; width: calc((100% - 20px) * var(--w) / 100); background: color-mix(in srgb, var(--pass) 60%, transparent); border-radius: 2px; }
 
 /* ---------- detail ---------- */
-.cl-detail { min-width: 0; }
+.cl-detail { min-width: 0; container: cl-detail / inline-size; }
 .cl-head { padding: 2px 0 var(--s-4); }
 .cl-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
 .cl-title { margin: 0; font-family: var(--mono); font-size: 22px; font-weight: 600; color: var(--text-strong); letter-spacing: -0.01em; overflow-wrap: anywhere; }
@@ -128,13 +128,20 @@ body.theme-light #sec-cells {
 .cl-dt.is-ex b { text-decoration: line-through; color: var(--text-disabled); }
 .cl-dt-help { margin-left: 6px; font-size: 12px; color: var(--text-muted); font-family: var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
 .cl-facts { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; margin: var(--s-4) 0 0; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
-@media (max-width: 1400px) { .cl-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container cl-detail (max-width: 1000px) { .cl-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .cl-fact { padding: 9px 12px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); margin-bottom: -1px; cursor: help; min-width: 0; }
 .cl-fact dt { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); }
 .cl-fact dd { margin: 3px 0 0; font-size: 15px; font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.cl-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-4); }
-@media (max-width: 1350px) { .cl-cards { grid-template-columns: 1fr; } }
+/* Two stacks side by side (what it does + drive | layout + flow), the pins
+   table across both. Narrow: one column, in reading order. */
+.cl-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-4); align-items: start; }
+.cl-col { display: flex; flex-direction: column; gap: var(--s-4); min-width: 0; }
+@container cl-detail (max-width: 940px) {
+  .cl-cards { grid-template-columns: 1fr; }
+  .cl-col { display: contents; }
+  #cl-c-fn { order: 1; } #cl-c-layout { order: 2; } #cl-c-drive { order: 3; } #cl-c-flow { order: 4; } #cl-c-pins { order: 5; }
+}
 .cl-card {
   position: relative; min-width: 0; padding: var(--s-4) var(--s-5) var(--s-5);
   border: 1px solid var(--border); border-radius: var(--r-md);
@@ -161,6 +168,25 @@ body.theme-light #sec-cells {
 .gd-x { fill: none; }
 .gd-in, .gd-out { font-family: var(--mono); font-size: 12px; fill: var(--text-strong); }
 .cl-tt { margin-top: var(--s-3); }
+/* What it does: the formulas centred, then the drawing. A short truth table
+   stands beside the drawing when the card has room (.is-pair); otherwise it
+   folds under it. The drawing grows to fill the card, up to twice its own size. */
+#cl-c-fn { container: cl-fn / inline-size; }
+.cl-fn-eq { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+.cl-fn-eq .cl-words { margin: 0; }
+.cl-fn-eq .cl-formula + .cl-formula { margin-top: 0; }
+.cl-fn-vis { display: flex; flex-direction: column; align-items: center; gap: var(--s-4); margin-top: var(--s-5); }
+.cl-fn-vis > .cl-gd { width: 100%; max-width: min(calc(var(--gw, 300) * 2px), 640px); margin: 0; overflow: visible; }
+.cl-fn-vis > .cl-gd .gd { width: 100%; max-width: none; height: auto; }
+.cl-fn-vis > .cl-tt { margin: 0; display: flex; flex-direction: column; align-items: center; }
+.cl-fn-vis > .cl-tt .cl-tt-wrap { max-height: 300px; }
+.cl-fn-vis > .cl-p { margin: 0; text-align: center; }
+@container cl-fn (min-width: 520px) {
+  .cl-fn-vis.is-pair { flex-direction: row; justify-content: center; align-items: center; gap: var(--s-6); }
+  .cl-fn-vis.is-pair > .cl-gd { flex: 1 1 0; min-width: 0; max-width: min(calc(var(--gw, 300) * 2px), 460px); }
+  .cl-fn-vis.is-pair > .cl-tt { flex: none; }
+  .cl-fn-vis.is-pair > .cl-tt > summary { align-self: flex-start; }
+}
 .cl-tt summary { cursor: pointer; font-size: 13px; color: var(--text); }
 .cl-tt-wrap { max-height: 260px; overflow: auto; margin-top: 6px; border: 1px solid var(--border); border-radius: var(--r-sm); display: inline-block; max-width: 100%; }
 .cl-tt table { border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
@@ -182,6 +208,7 @@ body.theme-light #sec-cells {
 /* a layout always reads on black, as in KLayout, whatever the app theme */
 .cl-lay { border-radius: var(--r-sm); background: #0c1017; border: 1px solid var(--border); padding: 8px; }
 .cl-lay svg { display: block; width: 100%; height: 280px; }
+@container cl-detail (min-width: 1420px) or ((min-width: 700px) and (max-width: 940px)) { .cl-lay svg { height: 360px; } }
 .cl-ly { fill: var(--f); fill-opacity: 0.5; stroke: var(--s); stroke-width: 0.012; vector-effect: non-scaling-stroke; stroke-opacity: 0.9; transition: opacity var(--dur-1); }
 .cl-ly.is-blanket { fill-opacity: 0.07; stroke-dasharray: 3 3; }
 .cl-ly.is-off { opacity: 0; }

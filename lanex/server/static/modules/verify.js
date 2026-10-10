@@ -468,7 +468,7 @@ function renderChecks() {
   el.innerHTML = head("Checks", "Every check, in flow order",
       "Each row is one of LibreLane's checks on this run. Click a row to see what it looks at, the numbers behind it and what to change. Problems are open already.",
       "<div class='seg vf-seg' role='group' aria-label='Filter checks'>" + seg + "</div>") +
-    (groups || "<div class='an-none'>" + (_filter === "problems" ? "No problems in this run." : "Nothing to show for this filter.") + "</div>");
+    (groups ? "<div class='vf-groups'>" + groups + "</div>" : "<div class='an-none'>" + (_filter === "problems" ? "No problems in this run." : "Nothing to show for this filter.") + "</div>");
 }
 
 function rowHtml(c) {

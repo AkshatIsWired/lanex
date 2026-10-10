@@ -400,8 +400,16 @@ body.theme-light .src-tag.is-top { color: var(--accent); }
 .iconbtn-sm { padding-left: 8px; padding-right: 8px; }
 .nf-use { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; color: var(--text); margin-top: 4px; }
 .nf-use[hidden] { display: none; }
-.filesel-list { display: flex; flex-direction: column; gap: 4px; }
-.filesel-group { display: flex; align-items: baseline; gap: 10px; padding: 14px 0 4px; }
+/* Two columns once there is room: the Verilog, and the project's other files
+   (fs.js puts each in a .src-col), so Edit sits next to its file. */
+.filesel-list {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr));
+  gap: 4px var(--s-6); align-items: start;
+}
+.src-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.filesel-list > .filesel-empty { grid-column: 1 / -1; }
+.filesel-group { display: flex; align-items: center; gap: 10px; min-height: 22px; padding: 14px 0 4px; box-sizing: content-box; }
+.filesel-group-note code { font-size: 12px; }
 .filesel-group:first-child { padding-top: 0; }
 .filesel-group .lane-label { font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.14em; color: var(--text-muted); }
 .filesel-group-note { font-size: 13px; color: var(--text-muted); }
@@ -426,11 +434,18 @@ body.theme-light .src-tag.is-top { color: var(--accent); }
 .filesel-empty b { color: var(--text-strong); font-size: 15px; }
 
 /* PDK */
-.pdk-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-4); }
+.pdk-row {
+  display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 340px) minmax(0, 1fr);
+  gap: var(--s-3) var(--s-4); align-items: end;
+}
+@media (max-width: 1100px) {
+  .pdk-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pdk-row .pdk-about { grid-column: 1 / -1; }
+}
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .field > span { font-size: 14px; font-weight: 500; color: var(--text); }
 .field > span em { font-style: normal; font-weight: 400; color: var(--text-muted); margin-left: 4px; }
-.pdk-about { margin: 12px 0 0; font-size: 14px; color: var(--text-muted); }
+.pdk-about { margin: 0 0 9px; font-size: 14px; line-height: 1.45; color: var(--text-muted); max-width: 80ch; text-wrap: pretty; }
 .pdk-about:empty { display: none; }
 
 /* ---------- Settings: the most used variables, saved in the config ---------- */
@@ -439,26 +454,50 @@ body.theme-light .src-tag.is-top { color: var(--accent); }
 .ms-where .is-warn { color: var(--warn); }
 .picker-head .ms-where ~ .block-actions { margin-left: 0; }
 .ms-ro { margin: 0 0 var(--s-3); font-size: 14px; color: var(--warn); }
-.ms-groups { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-3); align-items: stretch; }
-@media (max-width: 1400px) { .ms-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 720px) { .ms-groups { grid-template-columns: 1fr; } }
+/* A property sheet: each group is a container, and its fields lay out by the
+   room they get. Wide: label | control | when to change it, one row each.
+   Medium: the line goes under the control. Narrow: everything stacks. Controls
+   keep a sensible width instead of stretching across the page. */
+.ms-body { container: ms-body / inline-size; }
+.ms-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); align-items: stretch; }
+@container ms-body (max-width: 900px) { .ms-groups { grid-template-columns: 1fr; } }
 .ms-group {
-  display: flex; flex-direction: column; gap: var(--s-3); min-width: 0;
-  padding: var(--s-3) var(--s-4) var(--s-4);
+  container: ms-group / inline-size;
+  display: flex; flex-direction: column; gap: 0; min-width: 0;
+  padding: var(--s-3) var(--s-4) var(--s-3);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
 }
+.ms-group > .lane-label { margin-bottom: 2px; }
 .ms-group > .lane-label { font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--met1); }
 body.theme-light .ms-group > .lane-label { color: var(--accent); }
 .ms-gnote { margin: auto 0 0; font-size: 13px; line-height: 1.45; color: var(--text-muted); border-top: 1px dashed var(--border); padding-top: var(--s-2); }
-.ms-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-left: 10px; border-left: 2px solid transparent; margin-left: -12px; }
-.ms-field.is-set { border-left-color: var(--met1); }
+.ms-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px 0; }
+.ms-field + .ms-field { border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.ms-field + .ms-gnote { margin-top: var(--s-2); }
+/* Medium: label | control, the line under the control; the control fills the
+   group so every box in it is the same width and nothing is left empty. */
+@container ms-group (min-width: 440px) {
+  .ms-field { display: grid; grid-template-columns: 196px minmax(0, 1fr); column-gap: var(--s-4); row-gap: 6px; align-items: center; }
+  .ms-field > .ms-hint, .ms-field > .ms-note { grid-column: 2; }
+}
+/* Wide: label | control | when to change it, all on one row. */
+@container ms-group (min-width: 760px) {
+  .ms-field { grid-template-columns: 200px minmax(0, 300px) minmax(0, 1fr); column-gap: var(--s-5); }
+  .ms-field > .ms-hint { grid-column: 3; grid-row: 1; }
+  .ms-field > .ms-note { grid-column: 2 / -1; }
+}
+/* A value set in the config file: a small "set" tag after the name. */
+.ms-field.is-set .ms-top label::after {
+  content: "set"; margin-left: 8px; padding: 1px 6px; border-radius: var(--r-pill); vertical-align: 2px;
+  font: 600 10px/1.4 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--met1); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+body.theme-light .ms-field.is-set .ms-top label::after { color: var(--accent); }
 .ms-top { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .ms-top label { font-size: 14px; font-weight: 600; color: var(--text-strong); }
 .ms-key { font-size: 11px; color: var(--text-muted); background: none; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ms-field.is-set .ms-key { color: var(--met1); }
-body.theme-light .ms-field.is-set .ms-key { color: var(--accent); }
-.ms-ctl { display: flex; align-items: center; gap: 8px; }
-.ms-ctl input, .ms-ctl select { flex: 1; min-width: 0; width: 100%; }
+.ms-ctl { display: grid; grid-template-columns: minmax(0, 1fr) 24px 30px; align-items: center; gap: 6px; }
+.ms-ctl input, .ms-ctl select { min-width: 0; width: 100%; }
 .ms-ctl em { font-style: normal; font-family: var(--mono); font-size: 13px; color: var(--text-muted); }
 .ms-reset {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
@@ -466,10 +505,62 @@ body.theme-light .ms-field.is-set .ms-key { color: var(--accent); }
   background: transparent; border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-muted);
 }
 .ms-reset:hover { color: var(--text-strong); border-color: var(--border-strong); }
-.ms-reset[hidden] { display: none; }
+.ms-reset[hidden] { display: inline-flex; visibility: hidden; }
 .ms-hint { font-size: 12.5px; line-height: 1.45; color: var(--text-muted); text-wrap: pretty; }
 .ms-note { font-size: 12.5px; line-height: 1.45; color: var(--warn); }
 .ms-note code { font-size: 11.5px; }
+
+/* ---------- Common settings: folded behind a bar that says what is set ----------
+   The bar is the inviting one (accent tile, MOST USED tag, the values that are
+   set); All settings further down stays plain: it is the expert's full list. */
+.ms-card { padding: 0; }
+.ms-card > summary { list-style: none; cursor: pointer; }
+.ms-card > summary::-webkit-details-marker { display: none; }
+.ms-sum {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--s-4);
+  padding: var(--s-4) var(--s-5); border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%);
+  transition: background var(--dur-2) var(--ease-out);
+}
+.ms-sum:hover { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%); }
+.ms-sum:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ms-sum-ico {
+  width: 40px; height: 40px; display: grid; place-items: center; border-radius: var(--r-md);
+  color: var(--met1); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+body.theme-light .ms-sum-ico { color: var(--accent); }
+.ms-sum-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ms-sum-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ms-card .ms-title { margin: 0; padding: 0; border: 0; font-size: 18px; font-weight: 600; line-height: 1.2; color: var(--text-strong); }
+.ms-tag { font: 500 10.5px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--met1); }
+body.theme-light .ms-tag { color: var(--accent); }
+.ms-sum-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; color: var(--text-muted); }
+.ms-chip {
+  display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 10px; border-radius: var(--r-pill);
+  background: var(--surface-2); border: 1px solid var(--border); font-size: 13px; color: var(--text-strong);
+}
+.ms-chip b { font-weight: 500; color: var(--text-muted); }
+.ms-chip.is-more { color: var(--text-muted); }
+.ms-sum-side { display: flex; align-items: center; gap: var(--s-3); white-space: nowrap; }
+.ms-sum-side .ms-where { margin-left: 0; }
+.ms-count { font: 600 11px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; padding: 5px 8px; border-radius: var(--r-pill); border: 1px solid var(--border); color: var(--text-muted); }
+.ms-count.is-set { color: var(--met1); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); }
+body.theme-light .ms-count.is-set { color: var(--accent); }
+.ms-count[hidden] { display: none; }
+.ms-chev { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--surface-2); color: var(--text-strong); font-size: 13.5px; font-weight: 500; }
+.ms-chev svg { transition: transform var(--dur-2) var(--ease-out); }
+.ms-card[open] .ms-chev svg { transform: rotate(180deg); }
+.ms-chev-hide, .ms-card[open] .ms-chev-show { display: none; }
+.ms-card[open] .ms-chev-hide { display: inline; }
+.ms-sum:hover .ms-chev { border-color: var(--accent); }
+.ms-card[open] > .ms-sum { border-bottom: 1px solid var(--border); border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.ms-card[open] .ms-sum-line { display: none; }
+.ms-open { padding: var(--s-4) var(--s-5) var(--s-5); }
+.ms-open > .hint { margin-top: 0; }
+@media (max-width: 900px) {
+  .ms-sum { grid-template-columns: auto minmax(0, 1fr); }
+  .ms-sum-side { grid-column: 1 / -1; justify-content: flex-end; }
+}
 
 /* ---- Preflight "Ready to run?" checklist ---- */
 /* ---------- Ready to run: checkpoints on a trace, then the launch ----------
@@ -486,7 +577,7 @@ body.theme-light .ms-field.is-set .ms-key { color: var(--accent); }
 body:not(.theme-light) .launch-verdict.is-ok { color: var(--met3); }
 .launch-verdict.is-bad { color: var(--warn); }
 
-.pf-chain { margin: var(--s-5) 0 0; }
+.pf-chain { margin: var(--s-5) auto 0; max-width: 1120px; }
 .pf-nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
 .pf-node {
   position: relative; min-width: 0;

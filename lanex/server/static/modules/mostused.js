@@ -129,8 +129,7 @@ function control(it, id, val) {
     (num && it.min !== undefined ? " min='" + it.min + "'" : "") +
     (num && it.max !== undefined ? " max='" + it.max + "'" : "") +
     (num ? " step='" + (it.step || (it.kind === "int" ? 1 : "any")) + "' inputmode='decimal'" : " spellcheck='false' autocomplete='off'") +
-    " value='" + fmt.escape(cur) + "' placeholder='" + fmt.escape(ph) + "'/>" +
-    (it.unit ? "<em>" + fmt.escape(it.unit) + "</em>" : "");
+    " value='" + fmt.escape(cur) + "' placeholder='" + fmt.escape(ph) + "'/>";
 }
 
 function notesFor(it) {
@@ -157,8 +156,10 @@ function fieldHtml(it) {
   const notes = notesFor(it);
   return "<div class='ms-field" + (set ? " is-set" : "") + "' data-key='" + it.key + "'>" +
     "<div class='ms-top'><label for='" + id + "'>" + fmt.escape(it.label) + "</label>" +
-    "<code class='ms-key' title='The LibreLane variable'>" + it.key + "</code></div>" +
-    "<div class='ms-ctl'>" + control(it, id, val) +
+    "<code class='ms-key' title='The LibreLane variable " + it.key + "'>" + it.key + "</code></div>" +
+    // control | unit | reset: every field keeps all three slots, so the
+    // controls in a group line up and are the same width.
+    "<div class='ms-ctl'>" + control(it, id, val) + "<em class='ms-unit'>" + fmt.escape(it.unit || "") + "</em>" +
     "<button type='button' class='ms-reset' data-reset='" + it.key + "' title='Remove from " +
     fmt.escape((_cfg && _cfg.name) || "the config") + " and use the default'" + (set ? "" : " hidden") +
     " aria-label='Reset " + it.key + " to its default'><svg viewBox='0 0 24 24' width='14' height='14' fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M3 12a9 9 0 1 0 3-6.7M3 4v5h5'/></svg></button></div>" +
@@ -191,6 +192,35 @@ function render() {
       (g.note ? "<p class='ms-gnote'>" + fmt.escape(g.note) + "</p>" : "") +
       "</section>").join("") + "</div>";
   body.querySelectorAll("input, select").forEach((el) => { el.disabled = !editable; });
+  paintSummary();
+}
+
+// The folded card's bar: what is set, in a line, so the card can stay closed.
+function shortVal(it, v) {
+  if (it.kind === "select") {
+    const c = (it.choices || []).find((x) => x[0] === String(v));
+    return c ? c[1].split(" · ")[0].split(" (")[0] : shown(v);
+  }
+  if (it.kind === "bool") return v && v !== "false" ? "on" : "off";
+  return shown(v) + (it.unit ? " " + it.unit : "");
+}
+
+function paintSummary() {
+  const line = $("ms-sum-line"), count = $("ms-count");
+  if (!line || !count) return;
+  if (!state.designDir) {
+    line.textContent = "The handful of settings most designs change, saved in the project's config.";
+    count.hidden = true;
+    return;
+  }
+  const set = ITEMS.filter((it) => (!it.when || it.when(_vals)) && _vals[it.key] !== undefined && _vals[it.key] !== null && shown(_vals[it.key]) !== "");
+  count.hidden = false;
+  count.textContent = set.length ? set.length + " set" : "defaults";
+  count.classList.toggle("is-set", set.length > 0);
+  line.innerHTML = set.length
+    ? set.slice(0, 4).map((it) => "<span class='ms-chip'><b>" + fmt.escape(it.label) + "</b> " + fmt.escape(shortVal(it, _vals[it.key])) + "</span>").join("") +
+      (set.length > 4 ? "<span class='ms-chip is-more'>+" + (set.length - 4) + " more</span>" : "")
+    : "All " + ITEMS.filter((it) => !it.when || it.when(_vals)).length + " at LibreLane's defaults. Open to change the die size, density, synthesis goal, hold margins and more.";
 }
 
 export async function paintSettings() {
@@ -274,4 +304,13 @@ export function wireSettings() {
   document.querySelector("#setup-settings [data-jump-to]")?.addEventListener("click", (e) => {
     document.querySelector('#setup-jump [data-jump="' + e.currentTarget.dataset.jumpTo + '"]')?.click();
   });
+  // Folded by default; the choice is remembered.
+  const card = $("setup-settings");
+  if (card && card.tagName === "DETAILS" && !card._wired) {
+    card._wired = true;
+    try { card.open = localStorage.getItem("ll.commonSettings") === "open"; } catch (_e) {}
+    card.addEventListener("toggle", () => {
+      try { localStorage.setItem("ll.commonSettings", card.open ? "open" : "closed"); } catch (_e) {}
+    });
+  }
 }

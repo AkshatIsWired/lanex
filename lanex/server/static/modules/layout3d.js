@@ -100,6 +100,11 @@ export class Layout3D {
     this.head = head;
     const ex = head.extent;
     this.extent = [0, 0, ex[2] - ex[0], ex[3] - ex[1]];
+    // Same footprint as the mesh on screen (another stage of the same chip, or
+    // the same region): keep the user's camera. A new chip or region is framed.
+    const tol = 0.02 * Math.max(this.extent[2], this.extent[3]);
+    const keepCam = !!this._ex && this._ex.every((v, i) => Math.abs(v - ex[i]) <= tol);
+    this._ex = ex.slice();
     let order = 0;
     const sorted = head.layers.slice().sort((a, b) => a.z0 - b.z0 || a.z1 - b.z1);
     for (const L of sorted) {
@@ -129,7 +134,7 @@ export class Layout3D {
       this.layers.push({ ...L, vbo, count: nv, order: order++,
         rgb: [((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255] });
     }
-    this.reset(false);
+    if (!keepCam) this.reset(false);
     this.draw();
     return head;
   }

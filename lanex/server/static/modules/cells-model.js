@@ -264,8 +264,14 @@ export function gateDiagram(ast, outName, { maxLeaves = 14 } = {}) {
   const leaves = countLeaves(ast);
   if (leaves > maxLeaves) return "";
   const ROW = 26, COL = 92, GW = 44, PADL = 46, PADR = 44, PADT = 12;
-  // depth of gates
-  const depthOf = (n) => (n.op === "var" || n.op === "const") ? 0 : 1 + Math.max(...kids(n).map(depthOf));
+  // depth of gates. An inverted gate (NAND, XNOR, AOI…) is one gate with a
+  // bubble, not an extra column: counting the NOT as a level left an empty
+  // column that every input wire had to cross.
+  const depthOf = (n) => {
+    if (n.op === "var" || n.op === "const") return 0;
+    if (n.op === "not" && n.a && n.a.args) return depthOf(n.a);
+    return 1 + Math.max(...kids(n).map(depthOf));
+  };
   const D = depthOf(ast);
   const W = PADL + Math.max(1, D) * COL + PADR;
   const H = PADT * 2 + leaves * ROW;

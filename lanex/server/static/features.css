@@ -215,8 +215,14 @@
 .cmp-chart { min-height: 80px; }
 
 /* ---- DSE ------------------------------------------------------------------ */
+/* DSE's jump bar sits under the page's own heading, not at the top of the
+   section: no pull-up, or it covers the line above it. */
+#dse-body > .section-jump { margin-top: 0; }
 .dse-builder { padding: var(--s-4); }
 .dse-add { display: flex; gap: var(--s-2); margin: var(--s-2) 0; flex-wrap: wrap; }
+.dse-add > select { flex: 0 1 380px; width: auto; min-width: 220px; }
+.dse-add > input { flex: 1 1 320px; width: auto; min-width: 0; }
+.dse-add > .btn { flex: none; }
 .dse-axis { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; }
 .dse-mode { display: flex; gap: var(--s-4); margin: var(--s-2) 0; }
 .dse-foot { display: flex; align-items: center; gap: var(--s-3); margin-top: var(--s-3); }

@@ -40,8 +40,7 @@ export async function renderCompare() {
       "' data-rundir='" + fmt.escape(r.run_dir || "") + "'/> " +
       (multi ? "<span class='muted'>" + fmt.escape(designLabel(r._design)) + " · </span>" : "") +
       fmt.escape(r.tag) + (r.success ? " <svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M5 13l4 4L19 7'/></svg>" : " <svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg>") + "</label>").join("") +
-    "</div><button class='btn btn-primary' id='cmp-go'>Compare</button>" +
-    "<input id='cmp-search' class='inp' type='search' placeholder='filter metrics…' hidden /></div>" +
+    "</div><button class='btn btn-primary' id='cmp-go'>Compare</button></div>" +
     "<div id='cmp-out'></div>";
   root.querySelector("#cmp-go").addEventListener("click", () => doCompare(root));
 }
@@ -61,8 +60,6 @@ async function doCompare(root) {
   try { data = await api.compare(tags, runDirs); } catch (ex) {
     out.innerHTML = "<div class='cmp-error'>Compare failed: " + fmt.escape(ex.message || ex) + "</div>"; return;
   }
-  const search = root.querySelector("#cmp-search");
-  search.hidden = false;
 
   // Columns are keyed by the backend's per-run ``col`` (the unique run_dir), NOT
   // the tag: two different designs can each hold a run named "baseline", and a
@@ -122,10 +119,15 @@ async function doCompare(root) {
 
   out.innerHTML =
     "<div class='cmp-toolbar'><button class='btn btn-ghost' id='cmp-export-csv'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Export comparison CSV</button></div>" +
-    summaryHtml + kcHtml + cfgHtml +
+    // Summary, recipe and differences side by side when there is room.
+    "<div class='cmp-blocks'><section class='cmp-block'>" + summaryHtml + "</section>" +
+    "<section class='cmp-block'>" + kcHtml + "</section><section class='cmp-block'>" + cfgHtml + "</section></div>" +
     "<h3>Comparison charts</h3><div id='cmp-charts' class='cmp-charts'></div>" +
-    "<h3>Metrics <span class='muted'>(best highlighted)</span></h3>" +
+    // The filter belongs to the metrics table, so it sits on its heading.
+    "<div class='cmp-mhead'><h3>Metrics <span class='muted'>(best highlighted)</span></h3>" +
+    "<input id='cmp-search' class='inp' type='search' placeholder='Filter metrics' aria-label='Filter metrics'/></div>" +
     "<div id='cmp-metrics'>" + renderMetrics("") + "</div>";
+  const search = out.querySelector("#cmp-search");
   search.oninput = () => {
     document.getElementById("cmp-metrics").innerHTML = renderMetrics(search.value.trim());
   };
