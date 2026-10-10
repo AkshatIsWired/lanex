@@ -2,6 +2,7 @@
 // Shortcuts tab of the help sheet (so the list and the handlers can never drift).
 import { toggleDensity } from "./density.js";
 import { go, railKeys } from "./nav.js";
+import { state } from "./state.js";
 
 // Number keys follow the rail, top to bottom (1–9, then 0), read from the rail
 // itself so they can't drift from it; each rail tab's tooltip shows its key.
@@ -63,7 +64,8 @@ export function setupHotkeys() {
     if (e.key === "d") toggleDensity();
     const page = railKeys().find(([k]) => k === e.key);
     if (page) go(page[1], {}, { link: false });
-    if (e.key === "r") document.getElementById("btn-run")?.click();
+    // The top bar's Run: it starts the flow without leaving this page.
+    if (e.key === "r" && !(state.status && state.status.running)) document.getElementById("btn-run-global")?.click();
     if (e.key === "s") document.getElementById("btn-cancel")?.click();
     if (e.key === "/") {
       const s = document.getElementById("log-search");

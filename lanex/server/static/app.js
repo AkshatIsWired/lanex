@@ -4,7 +4,7 @@ import { api, sse, fmt } from "./modules/api.js";
 import { state, safeStorage } from "./modules/state.js";
 import { setupTabs } from "./modules/tabs.js";
 import { setupNav, startAt, go } from "./modules/nav.js";
-import { noteRunStarted, noteRunFinished } from "./modules/context.js";
+import { noteRunStarted, noteRunFinished, loadRuns, onContext } from "./modules/context.js";
 import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkPill, paintOnboardChecklist } from "./modules/setup.js";
 import { setupTheme, toggleTheme } from "./modules/theme.js";
 import { setupHotkeys } from "./modules/hotkeys.js";
@@ -230,13 +230,14 @@ function handle(ev) {
       // config, which reuses the runner back-to-back) looked like it was showing
       // the previous run's progress. Seeding pending here fixes that immediately.
       state.stepStatuses = {};
+      state.lastFlow = null;
       for (const s of ev.step_graph) state.stepStatuses[s.id] = s.status || "pending";
       resetTimeline();        // a fresh run is starting; clear old step timings
       R("runtimeline", renderRuntimeline);
       R("runs", renderRuns);  // surface the just-created run dir immediately
-      // Land the user on the live Pipeline view (timeline) and focus
-      // the log pane, so they immediately see steps light up + terminal output.
-      go("pipeline", {}, { link: false });
+      // The user stays on their page (setup.js shows Pipeline only when the run
+      // came from Setup's Run flow or is their first). Pipeline's console shows
+      // the live log when they get there.
       document.querySelector('.side-pane-tab[data-itab="logs"]')?.click();
       noteRunStarted();
     }
@@ -376,6 +377,7 @@ function handle(ev) {
     // (that is exactly what made "a failed run blocks the next run": a render
     // error on flow_done skipped paintRunning(false), wedging the UI).
     state.status.running = false;
+    state.lastFlow = { error: ev.error || null, cancelled: !!ev.cancelled };
     paintRunning(false);
     document.dispatchEvent(new CustomEvent("g:flow_done", { detail: ev }));
     const pill = document.getElementById("run-pill");
@@ -442,8 +444,11 @@ function setRunProgress(done, total, current) {
     bar.textContent = "";
     return;
   }
+  // The flow's own count can pass its estimate (a step that runs twice):
+  // never show more steps than the total, or more than 100 %.
+  done = Math.min(done, total);
   const pct = Math.round((done / total) * 100);
-  bar.textContent = "step " + done + "/" + total + ":" + (current ? " " + current : "") + " (" + pct + "%)";
+  bar.textContent = "step " + done + "/" + total + (current ? ": " + current : "") + " (" + pct + "%)";
 }
 
 function logInstallerLine(line) {
@@ -621,6 +626,8 @@ const RENDER = {
     renderTimingAdvisor();
   },
   runs: () => renderRuns(),
+  // Idle, Pipeline names the run the results pages show.
+  pipeline: () => loadRuns().then(() => R("runtimeline", renderRuntimeline)),
   ide: () => import("./modules/ide/main.js").then((m) => m.initIde({ designDir: state.designDir, runMode: state.runMode })),
   layout: () => import("./modules/layout.js").then((m) => m.renderLayout()),
   verify: () => import("./modules/verify.js").then((m) => m.renderVerify()),
@@ -628,6 +635,7 @@ const RENDER = {
   cells: () => import("./modules/cells.js").then((m) => m.renderCells()),
   manual: () => import("./modules/manual.js").then((m) => m.renderManual()),
 };
+onContext(() => { if (!state.status.running) R("runtimeline", renderRuntimeline); });
 document.addEventListener("g:tab_activated", (e) => {
   const r = RENDER[e.detail?.tab];
   if (r) Promise.resolve().then(r).catch((err) => console.error("render " + e.detail.tab, err));

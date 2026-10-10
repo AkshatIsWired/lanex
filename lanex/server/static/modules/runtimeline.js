@@ -10,6 +10,8 @@
 import { fmt } from "./api.js";
 import { state } from "./state.js";
 import { icon } from "./icons.js";
+import { contextRow } from "./context.js";
+import { STAGES } from "./flowstages.js";
 
 // Per-tool presentation. The tool is the part of the step id before the dot.
 // `ic` is an icons.js name; toolMeta resolves it to an inline SVG so the badge
@@ -99,7 +101,11 @@ export function renderRuntimeline() {
   // spinning and the bar stuck at 99% after the flow already finished.
   const currentId = running ? [...ids].reverse().find((id) => statuses[id] === "running") : null;
   let done = ids.filter((id) => ["done", "skipped"].includes(statuses[id])).length;
-  if (!running && !failed) done = total;  // finished cleanly => all done
+  // "Complete" only for a run that finished cleanly in this session; with no
+  // run since LanEx opened, nothing here has run (state.lastFlow, app.js).
+  const last = state.lastFlow;
+  const clean = !running && !failed && last && !last.error && !last.cancelled;
+  if (clean) done = total;
   const pct = total ? Math.round((done / total) * 100) : 0;
   if (!running) stopTimer();
 
@@ -144,18 +150,42 @@ export function renderRuntimeline() {
       "<div class='rt-hero-sub'>The flow hasn't reported a step yet. First container start can take a minute.</div>" +
       "</div>" +
       "<div class='rt-hero-time'><span class='rt-elapsed' id='rt-prep-elapsed'>" + elapsed + "</span></div></div>";
-  } else if (done >= total && total > 0) {
+  } else if (clean && total > 0) {
     hero =
       "<div class='rt-hero rt-complete'>" +
       "<span class='rt-badge' style='--tool:#3fb950'>" + icon('check',{size:14}) + " Complete</span>" +
       "<div class='rt-hero-main'><div class='rt-hero-step'>RTL → GDSII finished</div>" +
-      "<div class='rt-hero-sub'>All " + total + " steps done. The GDS is on the Preview tab.</div></div></div>";
+      "<div class='rt-hero-sub'>All " + total + " steps done. The chip is in Layout, the checks in Verify.</div></div>" +
+      "<div class='rt-hero-act'><button class='btn btn-ghost btn-sm' data-go='layout'>See your chip</button></div></div>";
+  } else if (!running && last && last.cancelled) {
+    hero =
+      "<div class='rt-hero'>" +
+      "<span class='rt-badge' style='--tool:var(--warn)'>" + icon('stop',{size:14}) + " Stopped</span>" +
+      "<div class='rt-hero-main'><div class='rt-hero-step'>You stopped the run</div>" +
+      "<div class='rt-hero-sub'>" + done + " of " + total + " steps had finished. Run again whenever you are ready.</div></div></div>";
   } else {
+    // Nothing has run since LanEx opened: say so, and where the last run's
+    // results are, instead of claiming a finished flow.
+    const prev = contextRow();
+    const prevTxt = prev
+      ? "The run on the results pages is <b>" + fmt.escape(prev.tag) + "</b> (" + (prev.success ? "passed" : "failed") + "). "
+      : "";
     hero =
       "<div class='rt-hero'>" +
       "<span class='rt-badge' style='--tool:var(--text-muted)'>idle</span>" +
-      "<div class='rt-hero-main'><div class='rt-hero-step'>Ready to run</div>" +
-      "<div class='rt-hero-sub'>" + total + " steps in this flow. Press ▶ Run flow.</div></div></div>";
+      "<div class='rt-hero-main'><div class='rt-hero-step'>No run since LanEx opened</div>" +
+      "<div class='rt-hero-sub'>" + prevTxt + "Press Run and each step lights up here as it goes.</div></div>" +
+      (prev ? "<div class='rt-hero-act'><button class='btn btn-ghost btn-sm' data-go='layout'>See its chip</button></div>" : "") + "</div>";
+  }
+  // Before any run there is no flow graph yet, only every step LibreLane
+  // knows: show what the flow will do, stage by stage, instead.
+  if (!running && !(state.pipeline && state.pipeline.length)) {
+    root.innerHTML = hero +
+      "<ol class='rt-stages' aria-label='The flow, stage by stage'>" + STAGES.map((s, i) =>
+        "<li><span class='rt-stage-n'>" + String(i + 1).padStart(2, "0") + "</span><b>" + fmt.escape(s.label) + "</b>" +
+        "<span>" + fmt.escape(s.blurb) + "</span></li>").join("") + "</ol>";
+    stopTimer();
+    return;
   }
 
   // ---- progress bar ----

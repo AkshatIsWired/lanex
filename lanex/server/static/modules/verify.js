@@ -851,8 +851,8 @@ async function rerun(stepId) {
   try {
     const res = await api.verifyRerun({ step_id: stepId, overrides, run_tag: _tag, run_mode: state.runMode });
     if (res.ok) {
-      toast.show("Re-running " + stepId + ". Follow it in Pipeline, then press Refresh here.", "success");
-      import("./nav.js").then((m) => m.go("pipeline"));
+      toast.show("Re-running " + stepId + ". This page updates when it finishes.", "success", 8000,
+        { label: "Watch", run: () => import("./nav.js").then((m) => m.go("pipeline")) });
     } else {
       toast.show("Re-run refused: " + (res.reason || res.error || "unknown"), "error");
     }

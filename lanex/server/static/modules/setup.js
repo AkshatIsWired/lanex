@@ -158,14 +158,15 @@ export function setupSetup() {
   document.getElementById("pdk-select")?.addEventListener("change", onPdkSelected);
   document.getElementById("scl-select")?.addEventListener("change", onSclSelected);
 
-  document.getElementById("btn-run")?.addEventListener("click", onRunClick);
+  // Setup's own Run flow shows the run; the top-bar Run leaves you where you are.
+  document.getElementById("btn-run")?.addEventListener("click", () => onRunClick({ show: true }));
   document.getElementById("btn-cancel")?.addEventListener("click", () => api.cancelRun().catch(() => {}));
   document.getElementById("btn-cancel-2")?.addEventListener("click", () => api.cancelRun().catch(() => {}));
   // Global topbar Run/Stop: start the flow, or stop a running one, from any tab —
   // no need to navigate back to Setup. Reuses the same start/cancel paths.
   document.getElementById("btn-run-global")?.addEventListener("click", () => {
     if (state.status && state.status.running) { api.cancelRun().catch(() => {}); }
-    else { onRunClick(); }
+    else { onRunClick({ show: false }); }
   });
   document.getElementById("btn-resume")?.addEventListener("click", () => api.resumeRun().catch(() => {}));
   document.getElementById("btn-resume-2")?.addEventListener("click", () => api.resumeRun().catch(() => {}));
@@ -457,7 +458,7 @@ export function paintRunButton() {
   b.disabled = !state.designDir;
 }
 
-async function onRunClick() {
+async function onRunClick({ show = false } = {}) {
   if (!state.designDir) {
     toast.show("Pick a design folder first.", "warn");
     return;
@@ -497,6 +498,19 @@ async function onRunClick() {
     state.previewedConfigHash = null;
     paintRunning(true);
     openLogsTab();
+    // A run never pulls you off your page, except from Setup's Run flow and on
+    // the very first run (a beginner should see it happen). Otherwise the
+    // status bar shows it, and this says so.
+    const first = !safeStorage.get("ll.ranOnce") && !(state.runs || []).length;
+    safeStorage.set("ll.ranOnce", "1");
+    const { go } = await import("./nav.js");
+    const { currentTab } = await import("./tabs.js");
+    if (show || first) go("pipeline", {}, { link: false });
+    else if (currentTab() !== "pipeline") {
+      toast.show((payload.tag ? "Run " + payload.tag + " started" : "The run started") +
+        ". It keeps going in the background; the status bar shows how far it is.", "info", 7000,
+        { label: "Watch it", run: () => go("pipeline") });
+    }
   } catch (ex) {
     toast.show("Run failed: " + ex.message, "error");
   }

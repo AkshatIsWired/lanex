@@ -924,6 +924,21 @@ body.density-compact .steps-3 { margin-bottom: var(--s-4); }
 }
 .rt-hero.rt-running { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow), 0 8px 30px var(--accent-soft); }
 .rt-hero.rt-complete { border-color: var(--pass); }
+/* No run yet: the seven stages the flow goes through (flowstages.js). */
+.run-timeline { container: rt / inline-size; }
+.rt-stages {
+  list-style: none; margin: var(--s-4) 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--s-3);
+}
+/* One row, left to right, the way the flow runs. */
+@container rt (min-width: 1100px) { .rt-stages { grid-template-columns: repeat(7, minmax(0, 1fr)); } }
+.rt-stages li {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-content: start;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface);
+}
+.rt-stages .rt-stage-n { grid-row: span 2; font-family: var(--mono); font-size: 12px; color: var(--accent); padding-top: 2px; }
+.rt-stages b { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.rt-stages li > span:last-child { font-size: 12.5px; line-height: 1.45; color: var(--text-muted); }
 .rt-hero.rt-failed { border-color: var(--fail); }
 .rt-hero.rt-preparing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
 .rt-badge-spin { display: inline-flex; align-items: center; gap: 6px; }

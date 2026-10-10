@@ -1255,10 +1255,14 @@ check("links: every page change goes through nav.go(), none clicks the rail", ()
   assert.ok(!readdirSync(MOD).includes("runscope.js"), "runscope.js merged into context.js");
 });
 
-check("keys: number keys follow the rail", () => {
+check("keys: number keys follow the rail, Pipeline never claims a run that did not happen", () => {
   const hk = readFileSync(resolve(MOD, "hotkeys.js"), "utf8");
   assert.ok(/railKeys\(\)/.test(hk) && !/TAB_KEYS/.test(hk), "number keys come from the rail order");
+  const rt = readFileSync(resolve(MOD, "runtimeline.js"), "utf8");
+  assert.ok(!/Preview tab/.test(rt), "Pipeline still points at the Preview tab");
+  assert.ok(!/if \(!running && !failed\) done = total/.test(rt), "an idle Pipeline must not count every step as done");
   const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  assert.ok(!/Preview tab/.test(html), "index.html still points at the Preview tab");
   for (const id of ["analytics-runbar", "verify-runbar", "layout-runbar"]) assert.ok(html.includes('id="' + id + '"'), id + " missing");
 });
 
