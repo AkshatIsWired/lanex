@@ -704,7 +704,7 @@ function drawCurves(host, cv) {
   const svg = host.querySelector("svg"), guide = host.querySelector(".cl-guide"), tip = host.querySelector(".cl-tip");
   svg.addEventListener("mousemove", (e) => {
     const r = svg.getBoundingClientRect();
-    const px = e.clientX - r.left;
+    const px = (e.clientX - r.left) * (W / (r.width || W));   // client px → chart units (UI zoom)
     if (px < L || px > W - R) { tip.hidden = true; guide.setAttribute("x1", -10); guide.setAttribute("x2", -10); return; }
     const load = ((px - L) / (W - L - R)) * hiX;
     let i = 0; let best = Infinity;

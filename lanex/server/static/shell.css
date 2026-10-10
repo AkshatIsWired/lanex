@@ -184,6 +184,9 @@ body:not(.theme-light) .iconbtn:hover { color: var(--met1); }
 }
 .zoom-ctl { gap: 2px; }
 .zoom-pct:hover { border-color: var(--accent); color: var(--text-strong); }
+/* A size the user picked (not the automatic one for this screen): it shows,
+   and a click goes back to automatic. */
+.zoom-pct:not(.is-auto) { color: var(--text-strong); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 #theme-btn .ico-sun { display: none; }
 body.theme-light #theme-btn .ico-sun { display: block; }
 body.theme-light #theme-btn .ico-moon { display: none; }
@@ -378,7 +381,7 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 }
 .st-run { display: inline-flex; align-items: center; gap: 8px; min-width: 0; margin-right: 8px; }
 .st-run .pill { height: 20px; padding: 0 7px; font-size: 12.5px; background: transparent; border-color: transparent; }
-.status-progress { font-family: var(--mono); font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42vw; }
+.status-progress { font-family: var(--mono); font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: calc(42vw / var(--ll-zoom, 1)); }
 .status-progress:empty { display: none; }
 /* Overall progress: one met1 band along the wafer edge. */
 .st-bar { position: absolute; left: 0; right: 0; top: -1px; height: 2px; pointer-events: none; }

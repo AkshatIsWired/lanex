@@ -25,6 +25,13 @@ function scrollRootOf(el) {
   return el.closest("main.work") || document.querySelector("main.work") || null;
 }
 
+// The app's UI zoom (CSS zoom on <html>): client rects are this many times the
+// CSS px that scrollTop and scrollTo work in.
+function zoomOf(root) {
+  if (!root || !root.offsetHeight) return 1;
+  return root.getBoundingClientRect().height / root.offsetHeight || 1;
+}
+
 // Click-to-jump + scroll-spy for one nav. Chips are read live, so navs whose
 // buttons are re-rendered (the Constraints categories) keep working. Idempotent.
 export function wireJumpNav(nav, { clicks = true } = {}) {
@@ -56,9 +63,10 @@ export function wireJumpNav(nav, { clicks = true } = {}) {
     if (t.tagName === "DETAILS") t.open = true;
     pinned = b.dataset.jump;
     setCurrent(pinned);
-    const line = nav.getBoundingClientRect().bottom - (root ? root.getBoundingClientRect().top : 0);
-    const top = (root ? root.scrollTop : window.scrollY) + t.getBoundingClientRect().top -
-      (root ? root.getBoundingClientRect().top : 0) - line - 12;
+    const k = zoomOf(root);
+    const rootTop = root ? root.getBoundingClientRect().top : 0;
+    const line = (nav.getBoundingClientRect().bottom - rootTop) / k;
+    const top = (root ? root.scrollTop : window.scrollY) + (t.getBoundingClientRect().top - rootTop) / k - line - 12;
     (root || window).scrollTo({ top, behavior: "smooth" });
   });
 
@@ -76,7 +84,7 @@ export function wireJumpNav(nav, { clicks = true } = {}) {
       pinned = null;
     }
     // The line just under the sticky nav; the last section to cross it is current.
-    const base = nav.getBoundingClientRect().bottom + 16;
+    const base = nav.getBoundingClientRect().bottom + 20 * zoomOf(root);
     let current = list[0].dataset.jump;
     for (const c of list) {
       const t = document.getElementById(c.dataset.jump);

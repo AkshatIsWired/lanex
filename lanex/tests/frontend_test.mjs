@@ -17,7 +17,7 @@
 //   node lanex/tests/frontend_test.mjs      → exit 0 = pass, 1 = fail
 
 import assert from "node:assert/strict";
-import { readFileSync, appendFileSync } from "node:fs";
+import { readFileSync, appendFileSync, readdirSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -166,12 +166,17 @@ check("zoom: stylesheets compensate viewport units via --ll-zoom", () => {
   const STATIC = resolve(HERE, "..", "server", "static");
   assert.match(readFileSync(resolve(MOD, "zoom.js"), "utf8"),
     /setProperty\("--ll-zoom"/);
-  for (const f of ["styles.css", "features.css", "ide.css"]) {
+  // Every app stylesheet (the landing page is not zoomed), and the dynamic /
+  // small / large viewport units too: 100dvh slipped through once (Layout).
+  const core = ["styles.css", "features.css", "ide.css"];
+  const sheets = readdirSync(STATIC).filter((f) => f.endsWith(".css") && f !== "landing.css");
+  for (const f of core) assert.ok(sheets.includes(f), f);
+  for (const f of sheets) {
     const css = readFileSync(resolve(STATIC, f), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "");   // comments may mention 100vw freely
-    assert.match(css, /var\(--ll-zoom, 1\)/, `${f} lost the zoom compensation`);
+    if (core.includes(f)) assert.match(css, /var\(--ll-zoom, 1\)/, `${f} lost the zoom compensation`);
     for (const ln of css.split("\n")) {
-      if (/\d(vw|vh)\b/.test(ln) && !ln.includes("--ll-zoom")) {
+      if (/\d(?:[dsl]?v[wh]|vmin|vmax)\b/.test(ln) && !ln.includes("--ll-zoom")) {
         assert.fail(`${f}: viewport unit without --ll-zoom compensation: ${ln.trim()}`);
       }
     }

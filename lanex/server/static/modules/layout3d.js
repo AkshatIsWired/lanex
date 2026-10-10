@@ -67,6 +67,8 @@ export class Layout3D {
     this._wire();
     this._ro = new ResizeObserver(() => this._resize());
     this._ro.observe(wrap);
+    this._onZoom = () => this._resize();          // UI size changed: re-sharpen
+    window.addEventListener("g:zoom", this._onZoom);
   }
 
   show(on) {
@@ -165,12 +167,16 @@ export class Layout3D {
   }
 
   _resize() {
+    // CSS size from clientWidth (the client rect is in zoomed px under the
+    // app's UI zoom); the backing store adds that zoom to the screen density.
+    const cw = this.wrap.clientWidth, ch = this.wrap.clientHeight;
     const r = this.wrap.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
-    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+    const z = cw && r.width ? r.width / cw : 1;
+    const dpr = Math.min((window.devicePixelRatio || 1) * z, 2.5);
+    const w = Math.max(1, Math.round(cw * dpr)), h = Math.max(1, Math.round(ch * dpr));
     if (this.cv.width !== w || this.cv.height !== h) {
       this.cv.width = w; this.cv.height = h;
-      this.cv.style.width = r.width + "px"; this.cv.style.height = r.height + "px";
+      this.cv.style.width = cw + "px"; this.cv.style.height = ch + "px";
       this.draw();
     }
   }
@@ -282,6 +288,7 @@ export class Layout3D {
 
   destroy() {
     if (this._ro) this._ro.disconnect();
+    if (this._onZoom) window.removeEventListener("g:zoom", this._onZoom);
     this.cv.remove();
   }
 }

@@ -24,7 +24,7 @@
   background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-lg);
   box-shadow: var(--sh-2);
 }
-.lx-menu-wide { width: min(620px, 80vw); }
+.lx-menu-wide { width: min(620px, calc(80vw / var(--ll-zoom, 1))); }
 .lx-menu button {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left;
   padding: 8px 10px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text-strong);
@@ -76,14 +76,14 @@ body.theme-light .lx-stage.is-on .lx-stage-n { color: var(--accent); }
 /* ---------- workspace: side panel + view ---------- */
 .lx-ws {
   display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 0;
-  height: clamp(460px, calc(100dvh - var(--topbar-h) - var(--status-h) - 236px), 1600px);
+  height: clamp(460px, calc(100dvh / var(--ll-zoom, 1) - var(--topbar-h) - var(--status-h) - 236px), 1600px);
   border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden;
   background: var(--surface);
   box-shadow: 0 1px 0 color-mix(in srgb, var(--met1) 10%, transparent) inset, var(--sh-1);
 }
 .lx-ws.side-off { grid-template-columns: 0 minmax(0, 1fr); }
 .lx-ws.side-off .lx-side { visibility: hidden; }
-.lx-ws.is-full, .lx-ws.is-max { height: 100dvh; border-radius: 0; }
+.lx-ws.is-full, .lx-ws.is-max { height: calc(100dvh / var(--ll-zoom, 1)); border-radius: 0; }
 .lx-ws.is-max { position: fixed; inset: 0; z-index: var(--z-modal); }
 
 .lx-side {
@@ -293,7 +293,7 @@ body.theme-light .lx-stage.is-on .lx-stage-n { color: var(--accent); }
 .lx-msg-in { max-width: 560px; text-align: center; color: #c2cee0; }
 .lx-msg-in h3 { margin: 0 0 8px; color: #f2f7ff; font-size: 18px; }
 .lx-msg-in p { margin: 6px 0; line-height: 1.5; }
-.lx-static { display: block; max-width: 100%; max-height: 50vh; margin: 14px auto; border: 1px solid var(--border); }
+.lx-static { display: block; max-width: 100%; max-height: calc(50vh / var(--ll-zoom, 1)); margin: 14px auto; border: 1px solid var(--border); }
 
 .lx-note { margin: 10px 2px 0; min-height: 1.4em; font-size: 13.5px; line-height: 1.5; color: var(--text); }
 .lx-note code { font-size: 12px; }
@@ -355,7 +355,7 @@ body.theme-light .lx-dfor { color: var(--accent); }
 .rf-path { font-family: var(--mono); }
 .rf-variant { font: 500 11px/1 var(--mono); padding: 2px 5px; border-radius: 3px; background: var(--surface-3); color: var(--text); }
 .rf-actions { display: flex; gap: 6px; flex: none; }
-#rf-text { max-height: 60vh; overflow: auto; }
+#rf-text { max-height: calc(60vh / var(--ll-zoom, 1)); overflow: auto; }
 
 /* 3D mode: the WebGL canvas replaces the 2D picture and its overlays */
 .lx-cv3d { cursor: grab; z-index: 1; }

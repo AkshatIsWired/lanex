@@ -42,6 +42,8 @@ export class LayoutCanvas {
     this._wire();
     this._ro = new ResizeObserver(() => this._resize());
     this._ro.observe(wrap);
+    this._onZoom = () => this._resize();          // UI size changed: re-sharpen
+    window.addEventListener("g:zoom", this._onZoom);
     this._resize();
   }
 
@@ -195,9 +197,11 @@ export class LayoutCanvas {
   }
 
   _resize() {
-    const r = this.wrap.getBoundingClientRect();
-    const W = Math.max(1, Math.round(r.width)), H = Math.max(1, Math.round(r.height));
-    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    // CSS px from clientWidth: under the app's UI zoom the client rect is in
+    // zoomed px. The backing store takes the zoom on top of the screen's
+    // density, so the picture stays sharp at any UI size.
+    const W = Math.max(1, this.wrap.clientWidth), H = Math.max(1, this.wrap.clientHeight);
+    const dpr = Math.min((window.devicePixelRatio || 1) * this._zoom(), 3);
     if (W === this.W && H === this.H && dpr === this.dpr) return;
     const first = this.W <= 1;
     this.W = W; this.H = H; this.dpr = dpr;
@@ -302,22 +306,32 @@ export class LayoutCanvas {
   }
 
   // ---------------------------------------------------------------- input
+  // The UI zoom (CSS zoom on <html>): client rects are this many times their CSS size.
+  _zoom() {
+    const r = this.wrap.getBoundingClientRect();
+    return this.wrap.clientWidth && r.width ? r.width / this.wrap.clientWidth : 1;
+  }
+
+  // A pointer event's position on the canvas, in its CSS px.
+  _at(e) {
+    const r = this.over.getBoundingClientRect(), k = this._zoom();
+    return [(e.clientX - r.left) / k, (e.clientY - r.top) / k];
+  }
+
   _wire() {
     const el = this.over;
     el.addEventListener("contextmenu", (e) => e.preventDefault());
     el.addEventListener("wheel", (e) => {
       e.preventDefault();
-      const r = el.getBoundingClientRect();
       // Trackpad pinch arrives as ctrl+wheel with small deltas; mice send ±100.
       const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
       const f = Math.pow(1.0018, -dy * (e.ctrlKey ? 2.2 : 1));
-      this.zoomAt(e.clientX - r.left, e.clientY - r.top, f);
+      this.zoomAt(...this._at(e), f);
     }, { passive: false });
 
     el.addEventListener("pointerdown", (e) => {
       el.focus({ preventScroll: true });
-      const r = el.getBoundingClientRect();
-      const sx = e.clientX - r.left, sy = e.clientY - r.top;
+      const [sx, sy] = this._at(e);
       el.setPointerCapture(e.pointerId);
       const zoomBox = e.button === 2 || (e.button === 0 && e.shiftKey);
       const measure = e.button === 0 && this.mode === "measure" && !zoomBox;
@@ -326,8 +340,7 @@ export class LayoutCanvas {
       if (e.button === 1) e.preventDefault();
     });
     el.addEventListener("pointermove", (e) => {
-      const r = el.getBoundingClientRect();
-      const sx = e.clientX - r.left, sy = e.clientY - r.top;
+      const [sx, sy] = this._at(e);
       this.opts.onHover && this.opts.onHover(...this.s2w(sx, sy));
       const p = this._ptr;
       if (!p || p.id !== e.pointerId) return;
@@ -352,8 +365,7 @@ export class LayoutCanvas {
       if (!p || p.id !== e.pointerId) return;
       this._ptr = null;
       this.wrap.classList.remove("is-panning");
-      const r = el.getBoundingClientRect();
-      const sx = e.clientX - r.left, sy = e.clientY - r.top;
+      const [sx, sy] = this._at(e);
       if (p.zoomBox) {
         this._zbox = null;
         if (p.moved && Math.abs(sx - p.sx) > 6 && Math.abs(sy - p.sy) > 6) {
@@ -377,8 +389,7 @@ export class LayoutCanvas {
     el.addEventListener("pointerup", end);
     el.addEventListener("pointercancel", end);
     el.addEventListener("dblclick", (e) => {
-      const r = el.getBoundingClientRect();
-      this.zoomAt(e.clientX - r.left, e.clientY - r.top, 2);
+      this.zoomAt(...this._at(e), 2);
     });
     el.addEventListener("pointerleave", () => this.opts.onHover && this.opts.onHover(null, null));
     el.addEventListener("keydown", (e) => this._key(e));
@@ -405,6 +416,7 @@ export class LayoutCanvas {
 
   destroy() {
     this._ro.disconnect();
+    window.removeEventListener("g:zoom", this._onZoom);
     this.base.remove();
     this.over.remove();
   }

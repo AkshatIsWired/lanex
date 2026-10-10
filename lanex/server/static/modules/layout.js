@@ -974,7 +974,7 @@ function showInspector(sx, sy) {
       (others.length ? "<p class='lx-in-also'>Also here: " + others.map(esc).join(", ") + "</p>" : "");
   }
   el.hidden = false;
-  const view = $("lx-view").getBoundingClientRect();
+  const vw = $("lx-view"), view = { width: vw.clientWidth, height: vw.clientHeight };   // CSS px, like sx/sy
   const W = el.offsetWidth, H = el.offsetHeight;
   let left = sx + 16, top = sy + 16;
   if (left + W > view.width - 8) left = Math.max(8, sx - W - 16);

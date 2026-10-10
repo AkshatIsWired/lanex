@@ -12,7 +12,7 @@ import { parseVCD, formatTime, parseTimescale, valueAt } from "./vcd.js";
 import { explain, TESTBENCH_STYLE } from "./lintinfo.js";
 import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
-import { applyZoom, currentZoom } from "../zoom.js";
+import { applyZoom, currentZoom, isAutoZoom } from "../zoom.js";
 
 const state = {
   designDir: null, files: [], top: null, topAbs: null,
@@ -40,6 +40,13 @@ function setupThemeSync() {
       document.dispatchEvent(new CustomEvent("g:theme_changed", { detail: { dark: !document.body.classList.contains("theme-light") } }));
     }
     if (!e || e.key === "ll.zoom") applyZoom(currentZoom());
+  });
+  // The automatic size follows this window's own size.
+  let t = 0;
+  window.addEventListener("resize", () => {
+    if (!isAutoZoom()) return;
+    clearTimeout(t);
+    t = setTimeout(() => applyZoom(currentZoom()), 120);
   });
 }
 

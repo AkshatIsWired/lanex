@@ -53,7 +53,7 @@ body.theme-light #sec-cells {
 @media (max-width: 1000px) { .cl-browser { grid-template-columns: 1fr; } }
 .cl-listpane {
   position: sticky; top: 64px; display: flex; flex-direction: column; min-height: 0;
-  max-height: calc(100vh - var(--topbar-h, 48px) - var(--status-h, 28px) - 96px);
+  max-height: calc(100vh / var(--ll-zoom, 1) - var(--topbar-h, 48px) - var(--status-h, 28px) - 96px);
   border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); overflow: hidden;
 }
 @media (max-width: 1000px) { .cl-listpane { position: static; max-height: 460px; } }
