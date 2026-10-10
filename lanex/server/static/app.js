@@ -3,6 +3,7 @@
 import { api, sse, fmt } from "./modules/api.js";
 import { state, safeStorage } from "./modules/state.js";
 import { setupTabs, activate } from "./modules/tabs.js";
+import { noteRunStarted, noteRunFinished } from "./modules/context.js";
 import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkPill, paintOnboardChecklist } from "./modules/setup.js";
 import { setupTheme, toggleTheme } from "./modules/theme.js";
 import { setupHotkeys } from "./modules/hotkeys.js";
@@ -237,6 +238,7 @@ function handle(ev) {
       // the log pane, so they immediately see steps light up + terminal output.
       document.querySelector('.side-tab[data-tab="pipeline"]')?.click();
       document.querySelector('.side-pane-tab[data-itab="logs"]')?.click();
+      noteRunStarted();
     }
     if (ev.message) renderLogs.append(ev);
   } else if (ev.type === "phase") {
@@ -407,7 +409,8 @@ function handle(ev) {
       renderAdvisorAndRefreshMetrics();
       renderRuns();
       renderRuntimeline();
-      import("./modules/layout.js").then((m) => m.refreshAfterRun()).catch(() => {});
+      // Results pages follow the new run if the user was on the newest one.
+      noteRunFinished().catch(() => {});
       paintOnboardChecklist();
       if (!ev.error && !ev.cancelled) {
         maybeShowPostRunPanel();

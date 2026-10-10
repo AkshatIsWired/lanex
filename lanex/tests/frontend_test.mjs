@@ -1196,6 +1196,54 @@ check("stages: seven, in flow order, one name for each on every page", () => {
   assert.deepEqual(ids, ["synthesis", "pdn", "placement", "cts", "cts", "routing", "signoff"]);
 });
 
+await checkAsync("context: newest run by default, baseline is the last run before it that passed", async () => {
+  const store = new Map();
+  globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+  const events = [];
+  globalThis.document = { dispatchEvent: (e) => events.push(e), addEventListener() {} };
+  store.set("ll.runsScope", "all");                       // the old Runs key is adopted once
+  const CX = await import(toUrl(resolve(MOD, "context.js")));
+  const { state } = await import(toUrl(resolve(MOD, "state.js")));
+  assert.equal(CX.getRunScope(), "all");
+  assert.equal(store.get("ll.runsScope"), undefined);
+  store.set("ll.runScope", "design");
+  state.designDir = "/w/spm";
+  const rows = [
+    { tag: "c", success: true, started_at: "2026-10-06T20:00" },
+    { tag: "b", success: false, started_at: "2026-10-06T19:00" },
+    { tag: "a", success: true, started_at: "2026-10-06T18:00" },
+  ];
+  api.runs = async () => rows.map((r) => ({ ...r }));
+  await CX.loadRuns();
+  assert.equal(CX.contextRun(), "c");
+  assert.equal(CX.contextBaseline(), "a", "the failed run in between is skipped");
+  assert.equal(state.selectedRunTag, "c");
+  await CX.setRun("b");
+  assert.equal(CX.contextRun(), "b");
+  assert.equal(CX.contextBaseline(), "a");
+  assert.equal(events.at(-1).detail.why, "run");
+  CX.setBaseline("");                                     // "Nothing" is a choice that stands
+  await CX.loadRuns();
+  assert.equal(CX.contextBaseline(), "");
+  const mem = JSON.parse(store.get("ll.context"))["/w/spm"];
+  assert.deepEqual(mem, { run: "b", baseline: "", picked: true }, "each project remembers its run");
+  // A run finishes while the user is on the newest: the pages follow it.
+  CX.setBaseline("a"); await CX.setRun("c");
+  CX.noteRunStarted();
+  rows.unshift({ tag: "d", success: true, started_at: "2026-10-06T21:00" });
+  await CX.noteRunFinished();
+  assert.equal(CX.contextRun(), "d");
+  assert.equal(events.at(-1).detail.why, "run-finished");
+  // ...but not when they were looking at an older run.
+  await CX.setRun("a");
+  CX.noteRunStarted();
+  rows.unshift({ tag: "e", success: true, started_at: "2026-10-06T22:00" });
+  await CX.noteRunFinished();
+  assert.equal(CX.contextRun(), "a");
+  delete globalThis.document;
+  delete globalThis.localStorage;
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

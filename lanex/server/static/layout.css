@@ -15,7 +15,7 @@
 .lx-split { position: relative; display: inline-flex; }
 .lx-split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .lx-split-pick { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0 8px; margin-left: 1px; }
-#sec-layout .an-runbar .btn-sm { height: 36px; }
+#sec-layout .an-runbar .btn-sm { height: 40px; }
 
 /* menus (open-in, save, command) */
 .lx-menu {

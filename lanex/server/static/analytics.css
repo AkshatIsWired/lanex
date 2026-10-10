@@ -34,13 +34,7 @@ body.theme-light #sec-analytics {
   text-transform: uppercase; color: var(--text-muted);
 }
 .an-pick select { min-width: 280px; max-width: 460px; height: 36px; }
-.an-runbar .run-scope-toggle { position: absolute; transform: translate(calc(100% + 8px), 0); }
-.an-pick:first-child { position: relative; }
-.an-pick:first-child .run-scope-toggle {
-  position: absolute; right: 0; top: 0; transform: none;
-  font-size: 12px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 6px;
-}
-.an-runbar .btn-sm { height: 36px; }
+.an-runbar .btn-sm { height: 40px; }
 
 #an-body { transition: opacity var(--dur-3) var(--ease-out); }
 #an-body.is-loading { opacity: 0.55; pointer-events: none; }

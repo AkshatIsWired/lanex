@@ -12,7 +12,8 @@
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
-import { gatherRunsScoped, getRunScope, scopeToggleHtml, wireScopeToggle, ensureActiveDesignFor, normDir, designLabel } from "./runscope.js";
+import * as ctx from "./context.js";
+import { mountRunBar } from "./runbar.js";
 import { wireScrollSpy } from "./jumpnav.js";
 import { icon } from "./icons.js";
 import { provBtnHtml, wireProvBtns } from "./provenance.js";
@@ -25,11 +26,8 @@ import { wireTips } from "./analytics-charts.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
-let _runs = [];
-let _runIndex = {};
 let _tag = "";
 let _baseTag = "";
-let _baseChosen = false;
 let _rep = null;          // this run's /api/verify payload
 let _base = null;         // baseline's payload (or null)
 let _diff = null;         // V.statusDiff(_rep, _base)
@@ -117,45 +115,34 @@ const byId = () => new Map((_rep.checks || []).map((c) => [c.id, c]));
 
 // ---------- page entry ------------------------------------------------------------
 
-export async function renderVerify(tag) {
-  const sel = document.getElementById("verify-run");
+// The run on screen is the app's (context.js); this page follows it.
+let _rendering = null;
+export function renderVerify() {
+  _rendering = render();
+  return _rendering;
+}
+
+async function render() {
   const body = document.getElementById("vf-body");
-  if (!sel || !body) return;
+  if (!body) return;
   wireOnce();
-  let runs = [];
-  try { runs = await gatherRunsScoped(); } catch (_e) {}
-  _runs = runs;
-  _runIndex = {};
-  for (const r of runs) _runIndex[r.tag] = r;
-  if (getRunScope() === "design") state.runs = runs;
+  const runs = await ctx.loadRuns();
   const empty = document.getElementById("vf-empty");
-  const basePick = document.getElementById("verify-base").closest(".an-pick");
-  if (!runs.length) {
-    sel.innerHTML = "<option value=''>No runs yet</option>";
-    basePick.hidden = true;
+  if (!runs.length || !ctx.contextRun()) {
     body.classList.add("is-empty");
     empty.hidden = false;
     return;
   }
   body.classList.remove("is-empty");
-  basePick.hidden = false;
   empty.hidden = true;
-  const want = (tag && _runIndex[tag]) ? tag
-    : (_tag && _runIndex[_tag]) ? _tag
-    : (state.selectedRunTag && _runIndex[state.selectedRunTag]) ? state.selectedRunTag : runs[0].tag;
-  sel.innerHTML = runs.map((r) => "<option value='" + esc(r.tag) + "'>" + esc(runLabel(r)) + "</option>").join("");
-  sel.value = want;
-  await selectRun(want);
+  if (ctx.contextRun() !== _tag) _open.clear();
+  await selectRun(ctx.contextRun());
 }
 
-function runLabel(r, { short = false } = {}) {
-  const all = getRunScope() === "all";
-  const when = r.started_at ? new Date(r.started_at) : null;
-  const ds = when && !Number.isNaN(when.getTime())
-    ? when.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
-      when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-    : "";
-  return (all && !short ? designLabel(r._design) + " · " : "") + r.tag + (ds ? "  · " + ds : "") + (r.success ? "" : "  · failed");
+// A link to one check (nav.js go("verify", { check })): open its row.
+export async function revealCheck(id) {
+  if (_rendering) await _rendering;
+  jumpTo("vf-checks", id);
 }
 
 function wireOnce() {
@@ -163,18 +150,13 @@ function wireOnce() {
   if (!sec || sec._vfWired) return;
   sec._vfWired = true;
   wireTips(sec);
-  const sel = document.getElementById("verify-run");
-  sel.addEventListener("change", () => { _baseChosen = false; _open.clear(); selectRun(sel.value); });
-  sel.insertAdjacentHTML("afterend", scopeToggleHtml("verify-run-scope"));
-  wireScopeToggle("verify-run-scope", () => renderVerify());
-  const bsel = document.getElementById("verify-base");
-  bsel.addEventListener("change", async () => {
-    _baseChosen = true;
-    _baseTag = bsel.value;
-    await loadBase();
-    paint();
+  mountRunBar(document.getElementById("verify-runbar"), { baseline: true });
+  ctx.onContext(async (d) => {
+    if (!sec.classList.contains("section-active") || d.why === "loaded" || d.why === "settled") return;   // it renders when shown
+    if (d.why === "baseline") { _baseTag = ctx.contextBaseline(); await loadBase(); paint(); return; }
+    renderVerify();
   });
-  document.getElementById("btn-verify-refresh").addEventListener("click", () => renderVerify(_tag));
+  document.getElementById("btn-verify-refresh").addEventListener("click", () => renderVerify());
   document.getElementById("btn-verify-settings").addEventListener("click", async () => {
     const { openResolvedSettings } = await import("./finalsettings.js");
     openResolvedSettings(_tag);
@@ -218,23 +200,10 @@ function wireOnce() {
 
 async function selectRun(tag) {
   const my = ++_token;
-  const row = _runIndex[tag];
-  await ensureActiveDesignFor(row);
-  if (my !== _token) return;
   _tag = tag;
-  state.selectedRunTag = tag;
+  _baseTag = ctx.contextBaseline();
   const body = document.getElementById("vf-body");
   body.classList.add("is-loading");
-  const same = _runs.filter((r) => normDir(r._design) === normDir(row && row._design));
-  const idx = same.findIndex((r) => r.tag === tag);
-  if (!_baseChosen || _baseTag === tag || !same.some((r) => r.tag === _baseTag)) {
-    const prev = same.slice(idx + 1).find((r) => r.success);
-    _baseTag = prev ? prev.tag : "";
-  }
-  const bsel = document.getElementById("verify-base");
-  bsel.innerHTML = "<option value=''>Nothing</option>" +
-    same.filter((r) => r.tag !== tag).map((r) => "<option value='" + esc(r.tag) + "'>" + esc(runLabel(r, { short: true })) + "</option>").join("");
-  bsel.value = _baseTag;
   let rep = null;
   try { rep = await api.verify(tag); } catch (_e) { rep = null; }
   if (my !== _token) return;
@@ -810,7 +779,7 @@ async function renderReports() {
   wireFileActions(el);
   let reps = [];
   try {
-    const r = await api.runReports((_runIndex[tag] && _runIndex[tag]._design) || state.designDir, tag);
+    const r = await api.runReports((ctx.contextRow(tag) || {})._design || state.designDir, tag);
     reps = ((r && r.reports) || []).filter((x) => x.rel && !seen.has(x.rel));
   } catch (_e) {}
   if (tag !== _tag) return;

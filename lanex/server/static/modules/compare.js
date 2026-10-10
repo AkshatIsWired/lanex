@@ -4,7 +4,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
-import { gatherRunsScoped, designLabel } from "./runscope.js";
+import { gatherRunsScoped, designLabel } from "./context.js";
 
 // tag -> run row (carries run_dir + _design) so Compare can pass absolute
 // run_dirs to the backend — robust even when a picked run lives in another

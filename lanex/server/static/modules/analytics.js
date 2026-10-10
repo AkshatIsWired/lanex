@@ -13,7 +13,9 @@
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
-import { gatherRunsScoped, getRunScope, scopeToggleHtml, wireScopeToggle, ensureActiveDesignFor, normDir, designLabel } from "./runscope.js";
+import * as ctx from "./context.js";
+import { normDir } from "./context.js";
+import { mountRunBar } from "./runbar.js";
 import { toast } from "./toast.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
 import { wireScrollSpy } from "./jumpnav.js";
@@ -27,11 +29,8 @@ const esc = (s) => fmt.escape(s == null ? "" : String(s));
 // ---------- state ---------------------------------------------------------------
 
 let _meta = new Map();          // LibreLane metric registry: name -> {higher_is_better, critical}
-let _runs = [];                 // picker rows (newest first)
-let _runIndex = {};             // tag -> row
-let _tag = "";                  // selected run
-let _baseTag = "";              // baseline run ("" = none)
-let _baseChosen = false;        // user picked the baseline explicitly
+let _tag = "";                  // the run on screen (the app's, context.js)
+let _baseTag = "";              // what it is compared with ("" = nothing)
 let _v = {};                    // selected run's metrics
 let _b = null;                  // baseline metrics (or null)
 let _ctx = null;                // everything the sections render from
@@ -119,44 +118,20 @@ function fact(label, key, { tip = "", value, extra = "", delta = true } = {}) {
 // ---------- page entry ---------------------------------------------------------------
 
 export async function renderAnalyticsFull() {
-  const sel = document.getElementById("analytics-run-select");
   const body = document.getElementById("an-body");
-  if (!sel || !body) return;
+  if (!body) return;
   wireOnce();
   _trendCache.clear();   // a run may have finished since the tab was last shown
   await loadMeta();
-  let runs = [];
-  try { runs = await gatherRunsScoped(); } catch (_e) {}
-  _runs = runs;
-  _runIndex = {};
-  for (const r of runs) _runIndex[r.tag] = r;
-  if (getRunScope() === "design") state.runs = runs;
-  if (!runs.length) {
-    sel.innerHTML = "<option value=''>No runs yet</option>";
-    document.getElementById("an-base-select").innerHTML = "";
-    document.getElementById("an-base-select").closest(".an-pick").hidden = true;
+  const runs = await ctx.loadRuns();
+  if (!runs.length || !ctx.contextRun()) {
     body.classList.add("is-empty");
     document.getElementById("an-empty").hidden = false;
     return;
   }
   body.classList.remove("is-empty");
-  document.getElementById("an-base-select").closest(".an-pick").hidden = false;
   document.getElementById("an-empty").hidden = true;
-  const want = (_tag && _runIndex[_tag]) ? _tag
-    : (state.selectedRunTag && _runIndex[state.selectedRunTag]) ? state.selectedRunTag : runs[0].tag;
-  sel.innerHTML = runs.map((r) => "<option value='" + esc(r.tag) + "'>" + esc(runLabel(r)) + "</option>").join("");
-  sel.value = want;
-  await selectRun(want);
-}
-
-function runLabel(r, { short = false } = {}) {
-  const all = getRunScope() === "all";
-  const when = r.started_at ? new Date(r.started_at) : null;
-  const ds = when && !Number.isNaN(when.getTime())
-    ? when.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-    : "";
-  const st = r.success ? "" : "  · failed";
-  return (all && !short ? designLabel(r._design) + " · " : "") + r.tag + (ds ? "  · " + ds : "") + st;
+  await selectRun(ctx.contextRun());
 }
 
 function wireOnce() {
@@ -164,16 +139,11 @@ function wireOnce() {
   if (!sec || sec._anWired) return;
   sec._anWired = true;
   C.wireTips(sec);
-  const sel = document.getElementById("analytics-run-select");
-  sel.addEventListener("change", () => { _baseChosen = false; selectRun(sel.value); });
-  sel.insertAdjacentHTML("afterend", scopeToggleHtml("analytics-run-scope"));
-  wireScopeToggle("analytics-run-scope", () => renderAnalyticsFull());
-  const bsel = document.getElementById("an-base-select");
-  bsel.addEventListener("change", async () => {
-    _baseChosen = true;
-    _baseTag = bsel.value;
-    await loadBaseline();
-    paint();
+  mountRunBar(document.getElementById("analytics-runbar"), { baseline: true });
+  ctx.onContext(async (d) => {
+    if (!sec.classList.contains("section-active") || d.why === "loaded" || d.why === "settled") return;   // it renders when shown
+    if (d.why === "baseline") { _baseTag = ctx.contextBaseline(); await loadBaseline(); paint(); return; }
+    renderAnalyticsFull();
   });
   document.getElementById("btn-refresh-analytics").addEventListener("click", () => renderAnalyticsFull());
   document.getElementById("btn-analytics-csv").addEventListener("click", exportCsv);
@@ -204,10 +174,8 @@ function wireOnce() {
       return;
     }
     const pick = e.target.closest("[data-an-run]");
-    if (pick && _runIndex[pick.dataset.anRun]) {
-      sel.value = pick.dataset.anRun;
-      _baseChosen = false;
-      selectRun(pick.dataset.anRun);
+    if (pick && ctx.contextRow(pick.dataset.anRun)) {
+      ctx.setRun(pick.dataset.anRun);
       document.getElementById("an-overview")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
@@ -226,25 +194,11 @@ function wireOnce() {
 
 async function selectRun(tag) {
   const my = ++_token;
-  const row = _runIndex[tag];
-  await ensureActiveDesignFor(row);
-  if (my !== _token) return;
+  const row = ctx.contextRow(tag);
   _tag = tag;
-  state.selectedRunTag = tag;
+  _baseTag = ctx.contextBaseline();
   const body = document.getElementById("an-body");
   body.classList.add("is-loading");
-  // Baseline: keep the user's pick if it is still a different run of the same
-  // design; otherwise the previous clean run of this design.
-  const sameDesign = _runs.filter((r) => normDir(r._design) === normDir(row && row._design));
-  const idx = sameDesign.findIndex((r) => r.tag === tag);
-  if (!_baseChosen || _baseTag === tag || !sameDesign.some((r) => r.tag === _baseTag)) {
-    const prev = sameDesign.slice(idx + 1).find((r) => r.success);
-    _baseTag = prev ? prev.tag : "";
-  }
-  const bsel = document.getElementById("an-base-select");
-  bsel.innerHTML = "<option value=''>Nothing (no deltas)</option>" +
-    sameDesign.filter((r) => r.tag !== tag).map((r) => "<option value='" + esc(r.tag) + "'>" + esc(runLabel(r, { short: true })) + "</option>").join("");
-  bsel.value = _baseTag;
 
   const designDir = (row && row._design) || state.designDir;
   const [view, stages, cells, trends, signoff] = await Promise.all([

@@ -4,7 +4,7 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { confirmDialog, alertDialog, checklistDialog, choiceDialog, promptDialog } from "./dialog.js";
 import { toast } from "./toast.js";
-import { gatherRunsScoped, normDir } from "./runscope.js";
+import { gatherRunsScoped, normDir, getRunScope, setRunScope, setRun, contextRun, contextDesign, onContext } from "./context.js";
 import { icon } from "./icons.js";
 
 // Lightweight "make this run's design active" — needed before any run-scoped
@@ -17,11 +17,7 @@ async function focusDesign(designDir) {
   }
 }
 
-const SCOPE_KEY = "ll.runsScope";
-function getScope() {
-  try { return localStorage.getItem(SCOPE_KEY) === "all" ? "all" : "design"; } catch (_e) { return "design"; }
-}
-function setScope(s) { try { localStorage.setItem(SCOPE_KEY, s); } catch (_e) {} }
+const getScope = getRunScope;
 
 // The design dir a run belongs to: <design>/runs/<tag> → strip the last 2 parts.
 function designOfRun(run) {
@@ -36,18 +32,20 @@ let _filterText = "";
 let _filterStatus = "";
 let _filterPinned = false;
 // Runs ticked for batch delete, keyed "<designDir>\u0000<tag>" so the same tag
-// in two designs can't collide in the "All history" scope.
+// in two designs can't collide in the "All designs" scope.
 const _picked = new Set();
 function pickKey(designDir, tag) { return (designDir || "") + "\u0000" + tag; }
 
 function wireScope() {
   if (_scopeWired) return;
   _scopeWired = true;
-  document.querySelectorAll(".runs-scope").forEach((b) =>
+  document.querySelectorAll(".runs-scope[data-scope]").forEach((b) =>
     b.addEventListener("click", () => {
-      setScope(b.dataset.scope);
+      setRunScope(b.dataset.scope);
       renderRuns();
     }));
+  // The run the results pages show is marked here; it follows a pick anywhere.
+  onContext(() => paintViewing());
   const fi = document.getElementById("runs-filter");
   if (fi) fi.addEventListener("input", () => { _filterText = fi.value.toLowerCase(); renderRuns(); });
   const sf = document.getElementById("runs-status-filter");
@@ -82,8 +80,8 @@ function matchesFilter(run) {
   return hay.includes(_filterText);
 }
 
-// Run gathering (this-design vs all-history, de-dup by run_dir) is shared with
-// the per-tab pickers — see runscope.js.
+// Run gathering (this design vs all designs, de-dup by run_dir) is shared with
+// the run bar — see context.js.
 const gatherRuns = gatherRunsScoped;
 
 export async function renderRuns() {
@@ -91,7 +89,7 @@ export async function renderRuns() {
   if (!root) return;
   wireScope();
   const scope = getScope();
-  document.querySelectorAll(".runs-scope").forEach((b) =>
+  document.querySelectorAll(".runs-scope[data-scope]").forEach((b) =>
     b.classList.toggle("runs-scope-active", b.dataset.scope === scope));
   let runs = [];
   try { runs = await gatherRuns(scope); } catch (_e) { runs = []; }
@@ -121,6 +119,8 @@ export async function renderRuns() {
     // Pass/fail left border for at-a-glance scanning (the status word is the
     // colour-blind-safe redundant cue).
     li.className = run.success ? "run-pass" : "run-fail";
+    li.dataset.tag = run.tag;
+    li.dataset.design = run._design || "";
     const designRow = scope === "all"
       ? "<div class='row2 muted'>" + icon("folder", { size: 13 }) + " " + fmt.escape(designLabel(run._design)) + "</div>"
       : "";
@@ -132,6 +132,7 @@ export async function renderRuns() {
         (run.pinned ? "true" : "false") + "' title='" + (run.pinned ? "Unpin" : "Pin") +
         " this run' aria-label='Pin run'>" + (run.pinned ? "<svg viewBox='0 0 24 24' width='14' height='14' fill='currentColor' stroke='currentColor' stroke-width='1' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z'/></svg>" : "<svg viewBox='0 0 24 24' width='14' height='14' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z'/></svg>") + "</button>" +
       "<span class='tag'>" + fmt.escape(run.tag) + "</span>" +
+      "<span class='run-viewing' title='Layout, Analytics and Verify show this run'>On the results pages</span>" +
       (run.success
         ? "<span class='pill pill-pass'><span class='text'>passed</span></span>"
         : "<span class='pill pill-fail'><span class='text'>failed</span></span>") +
@@ -145,7 +146,7 @@ export async function renderRuns() {
       "</div>" +
       "<div class='run-note-row' data-note-row hidden></div>" +
       "<div class='row3 run-actions'>" +
-      "<button class='btn btn-ghost run-act' data-act='open'>Open</button>" +
+      "<button class='btn btn-ghost run-act' data-act='open' title='Show this run in Layout'>" + icon("grid", { size: 13 }) + " Open in Layout</button>" +
       "<button class='btn btn-ghost run-act' data-act='reproduce' title='Load this run's settings into Setup'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M21 12a9 9 0 1 1-3-6.7M21 4v4h-4'/></svg> Reproduce</button>" +
       "<button class='btn btn-ghost run-act' data-act='files'>" + icon("folder", { size: 13 }) + " Files</button>" +
       "<button class='btn btn-ghost run-act' data-act='note'>" + icon("file", { size: 13 }) + " Note</button>" +
@@ -168,10 +169,18 @@ export async function renderRuns() {
       if (pick.checked) _picked.add(pkey); else _picked.delete(pkey);
       syncBatchButton();
     });
-    li.addEventListener("click", () => openRun(run.tag, designDir));
+    // A click picks the run for the results pages; it no longer leaves Runs.
+    li.addEventListener("click", () => setRun(run.tag, designDir));
     root.appendChild(li);
   }
   syncBatchButton();
+  paintViewing();
+}
+
+function paintViewing() {
+  const run = contextRun(), design = normDir(contextDesign());
+  document.querySelectorAll("#runs-list > li[data-tag]").forEach((li) =>
+    li.classList.toggle("is-viewing", li.dataset.tag === run && normDir(li.dataset.design) === design));
 }
 
 // Batch delete every ticked run. Grouped by design dir so each run resolves
@@ -188,7 +197,7 @@ async function batchDelete() {
       byDesign.get(r._design).push(r.tag);
     }
   }
-  // The "All history" scope holds runs not in state.runs; fall back to keys.
+  // The "All designs" scope holds runs not in state.runs; fall back to keys.
   if (!items.length && _picked.size) {
     for (const key of _picked) {
       const sp = key.indexOf(" ");
@@ -489,35 +498,8 @@ async function showFilesModal(tag) {
 }
 
 async function openRun(tag, designDir) {
-  // Opening a run from another design (All-history scope): make it the active
-  // design first, since /api/runs/<tag> and the run-scoped views resolve against
-  // the active design dir.
-  if (designDir && designDir !== state.designDir) {
-    try {
-      const res = await api.setDesignDir(designDir);
-      const { adoptDesignDir } = await import("./setup.js");
-      await adoptDesignDir(res.design_dir, { explicit: true });
-    } catch (_e) { /* fall through; open may still work if dirs coincide */ }
-  }
-  state.selectedRunTag = tag;
-  try {
-    const view = await api.run(tag);
-    state.pipeline = (view.summaries || []).map((line) => {
-      const id = line.split(":")[0] || "";
-      return { id, status: line.includes("ok") ? "done" : "failed" };
-    });
-    // Pull metrics for analytics tab (rendered on tab activation).
-    state.metrics = view.metrics?.values || {};
-    const modA = await import("./timingAdvisor.js");
-    modA.renderTimingAdvisor();
-    document.querySelector(".side-tab[data-tab='layout']")?.click();
-    const modL = await import("./layout.js");
-    modL.selectRun(tag);
-    const modV = await import("./violations.js");
-    modV.populateReportsList(view.design_dir || state.designDir, tag);
-  } catch (ex) {
-    console.error("openRun", ex);
-  }
+  await setRun(tag, designDir);
+  document.querySelector(".side-tab[data-tab='layout']")?.click();
 }
 
 // (The old Runs-tab metric-diff UI was removed; run comparison now lives in the

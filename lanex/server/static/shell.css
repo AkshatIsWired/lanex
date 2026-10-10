@@ -234,6 +234,87 @@ body.theme-light #theme-btn .ico-moon { display: none; }
 .project-row.is-current .via { background: var(--met1); border-color: var(--met1); }
 .project-empty { padding: 6px 10px 8px; font-size: 13px; color: var(--ink-2); }
 
+/* ------------------------------------------------------------ run bar (runbar.js) */
+/* The run a results page shows and the run it is compared with: a field per
+   run (verdict via, name, when), opening a list of runs. One look on every page. */
+.rb { position: relative; display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s-3) var(--s-4); min-width: 0; }
+.rb-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.rb-field[hidden] { display: none; }
+.rb-label {
+  font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--text-muted);
+}
+.rb-pick {
+  display: inline-flex; align-items: center; gap: 10px;
+  width: 340px; max-width: 100%; height: 40px; padding: 0 10px 0 12px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+  color: var(--text); cursor: pointer; text-align: left;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.rb-pick:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.rb-pick[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.rb-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rb-pick:disabled { cursor: default; }
+.rb-pick:disabled .rb-chev { visibility: hidden; }
+.rb-val { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; }
+/* The name gives way last: the time shortens first, a very long name stops at 65 %. */
+.rb-name { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto; max-width: 65%; }
+.rb-meta { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.rb-tags { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.rb-tags:empty { display: none; }
+.rb-tag {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 3px; white-space: nowrap;
+  color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+}
+.rb-tag.is-new { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.rb-chev { display: inline-flex; flex: 0 0 auto; color: var(--text-muted); }
+/* The verdict is a square via, like everything on the plate; the word beside
+   it says the same, so it never rests on colour alone. */
+.rb-mark { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 2px; background: var(--text-muted); }
+.rb-mark.is-pass { background: var(--pass); }
+.rb-mark.is-fail { background: var(--fail); }
+.rb-mark.is-run { background: var(--accent); animation: rb-pulse 1.4s ease-in-out infinite; }
+.rb-mark.is-none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-muted); }
+@keyframes rb-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .rb-mark.is-run { animation: none; } }
+
+.rb-pop {
+  position: absolute; top: calc(100% + 6px); z-index: var(--z-drawer);
+  width: min(600px, calc(92vw / var(--ll-zoom, 1))); padding: 6px;
+  background: var(--die); border: 1px solid var(--seal-strong); border-radius: var(--r-lg);
+  box-shadow: var(--sh-3);
+  animation: menu-in var(--dur-2) var(--ease-out);
+}
+.rb-pop[hidden] { display: none; }
+.rb-pop-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 8px 10px 10px; }
+.rb-pop-head b { display: block; font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.rb-pop-head span { display: block; margin-top: 3px; font-size: 12.5px; line-height: 1.4; color: var(--text-muted); max-width: 52ch; }
+.rb-scope { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding-top: 1px; font-size: 13px; color: var(--text); cursor: pointer; white-space: nowrap; }
+.rb-scope input { accent-color: var(--accent); cursor: pointer; }
+.rb-q { display: block; width: calc(100% - 8px); height: 32px; margin: 0 4px 6px; }
+.rb-list { max-height: min(380px, calc(56vh / var(--ll-zoom, 1))); overflow-y: auto; outline: none; }
+.rb-group {
+  display: flex; align-items: center; gap: 6px; padding: 10px 10px 4px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted);
+}
+.rb-opt {
+  display: grid; grid-template-columns: 10px minmax(0, 1fr) minmax(0, 1.25fr) auto 14px; align-items: center; gap: 12px;
+  padding: 9px 10px; border-radius: var(--r-sm); color: var(--text); cursor: pointer;
+}
+.rb-opt.is-active { background: var(--hover); }
+.rb-o-name {
+  display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap;
+  font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--text-strong);
+}
+.rb-opt.is-cur .rb-o-name { color: var(--accent); }
+.rb-o-facts, .rb-o-when { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rb-o-when { font-variant-numeric: tabular-nums; text-align: right; }
+.rb-o-cur { display: inline-flex; color: var(--accent); }
+.rb-none { padding: 14px 10px; font-size: 13px; color: var(--text-muted); }
+.rb-pop-foot { margin-top: 6px; padding: 8px 10px 4px; border-top: 1px solid var(--seal); }
+.rb-pop-foot .linklike { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+
 /* ------------------------------------------------------------ side rail */
 /* Plain inset well. Every tab gets the same
    share of the rail's height: a group grows in proportion to its tab count

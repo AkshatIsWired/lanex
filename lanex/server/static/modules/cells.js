@@ -4,7 +4,7 @@
 //   Library     every standard cell the flow can build with: what it does
 //               (function, gate diagram, truth table), what it looks like
 //               (the real GDS), how fast each drive strength is, and whether
-//               this design's flow is allowed to use it. Last-run usage on top.
+//               this design's flow is allowed to use it. Usage (the run on the results pages) on top.
 //   Macros      pre-built blocks (PDK SRAMs, a block hardened in another
 //               project, files from a vendor) with the checks that catch a
 //               first macro's usual mistakes before a run does (cells-macros.js).
@@ -20,6 +20,7 @@ import { toast } from "./toast.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 import * as M from "./cells-model.js";
+import * as runCtx from "./context.js";
 
 const esc = M.esc;
 const LS = "lanex.cells.view";
@@ -139,6 +140,12 @@ function wire(sec) {
   const stale = () => { if (S.lib) S.stale = true; };
   document.addEventListener("g:config_changed", stale);
   document.addEventListener("g:flow_done", stale);
+  // Usage is the run every results page shows (context.js): follow it.
+  runCtx.onContext((d) => {
+    if (d.why === "loaded" || d.why === "baseline" || !S.lib) return;
+    if (!sec.classList.contains("section-active")) { S.stale = true; return; }
+    if (d.why !== "settled") renderCells({ force: true, cell: S.sel });
+  });
   document.addEventListener("g:active_design_changed", () => { S.lib = null; S.sel = null; });
   document.addEventListener("g:tab_activated", (e) => {
     if (e.detail && e.detail.tab === "cells" && S.stale) { S.stale = false; S.lib = null; }
@@ -154,6 +161,20 @@ async function load(pdk, scl, wantCell, { keepScroll = false } = {}) {
   let res;
   try { res = await api.cellLibrary(pdk, scl, state.designDir); } catch (ex) { res = { ok: false, error: ex.message || String(ex) }; }
   if (my !== S.token) return;
+  // The server counts the newest run with a cell report; show the run on the
+  // results pages instead when it has one for this library.
+  if (res && res.ok !== false && state.designDir) {
+    await runCtx.loadRuns().catch(() => {});
+    const row = runCtx.contextRow();
+    if (row && row.tag !== (res.usage || {}).tag && runCtx.normDir(row._design) === runCtx.normDir(state.designDir) && (!row.scl || row.scl === scl)) {
+      try {
+        const u = await api.cellUsage(row.tag);
+        const named = ((u && u.cells) || []).filter((x) => typeof x.cell === "string" && x.count != null && !/^(design__|class:)/.test(x.cell));
+        if (named.length) res.usage = { tag: row.tag, cells: Object.fromEntries(named.map((x) => [x.cell, x.count])) };
+      } catch (_e) { /* keep the server's pick */ }
+      if (my !== S.token) return;
+    }
+  }
   if (!res || res.ok === false) {
     S.lib = null;
     host.innerHTML = emptyHtml("Couldn't read " + scl, (res && res.error) || "unknown error", null);
@@ -243,8 +264,8 @@ function paintSummary() {
     tile("Synthesis can use", esc(String(usable)), "of " + logic.length + " logic cells", "data-cl-filter='usable'") +
     tile("Never used", esc(String(ex.length)), esc(pdkEx + " by the PDK" + (userEx ? " · " + userEx + " by you" : "")), "data-cl-jump='cl-rules'") +
     (types
-      ? tile("Last run used", esc(String(types)) + " <small>types</small>", esc(inst.toLocaleString("en-US") + " instances · " + (u.tag || "")), "data-cl-filter='used'")
-      : tile("Last run used", "–", state.designDir ? "Run the flow to see which cells it picked" : "Open a project to see usage", "data-cl-go='setup'")) +
+      ? tile("Used by run", esc(String(types)) + " <small>types</small>", esc(inst.toLocaleString("en-US") + " instances · " + (u.tag || "")), "data-cl-filter='used'")
+      : tile("Used by run", "–", state.designDir ? "Run the flow to see which cells it picked" : "Open a project to see usage", "data-cl-go='setup'")) +
     "<button class='cl-tile' data-cl-jump='cl-macros' id='cl-tile-macros'><span class='cl-tile-k'>Macros</span><span class='cl-tile-v'>–</span><span class='cl-tile-s'>SRAMs and pre-built blocks</span></button>" +
     "</div>";
   document.querySelectorAll("[data-cl-filter]").forEach((b) => b.addEventListener("click", () => {
@@ -280,7 +301,7 @@ function paintLibraryShell() {
             esc(L.categories[k] || k) + " <span>" + S.fams.filter((f) => f.cat === k).length + "</span></button>").join("") +
         "</div>" +
         "<div class='cl-opts'>" +
-          "<label class='cl-chk'><input type='checkbox' id='cl-used'> Used in last run</label>" +
+          "<label class='cl-chk'><input type='checkbox' id='cl-used'> Used in the run</label>" +
           "<label class='cl-chk'><input type='checkbox' id='cl-hideex'> Hide cells the flow won't use</label>" +
           "<span class='bar-spacer'></span>" +
           "<label class='cl-sort'>Sort <select id='cl-sort'><option value='name'>Name</option><option value='area'>Smallest</option>" +
@@ -380,12 +401,12 @@ function paintList() {
       if (c.used) cls.push("is-used");
       if (isExcluded(c) || c.dont_use) cls.push("is-ex");
       if (c.cell === S.sel) cls.push("is-sel");
-      const tip = c.cell + (c.used ? "\nUsed " + c.used + "× in the last run" : "") +
+      const tip = c.cell + (c.used ? "\nUsed " + c.used + "× in " + ((S.lib.usage || {}).tag || "the run") : "") +
         (isExcluded(c) ? "\nThe flow won't use it (" + exWhy(c).join(", ") + ")" : "") +
         (Number.isFinite(c.area) ? "\n" + M.fmtArea(c.area) : "");
       return "<span class='" + cls.join(" ") + "' data-cell='" + esc(c.cell) + "' title='" + esc(tip) + "'>" + esc(c.drive || "·") + "</span>";
     }).join("");
-    const bar = f.used ? "<span class='cl-usebar' style='--w:" + Math.max(4, Math.round((f.used / maxUse) * 100)) + "%' title='" + f.used + " instances in the last run'></span>" : "";
+    const bar = f.used ? "<span class='cl-usebar' style='--w:" + Math.max(4, Math.round((f.used / maxUse) * 100)) + "%' title='" + f.used + " instances in " + esc((S.lib.usage || {}).tag || "the run") + "'></span>" : "";
     return "<div class='cl-fam" + (selFam ? " is-sel" : "") + "' role='option' aria-selected='" + (selFam ? "true" : "false") + "' data-first='" + esc(pickDrive({ cells: f.shown }).cell) + "'>" +
       "<span class='cl-fam-top'><span class='cl-fam-name'>" + esc(f.fam) + "</span>" +
         (f.lib ? "<span class='cl-fam-lib' title='From the sister library " + esc(f.lib) + "'>" + esc(f.lib.replace(/^[a-z0-9]+_/, "")) + "</span>" : "") +
@@ -488,7 +509,7 @@ function headHtml(c, fam) {
   const chips = [];
   if (c.used) {
     const total = L.cells.reduce((s, x) => s + (x.used || 0), 0);
-    chips.push("<span class='cl-chip is-used'>" + icon("check", { size: 12 }) + " Used " + c.used.toLocaleString("en-US") + "× in the last run" +
+    chips.push("<span class='cl-chip is-used'>" + icon("check", { size: 12 }) + " Used " + c.used.toLocaleString("en-US") + "× in " + esc((S.lib.usage || {}).tag || "the run") +
       (total ? " <span>(" + (100 * c.used / total).toFixed(1) + "% of cells)</span>" : "") + "</span>");
   }
   if (c.excluded.synth || c.excluded.pnr) chips.push("<span class='cl-chip is-ex'>" + icon("ban", { size: 12 }) + " PDK keeps it out of " + (c.excluded.pnr ? "synthesis and placement" : "synthesis") + "</span>");
@@ -832,7 +853,7 @@ function flowHtml(c) {
   if (e.swap) rows.push("<li>" + mark(false) + " Swapped out for one of your custom cells (Flow rules).</li>");
   if (c.dont_use) rows.push("<li>" + mark(false) + " The Liberty file marks it <code>dont_use</code>.</li>");
   if (c.used) rows.push("<li><span class='vf-mark is-pass'></span> " + c.used.toLocaleString("en-US") + " instances in run <b>" + esc((L.usage || {}).tag || "") + "</b>. <button class='btn btn-ghost btn-xs' data-cl-go='analytics'>Area breakdown</button></li>");
-  else if ((L.usage || {}).tag && c.category !== "physical") rows.push("<li><span class='vf-mark is-not_run'></span> Not used in the last run.</li>");
+  else if ((L.usage || {}).tag && c.category !== "physical") rows.push("<li><span class='vf-mark is-not_run'></span> Not used in run <b>" + esc(L.usage.tag) + "</b>.</li>");
   let act = "";
   if (c.category !== "physical" && state.designDir) {
     const exact = (e.user || []).includes(c.cell);

@@ -7,7 +7,7 @@ import { toast } from "./toast.js";
 import { paretoOption } from "./charts.js";
 import { runBarsOption, runBarsHeight } from "./barchart.js";
 import { chartTheme } from "./theme-echarts.js";
-import { gatherRunsScoped, getRunScope, designLabel, scopeToggleHtml, wireScopeToggle } from "./runscope.js";
+import { gatherRunsScoped, getRunScope, designLabel, scopeToggleHtml, wireScopeToggle } from "./context.js";
 import { jumpBarHtml, wireJump } from "./jumpnav.js";
 import { collectRunPayload } from "./setup.js";
 

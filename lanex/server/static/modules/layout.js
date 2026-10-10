@@ -18,7 +18,8 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { icon } from "./icons.js";
-import { gatherRunsScoped, getRunScope, runOptionsHtml, scopeToggleHtml, wireScopeToggle, ensureActiveDesignFor } from "./runscope.js";
+import * as ctx from "./context.js";
+import { mountRunBar } from "./runbar.js";
 import { STAGES as FLOW_STAGES } from "./flowstages.js";
 import { LayoutCanvas, fmtUm, niceLength } from "./layoutcanvas.js";
 import { Layout3D } from "./layout3d.js";
@@ -40,7 +41,7 @@ const KIND_ORDER = ["sequential", "combinational", "inverter", "buffer", "mux", 
 
 const S = {
   wired: false,
-  runs: [], runIdx: {}, tag: "",
+  tag: "", design: "",  // the run on screen (the app's, context.js)
   src: null,          // sources() reply for the run
   source: "",         // current source id
   info: null,         // open_session() reply
@@ -76,57 +77,28 @@ export async function renderLayout() {
   await loadRuns();
 }
 
-// Runs tab "Open" and post-run links land here with a run already chosen.
-export async function selectRun(tag) {
-  wireOnce();
-  await loadRuns(tag);
-}
-
-// After a flow finishes: refresh the run list; follow the newest run if the
-// user was looking at the newest one before (or at nothing).
-export async function refreshAfterRun() {
-  if (!S.wired) return;
-  const wasNewest = !S.tag || (S.runs[0] && S.runs[0].tag === S.tag);
-  await loadRuns(wasNewest ? "__newest__" : S.tag);
-}
-
 // ------------------------------------------------------------------ runs
-async function loadRuns(want) {
-  const sel = $("layout-run");
-  if (!sel) return;
-  let runs = [];
-  try { runs = await gatherRunsScoped(); } catch (_e) {}
-  if (getRunScope() === "design") state.runs = runs;
-  S.runs = runs;
-  S.runIdx = {};
-  for (const r of runs) S.runIdx[r.tag] = r;
-  if (!sel.parentNode.querySelector("#layout-run-scope")) {
-    sel.insertAdjacentHTML("afterend", " " + scopeToggleHtml("layout-run-scope"));
-    wireScopeToggle("layout-run-scope", () => loadRuns(S.tag));
-  }
-  const empty = !runs.length;
+// The run is the app's (context.js): Runs, the run bar on any results page and
+// a finished run all change it, and this page follows.
+async function loadRuns() {
+  const runs = await ctx.loadRuns();
+  const tag = ctx.contextRun();
+  const empty = !runs.length || !tag;
   $("lx-empty").hidden = !empty;
   $("lx-page").hidden = empty;
   for (const id of ["lx-openin", "lx-save", "lx-cmd"]) { const el = $(id); if (el) el.closest(".lx-split").hidden = empty; }
   if (empty) {
-    sel.innerHTML = "<option value=''>No runs yet</option>";
-    S.tag = "";
+    S.tag = ""; S.design = "";
     setRunFilesTag("");
     return;
   }
-  let tag = want === "__newest__" ? runs[0].tag : (want || S.tag || state.selectedRunTag);
-  if (!tag || !S.runIdx[tag]) tag = runs[0].tag;
-  sel.innerHTML = runOptionsHtml(runs, tag, (s) => fmt.escape(s));
-  sel.value = tag;
-  if (tag !== S.tag || !S.info) await openRun(tag);
+  if (tag !== S.tag || ctx.contextDesign() !== S.design || !S.info) { stopPlay(); await openRun(tag); }
 }
 
 async function openRun(tag) {
   const tok = ++S.openToken;
-  await ensureActiveDesignFor(S.runIdx[tag]);
-  if (tok !== S.openToken) return;
   S.tag = tag;
-  state.selectedRunTag = tag;
+  S.design = ctx.contextDesign();
   S.commands = null;
   S.markers = null;
   S.hl = null; S.sel = null; S.pin = null; S.activeMarker = null;
@@ -1306,8 +1278,8 @@ function saveImage(kind) {
 function wireOnce() {
   if (S.wired) return;
   S.wired = true;
-  const sel = $("layout-run");
-  sel?.addEventListener("change", () => { stopPlay(); openRun(sel.value); });
+  mountRunBar($("layout-runbar"));
+  ctx.onContext((d) => { if ($("sec-layout")?.classList.contains("section-active") && d.why !== "loaded" && d.why !== "settled") loadRuns(); });
   document.querySelector("#sec-layout .lx-tools")?.addEventListener("click", onToolbar);
   for (const [id, b] of [["labels", S.labels], ["detail", S.outlines]]) document.querySelector("[data-lx='" + id + "']")?.setAttribute("aria-pressed", b ? "true" : "false");
   if (pref("side", "1") === "0") { $("lx-ws").classList.add("side-off"); document.querySelector("[data-lx='side']")?.setAttribute("aria-pressed", "false"); }
