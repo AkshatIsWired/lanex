@@ -67,6 +67,9 @@
   --canvas-dark: #000;
   --focus: var(--met1);
   --accent-cyan: #38d6c8;     /* secondary chart hue only */
+  /* Chart series, in this fixed order (validated for colour-blind separation
+     on --surface): the layer hues stepped down to chart-mark lightness. */
+  --chart-1: #378ee9; --chart-2: #d164b4; --chart-3: #e05e26; --chart-4: #7d6cdb; --chart-5: #009e92;
 
   /* syntax highlighting (RTL IDE), recoloured to the layer family */
   --syntax-kw: #ff7a93;
@@ -203,6 +206,7 @@ body.theme-light {
   --pending: #6e7781;
   --info: #1f5fd0;
   --info-soft: rgba(31, 95, 208, 0.10);
+  --chart-1: #1775ce; --chart-2: #af4595; --chart-3: #c44400; --chart-4: #7260cd; --chart-5: #00897d;
 
   --met1-hi: #1a4fb0;
   --on-met: #ffffff;

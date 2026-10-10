@@ -206,8 +206,13 @@
 .cmp-table th, .cmp-table td { border: 1px solid var(--border); padding: var(--s-1) var(--s-2); text-align: left; }
 .cmp-table th { background: var(--surface-2); }
 .cmp-best { background: var(--pass-soft); color: var(--pass); font-weight: 600; }
-.cmp-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--s-3); margin: var(--s-3) 0; }
-.cmp-chart { height: 220px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-2); }
+.cmp-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--s-3); margin: var(--s-3) 0; align-items: start; }
+.cmp-fig { margin: 0; padding: 12px 14px 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); min-width: 0; }
+.cmp-fig figcaption { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 4px; }
+.cmp-fig figcaption b { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.cmp-fig figcaption span { font-size: 12.5px; color: var(--text-muted); }
+.cmp-fig figcaption code { flex-basis: 100%; font-size: 11px; color: var(--text-muted); background: none; padding: 0; }
+.cmp-chart { min-height: 80px; }
 
 /* ---- DSE ------------------------------------------------------------------ */
 .dse-builder { padding: var(--s-4); }

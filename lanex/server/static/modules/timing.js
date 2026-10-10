@@ -8,7 +8,7 @@
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
-import { chartTheme, chartPalette } from "./theme-echarts.js";
+import { histogramOption } from "./barchart.js";
 import { provBtnHtml, wireProvBtns } from "./provenance.js";
 
 let _kind = "setup";
@@ -35,23 +35,16 @@ function drawHist(hist, unit) {
     el.innerHTML = "<p class='muted' style='padding:var(--s-3)'>No slack distribution.</p>";
     return;
   }
+  const opt = histogramOption({ edges: hist.edges, counts: hist.counts, bins: hist.bins, unit: unit || "ns" });
+  if (!opt) {
+    if (chart) chart.dispose();
+    el.innerHTML = "<p class='muted' style='padding:var(--s-3)'>No slack distribution.</p>";
+    return;
+  }
   if (!chart) { el.innerHTML = ""; chart = window.echarts.init(el); }
   el.setAttribute("role", "img");
   el.setAttribute("aria-label", "Timing slack histogram; critical endpoints are listed in the table below.");
-  const theme = chartTheme();
-  const pal = chartPalette();
-  chart.setOption({
-    ...theme,
-    tooltip: { trigger: "axis" },
-    grid: { left: 48, right: 16, top: 16, bottom: 40 },
-    xAxis: { type: "category", data: hist.bins, name: "slack (" + (unit || "ns") + ")", nameLocation: "middle",
-             nameGap: 26, axisLabel: { rotate: 45, fontSize: 10 } },
-    yAxis: { type: "value", name: "paths" },
-    series: [{
-      type: "bar", data: hist.counts, itemStyle: { color: pal[0] },
-      barWidth: "92%",
-    }],
-  }, true);
+  chart.setOption(opt, true);
   chart.resize();
 }
 

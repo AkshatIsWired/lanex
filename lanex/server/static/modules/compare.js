@@ -235,14 +235,21 @@ const _CHART_METRICS = [
 async function renderCompareCharts(host, data, cols) {
   if (!host) return;
   if (typeof window.echarts === "undefined") { host.innerHTML = "<p class='muted'>Charts need ECharts.</p>"; return; }
-  const { chartTheme } = await import("./theme-echarts.js");
+  const { runBarsOption, runBarsHeight } = await import("./barchart.js");
   const table = data.metric_table || {};
   const num = (v) => { const n = Number(v); return isFinite(n) ? n : null; };
   const labels = cols.map((c) => c.label);
   const present = _CHART_METRICS.filter(([k]) => table[k] &&
     cols.some((c) => num(table[k][c.col]) !== null));
   if (!present.length) { host.innerHTML = "<p class='muted'>No chartable metrics in common across these runs.</p>"; return; }
-  host.innerHTML = present.map(([k]) => "<div class='cmp-chart' data-k='" + fmt.escape(k) + "'></div>").join("");
+  // Each chart is a small card: the metric named in the page's own type, the
+  // runs as bars down the side in the same colours on every card.
+  host.innerHTML = present.map(([k, label]) => {
+    const um = /\(([^)]+)\)\s*$/.exec(label);
+    const name = um ? label.slice(0, um.index).trim() : label;
+    return "<figure class='cmp-fig'><figcaption><b>" + fmt.escape(name) + "</b>" + (um ? " <span>" + fmt.escape(um[1]) + "</span>" : "") +
+      "<code>" + fmt.escape(k) + "</code></figcaption><div class='cmp-chart' data-k='" + fmt.escape(k) + "' style='height:" + runBarsHeight(cols.length) + "px'></div></figure>";
+  }).join("");
   for (const [k, label] of present) {
     const el = host.querySelector(".cmp-chart[data-k='" + (window.CSS && CSS.escape ? CSS.escape(k) : k) + "']");
     if (!el) continue;
@@ -251,18 +258,12 @@ async function renderCompareCharts(host, data, cols) {
     const um = /\(([^)]+)\)\s*$/.exec(label);
     const unit = um ? um[1] : "";
     const name = um ? label.slice(0, um.index).trim() : label;
-    const chart = window.echarts.init(el, chartTheme(), { renderer: "canvas" });
+    const opt = runBarsOption({ labels, values: cols.map((c) => num(table[k][c.col])), unit });
+    if (!opt) continue;
+    const chart = window.echarts.init(el, null, { renderer: "canvas" });
     el.setAttribute("role", "img");
     el.setAttribute("aria-label", name + " comparison across selected runs, matching the values in the comparison tables above.");
-    chart.setOption({
-      backgroundColor: "transparent",
-      title: { text: name, subtext: k, left: "center", textStyle: { fontSize: 13, fontWeight: 600 }, subtextStyle: { fontSize: 9 } },
-      tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : v) + (unit ? " " + unit : "") },
-      grid: { top: 48, bottom: 48, left: 56, right: 12 },
-      xAxis: { type: "category", data: labels, axisLabel: { interval: 0, rotate: labels.length > 2 ? 30 : 0, fontSize: 10 } },
-      yAxis: { type: "value", name: unit, nameTextStyle: { fontSize: 10 } },
-      series: [{ type: "bar", name, data: cols.map((c) => num(table[k][c.col])) }],
-    });
+    chart.setOption(opt);
   }
   window.addEventListener("resize", () => host.querySelectorAll(".cmp-chart").forEach((el) => {
     const inst = window.echarts.getInstanceByDom(el); if (inst) inst.resize();

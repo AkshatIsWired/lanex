@@ -5,6 +5,8 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { paretoOption } from "./charts.js";
+import { runBarsOption, runBarsHeight } from "./barchart.js";
+import { chartTheme } from "./theme-echarts.js";
 import { gatherRunsScoped, getRunScope, designLabel, scopeToggleHtml, wireScopeToggle } from "./runscope.js";
 import { jumpBarHtml, wireJump } from "./jumpnav.js";
 import { collectRunPayload } from "./setup.js";
@@ -441,14 +443,9 @@ function drawBar(root, runs, mt, key) {
     const v = mt[key] ? Number(mt[key][r.col]) : null;   // lookup by unique col
     return (v === v && Math.abs(v) !== Infinity) ? v : null;   // drop NaN/Inf
   });
-  const opt = (!key || vals.every((v) => v === null)) ? null : {
-    tooltip: { trigger: "axis" },
-    grid: { left: 60, right: 16, top: 16, bottom: 60 },
-    xAxis: { type: "category", data: tags, axisLabel: { rotate: 30, interval: 0 } },
-    yAxis: { type: "value", name: meta ? (meta.label + (meta.unit ? " (" + meta.unit + ")" : "")) : key },
-    series: [{ type: "bar", data: vals, label: { show: true, position: "top",
-      formatter: (o) => (o.value == null ? "" : o.value) } }],
-  };
+  const opt = !key ? null : runBarsOption({ labels: tags, values: vals, unit: meta ? meta.unit : "" });
+  const box = root.querySelector("#dse-bars");
+  if (box) box.style.height = Math.max(160, runBarsHeight(tags.length)) + "px";
   drawChart(root, "#dse-bars", opt, "No numeric values for this metric.");
 }
 
@@ -469,9 +466,9 @@ function drawChart(root, sel, opt, emptyMsg) {
   }
   if (!chart) {
     el.innerHTML = "";            // clear any prior empty-state message
-    chart = window.echarts.init(el);
+    chart = window.echarts.init(el, chartTheme());   // theme keys only apply at init
   }
-  chart.setOption(opt, true);      // notMerge: replace series on metric change
+  chart.setOption({ ...chartTheme(), ...opt }, true);      // notMerge: replace series on metric change
   chart.resize();
   el.setAttribute("role", "img");
   el.setAttribute("aria-label", "Design-space exploration scatter plot, showing the points listed in the results table below.");
