@@ -19,8 +19,7 @@ function esc(s) {
 // Bring the Step Output console into view: Pipeline tab + the stepout console
 // tab. Both are best-effort (clicks are no-ops if already active).
 function focusConsole() {
-  document.querySelector('.side-tab[data-tab="pipeline"]')?.click();
-  document.querySelector('.side-pane-tab[data-itab="stepout"]')?.click();
+  import("./nav.js").then((m) => m.go("pipeline", { pane: "stepout" }));
 }
 
 async function showStep(stepId, opts = {}) {

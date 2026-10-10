@@ -266,9 +266,8 @@ function wireCards(host) {
     if (e.target.closest("[data-mc-arrange]")) { arrange(false); return; }
     if (e.target.closest("[data-mc-copytpl]")) { if (info.template) copyText(info.template, "Template copied"); return; }
     if (e.target.closest("[data-mc-opentop]")) {
-      document.querySelector('.side-tab[data-tab="ide"]')?.click();
       const f = ((D.inspect.scan || {}).top_file) || "";
-      import("./ide/main.js").then((m) => f && m.openInIde && m.openInIde({ rel: shortPath(f) })).catch(() => {});
+      import("./nav.js").then((m) => m.go("ide", f ? { rel: shortPath(f) } : {}));
     }
   });
 }

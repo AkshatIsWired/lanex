@@ -510,13 +510,7 @@ export function wireSourceActions() {
     const act = b.dataset.srcAct;
     if (act === "use-sdc") useFileFor("sdc", b.dataset.rel);
     else if (act === "use-pins") useFileFor("pins", b.dataset.rel);
-    else if (act === "new-sdc") {
-      document.querySelector('.side-tab[data-tab="ide"]')?.click();
-      import("./ide/main.js").then(async (m) => {
-        await m.initIde({ designDir: state.designDir, runMode: state.runMode });
-        m.newFile("sdc");
-      });
-    }
+    else if (act === "new-sdc") import("./nav.js").then((m) => m.go("ide", { newFile: "sdc" }));
   });
 }
 

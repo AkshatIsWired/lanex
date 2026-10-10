@@ -1244,6 +1244,24 @@ await checkAsync("context: newest run by default, baseline is the last run befor
   delete globalThis.localStorage;
 });
 
+check("links: every page change goes through nav.go(), none clicks the rail", () => {
+  const files = readdirSync(MOD).filter((f) => f.endsWith(".js")).map((f) => resolve(MOD, f))
+    .concat([resolve(MOD, "ide", "main.js"), resolve(MOD, "..", "app.js")]);
+  for (const f of files) {
+    const src = readFileSync(f, "utf8");
+    assert.ok(!/side-tab\[data-tab=[^\]]*\]['"]?\)\??\.click\(\)/.test(src), f + " clicks a rail tab instead of calling go()");
+    assert.ok(!/data-(an|cl)-go=/.test(src), f + " still uses a page-local link attribute");
+  }
+  assert.ok(!readdirSync(MOD).includes("runscope.js"), "runscope.js merged into context.js");
+});
+
+check("keys: number keys follow the rail", () => {
+  const hk = readFileSync(resolve(MOD, "hotkeys.js"), "utf8");
+  assert.ok(/railKeys\(\)/.test(hk) && !/TAB_KEYS/.test(hk), "number keys come from the rail order");
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  for (const id of ["analytics-runbar", "verify-runbar", "layout-runbar"]) assert.ok(html.includes('id="' + id + '"'), id + " missing");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

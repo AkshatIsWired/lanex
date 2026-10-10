@@ -2,7 +2,8 @@
 
 import { api, sse, fmt } from "./modules/api.js";
 import { state, safeStorage } from "./modules/state.js";
-import { setupTabs, activate } from "./modules/tabs.js";
+import { setupTabs } from "./modules/tabs.js";
+import { setupNav, startAt, go } from "./modules/nav.js";
 import { noteRunStarted, noteRunFinished } from "./modules/context.js";
 import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkPill, paintOnboardChecklist } from "./modules/setup.js";
 import { setupTheme, toggleTheme } from "./modules/theme.js";
@@ -82,6 +83,7 @@ async function boot() {
     safeStorage.remove("ll.tier");
     safeStorage.remove("ll.onboarded");
     setupTabs();
+    setupNav();
     setupTheme();
     setupDensity();
     setupZoom();
@@ -105,9 +107,7 @@ async function boot() {
       const dd = state.designDir ? "?design_dir=" + encodeURIComponent(state.designDir) : "";
       window.open("/ide" + dd, "_blank", "noopener");
     });
-    document.getElementById("tools-icon")?.addEventListener("click", () => {
-      document.querySelector('.side-tab[data-tab="tools"]')?.click();
-    });
+    document.getElementById("tools-icon")?.addEventListener("click", () => go("tools", {}, { link: false }));
     document.getElementById("palette-btn")?.addEventListener("click", openPalette);
     document.getElementById("theme-btn")?.addEventListener("click", toggleTheme);
     // The "Parse" button is wired once by setupViolations() (smart kind
@@ -199,7 +199,7 @@ async function boot() {
 
     // Always open on Setup (the design/PDK/run entry point), regardless of which
     // tab was last visited — boot should land the user at the start of the flow.
-    activate("setup");
+    startAt("setup");
 
     // Hide splash and reveal the app.
     setStatus("ready");
@@ -236,7 +236,7 @@ function handle(ev) {
       R("runs", renderRuns);  // surface the just-created run dir immediately
       // Land the user on the live Pipeline view (timeline) and focus
       // the log pane, so they immediately see steps light up + terminal output.
-      document.querySelector('.side-tab[data-tab="pipeline"]')?.click();
+      go("pipeline", {}, { link: false });
       document.querySelector('.side-pane-tab[data-itab="logs"]')?.click();
       noteRunStarted();
     }
@@ -392,7 +392,7 @@ function handle(ev) {
       } else {
         pill.classList.add("pill-pass");
         pill.textContent = "done";
-        toast.show("Flow completed. Your chip is in the Layout tab.", "success");
+        toast.show("Flow completed. Your chip is in the Layout tab.", "success", 8000, { label: "See chip", run: () => go("layout") });
       }
     }
     try {
@@ -545,8 +545,8 @@ function maybeShowPostRunPanel() {
     "</div>";
   el.addEventListener("click", (e) => {
     const t = e.target;
-    const go = t.getAttribute && t.getAttribute("data-go");
-    if (go) { document.querySelector('.side-tab[data-tab="' + go + '"]')?.click(); el.remove(); }
+    // nav.js follows the [data-go] link itself.
+    if (t.closest && t.closest("[data-go]")) el.remove();
     if (t.classList && t.classList.contains("postrun-close")) el.remove();
   });
   document.body.appendChild(el);
@@ -597,7 +597,6 @@ window.addEventListener("DOMContentLoaded", () => {
   boot();
 });
 
-// Expose tools lazy-load — clicking the Tools tab will fetch fresh data.
 // A per-tab run picker switched the active design to view a cross-design run:
 // reflect it in the topbar pill so the user (and the global Run button) know
 // which design is active now.
@@ -607,11 +606,10 @@ document.addEventListener("g:active_design_changed", (e) => {
   if (label) paintDesignPill(label);
 });
 
-document.addEventListener("g:tab_activated", (e) => {
-  if (e.detail?.tab === "tools") {
-    import("./modules/tools.js").then((m) => m.renderTools());
-  }
-  if (e.detail?.tab === "analytics") {
+// Each page renders when it shows (nav.js says so with g:tab_activated).
+const RENDER = {
+  tools: () => import("./modules/tools.js").then((m) => m.renderTools()),
+  analytics: () => {
     import("./modules/analytics.js").then((m) => m.renderAnalyticsFull());
     import("./modules/compare.js").then((m) => m.renderCompare());
     import("./modules/watch.js").then((m) => m.renderWatch());
@@ -621,24 +619,16 @@ document.addEventListener("g:tab_activated", (e) => {
     const tag = state.selectedRunTag || (state.runs && state.runs[0] && state.runs[0].tag);
     if (tag && state.designDir) populateReportsList(state.designDir, tag);
     renderTimingAdvisor();
-  }
-});
-// Lazy-load tabs that have heavy work on first display.
-document.querySelectorAll(".side-tab").forEach((t) => {
-  t.addEventListener("click", () => {
-    const name = t.dataset.tab;
-    document.dispatchEvent(new CustomEvent("g:tab_activated", { detail: { tab: name } }));
-    if (name === "runs") renderRuns();
-    if (name === "ide") import("./modules/ide/main.js").then((m) =>
-      m.initIde({ designDir: state.designDir, runMode: state.runMode }));
-    if (name === "layout") import("./modules/layout.js").then((m) => m.renderLayout());
-    // tools + analytics are rendered by the g:tab_activated listener above; don't
-    // double-render them here.
-    if (name === "verify") import("./modules/verify.js").then((m) => m.renderVerify());
-    if (name === "dse") import("./modules/dse.js").then((m) => m.renderDse());
-    if (name === "cells") {
-      import("./modules/cells.js").then((m) => m.renderCells());
-    }
-    if (name === "manual") import("./modules/manual.js").then((m) => m.renderManual());
-  });
+  },
+  runs: () => renderRuns(),
+  ide: () => import("./modules/ide/main.js").then((m) => m.initIde({ designDir: state.designDir, runMode: state.runMode })),
+  layout: () => import("./modules/layout.js").then((m) => m.renderLayout()),
+  verify: () => import("./modules/verify.js").then((m) => m.renderVerify()),
+  dse: () => import("./modules/dse.js").then((m) => m.renderDse()),
+  cells: () => import("./modules/cells.js").then((m) => m.renderCells()),
+  manual: () => import("./modules/manual.js").then((m) => m.renderManual()),
+};
+document.addEventListener("g:tab_activated", (e) => {
+  const r = RENDER[e.detail?.tab];
+  if (r) Promise.resolve().then(r).catch((err) => console.error("render " + e.detail.tab, err));
 });

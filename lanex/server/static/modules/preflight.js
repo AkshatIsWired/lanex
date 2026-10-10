@@ -4,6 +4,7 @@
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
+import { go } from "./nav.js";
 
 let _last = null;
 
@@ -148,23 +149,15 @@ export async function renderPreflight() {
     b.addEventListener("click", () => {
       const act = b.dataset.act;
       if (act === "tools") {
-        document.querySelector('.side-tab[data-tab="tools"]')?.click();
+        go("tools");
       } else if (act === "design") {
         document.getElementById("setup-design")?.scrollIntoView({ behavior: "smooth", block: "start" });
       } else if (act === "sources") {
         document.getElementById("setup-sources")?.scrollIntoView({ behavior: "smooth", block: "start" });
       } else if (act === "edit") {
-        document.querySelector('.side-tab[data-tab="ide"]')?.click();
-        import("./ide/main.js").then(async (m) => {
-          await m.initIde({ designDir: state.designDir, runMode: state.runMode });
-          await m.openInIde({ rel: b.dataset.rel });
-        }).catch(() => {});
+        go("ide", { rel: b.dataset.rel });
       } else if (act === "new-file") {
-        document.querySelector('.side-tab[data-tab="ide"]')?.click();
-        import("./ide/main.js").then(async (m) => {
-          await m.initIde({ designDir: state.designDir, runMode: state.runMode });
-          m.newFile("module_v");
-        }).catch(() => {});
+        go("ide", { newFile: "module_v" });
       }
     });
   });

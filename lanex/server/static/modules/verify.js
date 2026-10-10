@@ -175,8 +175,6 @@ function wireOnce() {
     const t = e.target;
     const go = t.closest("[data-vf-jump]");
     if (go) { jumpTo(go.dataset.vfJump, go.dataset.vfOpen); return; }
-    const tab = t.closest("[data-an-go]");
-    if (tab) { document.querySelector('.side-tab[data-tab="' + tab.dataset.anGo + '"]')?.click(); return; }
     const row = t.closest("[data-vf-toggle]");
     if (row) { toggleRow(row.dataset.vfToggle); return; }
     const f = t.closest("[data-vf-filter]");
@@ -325,7 +323,7 @@ function renderOverview() {
   }
   if (_rep.metrics_from) flowNote += "<p class='vf-note'>This run has no final metrics, so the values are the ones LibreLane saved after step " + esc(_rep.metrics_from.n + " (" + (_rep.metrics_from.id || _rep.metrics_from.dir) + ")") + ", the last step that finished.</p>";
   if (_rep.has_config === false) flowNote += "<p class='vf-note'>This run has no resolved.json, so LibreLane's defaults were assumed for which checks fail the run.</p>";
-  const acts = (f.state === "stopped" ? btn("Open the run log", "data-an-go='runs'") : "") +
+  const acts = (f.state === "stopped" ? btn("Open the run log", "data-go='runs'") : "") +
     (v.blocker_ids.length ? btn("Go to first problem", "data-vf-jump='vf-checks' data-vf-open='" + esc(v.blocker_ids[0]) + "'", { primary: true }) : "");
   const verdict =
     "<div class='an-verdict vf-verdict is-" + cp.tone + "'>" +
@@ -590,7 +588,7 @@ function renderTiming() {
   const est = t.source === "estimate"
     ? "<p class='vf-callout is-warn'>Sign-off timing (OpenROAD.STAPostPNR) didn't run in this run. These are the last estimates an earlier timing step left behind, before routing finished; they are not a sign-off result.</p>" : "";
   el.innerHTML = head("Timing", "Timing in every corner", lede,
-      btn("Timing charts in Analytics", "data-an-go='analytics'", { ic: "chevron" })) +
+      btn("Timing charts in Analytics", "data-go='analytics' data-go-section='an-timing'", { ic: "chevron" })) +
     est + facts + "<div class='an-card vf-card-flush'>" + table + "</div>" +
     "<p class='an-foot'>A corner is a process (tt typical, ss slow, ff fast), temperature and voltage, with wire parasitics at their min, nominal or max. Worst values are outlined; red fails the run, amber only warns.</p>";
 }
@@ -854,7 +852,7 @@ async function rerun(stepId) {
     const res = await api.verifyRerun({ step_id: stepId, overrides, run_tag: _tag, run_mode: state.runMode });
     if (res.ok) {
       toast.show("Re-running " + stepId + ". Follow it in Pipeline, then press Refresh here.", "success");
-      document.querySelector('.side-tab[data-tab="pipeline"]')?.click();
+      import("./nav.js").then((m) => m.go("pipeline"));
     } else {
       toast.show("Re-run refused: " + (res.reason || res.error || "unknown"), "error");
     }

@@ -5,6 +5,7 @@ import { state } from "./state.js";
 import { confirmDialog, alertDialog, checklistDialog, choiceDialog, promptDialog } from "./dialog.js";
 import { toast } from "./toast.js";
 import { gatherRunsScoped, normDir, getRunScope, setRunScope, setRun, contextRun, contextDesign, onContext } from "./context.js";
+import { go } from "./nav.js";
 import { icon } from "./icons.js";
 
 // Lightweight "make this run's design active" — needed before any run-scoped
@@ -354,7 +355,7 @@ async function reproduceRun(tag) {
   if (Array.isArray(meta.sources) && meta.sources.length) state.selectedFiles = meta.sources.slice();
   // Repaint the config panel + jump to Setup.
   try { const cfg = await import("./config.js"); cfg.renderConfig(); } catch (_e) { /* ignore */ }
-  document.querySelector('.side-tab[data-tab="setup"]')?.click();
+  go("setup");
   const summary = "Loaded " + Object.keys(meta.overrides || {}).length + " override(s), " +
     (meta.sources || []).length + " source(s), " + (meta.run_mode || "container") +
     " mode, flow " + (meta.flow || "Classic") + ". Review your settings in Setup, then click Run flow when ready. " +
@@ -499,7 +500,7 @@ async function showFilesModal(tag) {
 
 async function openRun(tag, designDir) {
   await setRun(tag, designDir);
-  document.querySelector(".side-tab[data-tab='layout']")?.click();
+  go("layout");
 }
 
 // (The old Runs-tab metric-diff UI was removed; run comparison now lives in the

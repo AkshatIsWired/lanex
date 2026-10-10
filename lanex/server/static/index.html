@@ -68,6 +68,8 @@
             <span id="reveal-label">Show in file manager</span>
           </button>
         </div>
+        <!-- Shown after following a link from another page (nav.js). -->
+        <button id="nav-back" class="nav-back" hidden><span class="nav-back-k">Back to</span><span class="nav-back-to"></span></button>
       </div>
 
       <button id="palette-btn" class="cmdk-launcher" aria-label="Search commands (Ctrl K)">
@@ -658,7 +660,7 @@
         <span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span>
         <h3>No runs yet</h3>
         <p>Run the flow once and this page shows how it went: timing, area, power, routing and every metric LibreLane recorded.</p>
-        <button class="btn btn-primary" data-an-go="setup">Go to Setup</button>
+        <button class="btn btn-primary" data-go="setup">Go to Setup</button>
       </div>
       <div id="an-body">
         <div class="an-sec" id="an-overview"></div>
@@ -713,7 +715,7 @@
         <span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg></span>
         <h3>No runs yet</h3>
         <p>Run the flow once and this page shows whether the layout passes sign-off: timing in every corner, design rules, LVS, antenna and power, each judged the way LibreLane judges it.</p>
-        <button class="btn btn-primary" data-an-go="setup">Go to Setup</button>
+        <button class="btn btn-primary" data-go="setup">Go to Setup</button>
       </div>
       <div id="vf-body">
         <div class="an-sec" id="vf-overview"></div>
@@ -786,7 +788,7 @@
         <span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h18v18H3zM3 9h18M9 21V9"/></svg></span>
         <h3>No runs yet</h3>
         <p>Run the flow once and your chip shows up here: the floorplan, the placed cells, the clock tree, the routed wires and the final GDS, layer by layer.</p>
-        <button class="btn btn-primary" data-an-go="setup">Go to Setup</button>
+        <button class="btn btn-primary" data-go="setup">Go to Setup</button>
       </div>
 
       <div class="lx-page" id="lx-page" hidden>

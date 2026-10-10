@@ -284,13 +284,13 @@ async function doCreate(body, tpl) {
     if (tpl.kind === "blank") {
       toast.show("Created " + name + ". src/" + topName + ext + (tbRel ? " and " + tbRel : "") +
         " are open in the RTL IDE.", "success");
-      document.querySelector('.side-tab[data-tab="ide"]')?.click();
+      (await import("./nav.js")).go("ide", {}, { link: false });
       const ide = await import("./ide/main.js");
       await ide.initIde({ designDir: res.design_dir, runMode: state.runMode });
       if (tbRel) await ide.openInIde({ rel: tbRel });
       await ide.openInIde({ rel: "src/" + topName + ext });
     } else {
-      document.querySelector('.side-tab[data-tab="setup"]')?.click();
+      (await import("./nav.js")).go("setup", {}, { link: false });
       toast.show("Created " + name + ". It's ready to run.", "success");
     }
   } catch (ex) {

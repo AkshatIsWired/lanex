@@ -101,8 +101,9 @@ function sectionHead(eyebrow, title, lede, actions = "") {
     (actions ? "<div class='an-head-act'>" + actions + "</div>" : "") + "</header>";
 }
 
-function goBtn(tab, label) {
-  return "<button class='btn btn-ghost btn-sm' data-an-go='" + tab + "'>" + esc(label) + " " + icon("chevron", { size: 13 }) + "</button>";
+function goBtn(tab, label, section = "") {
+  return "<button class='btn btn-ghost btn-sm' data-go='" + tab + "'" + (section ? " data-go-section='" + section + "'" : "") + ">" +
+    esc(label) + " " + icon("chevron", { size: 13 }) + "</button>";
 }
 
 function notReached(what) {
@@ -164,8 +165,6 @@ function wireOnce() {
   wireScrollSpy(nav);
   // Delegated actions inside the rendered sections.
   sec.addEventListener("click", (e) => {
-    const go = e.target.closest("[data-an-go]");
-    if (go) { document.querySelector('.side-tab[data-tab="' + go.dataset.anGo + '"]')?.click(); return; }
     // a used cell opens in the Cells library (function, layout, drive strengths)
     const cellRow = e.target.closest("#an-cells-rows .an-bar-row");
     if (cellRow) {
@@ -484,7 +483,7 @@ function renderTiming() {
   const el = document.getElementById("an-timing");
   const head = sectionHead("Timing", "Does it meet the clock?",
     "Slack is the spare time on a path. Positive everywhere means the design meets its clock in every corner; the worst corner decides.",
-    goBtn("verify", "Worst paths in Verify"));
+    goBtn("verify", "Worst paths in Verify", "vf-timing"));
   if (!has("timing__setup__ws") && !has("timing__hold__ws")) {
     el.innerHTML = head + notReached("This run has no timing results: it stopped before static timing analysis.");
     return;

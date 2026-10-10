@@ -67,9 +67,8 @@ export async function renderCells(opts = {}) {
 
 // Open one cell from anywhere (Analytics cell table, timing reports…).
 export async function openCell(name, { pdk, scl } = {}) {
-  document.querySelector('.side-tab[data-tab="cells"]')?.click();
-  await renderCells({ pdk, scl, cell: name });
-  document.getElementById("cl-library")?.scrollIntoView({ block: "start" });
+  const { go } = await import("./nav.js");
+  go("cells", { cell: name, pdk, scl });
 }
 
 // The context the sibling modules share.
@@ -130,8 +129,6 @@ function wire(sec) {
     renderCells({ force: true, cell: S.sel });
   });
   sec.addEventListener("click", (e) => {
-    const go = e.target.closest("[data-cl-go]");
-    if (go) { document.querySelector('.side-tab[data-tab="' + go.dataset.clGo + '"]')?.click(); return; }
     const jump = e.target.closest("[data-cl-jump]");
     if (jump) { document.getElementById(jump.dataset.clJump)?.scrollIntoView({ behavior: "smooth", block: "start" }); }
   });
@@ -265,7 +262,7 @@ function paintSummary() {
     tile("Never used", esc(String(ex.length)), esc(pdkEx + " by the PDK" + (userEx ? " · " + userEx + " by you" : "")), "data-cl-jump='cl-rules'") +
     (types
       ? tile("Used by run", esc(String(types)) + " <small>types</small>", esc(inst.toLocaleString("en-US") + " instances · " + (u.tag || "")), "data-cl-filter='used'")
-      : tile("Used by run", "–", state.designDir ? "Run the flow to see which cells it picked" : "Open a project to see usage", "data-cl-go='setup'")) +
+      : tile("Used by run", "–", state.designDir ? "Run the flow to see which cells it picked" : "Open a project to see usage", "data-go='setup'")) +
     "<button class='cl-tile' data-cl-jump='cl-macros' id='cl-tile-macros'><span class='cl-tile-k'>Macros</span><span class='cl-tile-v'>–</span><span class='cl-tile-s'>SRAMs and pre-built blocks</span></button>" +
     "</div>";
   document.querySelectorAll("[data-cl-filter]").forEach((b) => b.addEventListener("click", () => {
@@ -852,7 +849,7 @@ function flowHtml(c) {
   if (e.user) rows.push("<li>" + mark(false) + " Excluded by your <code>EXTRA_EXCLUDED_CELLS</code> (" + esc(e.user.join(", ")) + ").</li>");
   if (e.swap) rows.push("<li>" + mark(false) + " Swapped out for one of your custom cells (Flow rules).</li>");
   if (c.dont_use) rows.push("<li>" + mark(false) + " The Liberty file marks it <code>dont_use</code>.</li>");
-  if (c.used) rows.push("<li><span class='vf-mark is-pass'></span> " + c.used.toLocaleString("en-US") + " instances in run <b>" + esc((L.usage || {}).tag || "") + "</b>. <button class='btn btn-ghost btn-xs' data-cl-go='analytics'>Area breakdown</button></li>");
+  if (c.used) rows.push("<li><span class='vf-mark is-pass'></span> " + c.used.toLocaleString("en-US") + " instances in run <b>" + esc((L.usage || {}).tag || "") + "</b>. <button class='btn btn-ghost btn-xs' data-go='analytics' data-go-section='an-area'>Area breakdown</button></li>");
   else if ((L.usage || {}).tag && c.category !== "physical") rows.push("<li><span class='vf-mark is-not_run'></span> Not used in run <b>" + esc(L.usage.tag) + "</b>.</li>");
   let act = "";
   if (c.category !== "physical" && state.designDir) {
@@ -930,7 +927,7 @@ function fallbackCopy(text, done) {
 
 function emptyHtml(title, body, go, label) {
   return "<div class='empty'><span class='ico'>" + icon("layers", { size: 40 }) + "</span><h3>" + esc(title) + "</h3><p>" + esc(body) + "</p>" +
-    (go ? "<button class='btn btn-primary' data-cl-go='" + go + "'>" + esc(label) + "</button>" : "") + "</div>";
+    (go ? "<button class='btn btn-primary' data-go='" + go + "'>" + esc(label) + "</button>" : "") + "</div>";
 }
 
 // "/" focuses the cell search while the tab is open.

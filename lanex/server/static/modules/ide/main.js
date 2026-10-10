@@ -1699,8 +1699,7 @@ function simStatus(run) {
       const run2 = state.simRun || {};
       if (act === "wave") setPanel("wave");
       else if (act === "flow") {
-        document.querySelector('.side-tab[data-tab="setup"]')?.click();
-        setTimeout(() => document.getElementById("setup-run")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+        import("../nav.js").then((m) => m.go("setup", { section: "setup-run" }));
       } else if (act === "first-error") {
         const d = (state.simDiags || []).find((x) => x.severity === "error");
         const f = d && projectFile(d.file);

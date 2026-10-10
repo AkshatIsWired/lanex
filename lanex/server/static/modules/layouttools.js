@@ -44,7 +44,7 @@ export async function launchTool(tool, tag, { path } = {}) {
   const label = LABEL[tool] || tool;
   if (r.where === "install") {
     toast.show(label + " isn't installed yet. Set it up in the Tools tab.", "warn");
-    document.querySelector('.side-tab[data-tab="tools"]')?.click();
+    import("./nav.js").then((m) => m.go("tools"));
     return;
   }
   if (r.where === "nodisplay") {

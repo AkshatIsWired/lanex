@@ -143,7 +143,7 @@ export function mountRunBar(host, { baseline = false } = {}) {
     if (opt) { choose(+opt.dataset.i); return; }
     if (e.target.closest("[data-rb-runs]")) {
       close(false);
-      document.querySelector('.side-tab[data-tab="runs"]')?.click();
+      import("./nav.js").then((m) => m.go("runs"));
     }
   });
   host.addEventListener("change", (e) => {

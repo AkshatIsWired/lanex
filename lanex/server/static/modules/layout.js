@@ -530,8 +530,6 @@ function showMsg(html) {
   const el = $("lx-msg");
   el.innerHTML = "<div class='lx-msg-in'>" + html + "</div>";
   el.hidden = false;
-  el.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () =>
-    document.querySelector('.side-tab[data-tab="' + b.dataset.go + '"]')?.click()));
 }
 function hideMsg() { const el = $("lx-msg"); if (el) el.hidden = true; }
 function setNote(html) { const el = $("lx-note"); if (el) el.innerHTML = html; }
@@ -865,7 +863,7 @@ function renderChecks() {
     host.innerHTML = "<div class='lx-clean'><span class='vf-mark is-pass'></span><div><b>No markers</b>" +
       "<p>" + srcs.map((s) => esc(s.label)).join(", ") + " found nothing to flag in this run.</p></div></div>" +
       "<p class='muted lx-pad'>When a check does flag something, each marker shows up here and on the layout; click one to zoom to it.</p>" +
-      "<button class='btn btn-ghost btn-sm lx-pad' data-go-verify>Full sign-off in Verify " + icon("chevron", { size: 13 }) + "</button>";
+      "<button class='btn btn-ghost btn-sm lx-pad' data-go='verify' data-go-section='vf-drc'>Full sign-off in Verify " + icon("chevron", { size: 13 }) + "</button>";
     return;
   }
   host.innerHTML =
@@ -888,7 +886,6 @@ function renderChecks() {
 }
 
 function onChecksClick(e) {
-  if (e.target.closest("[data-go-verify]")) { document.querySelector('.side-tab[data-tab="verify"]')?.click(); return; }
   const b = e.target.closest("[data-mk]");
   if (!b) return;
   const [si, ii] = b.dataset.mk.split(":").map(Number);
@@ -1316,8 +1313,6 @@ function wireOnce() {
   wireMenu("lx-open-pick", "lx-open-menu", (b) => openTool(b.dataset.open), () => paintOpenMain());
   wireMenu("lx-save", "lx-save-menu", (b) => saveImage(b.dataset.save));
   wireMenu("lx-cmd", "lx-cmd-menu", (b) => { if (b.dataset.copy) copy(b.dataset.copy); }, fillCommands);
-  document.querySelector("#lx-empty [data-an-go]")?.addEventListener("click", (e) =>
-    document.querySelector('.side-tab[data-tab="' + e.currentTarget.dataset.anGo + '"]')?.click());
   document.addEventListener("fullscreenchange", () => $("lx-ws").classList.toggle("is-full", document.fullscreenElement === $("lx-ws")));
 }
 

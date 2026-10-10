@@ -231,7 +231,7 @@ async function switchProject(dir) {
     const input = document.getElementById("design-dir-input");
     if (input) input.value = res.design_dir || dir;
     await setup.adoptDesignDir(res.design_dir || dir);
-    document.querySelector('.side-tab[data-tab="setup"]')?.click();
+    import("./nav.js").then((m) => m.go("setup", {}, { link: false }));
     toast.show("Opened " + baseName(dir) + ".", "success");
   } catch (ex) {
     toast.show("Could not open " + displayPath(dir) + ": " + (ex.message || ex), "error");
@@ -492,10 +492,8 @@ export function setupShell() {
     if (_sheet && !_sheet.hidden) closeOpen(); else openHelp("learn");
   });
   // Status items jump to where the setting lives.
-  document.getElementById("pdk-pill")?.addEventListener("click", () => {
-    document.querySelector('.side-tab[data-tab="setup"]')?.click();
-    setTimeout(() => document.getElementById("setup-pdk")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
-  });
+  document.getElementById("pdk-pill")?.addEventListener("click", () =>
+    import("./nav.js").then((m) => m.go("setup", { section: "setup-pdk" })));
   const openRunMenu = (e) => { e.stopPropagation(); document.getElementById("run-opts-btn")?.click(); };
   document.getElementById("st-engine")?.addEventListener("click", openRunMenu);
   document.getElementById("st-mode")?.addEventListener("click", openRunMenu);

@@ -1,27 +1,16 @@
 // hotkeys.js — global keyboard shortcuts + the single source of truth for the
 // Shortcuts tab of the help sheet (so the list and the handlers can never drift).
 import { toggleDensity } from "./density.js";
+import { go, railKeys } from "./nav.js";
 
-// Number keys → tab. One declarative map drives BOTH the handler and the dialog
-// text, so adding a tab key is a one-line change that stays documented.
-const TAB_KEYS = {
-  "1": ["setup", "Setup"],
-  "2": ["pipeline", "Pipeline"],
-  "3": ["runs", "Runs"],
-  "4": ["layout", "Layout"],
-  "5": ["tools", "Tools"],
-  "6": ["analytics", "Analytics"],
-  "7": ["verify", "Verify"],
-  "8": ["dse", "DSE"],
-  "9": ["ide", "RTL IDE"],
-  "0": ["cells", "Cells"],
-};
+// Number keys follow the rail, top to bottom (1–9, then 0), read from the rail
+// itself so they can't drift from it; each rail tab's tooltip shows its key.
 
 // Rendered verbatim into the help sheet's Shortcuts tab. Kept next to the handlers.
 export const SHORTCUTS = [
   { keys: "Ctrl K", desc: "Search every command and setting" },
-  { keys: "1 / 2 / 3 / 4 / 5", desc: "Setup, Pipeline, Runs, Layout, Tools" },
-  { keys: "6 / 7 / 8 / 9 / 0", desc: "Analytics, Verify, DSE, RTL IDE, Cells" },
+  { keys: "1 … 9, 0", desc: "The pages, top to bottom in the left rail" },
+  { keys: "Alt ← / Alt →", desc: "Back and forward between pages (the mouse's side buttons too)" },
   { keys: "r", desc: "Start a run" },
   { keys: "s", desc: "Stop the running flow" },
   { keys: "/", desc: "Filter the pipeline log" },
@@ -72,7 +61,8 @@ export function setupHotkeys() {
     }
     if (e.key === "t") document.getElementById("theme-btn")?.click();
     if (e.key === "d") toggleDensity();
-    if (Object.prototype.hasOwnProperty.call(TAB_KEYS, e.key)) dispatchJump(TAB_KEYS[e.key][0]);
+    const page = railKeys().find(([k]) => k === e.key);
+    if (page) go(page[1], {}, { link: false });
     if (e.key === "r") document.getElementById("btn-run")?.click();
     if (e.key === "s") document.getElementById("btn-cancel")?.click();
     if (e.key === "/") {
@@ -84,8 +74,4 @@ export function setupHotkeys() {
       }
     }
   });
-}
-
-function dispatchJump(name) {
-  document.querySelector('.side-tab[data-tab="' + name + '"]')?.click();
 }

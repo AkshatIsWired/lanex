@@ -3,7 +3,7 @@
 // tabs, run/stop, install, toggle theme/density, jump to docs. The power-user
 // fast path; also a discoverability aid for beginners (everything is here).
 
-import { activate } from "./tabs.js";
+import { go, recentPlaces } from "./nav.js";
 import { toggleTheme } from "./theme.js";
 import { toggleDensity } from "./density.js";
 import { toggleRunMode, getRunMode } from "./runmode.js";
@@ -21,7 +21,7 @@ function click(id) {
 }
 
 function tab(name) {
-  document.querySelector('.side-tab[data-tab="' + name + '"]')?.click() || activate(name);
+  go(name, {}, { link: false });
 }
 
 // Action registry. `when` (optional) hides actions that aren't applicable.
@@ -56,6 +56,16 @@ function actions() {
     { id: "license", title: "License and notices", hint: "help", icon: icon("book"), run: () => import("./shell.js").then((m) => m.openHelp("about")) },
     { id: "docs", title: "Open LibreLane docs", hint: "help", icon: icon("arrowUp"), run: () => window.open("https://librelane.readthedocs.io/", "_blank", "noopener") },
   ];
+}
+
+// The places visited before this one, newest first (nav.js): on top while
+// nothing is typed, so going back is one pick, not one step at a time.
+function recents() {
+  return recentPlaces().map((r, i) => ({
+    // Titles are HTML in the list; a place names files and cells, so escape it.
+    id: "recent-" + i, title: r.label.replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";"), hint: "recent", icon: icon("clock"),
+    run: () => go(r.tab, r.params, { link: false }),
+  }));
 }
 
 function score(q, text) {
@@ -135,7 +145,7 @@ function runSel() {
 
 export function openPalette() {
   if (!_el) build();
-  _items = actions();
+  _items = recents().concat(actions());
   _input.value = "";
   _sel = 0;
   refresh();

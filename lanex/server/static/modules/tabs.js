@@ -1,11 +1,13 @@
-// tabs.js — wire the left-side tabs (Setup/Pipeline/Runs/Preview/Tools).
+// tabs.js — the left rail's tabs: which section shows (activate) and the ARIA
+// tab pattern. Moving between pages goes through nav.js.
 import { state } from "./state.js";
+import { go } from "./nav.js";
 
 export function setupTabs() {
   const tabs = Array.from(document.querySelectorAll(".side-tab"));
-  // Side tabs switch sections.
+  // The user picked the page itself: no "Back to" chip (nav.js).
   tabs.forEach((tab) => {
-    tab.addEventListener("click", () => activate(tab.dataset.tab));
+    tab.addEventListener("click", () => go(tab.dataset.tab, {}, { link: false }));
   });
   // ARIA tab semantics (WAI-ARIA tabs pattern): the <nav> is already
   // role="tablist"; mark each button a tab wired to its section panel, with a
@@ -52,7 +54,7 @@ function onTabKey(e, tabs, tab) {
   else return;
   e.preventDefault();
   const next = tabs[j];
-  activate(next.dataset.tab);
+  go(next.dataset.tab, {}, { link: false });
   next.focus();
 }
 

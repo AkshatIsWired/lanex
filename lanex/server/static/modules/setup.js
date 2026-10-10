@@ -35,13 +35,9 @@ function rememberDesign(dir) {
 // older callers stay valid.
 export function renderRecentDesigns() {}
 
-// Switch to another tab and run something there once it has rendered.
-function goTab(name) {
-  document.querySelector('.side-tab[data-tab="' + name + '"]')?.click();
-}
-
 async function openIde(opts) {
-  goTab("ide");
+  const { go } = await import("./nav.js");
+  go("ide");
   const m = await import("./ide/main.js");
   await m.initIde({ designDir: state.designDir, runMode: state.runMode });
   await m.openInIde(opts || {});
@@ -84,7 +80,7 @@ function wireSetupActions() {
     } else if (act === "run") {
       scrollToBlock("setup-run");
     } else if (act === "runs") {
-      goTab("runs");
+      import("./nav.js").then((m) => m.go("runs"));
     }
   });
   // "Add files…" copies files from anywhere on the computer into the project,
