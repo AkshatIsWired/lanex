@@ -19,6 +19,7 @@ import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { icon } from "./icons.js";
 import { gatherRunsScoped, getRunScope, runOptionsHtml, scopeToggleHtml, wireScopeToggle, ensureActiveDesignFor } from "./runscope.js";
+import { STAGES as FLOW_STAGES } from "./flowstages.js";
 import { LayoutCanvas, fmtUm, niceLength } from "./layoutcanvas.js";
 import { Layout3D } from "./layout3d.js";
 import { setRunFilesTag } from "./runfiles.js";
@@ -66,6 +67,7 @@ const S = {
 function pref(k, d) { try { return localStorage.getItem("ll.lx." + k) ?? d; } catch (_e) { return d; } }
 function setPref(k, v) { try { localStorage.setItem("ll.lx." + k, v); } catch (_e) {} }
 const $ = (id) => document.getElementById(id);
+const STAGE_NO = Object.fromEntries(FLOW_STAGES.map((s, i) => [s.id, i + 1]));
 const esc = (s) => fmt.escape(String(s ?? ""));
 
 // ------------------------------------------------------------------ entry points
@@ -575,7 +577,8 @@ function renderStages() {
     "<li><button class='lx-stage' data-src='" + esc(st.source) + "' title='" + esc(st.blurb) + "'>" +
     "<span class='lx-stage-pic'>" + (eng.ok ? "<img alt='' loading='lazy' src='/api/layout/thumb?tag=" + encodeURIComponent(S.tag) +
       "&source=" + encodeURIComponent(st.source) + "&w=" + thumbW * 2 + "&h=" + thumbH * 2 + "&bg=" + bg + "'/>" : "") + "</span>" +
-    "<span class='lx-stage-txt'><span class='lx-stage-n'>" + (st.id === "final" ? "GDS" : String(i + 1).padStart(2, "0")) + "</span>" +
+    // The stage's number in the flow (flowstages.js), the same on every page.
+    "<span class='lx-stage-txt'><span class='lx-stage-n'>" + (st.id === "final" ? "GDS" : String(STAGE_NO[st.id] || i + 1).padStart(2, "0")) + "</span>" +
     "<b>" + esc(st.label) + "</b></span></button></li>").join("") +
     stageControls(stages, extra, eng);
   ol.querySelectorAll(".lx-stage").forEach((b) => b.addEventListener("click", () => { stopPlay(); openSource(b.dataset.src); }));

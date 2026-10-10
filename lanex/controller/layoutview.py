@@ -47,6 +47,8 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import flowstages
+
 _log = logging.getLogger(__name__)
 
 _LOCK = threading.RLock()
@@ -61,25 +63,20 @@ _MAX_MARKERS = 4000
 _MAX_INSTANCES = 30000
 _MAX_LABELS = 6000
 
-# Flow stages in the order the Classic flow reaches them. Each stage is shown
-# from the LAST step (by ordinal) whose name matches one of its patterns and
-# that wrote a DEF. Patterns match the step dir name after "NN-".
+# Flow stages that leave a picture, in flow order, named as on every other page
+# (flowstages.py). Each is shown from the LAST step (by ordinal) whose name
+# matches one of its patterns and that wrote a DEF. Patterns match the step dir
+# name after "NN-".
+_SNAPSHOT_STEPS = {
+    "floorplan": ["openroad-floorplan", "openroad-cutrows", "openroad-tapendcapinsertion"],
+    "pdn": ["openroad-generatepdn"],
+    "placement": ["openroad-globalplacement", "openroad-repairdesignpostgpl", "openroad-detailedplacement"],
+    "cts": ["openroad-cts", "openroad-resizertimingpostcts"],
+    "routing": ["openroad-globalrouting", "openroad-detailedrouting"],
+}
 STAGES: List[Dict[str, Any]] = [
-    {"id": "floorplan", "label": "Floorplan",
-     "match": ["openroad-floorplan", "openroad-cutrows", "openroad-tapendcapinsertion"],
-     "blurb": "The die and the core area, the rows the cells will sit in, and the tap and end-cap cells."},
-    {"id": "pdn", "label": "Power grid",
-     "match": ["openroad-generatepdn"],
-     "blurb": "The power distribution network: the VPWR / VGND straps and rails every cell connects to."},
-    {"id": "placement", "label": "Placement",
-     "match": ["openroad-globalplacement", "openroad-repairdesignpostgpl", "openroad-detailedplacement"],
-     "blurb": "Every standard cell placed on a legal row site. Wires come later."},
-    {"id": "cts", "label": "Clock tree",
-     "match": ["openroad-cts", "openroad-resizertimingpostcts"],
-     "blurb": "Clock buffers added so the clock reaches every flip-flop at nearly the same time."},
-    {"id": "routing", "label": "Routing",
-     "match": ["openroad-globalrouting", "openroad-detailedrouting"],
-     "blurb": "All signal wires drawn on the metal layers, with vias between them."},
+    {"id": sid, "label": flowstages.stage(sid)["label"], "blurb": flowstages.stage(sid)["blurb"], "match": m}
+    for sid, m in _SNAPSHOT_STEPS.items()
 ]
 _FINAL_BLURB = ("The signoff GDS: every cell with its real transistor-level shapes, plus fill. "
                 "This is the file that goes to the foundry.")

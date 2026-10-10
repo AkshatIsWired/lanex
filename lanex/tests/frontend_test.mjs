@@ -1018,7 +1018,7 @@ check("analytics: steps get a stage label and running metrics", () => {
     { n: 35, id: "OpenROAD.CTS", changed: {} },
     { n: 36, id: "OpenROAD.STAMidPNR-1", changed: { timing__setup__ws: 6.0 } },
   ]));
-  assert.deepEqual(steps.map((s) => s.stage), ["Synthesis", "Floorplan", "Floorplan", "CTS", "CTS"]);
+  assert.deepEqual(steps.map((s) => s.stage), ["Synthesis", "Floorplan", "Floorplan", "Clock tree", "Clock tree"]);
   assert.equal(steps[4].metrics.design__instance__count, 222);
   assert.equal(steps[2].metrics.timing__setup__ws, 6.6);
   assert.equal(AM.stepName({ id: "OpenROAD.STAMidPNR-3" }), "STA mid-PnR (4)");
@@ -1182,6 +1182,18 @@ check("layout: one Layout tab; Preview is gone everywhere", () => {
   }
   const app = readFileSync(resolve(MOD, "..", "app.js"), "utf8");
   assert.ok(!/preview\.js|data-go='preview'/.test(app), "app.js still points at the old Preview tab");
+});
+
+// ---------- P0 glue: one context, links, stages, keys --------------------------------
+const FS = await import(toUrl(resolve(MOD, "flowstages.js")));
+
+check("stages: seven, in flow order, one name for each on every page", () => {
+  assert.deepEqual(FS.STAGES.map((s) => s.label),
+    ["Synthesis", "Floorplan", "Power grid", "Placement", "Clock tree", "Routing", "Sign-off"]);
+  assert.deepEqual(AM.STAGES, FS.STAGES.map((s) => s.label), "Analytics groups by the shared names");
+  const ids = FS.stagesOf(["01-verilator-lint", "21-openroad-generatepdn", "25-openroad-ioplacement",
+    "35-openroad-cts", "36-openroad-stamidpnr-1", "44-openroad-detailedrouting", "70-netgen-lvs"].map((dir) => ({ dir })));
+  assert.deepEqual(ids, ["synthesis", "pdn", "placement", "cts", "cts", "routing", "signoff"]);
 });
 
 console.log(`\nfrontend_test: ${passed} checks passed` +

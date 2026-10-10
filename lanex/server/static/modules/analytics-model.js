@@ -7,6 +7,8 @@
 // tool's own keys and values; LanEx only converts units (W -> mW, V -> mV,
 // ratio -> %) and never derives a new silicon number.
 
+import * as FS from "./flowstages.js";
+
 // ---------- key anatomy ----------------------------------------------------
 
 // "timing__setup__ws__corner:max_ss_100C_1v60" ->
@@ -327,36 +329,13 @@ export function byCorner(values, base) {
 
 // ---------- flow stages ------------------------------------------------------------
 
-// Visual grouping of LibreLane Classic steps into the stages people know.
-// Steps not listed (e.g. the STAMidPNR checkpoints) inherit the stage of the
-// step before them. A label only — nothing is computed from it.
-export const STAGES = ["Synthesis", "Floorplan", "Placement", "CTS", "Routing", "Signoff"];
-const STAGE_OF = {
-  Synthesis: "lint linttimingconstructs linterrors lintwarnings jsonheader synthesis yosysunmappedcells yosyssynthchecks netlistassignstatements checksdcfiles checkmacroinstances staprepnr eqy equivalence",
-  Floorplan: "floorplan dumprcvalues checkmacroantennaproperties setpowerconnections manualmacroplacement macroplacement cutrows tapendcapinsertion addpdnobstructions generatepdn removepdnobstructions addroutingobstructions globalplacementskipio ioplacement customioplacement applydeftemplate",
-  Placement: "globalplacement writeverilogheader powergridviolations repairdesignpostgpl manualglobalplacement detailedplacement",
-  CTS: "cts resizertimingpostcts",
-  Routing: "globalrouting checkantennas diodesonports heuristicdiodeinsertion repairantennas resizertimingpostgrt detailedrouting removeroutingobstructions trdrc reportdisconnectedpins disconnectedpins reportwirelength wirelength fillinsertion",
-  Signoff: "cellfrequencytables rcx stapostpnr irdropreport streamout render writelef checkdesignantennaproperties xor drc spiceextraction illegaloverlap lvs setupviolations holdviolations maxslewviolations maxcapviolations reportmanufacturability timingviolations",
-};
-const _STEP_STAGE = {};
-for (const [st, names] of Object.entries(STAGE_OF)) for (const n of names.split(" ")) _STEP_STAGE[n] = st;
-
-// "OpenROAD.STAMidPNR-3" -> "stamidpnr"; dir "43-openroad-stamidpnr-3" works too.
-export function stepCore(idOrDir) {
-  let s = String(idOrDir || "");
-  if (/^\d+-/.test(s)) s = s.replace(/^\d+-[a-z]+-/i, "");
-  else s = s.split(".").slice(1).join(".") || s;
-  return s.toLowerCase().replace(/-\d+$/, "");
-}
+// The seven stages every page uses (flowstages.js). Analytics groups by label.
+export const STAGES = FS.STAGES.map((s) => s.label);
+export const stepCore = FS.stepCore;
 
 export function stageSteps(steps) {
-  let cur = STAGES[0];
-  return steps.map((s) => {
-    const st = _STEP_STAGE[stepCore(s.id || s.dir)];
-    if (st) cur = st;
-    return { ...s, stage: cur };
-  });
+  const ids = FS.stagesOf(steps);
+  return steps.map((s, i) => ({ ...s, stage: FS.stageLabel(ids[i]) }));
 }
 
 // Human name for a step: "OpenROAD.DetailedRouting" -> "Detailed routing",
