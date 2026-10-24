@@ -902,6 +902,17 @@ def test_store_wsl_without_the_old_feature_needs_no_administrator(tmp_path: Path
     assert _preflight(tmp_path, facts)["decision"]["code"] == "features-required"
 
 
+def test_pending_windows_update_restart_does_not_cost_a_second_restart(tmp_path: Path) -> None:
+    facts = _base_preflight(
+        pendingReboot=True,
+        features={"wsl": "disabled", "virtualMachinePlatform": "disabled"},
+        wsl={"present": True, "statusUsable": False, "version": "",
+             "systemdCapable": False, "kernelUsable": False, "kernelError": ""})
+    assert _preflight(tmp_path, facts)["decision"]["code"] == "features-required"
+    facts["features"] = {"wsl": "enabled", "virtualMachinePlatform": "enabled"}
+    assert _preflight(tmp_path, facts)["decision"]["code"] == "restart-required"
+
+
 def test_first_look_without_kernel_start_does_not_block(tmp_path: Path) -> None:
     result = _preflight(tmp_path, _base_preflight(
         wsl={"present": True, "statusUsable": True, "version": "3.0.1.0",

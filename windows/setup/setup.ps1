@@ -761,6 +761,10 @@ function Test-StoreWsl($Facts) {
 }
 
 function Get-PreflightDecision($Facts) {
+    $featuresMissing = (([string]$Facts.features.wsl -ne 'enabled' -and -not (Test-StoreWsl $Facts)) -or
+        [string]$Facts.features.virtualMachinePlatform -ne 'enabled') -and
+        [string]$Facts.features.wsl -notmatch 'pending' -and
+        [string]$Facts.features.virtualMachinePlatform -notmatch 'pending'
     $code = 'ready'
     $blocked = $false
     $needsElevation = $false
@@ -800,10 +804,12 @@ function Get-PreflightDecision($Facts) {
         $code = 'preflight-query-failed'; $blocked = $true
     } elseif ([string]$Facts.features.wsl -match 'pending' -or
             [string]$Facts.features.virtualMachinePlatform -match 'pending' -or
-            ($Facts.pendingReboot -eq $true -and $Facts.wsl.statusUsable -ne $true)) {
+            ($Facts.pendingReboot -eq $true -and $Facts.wsl.statusUsable -ne $true -and -not $featuresMissing)) {
+        # A restart Windows Update already wants is only waited for when the
+        # features are on; otherwise turning them on first lets one restart
+        # do both (a VM run asked for two).
         $code = 'restart-required'; $needsRestart = $true
-    } elseif (([string]$Facts.features.wsl -ne 'enabled' -and -not (Test-StoreWsl $Facts)) -or
-            [string]$Facts.features.virtualMachinePlatform -ne 'enabled') {
+    } elseif ($featuresMissing) {
         $code = 'features-required'; $needsElevation = $true
         $firmwareNotice = ([string]$Facts.firmwareVirtualization -eq 'unknown')
     } elseif ($Facts.wsl.statusUsable -ne $true -or $Facts.wsl.systemdCapable -ne $true) {
