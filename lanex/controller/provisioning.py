@@ -589,6 +589,22 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                 failures.append({"component": "container:image", "result": result})
             else:
                 print("  [OK] LibreLane container image verified ready.", flush=True)
+    # The pinned SHA-256 of every PDK file: used now, and kept in ~/.lanex so a
+    # PDK added later from the Tools tab is checked the same way.
+    asset_pins = plan["manifest"].get("pdkAssets")
+    if isinstance(asset_pins, dict) and asset_pins.get("families"):
+        try:
+            from . import pdkfeed
+
+            target = pdkfeed.pins_path()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(asset_pins, indent=1) + "\n", encoding="utf-8")
+            tmp.replace(target)
+        except Exception as exc:  # noqa: BLE001 - the in-memory pins still apply
+            print(f"note: could not save the PDK pins for later installs: {exc}", flush=True)
+    else:
+        asset_pins = None
     if not failures:
         for (family, version), variants in family_groups.items():
             if cancel_requested.is_set():
@@ -631,6 +647,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
                 strict=True,
                 variant_libraries=variant_libs_map,
                 expect_bytes=family_bytes,
+                asset_pins=asset_pins,
             )
             drain()
             if not result.get("ok"):

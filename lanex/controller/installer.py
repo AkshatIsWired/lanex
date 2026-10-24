@@ -2760,13 +2760,19 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
                      required_version: Optional[str] = None,
                      strict: bool = False,
                      variant_libraries: Optional[Dict[str, List[str]]] = None,
-                     expect_bytes: Optional[int] = None) -> Dict[str, Any]:
+                     expect_bytes: Optional[int] = None,
+                     asset_pins: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fetch, enable and verify one PDK before returning.
 
     This is the single completion contract used by Windows finalization and the
     asynchronous Tools-page wrapper.  Arguments are an argv list (never shell
     text), valid installed versions and download caches are never deleted, and
     exhausted retries are an explicit failure.
+
+    When the SHA-256 of every asset of the version is pinned (*asset_pins*, or
+    ``~/.lanex/pdk-assets.json``), the tarballs are downloaded by
+    :mod:`pdkfeed` (resumable, our copy first, hash-checked) and ciel reads
+    them from a local feed instead of the internet.
     """
     key = f"pdk:{pdk}"
     family = _pdk_family(pdk)
@@ -2830,43 +2836,87 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
             pass
 
         base = ["--pdk-root", root, "--pdk-family", family, version, *lib_args]
-        last: Dict[str, Any] = {"ok": False, "output": []}
-        max_attempts = 8
-        backoffs = [2, 4, 8, 12, 16, 20, 24, 30]
-        for attempt in range(1, max_attempts + 1):
-            if _is_cancelled(key):
-                return _cancelled_result(key)
-            last = _run_argv(ciel + ["fetch", *base],
-                             label=f"ciel fetch {family} ({attempt}/{max_attempts})", key=key,
-                             expect_bytes=expect_bytes, stall_s=_DOWNLOAD_STALL_S)
-            if _is_cancelled(key) or (last.get("rc") in (-15, -9) and not last.get("stalled")):
-                return _cancelled_result(key)
-            if last.get("ok"):
-                break
-            raw_out = last.get("output") or []
-            if isinstance(raw_out, str):
-                cleaned_out = [l for l in raw_out.splitlines() if l.strip()]
-            else:
-                cleaned_out = [str(l) for l in raw_out if str(l).strip()]
-            blob = "\n".join(cleaned_out).lower()
-            permanent = any(marker in blob for marker in _PDK_PERMANENT_FAILURES)
-            if permanent or attempt == max_attempts:
-                reason = (f"ciel fetch failed permanently for {family}" if permanent else
-                          f"ciel fetch failed after {max_attempts} attempts for {family}")
-                _emit("installer_error", {"key": key, "message": reason})
-                return {"ok": False, "permanent": permanent, "attempts": attempt,
-                        "reason": reason, "output": cleaned_out}
-            delay = backoffs[min(attempt - 1, len(backoffs) - 1)]
-            _emit("installer_info", {"key": key,
-                  "message": f"transient PDK fetch failure; retrying in {delay}s (cache retained)…"})
-            time.sleep(delay)
+        from . import pdkfeed
 
-        enabled = _run_argv(ciel + ["enable", *base], label=f"ciel enable {family}", key=key)
-        if not enabled.get("ok"):
-            raw_en_out = enabled.get("output") or []
-            cleaned_en_out = [l for l in (raw_en_out.splitlines() if isinstance(raw_en_out, str) else raw_en_out) if str(l).strip()]
-            return {"ok": False, "reason": f"ciel enable failed for {family}",
-                    "output": cleaned_en_out}
+        feed = pdkfeed.load_pins(family, version, asset_pins)
+        ciel_env: Dict[str, str] = {}
+        feed_files: Dict[str, Any] = {}
+        if feed:
+            assets = pdkfeed.needed_assets(family, feed, libraries)
+            total = sum(int(a.get("size") or 0) for a in assets) or 1
+            done = [0]
+            last_emit = [0.0]
+            label = f"{family} PDK files"
+
+            def on_bytes(n: int) -> None:
+                done[0] += n
+                now = time.monotonic()
+                if now - last_emit[0] >= 1.0:
+                    last_emit[0] = now
+                    pct = min(99, done[0] * 100 // total)
+                    msg = f"{_human_bytes(done[0])} of {_human_bytes(total)} downloaded and checked"
+                    _emit("installer_progress", {"key": key, "label": label, "bytes": done[0],
+                                                 "expect": total, "percent": pct, "message": msg})
+                    _emit("installer_line", {"key": key, "label": label,
+                                             "line": f"  [active] {msg}"})
+
+            def log(line: str) -> None:
+                _emit("installer_line", {"key": key, "label": label, "line": line})
+
+            cache = pdkfeed.cache_dir(family, version)
+            cache.mkdir(parents=True, exist_ok=True)
+            log(f"downloading {len(assets)} {family} files ({_human_bytes(total)}); "
+                "each is checked against its pinned SHA-256")
+            try:
+                for asset in assets:
+                    feed_files[asset["filename"]] = pdkfeed.fetch_verified(
+                        asset, cache, feed.get("mirrorBase", ""), on_bytes=on_bytes,
+                        cancelled=lambda: _is_cancelled(key), log=log)
+            except pdkfeed.Cancelled:
+                return _cancelled_result(key)
+            except Exception as ex:  # noqa: BLE001
+                reason = f"{family} PDK download failed: {ex}"
+                _emit("installer_error", {"key": key, "message": reason})
+                return {"ok": False, "reason": reason}
+            log(f"all {family} files verified")
+
+        # Marked until ciel has unpacked and enabled the version, so a fetch cut
+        # off mid-unpack is never taken for an installed PDK (pdk.py checks it).
+        marker = None
+        try:
+            import ciel as _ciel_mod  # type: ignore
+
+            vdir = _ciel_mod.Version(name=version, pdk=family).get_dir(_ciel_mod.get_ciel_home(root))
+            marker = Path(str(vdir).rstrip("/") + ".lanex-incomplete")
+            if marker.exists() and os.path.isdir(vdir):
+                # The previous attempt never finished: unpack again from the
+                # verified files rather than trust a partial tree.
+                repair_ciel_store(None, pdk_root=root)
+                shutil.rmtree(vdir, ignore_errors=True)
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("LanEx: ciel fetch in progress\n", encoding="utf-8")
+        except Exception:
+            marker = None
+
+        feed_ctx = None
+        if feed:
+            feed_root = pdkfeed.cache_dir(family, version).parent / f"feed-{family}-{version}"
+            feed_ctx = pdkfeed.serve(feed_root)
+            feed_root.mkdir(parents=True, exist_ok=True)
+            feed_url = feed_ctx.__enter__()
+            pdkfeed.write_static_source(feed_root, family, feed, feed_files, feed_url)
+            ciel_env = {"CIEL_DATA_SOURCE": f"static-web:{feed_url}", **pdkfeed.no_proxy_env()}
+        try:
+            result = _install_pdk_ciel(key, family, version, ciel, base, ciel_env,
+                                       expect_bytes=None if feed else expect_bytes)
+        finally:
+            if feed_ctx is not None:
+                feed_ctx.__exit__(None, None, None)
+        if not result.get("ok"):
+            return result
+        attempt = result.get("attempts", 1)
+        if marker is not None:
+            marker.unlink(missing_ok=True)
         failed_libraries: List[str] = []
         if variant_libraries:
             for v_name, v_libs in variant_libraries.items():
@@ -2886,12 +2936,61 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
             _emit("installer_error", {"key": key, "message": reason})
             return {"ok": False, "reason": reason, "missingLibraries": failed_libraries}
         _emit("installer_done", {"key": key, "rc": 0, "label": "ciel fetch+enable",
-                                  "method": "ciel", "version": version})
+                                  "method": "ciel", "version": version,
+                                  "verified": bool(feed)})
         return {"ok": True, "method": "ciel", "version": version,
-                "libraries": list(libraries or []), "attempts": attempt}
+                "libraries": list(libraries or []), "attempts": attempt,
+                "verifiedDownloads": bool(feed)}
     finally:
         _end_job(key)
         _end_pdk_family(family)
+
+
+def _install_pdk_ciel(key: str, family: str, version: str, ciel: List[str],
+                      base: List[str], env_extra: Dict[str, str], *,
+                      expect_bytes: Optional[int]) -> Dict[str, Any]:
+    """``ciel fetch`` with retries, then ``ciel enable``."""
+    last: Dict[str, Any] = {"ok": False, "output": []}
+    max_attempts = 8
+    backoffs = [2, 4, 8, 12, 16, 20, 24, 30]
+    attempt = 0
+    for attempt in range(1, max_attempts + 1):
+        if _is_cancelled(key):
+            return _cancelled_result(key)
+        last = _run_argv(ciel + ["fetch", *base],
+                         label=f"ciel fetch {family} ({attempt}/{max_attempts})", key=key,
+                         env_extra=env_extra or None,
+                         expect_bytes=expect_bytes, stall_s=_DOWNLOAD_STALL_S)
+        if _is_cancelled(key) or (last.get("rc") in (-15, -9) and not last.get("stalled")):
+            return _cancelled_result(key)
+        if last.get("ok"):
+            break
+        raw_out = last.get("output") or []
+        if isinstance(raw_out, str):
+            cleaned_out = [l for l in raw_out.splitlines() if l.strip()]
+        else:
+            cleaned_out = [str(l) for l in raw_out if str(l).strip()]
+        blob = "\n".join(cleaned_out).lower()
+        permanent = any(marker in blob for marker in _PDK_PERMANENT_FAILURES)
+        if permanent or attempt == max_attempts:
+            reason = (f"ciel fetch failed permanently for {family}" if permanent else
+                      f"ciel fetch failed after {max_attempts} attempts for {family}")
+            _emit("installer_error", {"key": key, "message": reason})
+            return {"ok": False, "permanent": permanent, "attempts": attempt,
+                    "reason": reason, "output": cleaned_out}
+        delay = backoffs[min(attempt - 1, len(backoffs) - 1)]
+        _emit("installer_info", {"key": key,
+              "message": f"transient PDK fetch failure; retrying in {delay}s (cache retained)…"})
+        time.sleep(delay)
+
+    enabled = _run_argv(ciel + ["enable", *base], label=f"ciel enable {family}", key=key,
+                        env_extra=env_extra or None)
+    if not enabled.get("ok"):
+        raw_en_out = enabled.get("output") or []
+        cleaned_en_out = [l for l in (raw_en_out.splitlines() if isinstance(raw_en_out, str) else raw_en_out) if str(l).strip()]
+        return {"ok": False, "reason": f"ciel enable failed for {family}",
+                "output": cleaned_en_out}
+    return {"ok": True, "attempts": attempt}
 
 
 def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -2951,9 +3050,10 @@ def pull_image_sync(reference: str, expected_digest: str, *,
     key = "container:image"
     result: Dict[str, Any] = {"ok": False, "reason": "image pull failed"}
     # Layers already pulled stay in the engine's store, so every retry resumes
-    # rather than restarts. Stalls (dead connection, no traffic) get more
-    # retries than hard failures: on bad Wi-Fi they are the normal case.
-    max_attempts = 6
+    # rather than restarts. A dropped connection (Wi-Fi gone, laptop asleep, a
+    # VPN reconnecting) fails the pull at once, so the retries are spread over
+    # about six and a half minutes before Setup gives up and offers Retry.
+    max_attempts = 10
     for attempt in range(1, max_attempts + 1):
         if _is_cancelled(key):
             return _cancelled_result(key)
@@ -2967,10 +3067,8 @@ def pull_image_sync(reference: str, expected_digest: str, *,
             break
         if _is_cancelled(key) or (result.get("rc") in (-15, -9) and not result.get("stalled")):
             return _cancelled_result(key)
-        if attempt >= 3 and not result.get("stalled"):
-            break
         if attempt < max_attempts:
-            delay = min(30, 5 * attempt)
+            delay = min(60, 10 * attempt)
             _emit("installer_info", {"key": key, "message": (
                 f"image download interrupted; retrying in {delay}s (layers already "
                 "downloaded are kept)…")})

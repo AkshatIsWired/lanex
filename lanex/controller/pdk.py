@@ -552,6 +552,11 @@ def check_pdk_library_ready(pdk: str, library: str, *,
             ver = ciel.Version(name=version, pdk=family)
             libdir = Path(ver.get_dir(home)) / variant / "libs.ref" / library
             checked.append(str(libdir))
+            # A fetch that was cut off while unpacking leaves library folders
+            # that are not empty but not whole; install_pdk_sync marks the
+            # version until ciel has finished.
+            if Path(str(ver.get_dir(home)).rstrip("/") + ".lanex-incomplete").exists():
+                continue
             if ver.is_installed(home) and libdir.is_dir() and any(libdir.rglob("*")):
                 return {"ready": True, "required_version": version,
                         "where": [str(libdir)], "pdk_root": home, "missing": []}
