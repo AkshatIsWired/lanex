@@ -182,13 +182,11 @@ function renderStep2(body, tpl) {
 
   const paintWhere = () => {
     const name = $("wiz-name").value.trim() || defaultName(tpl);
-    $("wiz-where").textContent = shown(joinPath(projectsDir(), name));
-    $("wiz-where").title = shown(joinPath(projectsDir(), name));
-    $("wiz-where-help").textContent = _parent
-      ? "A new folder is created inside the folder you chose."
-      : (_defaults && _defaults.wsl
-        ? "Your LanEx projects folder, next to your other Windows files."
-        : "Your LanEx projects folder.");
+    const where = shown(joinPath(projectsDir(), name));
+    $("wiz-where").textContent = $("wiz-where").title = where;
+    $("wiz-where-help").textContent = _parent ? "A new folder is created inside the folder you chose."
+      : where.startsWith("\\\\wsl") ? "Inside the LanEx environment: a space in your Windows user name would break the chip tools. The LanEx Project Files shortcut opens it."
+      : _defaults && _defaults.wsl ? "Your LanEx projects folder, next to your other Windows files." : "Your LanEx projects folder.";
   };
   const paintClk = () => {
     if (!$("wiz-clk")) return;
