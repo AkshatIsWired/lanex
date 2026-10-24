@@ -565,6 +565,10 @@ begin
   while LiveLogMemo.Lines.Count > 400 do
     LiveLogMemo.Lines.Delete(0);
   LiveLogMemo.SelStart := Length(LiveLogMemo.Text);
+  // Moving the caret does not scroll a memo without focus: once the 400-line
+  // cap was reached, the VMs showed old apt lines while the PDK downloaded.
+  // WM_VSCROLL with SB_BOTTOM keeps the newest line in view.
+  SendMessage(LiveLogMemo.Handle, $0115, 7, 0);
   LiveLogMemo.Update;
 end;
 
