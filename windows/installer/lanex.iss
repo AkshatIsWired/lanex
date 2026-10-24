@@ -216,12 +216,14 @@ OutputDir=.
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
+PrepareToInstallNeedsRestart=Windows needs to restart once to finish turning on WSL. LanEx Setup opens again by itself after you sign in and carries on.%n%nSave your work, then restart now?
+; Shown by Windows' uninstaller right after LanEx's own keep-or-remove question,
+; so it must not say "completely remove ... all of its components"; and the
+; last word must hold when projects, tools and PDKs were kept.
+ConfirmUninstall=Remove the LanEx app now? What happens to your projects, tools and PDKs follows the choice you just made.
+UninstalledAll=The LanEx app was removed from your computer.
 ; Inno's stock text for an unsupported Windows version is generic; ours names
 ; the version and the reason.
-; Shown by Windows' uninstaller right after LanEx's own keep-or-remove question,
-; so it must not say "completely remove ... all of its components".
-PrepareToInstallNeedsRestart=Windows needs to restart once to finish turning on WSL. LanEx Setup opens again by itself after you sign in and carries on.%n%nSave your work, then restart now?
-ConfirmUninstall=Remove the LanEx app now? What happens to your projects, tools and PDKs follows the choice you just made.
 WindowsVersionNotSupported=LanEx needs Windows 10 version 21H2 (build 19044) or newer for WSLg desktop tools. Windows 11 x64 is recommended.
 ; The wizard's own words, in the language of the person we are installing for.
 WelcomeLabel2=This installs [name/ver], the chip design app, on your computer.%n%nLanEx runs in its own private Linux environment (WSL). Your other WSL distributions are not changed.%n%nSetup downloads the design tools and a chip process kit (PDK): a few GB, so a steady connection helps. If WSL is not on yet, Windows asks for permission and restarts once; Setup then carries on by itself.%n%nUninstalling keeps your projects unless you choose otherwise.
@@ -437,11 +439,20 @@ end;
 // ------------------------------------------------------------------- helpers --
 
 procedure LogLine(const S: String);
+var
+  Tries: Integer;
 begin
   ForceDirectories(LogDir);
   // Append, so this interleaves correctly with the command output that cmd.exe
-  // redirects into the same file (see RunLogged).
-  SaveStringsToUTF8FileWithoutBOM(LogFile, [S], True);
+  // redirects into the same file (see RunLogged). Retried: a reader holding
+  // the file at that moment (antivirus, a log viewer) once cost the final
+  // "successfully completed" line.
+  for Tries := 1 to 40 do
+  begin
+    if SaveStringsToUTF8FileWithoutBOM(LogFile, [S], True) then
+      Exit;
+    Sleep(50);
+  end;
 end;
 
 procedure RotateInstallLog;
