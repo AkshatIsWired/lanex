@@ -26,80 +26,92 @@ long version.
 
 ## Windows — the installer
 
-Download **[LanEx-Setup.exe](https://github.com/AkshatIsWired/lanex/releases/latest)**,
-run it, click through the wizard. Setup stays in your Windows account. If WSL's
-two Windows features are off, Windows asks once for administrator approval;
-those feature commands are the only part that runs elevated.
+Download **LanEx-Setup.exe** from the
+[Releases page](https://github.com/AkshatIsWired/lanex/releases), run it, and
+click through five pages: **Welcome → License → Configure → Installing →
+Finished**. Setup runs in your own Windows account. If WSL is not on yet,
+Windows asks for administrator permission (once on Windows 11; twice on
+Windows 10, the second time for "Host Process for Windows Services", which
+installs WSL) and needs **one restart**. After you sign in again, Setup opens
+by itself and asks you to click **Install** once more; your choices are kept.
 
-**Requirements:** Windows 11 x64. Windows Home is fine. Setup calculates the
-space needed for your exact tool/PDK selection and checks both the LanEx data
-drive and temporary-files drive before large phases. A recommended setup needs
-substantially more than the small rootfs download because it includes the flow
-image, PDK extraction space, caches, and practical run headroom. Windows 10
-build 19044 is the technical floor but is not advertised as a
-supported installer target until its separate real-machine acceptance leg
-passes. This amd64 appliance is rejected on ARM64 even when Windows can emulate
-x64 apps.
+**Requirements:** a 64-bit (x64) PC with Windows 11, or Windows 10 22H2 with
+its updates (build 19045.2311 or newer; Setup says so if Windows Update is
+needed first). Home, Pro and Enterprise all work. **At least 6 GB of memory**
+(8 GB recommended) and about **25 GB free** on C: for the Recommended setup.
+Virtualization must be on in the PC's firmware (almost always is; see
+[below](#enable-virtualization)). ARM64 PCs are not supported, even with x64
+emulation. In a virtual machine, the host must allow nested virtualization.
 
-**What you get:** a Start-menu app called **LanEx**. The **Recommended** profile
-installs Docker, the matched LibreLane image, Verilator, Icarus, Graphviz,
-GTKWave, GDS3D, and SKY130A with validated starter libraries before Setup
-offers Launch. The **Maximum** profile installs the full toolset and all supported
-PDKs (SKY130A, SKY130B, GF180MCUD, IHP SG13G2) with all published libraries.
-**Custom** setup lets you choose Docker or Podman, every supported PDK family/variant,
-and advanced libraries. **Minimal** deliberately leaves flow components for the Tools
-page. Setup does not claim success until every selected component passes its operational
-readiness check.
+**Measured on a clean 2-core, 8 GB virtual machine** (Recommended setup):
 
-> **"Windows protected your PC"?** Until the installer is code-signed, Windows
-> SmartScreen shows a blue warning for it (it warns about any new publisher, not
-> about anything it found). Click **More info** → **Run anyway**. If you would
-> rather verify first, every release lists the installer's SHA256 — compare it
-> with `Get-FileHash .\LanEx-Setup.exe` in PowerShell.
+| | Windows 11 | Windows 10 |
+|---|---|---|
+| Time from Install to "Ready to design", including the restart | 15 to 17 min | 17 to 18 min |
+| Downloaded | 2.35 GB | 2.35 GB |
+| Disk used afterwards | 13.9 GB | 13.9 GB |
+
+The download is: Ubuntu 24.04 for WSL (374 MB), Ubuntu packages (126 MB),
+Python packages (46 MB), the LibreLane tool image (1.48 GB) and the SKY130
+files the starter libraries need (323 MB). On a slower connection, add the
+download time.
+
+**The profiles** on the Configure page: **Recommended** (Docker, the LibreLane
+image, Verilator, Icarus Verilog, Graphviz, GTKWave, GDS3D and SKY130A with
+its starter libraries: everything the examples need), **Custom** (pick tools,
+PDK families and variants), **Minimal** (LanEx only; add tools and PDKs later
+from the Tools tab) and **Complete** (every supported tool and PDK: SKY130A
+and B, GF180MCU D and IHP SG13G2, about 6 GB to download).
+
+> **"Windows protected your PC"?** The installer is not code-signed yet, so
+> Windows SmartScreen shows a blue warning for it. It warns about any new
+> publisher; it did not find anything. Click **More info**, then **Run
+> anyway**. To check the file first, compare its SHA-256 with the one on the
+> release page: in PowerShell, `Get-FileHash .\LanEx-Setup.exe`.
+
+**If something goes wrong,** every message Setup shows names its log:
+`%LOCALAPPDATA%\LanEx\logs\install.log` (paste that into Explorer's address
+bar). Please attach it to a
+[Windows install issue](https://github.com/AkshatIsWired/lanex/issues/new?template=windows-install.yml).
+Setup never leaves a half-installed LanEx behind: it stops with the reason and
+the next step, and running it again carries on from what is already verified.
 
 <a id="windows-details"></a>
 
 ### What it actually does, and where things live
 
-LanEx, LibreLane, and every EDA tool in the flow (OpenROAD, Yosys, Magic,
-KLayout) are Linux programs. There is no native Windows build of any of them, so
-on Windows LanEx runs inside **WSL 2** — and the installer's whole job is to set
-that up so thoroughly that you never have to know it is there.
+LanEx, LibreLane and every EDA tool in the flow (OpenROAD, Yosys, Magic,
+KLayout) are Linux programs, so on Windows LanEx runs inside **WSL 2**, in a
+private Linux environment of its own. In order:
 
-It does exactly five things:
-
-1. **Checks and turns on WSL** if needed. Setup distinguishes unsupported
-   hardware/Windows, firmware virtualization, disabled features, a pending
-   restart, and an old WSL runtime. Enabling Windows Subsystem for Linux and
-   Virtual Machine Platform is the only elevated operation. Setup saves the
-   exact installer and your choices before UAC or restart, registers an
-   owner-only continuation, and also creates **Continue LanEx Setup** in your
-   Start menu as a manual fallback. Automatic restart attempts are bounded.
-2. **Downloads the Linux environment**, verified against a SHA256 built into
-   Setup. Released versions fetch a ready-made LanEx environment (~1 GB) that is
-   assembled and tested by CI; if that file is ever unreachable, Setup falls
-   back by itself to Canonical's official Ubuntu 24.04 WSL image (~373 MB) and
-   builds the environment on your PC instead. Either way you end up with the
-   same thing — the ready-made one is just faster.
-3. **Imports it as a private distro named `lanex`** with `wsl --import`. This is
-   the same appliance approach Docker Desktop and Rancher Desktop use on
-   Windows. Because it is an import, there is no Microsoft Store dependency and
-   **no Ubuntu first-run screen** asking you to invent a username and password.
-4. **Provisions it**: creates the `lanex` user, installs Docker, then installs
-   LanEx using this repo's own [`scripts/install.sh`](../scripts/install.sh) —
-   the identical installer Linux users run, so there is only ever one install
-   path to keep working. On the ready-made image this step finds everything
-   already in place and takes seconds; from the plain Ubuntu image it is the
-   part that takes a few minutes.
-5. **Finalizes and verifies your choices** after the private environment boots
-   with systemd. The wizard shows phase count, elapsed activity, live output,
-   and real download bytes when available. **Cancel** asks the Linux worker to
-   stop its own process group; during package-database work it waits safely
-   rather than corrupting dpkg. Retry rechecks readiness and reuses completed,
-   validated rootfs/image/PDK data. Open, copy, or save the bounded diagnostics
-   log directly from the progress page.
-6. **Creates two Start-menu shortcuts**: **LanEx** (the app) and **LanEx Project
-   Files** (opens your designs in File Explorer).
+1. **Checks this PC**: x64, Windows build and updates, memory, free disk,
+   virtualization (including inside a VM), a policy that blocks WSL, and
+   whether WSL is installed and current. Anything it cannot fix stops here,
+   before anything changes, with a plain reason and the next step.
+2. **Turns on WSL** if needed: the Virtual Machine Platform and Windows
+   Subsystem for Linux features and the WSL app. This is the only part that
+   needs administrator permission. Before the restart, Setup keeps a copy of
+   itself and your choices and registers itself to open again after you sign
+   in; **Continue LanEx Setup** in the Start menu does the same by hand.
+3. **Checks every download server** through your Windows proxy settings, so a
+   blocked host is named up front instead of failing an hour in.
+4. **Downloads Ubuntu 24.04 for WSL** (Canonical's image) from LanEx's own
+   copy first and Ubuntu's servers second, resumes after a dropped connection,
+   and imports it only if its SHA-256 matches the one built into Setup.
+5. **Imports it as a private distro named `lanex`** with `wsl --import`, the
+   way Docker Desktop and Rancher Desktop do it: no Microsoft Store, no Ubuntu
+   first-run screen.
+6. **Provisions it** from fixed sources: Ubuntu packages from a dated Ubuntu
+   archive snapshot, Docker from Ubuntu, and Python packages from a lock file
+   where every file is pinned by hash. LanEx itself is installed with the same
+   [`scripts/install.sh`](../scripts/install.sh) Linux users run.
+7. **Installs and verifies what you chose**: the tools, the LibreLane image
+   (pulled by digest), and the PDK files (each one SHA-256 checked, from
+   LanEx's copy first). Setup only says "Ready to design" after every chosen
+   part passes its own check. Cancel stops cleanly; running Setup again reuses
+   everything already verified.
+8. **Creates the Start-menu entries**: **LanEx**, **LanEx Project Files** (the
+   folder your designs are in), **Repair LanEx**, and a desktop shortcut.
 
 ### Unattended Windows setup
 
@@ -108,7 +120,7 @@ Use Inno Setup's `/SILENT` or `/VERYSILENT` with
 required because Inno Setup otherwise returns `0` after a successful install
 that needs a restart. LanEx-specific selection flags are:
 
-- `/PROFILE=recommended` (default), `/PROFILE=maximum`, or `/PROFILE=minimal`.
+- `/PROFILE=recommended` (default), `/PROFILE=complete`, or `/PROFILE=minimal`.
 - `/SELECTIONS=C:\path\lanex-selections.json` for custom choices. The JSON is
   validated against the exact bundled catalog; unknown tools, PDKs, libraries,
   or conflicting variants fail before WSL is changed.
@@ -133,10 +145,10 @@ mode never waits for a hidden Retry or WSL-update confirmation.
 
 | | |
 |---|---|
-| ✅ Enables the Windows Subsystem for Linux feature | if it was off |
+| ✅ Turns on Virtual Machine Platform and Windows Subsystem for Linux, installs the WSL app | only if they are off or missing |
 | ✅ Creates one new WSL distro called `lanex` | entirely its own |
-| ✅ Writes to `%LOCALAPPDATA%\LanEx` and `%LOCALAPPDATA%\Programs\LanEx` | user-owned installer, appliance, cache, logs and launcher |
-| ❌ Your existing WSL distros | never read, listed for anything but our own name, modified, or upgraded |
+| ✅ Writes to `%LOCALAPPDATA%\LanEx`, `%LOCALAPPDATA%\Programs\LanEx` and `%USERPROFILE%\LanEx-Projects` | user-owned |
+| ❌ Your existing WSL distros | never started, stopped, changed or made default (tested: a stock Ubuntu with a file in it, before and after) |
 | ❌ Your Python, your PATH, your registry beyond the standard uninstall entry | untouched |
 | ❌ Docker Desktop | not needed and not installed; Docker lives *inside* the LanEx distro |
 
@@ -144,11 +156,11 @@ mode never waits for a hidden Retry or WSL-update confirmation.
 
 | What | Where |
 |---|---|
+| **Your designs and run results** | `%USERPROFILE%\LanEx-Projects` (the *LanEx Project Files* shortcut). If your Windows user folder has a space in its name, inside the LanEx environment instead: `\\wsl.localhost\lanex\home\lanex\lanex-projects` |
 | The launcher (`LanEx.exe`) | `%LOCALAPPDATA%\Programs\LanEx` |
-| The Linux environment's virtual disk | `%LOCALAPPDATA%\LanEx\appliance\distro` |
-| The exact resume installer and downloaded image cache | `%LOCALAPPDATA%\LanEx\installer-cache` |
-| Setup and launcher logs — **ask for these first when something is wrong** | `%LOCALAPPDATA%\LanEx\logs` |
-| **Your designs and run results** | `\\wsl.localhost\lanex\home\lanex` (the *LanEx Project Files* shortcut) |
+| The Linux environment's virtual disk (tools, PDKs) | `%LOCALAPPDATA%\LanEx\appliance\distro` |
+| Setup's own copy and the download cache | `%LOCALAPPDATA%\LanEx\installer-cache` |
+| Setup and launcher logs: **ask for these first when something is wrong** | `%LOCALAPPDATA%\LanEx\logs` |
 | The app window's browser profile | `%LOCALAPPDATA%\lanex\app-profile` |
 
 **The tray icon** is the launcher's entire interface: **Open LanEx** re-opens the
@@ -170,18 +182,40 @@ run `sudo apt-get install …` is a bug in LanEx, not a step. The menu item exis
 for the case *past* that: a package LanEx has no button for, a `git clone` of
 your own. It opens in your projects folder, and closing it changes nothing.
 
-**Uninstalling** from Windows Settings → Apps currently removes only the Windows
-launcher and shortcuts. It preserves the verified appliance, projects, PDKs,
-run results, installer state and caches for a later reinstall. It never
-unregisters a distro or disables WSL. A later installer milestone will add an
-explicit identity-checked export/erase choice; until then, preservation is the
-only supported uninstall mode.
+<a id="windows-uninstall"></a>
+
+**Uninstalling** (Windows Settings → Apps → LanEx → Uninstall) asks one question
+first:
+
+- **Keep your projects, tools and PDKs (Yes, recommended):** removes the LanEx
+  app and its shortcuts and keeps everything else, so installing again takes
+  minutes and finds your projects. This is what most people want.
+- **No**, then a second question: **back up** the LanEx environment to a file
+  (several GB, in `%LOCALAPPDATA%\LanEx\backups`) and remove only the app, or
+  **remove the LanEx environment for good** (its tools, PDKs, run results, the
+  download cache and logs; it asks once more, and cannot be undone).
+
+Either way, uninstalling never deletes `%USERPROFILE%\LanEx-Projects`, never
+touches your other WSL distros, and never turns Windows features off.
+
+To remove what *Keep* left behind later, open PowerShell and run:
+
+```powershell
+wsl --unregister lanex
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\LanEx"
+```
+
+The first line deletes the LanEx environment (tools, PDKs and anything stored
+inside it); the second deletes the download cache and logs. Delete
+`%USERPROFILE%\LanEx-Projects` yourself only if you no longer want your designs.
+WSL itself stays installed; to remove it too, uninstall *Windows Subsystem for
+Linux* from Settings → Apps.
 
 **Using a standard Windows account?** You can run Setup yourself. If the WSL
-features are off, an administrator can enter different credentials at the UAC
+features are off, an administrator can enter their credentials at the UAC
 prompt; Setup then returns to your account for the private distro, state,
-shortcuts and first launch. If company policy denies WSL, an administrator must
-enable it—Setup does not claim it can bypass policy. You can also use the
+shortcuts and first launch. If company policy blocks WSL, Setup says so and
+stops: an administrator must allow it. You can also use the
 [manual path](#windows-manual) with a distro IT already provided.
 
 <a id="enable-virtualization"></a>
@@ -530,12 +564,9 @@ Check your installed version any time with `pipx list` (or `pip show lanex`).
 ### Uninstalling LanEx
 
 **Installed with LanEx-Setup.exe on Windows?** None of the layers below apply.
-Go to Windows **Settings → Apps → Installed apps → LanEx → Uninstall**: it
-removes the environment, the app, and the shortcuts in one step. Everything you
-made lives *inside* that environment, so copy anything you want to keep out of
-`\\wsl.localhost\lanex\home\lanex` first — the uninstaller warns you and offers
-to open the folder. Your other WSL distros are untouched; see
-[what remains](#windows-details).
+Go to Windows **Settings → Apps → Installed apps → LanEx → Uninstall**; what it
+keeps, what it can remove, and the two commands that remove the rest are in
+[Uninstalling on Windows](#windows-uninstall).
 
 Otherwise, removal is in three layers — the app, its data, and the heavy things
 it *helped* you install (the container image, PDKs, EDA tools). Do as many as you

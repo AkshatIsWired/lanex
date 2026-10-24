@@ -118,18 +118,28 @@ plug straight into a toolchain you already run.
 <table>
 <tr><th align="left" width="215">Your machine</th><th align="left">Do this</th></tr>
 
-<tr><td><b>Windows</b><br><sub>10 version 2004+ or 11, 64-bit</sub></td>
+<tr><td><b>Windows</b><br><sub>11, or 10 22H2 with its updates; x64; 8 GB RAM recommended</sub></td>
 <td>
 
-Download **[LanEx-Setup.exe](https://github.com/AkshatIsWired/lanex/releases/latest)**
-and click through it. You get a Start-menu app; there is no terminal step at any
-point.
+Download **LanEx-Setup.exe** from the
+**[Releases page](https://github.com/AkshatIsWired/lanex/releases)** and run it.
+Windows warns that it does not know the publisher (the installer is not
+code-signed yet): click **More info**, then **Run anyway**.
 
-Everything LanEx needs — Ubuntu, Docker, the tools — goes into an isolated
-environment of its own, so it never touches the rest of your PC (including any
-WSL distros you already have), and uninstalling removes every trace. About five
-minutes, plus a one-time ~3 GB toolchain download on first launch.
-[What it actually does →](docs/INSTALL.md#windows-details)</td></tr>
+Setup is five pages: Welcome, License, one Configure page (**Recommended** is
+right for a first chip), Installing, Finished. If WSL is not on yet, Windows
+asks for administrator permission and restarts once; Setup opens again by
+itself after you sign in. There is no terminal step at any point.
+
+Measured on a clean 2-core, 8 GB virtual machine: **about 17 minutes** from
+Install to "Ready to design", including the restart; **2.35 GB downloaded**;
+**13.9 GB of disk** afterwards (have about 23 GB free).
+
+Everything goes into a private Linux environment of its own: your other WSL
+distros are not touched. **Uninstalling** keeps your projects, tools and PDKs by
+default, so a reinstall takes minutes; it can also back the environment up or
+remove it for good. [What it does, where things live, how to remove the
+rest →](docs/INSTALL.md#windows)</td></tr>
 
 <tr><td><b>Linux / macOS</b><br><sub>or a WSL2 distro you manage yourself</sub></td>
 <td>
@@ -160,6 +170,23 @@ Per-distro manual steps, installing into an existing LibreLane environment, the
 manual WSL2 path, updating, uninstalling, and troubleshooting all live in
 **[docs/INSTALL.md](docs/INSTALL.md)**.</td></tr>
 </table>
+
+**Known limits of the beta:**
+
+- **LanEx is not a sign-off tool.** "Clean" means every check LibreLane runs on
+  the layout passed: design rules in Magic and KLayout, LVS, the GDS XOR,
+  antenna rules, and timing in every corner it checks. It does not cover
+  gate-level simulation with real delays, a shuttle's own precheck, or the
+  foundry's sign-off decks.
+- **Windows: x64 only.** Proven on clean virtual machines with Windows 11
+  Enterprise 26H2 (build 26300) and Windows 10 Enterprise 22H2 (build
+  19045.6456), each with 2 cores and 8 GB. Home and Pro editions use the same
+  WSL and are expected to behave the same, but were not run. ARM64 Windows is
+  not supported.
+- **Windows 10** shows a second administrator prompt ("Host Process for Windows
+  Services") while WSL installs, and its first WSL start after the restart can
+  take about five minutes; Setup waits for it.
+- The installer is **not code-signed** yet (the SmartScreen warning above).
 
 > **Prerequisites** for the Linux/macOS path: Python ≥ 3.10, and Docker or Podman
 > — recommended but **optional**, because LanEx's Tools tab can install an engine

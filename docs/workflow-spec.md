@@ -1012,7 +1012,7 @@ with before/after screenshots.
 | **P0 Glue** | `context.js`, `nav.js` (go, history, Back chip, only `go()` pushes history, editor keeps its own Alt+←), `flowstages.js` + Python twin, `runbar.js` in Analytics/Verify/Layout, one scope key, number keys in rail order, Pipeline idle fix and the two "Preview tab" strings, no auto-switch on run start (5.5 rule) | Changing the run in one results tab changes it in all; Back returns from every cross-link and never stops on a panel toggle; boot with no run shows an honest Pipeline; frontend tests + pytest pass |
 | **P1 Flow** | Pipeline → Flow (6.1): stage strip, grouped steps, step inspector, virtualised log with "Open raw log", failure card from `/api/explain` (halted vs checks-failed), run report card (with what "clean" covers), toast, window-title state, launcher notification with the numbers (prototype Web Notification as well, keep the better) | A forced GPL-0302 run shows the reason and fixes; a clean run shows the report card in Flow, the toast, the title, and (window in background) a notification that says the verdict and numbers and brings LanEx back when clicked |
 | **P2 Fix loop** (built 2026-10-24, 8.4) | Problem model, fix sheet through `configedit` (diff, Undo), variable → stage map (step `config_vars` + curated flow-common table + gating vars), branch-from-step runs (`-i` in `container_run.py`, `branched_from`), timing diagnosis (where it first failed, I/O constraint first, WNS/TNS with endpoint count), DRC grouping by rule and place, checker-disagreement note, status-bar count | From a failed placement: Apply and resume from Placement makes a new run that starts at Placement and finishes; the config holds the new value with a one-line diff; Undo restores it; a run failing setup before placement says "logic depth" and offers no density fix |
-| **Ship line** | Installer hardening, then a public beta. P3 onward is shaped by what beta users actually hit, not built ahead of them | A stranger installs it on a clean PC and gets a GDS |
+| **Ship line** (built 2026-10-25, 8.5) | Installer hardening, then a public beta. P3 onward is shaped by what beta users actually hit, not built ahead of them | A stranger installs it on a clean PC and gets a GDS |
 | **P3 Runs** | Runs table, baseline, compare, sweeps (DSE merged) with memory cap and "stop when one is good enough", promote configuration, staleness per stage (content hashes, toolchain and PDK versions, "why" popover, "mark as current"), notes | Sort by slack; compare 3 runs; an 8-run sweep shows as one group with a Pareto and stops early when asked; "Use this configuration" edits the config; editing FP_CORE_UTIL marks Floorplan onward stale and offers "Resume from Floorplan"; a comment-only edit can be marked current |
 | **P4 Palette and Console** | Search everything (5.8) with Recent places and settings that open the fix sheet, Console drawer (5.9) with the Journal and "Copy as script", Manual tab removed, logs merged | Every row type reachable from the palette; Ctrl+` opens Console from any tab; the Journal of a session replayed as a script reproduces its runs |
 | **P5 Setup tracker** | Live tracker, Continue chip, rail badges | J7 works end to end |
@@ -1270,6 +1270,45 @@ design are 5.6; the backend is 7. Beyond that:
   the reused stages' pictures from the parent); the palette opening the sheet (P4);
   per-stage staleness (P3; the plan already compares settings and file times with
   the run it resumes).
+
+
+### 8.5 Ship line as built (2026-10-24/25, branch `ship-line`, not pushed)
+
+Report: `installer-workspace/outputs/SHIP-LINE-REPORT.md` (and its review page). The
+audit that started it is `installer-workspace/outputs/ship-line-audit.md`; the running
+notes are in `installer-workspace/START-HERE.md`. Beyond that:
+
+- **Proven on clean VMs, final build c18** (source 083852a): Windows 11 Enterprise
+  26H2 and Windows 10 Enterprise 22H2 (updated), both 2 vCPU / 8 GB, nested
+  virtualization, each from a checkpoint taken before anything else ran. The wizard is
+  driven through Hyper-V's synthetic mouse and keyboard with a screenshot of every page
+  (`installer-workspace/work/vm/`). Install to "Ready to design", including the WSL
+  restart: about 15 to 18 minutes; 2.35 GB downloaded; 13.9 GB of disk. Blinky to a
+  Clean GDS on both; the fix loop (spm, cell padding) resumes from Placement and ends
+  Clean; close and reopen, reopen after a restart; a user named "José Test" with
+  Documents in OneDrive; a PC with WSL and a stock Ubuntu (left untouched); two
+  2-minute network cuts; upgrade over an earlier build with every PDK family; uninstall
+  keeping projects and the reinstall finding them; plain stops for a VM without nested
+  virtualization and for too little disk. Also run (on c13 to c16): a 3-minute sleep,
+  closing Setup halfway, "remove for good".
+- **Frozen.** Ubuntu packages from a dated snapshot (`snapshot.ubuntu.com`, 20261023),
+  Docker from Ubuntu, the Python packages from `windows/setup/requirements.lock`
+  (29 wheels, every hash, `pip --require-hashes --no-deps`), the LibreLane image by
+  digest, the Ubuntu WSL image and every PDK file by SHA-256 with LanEx's own copy first
+  (`scripts/mirror_deps.py`, release `deps-v1`, prepared but not uploaded) and the
+  original second. `.github/workflows/dependency-watch.yml` opens an issue monthly when
+  something pinned moves or disappears (not enabled: needs a push).
+- **What the VMs found** (each fixed and rechecked; the audit's section 7 lists them
+  with commits): WSL on 24H2+ needs its app, not only the features; a 32-bit helper; a
+  hidden `wsl --version` that waited for a key; Windows 10's first WSL start after the
+  restart taking almost five minutes while Setup was invisible; a needless admin prompt
+  where WSL already worked; a second restart when Windows Update had one pending;
+  uninstall removing the environment before Windows' own confirmation; the launcher
+  built as a console program (a terminal window on every launch); the project shortcut
+  pointing at the wrong folder; and a dozen wording, progress and estimate fixes.
+- **Not built:** code signing; a guest S3 sleep (simulated by pausing the VM); Home and
+  Pro editions, ARM64 and physical PCs (not available here); the empty
+  `%LOCALAPPDATA%\Programs\LanEx` folder uninstall leaves behind.
 
 ---
 
