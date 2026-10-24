@@ -10,6 +10,7 @@ import { renderPreflight } from "./preflight.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 import { pdkFacts, stackHtml } from "./pdkinfo.js";
+import * as FS from "./flowstages.js";
 
 const RECENT_KEY = "ll.recentDesigns";
 
@@ -161,7 +162,6 @@ export function setupSetup() {
   // Setup's own Run flow shows the run; the top-bar Run leaves you where you are.
   document.getElementById("btn-run")?.addEventListener("click", () => onRunClick({ show: true }));
   document.getElementById("btn-cancel")?.addEventListener("click", () => api.cancelRun().catch(() => {}));
-  document.getElementById("btn-cancel-2")?.addEventListener("click", () => api.cancelRun().catch(() => {}));
   // Global topbar Run/Stop: start the flow, or stop a running one, from any tab —
   // no need to navigate back to Setup. Reuses the same start/cancel paths.
   document.getElementById("btn-run-global")?.addEventListener("click", () => {
@@ -169,17 +169,9 @@ export function setupSetup() {
     else { onRunClick({ show: false }); }
   });
   document.getElementById("btn-resume")?.addEventListener("click", () => api.resumeRun().catch(() => {}));
-  document.getElementById("btn-resume-2")?.addEventListener("click", () => api.resumeRun().catch(() => {}));
   document.getElementById("btn-preflight")?.addEventListener("click", () => renderPreflight());
 
-  // D11: the Setup "Run name" and the Pipeline-bar "run tag" are two inputs for
-  // the same value — mirror each into the other so they can never silently disagree.
-  const nameA = document.getElementById("run-name-input");
-  const nameB = document.getElementById("run-tag-input");
-  if (nameA && nameB) {
-    nameA.addEventListener("input", () => { nameB.value = nameA.value; });
-    nameB.addEventListener("input", () => { nameA.value = nameB.value; });
-  }
+  wireRunMenu();
 
   document.querySelectorAll(".mode-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -497,15 +489,14 @@ async function onRunClick({ show = false } = {}) {
     }
     state.previewedConfigHash = null;
     paintRunning(true);
-    openLogsTab();
-    // A run never pulls you off your page, except from Setup's Run flow and on
-    // the very first run (a beginner should see it happen). Otherwise the
-    // status bar shows it, and this says so.
+    // Pressing Run shows the run on Flow, unless the user turned that off in
+    // the Run menu (then the status line shows it, and this says so). Setup's
+    // Run flow and the very first run always show it.
     const first = !safeStorage.get("ll.ranOnce") && !(state.runs || []).length;
     safeStorage.set("ll.ranOnce", "1");
     const { go } = await import("./nav.js");
     const { currentTab } = await import("./tabs.js");
-    if (show || first) go("pipeline", {}, { link: false });
+    if (show || first || safeStorage.get("ll.showFlowOnRun") !== "0") go("pipeline", {}, { link: false });
     else if (currentTab() !== "pipeline") {
       toast.show((payload.tag ? "Run " + payload.tag + " started" : "The run started") +
         ". It keeps going in the background; the status bar shows how far it is.", "info", 7000,
@@ -516,19 +507,12 @@ async function onRunClick({ show = false } = {}) {
   }
 }
 
-function openLogsTab() {
-  document.querySelector('.side-pane-tab[data-itab="logs"]')?.click();
-}
-
 export function collectRunPayload() {
-  // Prefer the Setup-tab "Run name" (visible at run time); fall back to the
-  // Pipeline tab's run-tag field. Sanitised to a filesystem-safe run-dir name.
-  const rawName = (document.getElementById("run-name-input")?.value || "").trim() ||
-    (document.getElementById("run-tag-input")?.value || "").trim();
+  // Setup's "Run name", sanitised to a filesystem-safe run-dir name.
+  const rawName = (document.getElementById("run-name-input")?.value || "").trim();
   const tag = rawName ? rawName.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") : "";
-  const frm = (document.getElementById("run-from")?.value || "").trim();
-  const to = (document.getElementById("run-to")?.value || "").trim();
-  const skipRaw = (document.getElementById("run-skip")?.value || "").trim();
+  // "Run up to" a stage (Run menu): LibreLane's --to, at that stage's last step.
+  const to = lastStepOf(document.getElementById("run-stop-after")?.value || "");
   // Apply PDK + SCL overrides picked in setup. Drop any blank/empty value so a
   // left-empty constraint field never becomes a bare `KEY=` the engine can't
   // type-parse (issue #11) — blank means "use the default". The backend strips
@@ -552,9 +536,9 @@ export function collectRunPayload() {
   const extras = (state.extrasFiles || []).filter(Boolean);
   return {
     tag: tag || null,
-    frm: frm || null,
+    frm: null,
     to: to || null,
-    skip: skipRaw ? skipRaw.split(",").map((x) => x.trim()).filter(Boolean) : [],
+    skip: [],
     overrides,
     sources,
     extras,
@@ -563,22 +547,65 @@ export function collectRunPayload() {
   };
 }
 
+// The last step of a stage in the flow that runs (Classic unless told), for --to.
+function lastStepOf(stageId) {
+  if (!stageId) return "";
+  const flow = (state.flows || []).find((f) => f.name === (state.flowName || "Classic"));
+  const ids = (flow && flow.steps) || [];
+  const stages = FS.stagesOf(ids.map((id) => ({ id })));
+  let last = "";
+  stages.forEach((s, i) => { if (s === stageId) last = ids[i]; });
+  return last;
+}
+
+// The Run menu's run options: where to stop, and what to do when a run
+// starts and ends (runend.js reads the same keys).
+function wireRunMenu() {
+  const sel = document.getElementById("run-stop-after");
+  if (sel) {
+    sel.innerHTML = "<option value=''>The whole flow, to the GDS</option>" +
+      FS.STAGES.filter((s) => s.id !== "signoff").map((s, i) =>
+        "<option value='" + s.id + "'>" + (i + 1) + ". " + fmt.escape(s.label) + (s.id === "synthesis" ? " (cells and area in seconds)" : "") + "</option>").join("");
+    sel.addEventListener("change", () => paintRunLabel());
+  }
+  const pref = (id, key, onChange, on = false) => {
+    const box = document.getElementById(id);
+    if (!box) return;
+    box.checked = on ? safeStorage.get(key) !== "0" : safeStorage.get(key) === "1";
+    box.addEventListener("change", async () => {
+      if (onChange) {
+        const r = await onChange(box.checked);
+        if (r && !r.ok) { box.checked = false; toast.show(r.why, "warn", 7000); }
+      } else safeStorage.set(key, box.checked ? "1" : "0");
+    });
+  };
+  pref("run-pref-show", "ll.showFlowOnRun", null, true);
+  pref("run-pref-notify", "ll.notifyRuns", async (on) => (await import("./runend.js")).enableNotifications(on));
+  pref("run-pref-chime", "ll.runChime");
+}
+
+// "Run" or "Run to Placement": the button says what it will do.
+function paintRunLabel() {
+  const g = document.getElementById("btn-run-global");
+  if (!g || (state.status && state.status.running)) return;
+  const st = FS.stage(document.getElementById("run-stop-after")?.value || "");
+  const span = g.querySelector("span");
+  if (span) span.textContent = st ? "Run to " + st.label : "Run";
+  g.classList.toggle("is-partial", !!st);
+}
+
 export function paintRunning(running) {
   const b = document.getElementById("btn-run");
   const c = document.getElementById("btn-cancel");
-  const c2 = document.getElementById("btn-cancel-2");
   const r = document.getElementById("btn-resume");
-  const r2 = document.getElementById("btn-resume-2");
   const pill = document.getElementById("run-pill");
   // Resume/Next is only meaningful in Step-by-step mode.
   const showResume = running && state.mode === "semi";
   if (r) r.hidden = !showResume;
-  if (r2) r2.hidden = !showResume;
   const g = document.getElementById("btn-run-global");
   if (running) {
     if (b) b.disabled = true;
     if (c) { c.disabled = false; c.hidden = false; }
-    if (c2) c2.disabled = false;
     if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); }
     pill?.classList.remove("pill-pending");
     pill?.classList.add("pill-running");
@@ -586,8 +613,7 @@ export function paintRunning(running) {
   } else {
     if (b) b.disabled = !state.designDir;
     if (c) { c.disabled = true; c.hidden = true; }   // Stop shows only while a run is live
-    if (c2) c2.disabled = true;
-    if (g) { g.disabled = !state.designDir; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); }
+    if (g) { g.disabled = !state.designDir; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); paintRunLabel(); }
     pill?.classList.add("pill-pending");
     pill?.classList.remove("pill-running");
     if (pill) pill.textContent = "idle";

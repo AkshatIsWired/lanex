@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="/static/setup.css" />
   <link rel="stylesheet" href="/static/analytics.css" />
   <link rel="stylesheet" href="/static/verify.css" />
+  <link rel="stylesheet" href="/static/flow.css" />
   <link rel="stylesheet" href="/static/layout.css" />
   <link rel="stylesheet" href="/static/cells.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
@@ -106,6 +107,17 @@
               <span class="radio" aria-hidden="true"></span>
               <span class="mi-text"><b>Local tools</b><small>Use the EDA tools installed on this machine.</small></span>
             </button>
+            <div class="menu-sep" role="separator"></div>
+            <div class="menu-lane">Run up to</div>
+            <label class="menu-field"><select id="run-stop-after" aria-label="Stop the run after a stage"></select></label>
+            <div class="menu-sep" role="separator"></div>
+            <div class="menu-lane">While it runs</div>
+            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-show"/>
+              <span class="mi-text"><b>Show the flow when a run starts</b><small>Otherwise you stay on the page you're on.</small></span></label>
+            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-notify"/>
+              <span class="mi-text"><b>Tell me when a run finishes</b><small>A notification with the result while LanEx is in the background.</small></span></label>
+            <label class="menu-item menu-check"><input type="checkbox" id="run-pref-chime"/>
+              <span class="mi-text"><b>Play a sound</b><small>A short chime when a run ends.</small></span></label>
           </div>
         </div>
 
@@ -440,14 +452,6 @@
 
     <!-- PIPELINE -->
     <section class="section" id="sec-pipeline">
-      <div class="bar">
-        <input type="text" id="run-tag-input" placeholder="run tag (optional)"/>
-        <label>From <input type="text" id="run-from" placeholder="step id (optional)"/></label>
-        <label>To <input type="text" id="run-to" placeholder="step id (optional)"/></label>
-        <label>Skip <input type="text" id="run-skip" placeholder="step ids, comma separated"/></label>
-        <button id="btn-cancel-2" class="btn btn-warn" disabled><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg> Stop</button>
-        <button id="btn-resume-2" class="btn btn-ghost" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Resume</button>
-      </div>
       <!-- Live RTL→GDS run timeline: which tool, which step, since when.
            Click a step row to load its log/reports in the console below. -->
       <div id="run-timeline" class="run-timeline"></div>

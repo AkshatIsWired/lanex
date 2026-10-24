@@ -74,7 +74,8 @@ function wireMenu(btn, menu, onOpen) {
     e.preventDefault();
   });
   menu.addEventListener("click", (e) => {
-    if (e.target.closest(".menu-item")) closeOpen();
+    // A tick box or a field (the Run menu's options) keeps the menu open.
+    if (e.target.closest(".menu-item:not(.menu-check)")) closeOpen();
   });
 }
 

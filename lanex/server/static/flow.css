@@ -1,0 +1,25 @@
+/* flow.css — the run moment outside the Flow page: the ring on the rail's
+ * Flow tab while a run goes, the status line's link to it, and the Run
+ * menu's options (runend.js, setup.js). */
+
+/* ---------- rail: a ring on Flow while a run goes, a mark when it failed ---------- */
+.side-tab .ico { position: relative; }
+.side-tab.is-running .ico::after {
+  content: ""; position: absolute; inset: -6px; border-radius: 50%;
+  background: conic-gradient(var(--met1) var(--run-pct, 0%), color-mix(in srgb, var(--met1) 18%, transparent) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+}
+.side-tab.has-failed .ico::after {
+  content: ""; position: absolute; top: -3px; right: -5px; width: 8px; height: 8px; border-radius: 1px;
+  background: var(--fail); box-shadow: 0 0 0 2px var(--bg);
+}
+/* The status line's run text is a link to Flow. */
+#overall-progress[data-go] { cursor: pointer; }
+#overall-progress[data-go]:hover { color: var(--text-strong); text-decoration: underline; text-underline-offset: 3px; }
+/* "Run to Placement": a partial run says so on the button. */
+.run-main.is-partial { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 80%, var(--warn)) 0%, var(--accent-2) 100%); }
+.menu-field { display: block; padding: 2px 6px 6px; }
+.menu-field select { width: 100%; height: 32px; }
+.menu-check { align-items: flex-start; cursor: pointer; }
+.menu-check input { margin-top: 3px; accent-color: var(--accent); }

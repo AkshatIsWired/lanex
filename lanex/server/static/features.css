@@ -61,17 +61,6 @@
 #onboard-checklist li.ck-done .ck-mark { color: var(--pass); }
 #onboard-checklist li.ck-done { color: var(--text-muted); }
 
-/* ---- E5.2 one-time post-run "what now?" card ------------------------------ */
-.postrun-card {
-  position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: var(--z-toast);
-  max-width: 320px; display: flex; flex-direction: column; gap: var(--s-2);
-  padding: var(--s-4); background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r-lg); box-shadow: var(--sh-2);
-}
-.postrun-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
-.postrun-close { background: none; border: 0; color: var(--text-muted); cursor: pointer; font-size: var(--t-md); }
-.postrun-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
-
 /* ---- shared bits ---------------------------------------------------------- */
 .inp {
   background: var(--surface-2); color: var(--text);

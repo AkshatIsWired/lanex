@@ -15,6 +15,7 @@ import { setupPalette, openPalette } from "./modules/palette.js";
 import { setupRunMode } from "./modules/runmode.js";
 import { renderConfig } from "./modules/config.js";
 import { renderRuntimeline, noteStepEvent, resetTimeline, notePhase } from "./modules/runtimeline.js";
+import { runStarted, runProgress, runFinished } from "./modules/runend.js";
 import { renderRuns } from "./modules/runs.js";
 import { renderTools, updatePullProgress, finishPull } from "./modules/tools.js";
 import { renderAdvisor } from "./modules/advisor.js";
@@ -240,6 +241,7 @@ function handle(ev) {
       // the live log when they get there.
       document.querySelector('.side-pane-tab[data-itab="logs"]')?.click();
       noteRunStarted();
+      runStarted(ev.tag);
     }
     if (ev.message) renderLogs.append(ev);
   } else if (ev.type === "phase") {
@@ -326,7 +328,8 @@ function handle(ev) {
       eta_seconds: (ev.eta_seconds === undefined ? null : ev.eta_seconds),
       elapsed_seconds: (ev.elapsed_seconds === undefined ? null : ev.elapsed_seconds),
     };
-    setRunProgress(ev.done || 0, ev.total || 0, ev.current || "");
+    paintProgress(Math.min(ev.done || 0, ev.total || 0), ev.total || 0);
+    runProgress();
     R("runtimeline", renderRuntimeline);
   } else if (ev.type === "run_status_resync") {
     // The SSE stream dropped and reconnected past events the server's ring had
@@ -360,6 +363,8 @@ function handle(ev) {
     if (id) {
       state.stepStatuses[id] = statusMap[ev.type];
       noteStepEvent(ev.type, id);
+      if (ev.tag) state.liveTag = ev.tag;
+      runProgress();
       // Drop a navigable divider into the Live Logs at each step's start so the
       // log can later be jumped to that tool's instantiation point (issue #8b).
       if (ev.type === "step_started") {
@@ -368,7 +373,7 @@ function handle(ev) {
       R("runtimeline", renderRuntimeline);
     }
     if (ev.type === "step_failed") {
-      toast.show("Step failed: " + (ev.message || id || "Unknown error"), "error");
+      // Told once, when the run ends, with the reason (runend.js).
       renderAdvisor.pushFromAlert({ payload: { message: ev.message || "" } });
     }
   } else if (ev.type === "flow_done") {
@@ -383,20 +388,11 @@ function handle(ev) {
     const pill = document.getElementById("run-pill");
     if (pill) {
       pill.classList.remove("pill-running", "pill-pass", "pill-fail");
-      if (ev.error) {
-        pill.classList.add("pill-fail");
-        pill.textContent = "failed";
-        toast.show("Flow failed: " + ev.error, "error");
-      } else if (ev.cancelled) {
-        pill.classList.add("pill-pending");
-        pill.textContent = "cancelled";
-        toast.show("Flow cancelled", "warn");
-      } else {
-        pill.classList.add("pill-pass");
-        pill.textContent = "done";
-        toast.show("Flow completed. Your chip is in the Layout tab.", "success", 8000, { label: "See chip", run: () => go("layout") });
-      }
+      pill.classList.add(ev.error ? "pill-fail" : ev.cancelled ? "pill-pending" : "pill-pass");
+      pill.textContent = ev.error ? "failed" : ev.cancelled ? "stopped" : "done";
     }
+    // The toast, the window title and the notification say how it ended (runend.js).
+    runFinished(ev).catch((e) => console.error("run end", e));
     try {
       // On a clean finish, make sure every non-failed step shows done — guards
       // against a final step_done that never arrived (bar would stick at 99%).
@@ -415,7 +411,6 @@ function handle(ev) {
       noteRunFinished(ev.tag).catch(() => {});
       paintOnboardChecklist();
       if (!ev.error && !ev.cancelled) {
-        maybeShowPostRunPanel();
         import("./modules/watch.js").then((m) => m.checkAfterRun()).catch(() => {});
       }
     } catch (e) {
@@ -434,21 +429,6 @@ async function renderAdvisorAndRefreshMetrics() {
     populateReportsList(state.designDir, target);
     renderTimingAdvisor();
   } catch (_e) {}
-}
-
-function setRunProgress(done, total, current) {
-  const bar = document.getElementById("overall-progress");
-  paintProgress(done, total);
-  if (!bar) return;
-  if (!total) {
-    bar.textContent = "";
-    return;
-  }
-  // The flow's own count can pass its estimate (a step that runs twice):
-  // never show more steps than the total, or more than 100 %.
-  done = Math.min(done, total);
-  const pct = Math.round((done / total) * 100);
-  bar.textContent = "step " + done + "/" + total + (current ? ": " + current : "") + " (" + pct + "%)";
 }
 
 function logInstallerLine(line) {
@@ -526,35 +506,6 @@ function showActionBanner(message, actionLabel, onAction) {
 function clearActionBanner() {
   const el = document.getElementById("action-banner");
   if (el) el.hidden = true;
-}
-
-// E5.2 — after the FIRST successful run, a one-time card points the newcomer at
-// the three things to look at next (real tabs; no invented content). Shown once,
-// dismissible; never after a failed/cancelled run.
-function maybeShowPostRunPanel() {
-  if (safeStorage.get("ll.postRunSeen") === "1") return;
-  if (document.getElementById("postrun-card")) return;
-  safeStorage.set("ll.postRunSeen", "1");
-  const el = document.createElement("div");
-  el.id = "postrun-card";
-  el.className = "postrun-card";
-  el.setAttribute("role", "status");
-  el.innerHTML =
-    "<div class='postrun-head'><strong>Run complete. Next steps:</strong>" +
-    "<button class='postrun-close' aria-label='Dismiss'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
-    "<span class='muted'>See the layout, check sign-off, or dig into the numbers.</span>" +
-    "<div class='postrun-actions'>" +
-      "<button class='btn btn-ghost' data-go='layout'>See your chip</button>" +
-      "<button class='btn btn-ghost' data-go='verify'>Check sign-off</button>" +
-      "<button class='btn btn-ghost' data-go='analytics'>See metrics</button>" +
-    "</div>";
-  el.addEventListener("click", (e) => {
-    const t = e.target;
-    // nav.js follows the [data-go] link itself.
-    if (t.closest && t.closest("[data-go]")) el.remove();
-    if (t.classList && t.classList.contains("postrun-close")) el.remove();
-  });
-  document.body.appendChild(el);
 }
 
 // I2 — warn (never block) when running against an unvalidated librelane. LanEx

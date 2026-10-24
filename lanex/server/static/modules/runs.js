@@ -6,6 +6,17 @@ import { confirmDialog, alertDialog, checklistDialog, choiceDialog, promptDialog
 import { toast } from "./toast.js";
 import { gatherRunsScoped, normDir, getRunScope, setRunScope, setRun, contextRun, contextDesign, onContext } from "./context.js";
 import { go } from "./nav.js";
+import * as FS from "./flowstages.js";
+
+// The last step of a stage in the Classic flow (matches setup.js's --to).
+function lastStepOfStage(stageId) {
+  const flow = (state.flows || []).find((f) => f.name === "Classic");
+  const ids = (flow && flow.steps) || [];
+  const st = FS.stagesOf(ids.map((id) => ({ id })));
+  let last = "";
+  st.forEach((s, i) => { if (s === stageId) last = ids[i]; });
+  return last;
+}
 import { icon } from "./icons.js";
 
 // Lightweight "make this run's design active" — needed before any run-scoped
@@ -340,17 +351,21 @@ async function reproduceRun(tag) {
   for (const [k, v] of Object.entries(meta.overrides || {})) {
     state.varsValues[k] = (typeof v === "boolean") ? v : String(v);
   }
-  // From / To / Skip.
-  setVal("run-from", meta.frm);
-  setVal("run-to", meta.to);
-  setVal("run-skip", (meta.skip || []).join(", "));
+  // Where it stopped: the Run menu's "Run up to" stage, when --to was a stage's
+  // last step. (--from and --skip are no longer set from LanEx; see below.)
+  const stopSel = document.getElementById("run-stop-after");
+  if (stopSel) {
+    stopSel.value = "";
+    if (meta.to) for (const o of stopSel.options) if (o.value && lastStepOfStage(o.value) === meta.to) stopSel.value = o.value;
+    stopSel.dispatchEvent(new Event("change"));
+  }
   // Full-auto vs step-by-step.
   const modeVal = meta.mode === "semi" ? "semi" : "auto";
   document.querySelectorAll(".mode-btn").forEach((b) =>
     b.classList.toggle("mode-btn-active", b.dataset.mode === modeVal));
   // Run name.
   const rn = (meta.tag || tag) + "-repro";
-  setVal("run-name-input", rn); setVal("run-tag-input", rn);
+  setVal("run-name-input", rn);
   // Sources (best-effort — files may have moved/been deleted since the run).
   if (Array.isArray(meta.sources) && meta.sources.length) state.selectedFiles = meta.sources.slice();
   // Repaint the config panel + jump to Setup.
@@ -359,7 +374,8 @@ async function reproduceRun(tag) {
   const summary = "Loaded " + Object.keys(meta.overrides || {}).length + " override(s), " +
     (meta.sources || []).length + " source(s), " + (meta.run_mode || "container") +
     " mode, flow " + (meta.flow || "Classic") + ". Review your settings in Setup, then click Run flow when ready. " +
-    "Nothing has started yet.";
+    "Nothing has started yet." +
+    (meta.frm || (meta.skip || []).length ? " That run also used --from or --skip; LanEx runs the whole flow (or up to a stage) instead." : "");
   // E4.4 — offer the EXACT CLI command this run was launched with (persisted in
   // gui-run.json, not rebuilt), so a terminal user can reproduce it verbatim.
   // gui-run.json keeps the command per engine ({container, local, recommended}).

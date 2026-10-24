@@ -1266,7 +1266,28 @@ check("keys: number keys follow the rail, Pipeline never claims a run that did n
   for (const id of ["analytics-runbar", "verify-runbar", "layout-runbar"]) assert.ok(html.includes('id="' + id + '"'), id + " missing");
 });
 
-// ---------- one verdict, worded once ------------------------------------------------
+// ---------- the run moment: one summary, one verdict --------------------------------
+const RC = await import(toUrl(resolve(MOD, "reportcard.js")));
+check("run report card: one summary for the toast, the title and the notification", () => {
+  assert.equal(RC.fmtDur(4.12), "4.1 s");
+  assert.equal(RC.fmtDur(44), "44 s");
+  assert.equal(RC.fmtDur(104), "1 min 44 s");
+  assert.equal(RC.fmtDur(3725), "1 h 2 min");
+  const rs = { steps: [{ runtime_s: 60, changed: { timing__setup__ws: 0.31, design__die__bbox: "0.0 0.0 57.0 68.2" } }, { runtime_s: 1, changed: {} }] };
+  const clean = RC.runSummary({ tag: "try-2", design: "spm", rx: { kind: "clean" }, vf: null, rs });
+  assert.equal(clean.title, "spm · try-2 is clean");
+  assert.equal(clean.body, "setup +0.31 ns · 57 × 68.2 µm · 1 min 1 s", "the numbers, not just 'done'");
+  const halted = RC.runSummary({ tag: "t", rx: { kind: "halted", step: { id: "OpenROAD.GlobalPlacement" },
+    card: { title: "Placement ran out of room", plain: "The cells need 207 % of the core area, so they can't all be placed. The die is fixed." } }, rs });
+  assert.match(halted.title, /stopped at OpenROAD\.GlobalPlacement/);
+  assert.match(halted.body, /^Placement ran out of room\. The cells need 207 %/);
+  assert.equal(RC.runSummary({ tag: "t", rx: { kind: "stopped" }, rs }).tone, "warn");
+  // Every number on the card keeps its exact value one hover away.
+  const html = RC.reportCardHtml({ tag: "t", rx: { kind: "clean", warnings: { total: 0, by_code: [] } }, vf: null,
+    steps: [{ secs: 61, metrics: { timing__setup__ws: 0.30512 } }], stages: [], base: "", baseRs: null });
+  assert.match(html, /title='[^']*0\.30512/, "the setup slack's exact value is in its title");
+});
+
 check("one verdict: Verify and Flow say 'Clean', never 'tape-out ready'", () => {
   const rep = { verdict: { state: "ready", blocker_ids: [], warning_ids: [], missing_core: [], total: 23 }, flow_state: {}, checks: [] };
   const v = VM.verdictCopy(rep);
@@ -1285,8 +1306,12 @@ check("one verdict: Verify and Flow say 'Clean', never 'tape-out ready'", () => 
   assert.equal(vw.tone, "warn");
   assert.equal(vw.title, "Clean, with 1 warning");
   assert.match(vw.sub, /Setup violations warns instead of failing it \(TIMING_VIOLATION_CORNERS = \*tt\*\)/);
+  const sw = RC.runSummary({ tag: "t", rx: { kind: "clean" }, vf: warned, rs: { steps: [] } });
+  assert.equal(sw.title, "t is clean, with 1 warning");
+  assert.equal(sw.tone, "warn");
   assert.match(blocked.sub, /finished every step, then failed the run on Setup, Hold/);
 });
+
 
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
