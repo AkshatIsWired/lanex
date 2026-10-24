@@ -646,6 +646,7 @@ function Get-LivePreflightFacts {
     return [pscustomobject][ordered]@{
         nativeArchitecture = $nativeArchitecture.ToUpperInvariant()
         windowsBuild = [Environment]::OSVersion.Version.Build
+        windowsUbr = try { [int](Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop).UBR } catch { 0 }
         computer = [pscustomobject][ordered]@{
             manufacturer = if ($null -eq $computerSystem) { '' } else { [string]$computerSystem.Manufacturer }
             model = if ($null -eq $computerSystem) { '' } else { [string]$computerSystem.Model }
@@ -680,6 +681,13 @@ function Get-PreflightDecision($Facts) {
         $code = 'unsupported-architecture'; $blocked = $true
     } elseif ([int]$Facts.windowsBuild -lt 19044) {
         $code = 'unsupported-windows'; $blocked = $true
+    } elseif (($null -ne $Facts.windowsUbr) -and [int]$Facts.windowsUbr -gt 0 -and (
+            (([int]$Facts.windowsBuild -in @(19044, 19045)) -and [int]$Facts.windowsUbr -lt 2311) -or
+            (([int]$Facts.windowsBuild -eq 22000) -and [int]$Facts.windowsUbr -lt 1281))) {
+        # WSL from the Microsoft Store (systemd, WSLg) needs KB5020030 on
+        # Windows 10 21H2/22H2 and KB5019157 on Windows 11 21H2; older updates
+        # only have the inbox WSL, which LanEx cannot use.
+        $code = 'windows-update-required'; $blocked = $true
     } elseif ([string]$Facts.wslPolicy -eq 'wsl-disabled') {
         $code = 'wsl-blocked-by-policy'; $blocked = $true
     } elseif ($null -ne $Facts.memoryBytes -and [int64]$Facts.memoryBytes -gt 0 -and
@@ -762,6 +770,7 @@ function Invoke-Preflight {
         schema = 1
         nativeArchitecture = [string]$facts.nativeArchitecture
         windowsBuild = [int]$facts.windowsBuild
+        windowsUbr = [int]$facts.windowsUbr
         computer = $facts.computer
         hypervisorPresent = $facts.hypervisorPresent
         firmwareVirtualization = [string]$facts.firmwareVirtualization
@@ -800,6 +809,19 @@ function Enable-WindowsFeatures {
             restartRequired = ([int]$value.exitCode -eq 3010); output = [string]$value.output
         })
         if (-not $success) { $failed += $item[1] }
+    }
+    # The features alone are not WSL any more: since WSL left Windows, a clean
+    # PC needs the WSL package too, and `wsl --update` refuses to run until it
+    # exists ("not installed"). Installing it here keeps it to one UAC prompt.
+    # A failure is not fatal: after the restart Setup installs it again.
+    if ($null -eq $FeatureFixturePath -or -not $FeatureFixturePath) {
+        $wslExe = Join-Path $env:SystemRoot 'System32\wsl.exe'
+        if ($failed.Count -eq 0 -and (Test-Path -LiteralPath $wslExe -PathType Leaf)) {
+            $env:WSL_UTF8 = '1'
+            $text = (& $wslExe --install --no-distribution 2>&1 | Out-String) -replace "`0", ''
+            Add-OrSet $result 'wslPackage' ([pscustomobject][ordered]@{
+                exitCode = [int]$LASTEXITCODE; output = $text.Trim() })
+        }
     }
     if ($OutputPath) { Write-AtomicJson $OutputPath $result }
     if ($failed.Count -gt 0) { throw ('Feature enable failed: ' + ($failed -join ', ')) }

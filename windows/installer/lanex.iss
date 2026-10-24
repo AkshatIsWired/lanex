@@ -2113,6 +2113,16 @@ begin
     Result := False;
     Exit;
   end;
+  if PreflightDecision = 'windows-update-required' then
+  begin
+    if not WizardSilent then MsgBox('This copy of Windows needs its updates before LanEx can be installed.'
+      + #13#10#13#10 + 'LanEx uses the current Windows Subsystem for Linux, which needs a Windows '
+      + 'update from late 2022 or newer. Open Settings > Windows Update, install all updates, '
+      + 'restart, then run LanEx Setup again.'
+      + #13#10#13#10 + 'Nothing was changed. Log: ' + LogFile, mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
   if PreflightDecision = 'wsl-blocked-by-policy' then
   begin
     if not WizardSilent then MsgBox('Windows Subsystem for Linux is switched off by a policy on this PC.'
@@ -3047,6 +3057,9 @@ begin
   end;
   if (PreflightDecision = 'unsupported-architecture') or
      (PreflightDecision = 'unsupported-windows') or
+     (PreflightDecision = 'windows-update-required') or
+     (PreflightDecision = 'wsl-blocked-by-policy') or
+     (PreflightDecision = 'not-enough-memory') or
      (PreflightDecision = 'preflight-query-failed') then
   begin
     Result := 'This PC did not pass the structured Windows/WSL preflight: '
@@ -3133,21 +3146,46 @@ begin
         + 'choose Continue LanEx Setup from the Start menu when ready.';
       Exit;
     end;
-    SetPhase(1, 6, 'Updating Windows Subsystem for Linux...');
-    if not (RunLogged(WslExe, '--update --web-download', Code) and (Code = 0)) then
+    // A PC with the features on but no WSL package (every clean Windows 11
+    // 24H2+ after the feature restart) answers `wsl --update` with "not
+    // installed"; only `wsl --install --no-distribution` installs it. Windows
+    // asks for administrator permission itself.
+    if not (Exec(WslExe, '--version', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0)) then
     begin
-      if CancelRequested then
+      SetPhase(1, 6, 'Installing Windows Subsystem for Linux (Windows asks for permission)...');
+      if not (RunLogged(WslExe, '--install --no-distribution', Code) and (Code = 0)) then
       begin
-        Result := 'LanEx Setup was cancelled after the current WSL update attempt stopped.';
-        RecordSetupOutcome('cancelled', Result);
+        if CancelRequested then
+        begin
+          Result := 'LanEx Setup was cancelled while WSL was being installed.';
+          RecordSetupOutcome('cancelled', Result);
+          Exit;
+        end;
+        Result := 'Windows could not install Windows Subsystem for Linux.' + #13#10#13#10
+          + 'The administrator prompt may have been declined, the PC may be offline, or a '
+          + 'company policy may block it. Run LanEx Setup again to retry.'
+          + #13#10#13#10 + LogTail(12) + #13#10 + 'Install log: ' + LogFile;
         Exit;
       end;
-      if not (RunLogged(WslExe, '--update', Code) and (Code = 0)) then
+    end
+    else
+    begin
+      SetPhase(1, 6, 'Updating Windows Subsystem for Linux...');
+      if not (RunLogged(WslExe, '--update --web-download', Code) and (Code = 0)) then
       begin
-        Result := 'Windows could not update WSL. This may be a managed-policy or '
-          + 'network restriction; the existing distributions were not stopped or '
-          + 'changed.' + #13#10#13#10 + LogTail(12);
-        Exit;
+        if CancelRequested then
+        begin
+          Result := 'LanEx Setup was cancelled after the current WSL update attempt stopped.';
+          RecordSetupOutcome('cancelled', Result);
+          Exit;
+        end;
+        if not (RunLogged(WslExe, '--update', Code) and (Code = 0)) then
+        begin
+          Result := 'Windows could not update WSL. This may be a managed-policy or '
+            + 'network restriction; the existing distributions were not stopped or '
+            + 'changed.' + #13#10#13#10 + LogTail(12) + #13#10 + 'Install log: ' + LogFile;
+          Exit;
+        end;
       end;
     end;
     if CancelRequested then
