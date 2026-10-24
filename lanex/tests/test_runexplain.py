@@ -83,7 +83,7 @@ def test_gpl_0302_is_a_warning_with_what_openroad_did(tmp_path):
     by = {g["code"]: g for g in w["by_code"]}
     assert by["STA-1140"]["count"] == 2 and by["STA-1140"]["new"] is False
     assert by["GPL-0302"]["new"] is True
-    assert by["GPL-0302"]["note"].startswith("PL_TARGET_DENSITY_PCT asked for 12 %, below what this design can reach, so OpenROAD used 53 %")
+    assert by["GPL-0302"]["note"].startswith("The placement density (PL_TARGET_DENSITY_PCT, 12 %) is below what this design can reach, so OpenROAD used 53 %")
     assert w["by_code"][0]["code"] == "GPL-0302", "the warning worth reading comes first"
 
 

@@ -206,11 +206,15 @@ def _note_gpl_0302(text: str) -> Optional[str]:
     m = re.search(r"Target density (\d+(?:\.\d+)?).*?uniform density (\d+(?:\.\d+)?)", text, re.S)
     if not m:
         m2 = re.search(r"Target density (\d+(?:\.\d+)?)", text)
-        return ("PL_TARGET_DENSITY_PCT asked for %.0f %%, which is below what this design can reach, so "
-                "OpenROAD raised it. Remove the setting, or raise it." % (float(m2.group(1)) * 100)) if m2 else None
+        return ("The placement density (PL_TARGET_DENSITY_PCT, %.0f %%) is below what this design can "
+                "reach, so OpenROAD raised it. Harmless; set PL_TARGET_DENSITY_PCT higher to silence it."
+                % (float(m2.group(1)) * 100)) if m2 else None
+    # Often LibreLane's own default (a small design's first run), so it never
+    # says "your setting" and only says how to make it go away.
     a, b = float(m.group(1)) * 100, float(m.group(2)) * 100
-    return ("PL_TARGET_DENSITY_PCT asked for %.0f %%, below what this design can reach, so OpenROAD used "
-            "%.0f %% instead. Remove the setting, or set it to %d or more." % (a, b, math.ceil(b)))
+    return ("The placement density (PL_TARGET_DENSITY_PCT, %.0f %%) is below what this design can reach, "
+            "so OpenROAD used %.0f %% instead. Harmless; set it to %d or more to silence this."
+            % (a, b, math.ceil(b)))
 
 
 WARNING_NOTES = {"GPL-0302": _note_gpl_0302}
