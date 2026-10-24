@@ -844,3 +844,51 @@ def test_inno_keeps_user_work_unelevated_and_limits_uac_to_features() -> None:
                                                body.index("function OnDownloadProgress")]
     assert "--set-default-version" not in body
     assert "support.microsoft.com/en-US/Windows/Experience/enable-virtualization-on-windows" in body
+
+
+# --- Ship line preflight decisions (found on the clean VMs) -----------------
+
+def test_vm_without_nested_virtualization_is_told_before_any_change(tmp_path: Path) -> None:
+    # Inside a VM Windows always reports a hypervisor; only the processor's own
+    # flag shows the host does not pass virtualization through.
+    result = _preflight(tmp_path, _base_preflight(
+        computer={"manufacturer": "Microsoft Corporation", "model": "Virtual Machine"},
+        virtualMachine=True, firmwareVirtualizationRaw="disabled",
+        features={"wsl": "disabled", "virtualMachinePlatform": "disabled"},
+        wsl={"present": True, "statusUsable": False, "version": "",
+             "systemdCapable": False, "kernelUsable": False}))
+    assert result["decision"]["code"] == "vm-nested-virtualization-off"
+    assert result["decision"]["blocked"] is True
+
+
+def test_vm_with_nested_virtualization_proceeds(tmp_path: Path) -> None:
+    result = _preflight(tmp_path, _base_preflight(
+        virtualMachine=True, firmwareVirtualizationRaw="enabled",
+        features={"wsl": "disabled", "virtualMachinePlatform": "disabled"},
+        wsl={"present": True, "statusUsable": False, "version": "",
+             "systemdCapable": False, "kernelUsable": False}))
+    assert result["decision"]["code"] == "features-required"
+
+
+@pytest.mark.parametrize("build,ubr,code", [
+    (19045, 2006, "windows-update-required"),   # 22H2 as released, inbox WSL only
+    (19045, 2311, "ready"),                      # KB5020030: Store WSL works
+    (22000, 1000, "windows-update-required"),
+    (26300, 1, "ready"),
+])
+def test_windows_too_old_for_store_wsl(tmp_path: Path, build: int, ubr: int, code: str) -> None:
+    result = _preflight(tmp_path, _base_preflight(windowsBuild=build, windowsUbr=ubr))
+    assert result["decision"]["code"] == code
+
+
+@pytest.mark.parametrize("gb,code,low", [(4, "not-enough-memory", True), (6, "ready", True),
+                                         (8, "ready", False)])
+def test_memory_floor_and_warning(tmp_path: Path, gb: int, code: str, low: bool) -> None:
+    result = _preflight(tmp_path, _base_preflight(memoryBytes=gb * (1 << 30) - (1 << 26)))
+    assert result["decision"]["code"] == code
+    assert result["memory"]["low"] is low
+
+
+def test_wsl_group_policy_blocks_with_its_own_reason(tmp_path: Path) -> None:
+    result = _preflight(tmp_path, _base_preflight(wslPolicy="wsl-disabled"))
+    assert result["decision"]["code"] == "wsl-blocked-by-policy"

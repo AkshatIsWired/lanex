@@ -370,6 +370,8 @@ var
   // An install that is already ready: its components are reused, so the
   // Configure page counts only what a different choice would add.
   ExistingReady, BaselineCaptured: Boolean;
+  // Preparation ended with a message: the Preparing page must show it.
+  PrepareResultShown: Boolean;
   BaselineDownloadMB, BaselineAppMB: Int64;
   // The .part file curl is writing (RunLogged shows its size as progress).
   DownloadWatchPath: String;
@@ -2165,6 +2167,19 @@ begin
     Result := False;
     Exit;
   end;
+  if PreflightDecision = 'vm-nested-virtualization-off' then
+  begin
+    if not WizardSilent then MsgBox('This Windows runs inside a virtual machine that cannot run WSL 2.'
+      + #13#10#13#10 + 'LanEx needs WSL 2, which is itself a small virtual machine. The host of this '
+      + 'virtual machine does not pass virtualization through ("nested virtualization"), so WSL 2 '
+      + 'cannot start, and restarting will not change that.'
+      + #13#10#13#10 + 'Install LanEx on the PC itself, or turn on nested virtualization for this VM '
+      + '(Hyper-V: Set-VMProcessor -ExposeVirtualizationExtensions $true while the VM is off; '
+      + 'VMware: "Virtualize Intel VT-x/EPT or AMD-V/RVI"; VirtualBox: "Enable Nested VT-x/AMD-V").'
+      + #13#10#13#10 + 'Nothing was changed. Log: ' + LogFile, mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
   if PreflightDecision = 'windows-update-required' then
   begin
     if not WizardSilent then MsgBox('This copy of Windows needs its updates before LanEx can be installed.'
@@ -3096,6 +3111,7 @@ begin
     Result := Result + #13#10#13#10 + 'Install log: ' + LogFile;
   if Result <> '' then
     LogLine('setup stopped: ' + Result);
+  PrepareResultShown := Result <> '';
   if (Result <> '') and (ProgressContainer <> nil) then
     ProgressContainer.Visible := False;
 end;
@@ -3167,6 +3183,7 @@ begin
   if (PreflightDecision = 'unsupported-architecture') or
      (PreflightDecision = 'unsupported-windows') or
      (PreflightDecision = 'windows-update-required') or
+     (PreflightDecision = 'vm-nested-virtualization-off') or
      (PreflightDecision = 'wsl-blocked-by-policy') or
      (PreflightDecision = 'not-enough-memory') or
      (PreflightDecision = 'preflight-query-failed') then
@@ -3179,10 +3196,11 @@ begin
 
   if PreflightDecision = 'wsl-kernel-unavailable' then
   begin
-    Result := 'Windows reports that WSL is installed, but the WSL 2 kernel could '
-      + 'not start. If this PC is a virtual machine, its host must expose nested '
-      + 'virtualization to the guest; on physical hardware, verify virtualization '
-      + 'and the Windows hypervisor configuration.' + #13#10#13#10
+    Result := 'WSL is installed, but its Linux kernel could not start, so LanEx cannot '
+      + 'run on this PC yet.' + #13#10#13#10
+      + 'On a PC: make sure virtualization is turned on in the BIOS/UEFI settings '
+      + '(Intel VT-x or AMD-V/SVM), restart, and run LanEx Setup again. In a virtual '
+      + 'machine: its host must allow nested virtualization.' + #13#10#13#10
       + 'Setup did not download or import an environment. Existing WSL '
       + 'distributions were not started, stopped, or changed.';
     RecordSetupOutcome('failed', Result);
@@ -3544,7 +3562,8 @@ begin
         Result := False;
         Exit;
       end;
-      if ExistingReady then CalculateEstimatesFast;
+      // One set of numbers: the page's own, which it shows and checks.
+      CalculateEstimatesFast;
       if not CheckSelectionSpace(Failure) then
       begin
         MsgBox(Failure + #13#10#13#10 +
@@ -3577,7 +3596,8 @@ begin
   end;
   if ProgressContainer <> nil then
   begin
-    ProgressContainer.Visible := (CurPageID = wpPreparing) or (CurPageID = wpInstalling);
+    ProgressContainer.Visible := ((CurPageID = wpPreparing) and not PrepareResultShown)
+      or (CurPageID = wpInstalling);
     if ProgressContainer.Visible then
     begin
       ProgressContainer.BringToFront;

@@ -529,6 +529,18 @@ function Get-LivePreflightFacts {
     if ($null -ne $computerSystem -and $null -ne $computerSystem.HypervisorPresent) {
         $hypervisor = [bool]$computerSystem.HypervisorPresent
     }
+    # The processor's own flag, before the hypervisor override below: inside a
+    # virtual machine Windows always reports a hypervisor, so only this flag
+    # tells whether the host passes virtualization through (nested).
+    $firmwareRaw = 'unknown'
+    if ($null -ne $processor -and $null -ne $processor.VirtualizationFirmwareEnabled) {
+        $firmwareRaw = if ([bool]$processor.VirtualizationFirmwareEnabled) { 'enabled' } else { 'disabled' }
+    }
+    $isVirtualMachine = $false
+    if ($null -ne $computerSystem) {
+        $isVirtualMachine = ([string]$computerSystem.Model + ' ' + [string]$computerSystem.Manufacturer) -match
+            'Virtual Machine|VMware|VirtualBox|KVM|QEMU|Parallels|Xen'
+    }
     $firmware = 'unknown'
     if ($hypervisor -eq $true) {
         $firmware = 'enabled'
@@ -656,6 +668,8 @@ function Get-LivePreflightFacts {
         }
         hypervisorPresent = $hypervisor
         firmwareVirtualization = $firmware
+        firmwareVirtualizationRaw = $firmwareRaw
+        virtualMachine = $isVirtualMachine
         memoryBytes = $memoryBytes
         wslPolicy = $wslPolicy
         features = [pscustomobject][ordered]@{
@@ -696,6 +710,12 @@ function Get-PreflightDecision($Facts) {
     } elseif ($null -ne $Facts.memoryBytes -and [int64]$Facts.memoryBytes -gt 0 -and
             [int64]$Facts.memoryBytes -lt [int64]$MinMemoryBytes) {
         $code = 'not-enough-memory'; $blocked = $true
+    } elseif ($Facts.virtualMachine -eq $true -and
+            [string]$Facts.firmwareVirtualizationRaw -eq 'disabled' -and
+            $Facts.wsl.kernelUsable -ne $true) {
+        # Windows itself runs in a VM whose host does not expose
+        # virtualization: WSL 2 cannot start, and a restart will not help.
+        $code = 'vm-nested-virtualization-off'; $blocked = $true
     } elseif ($Facts.hypervisorPresent -ne $true -and
             [string]$Facts.firmwareVirtualization -eq 'disabled' -and
             $Facts.wsl.statusUsable -ne $true) {
@@ -774,6 +794,8 @@ function Invoke-Preflight {
         computer = $facts.computer
         hypervisorPresent = $facts.hypervisorPresent
         firmwareVirtualization = [string]$facts.firmwareVirtualization
+        firmwareVirtualizationRaw = [string]$facts.firmwareVirtualizationRaw
+        virtualMachine = $facts.virtualMachine
         features = $facts.features
         pendingReboot = $facts.pendingReboot
         bootIdentity = [string]$facts.bootIdentity
