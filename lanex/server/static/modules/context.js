@@ -160,11 +160,11 @@ export function noteRunStarted() {
 }
 
 // A run finished: reload, and move to it when the user was following.
-export async function noteRunFinished() {
+export async function noteRunFinished(tag) {
   const follow = C.follow;
   C.follow = false;
-  await loadRuns();
-  const newest = C.runs.find((r) => normDir(r._design) === normDir(state.designDir));
+  await waitForRun(tag);
+  const newest = (tag && contextRow(tag, state.designDir)) || C.runs.find((r) => normDir(r._design) === normDir(state.designDir));
   if (follow && newest) {
     C.run = newest.tag;
     C.design = newest._design || state.designDir;
@@ -172,6 +172,18 @@ export async function noteRunFinished() {
     remember();
   }
   emit(follow ? "run-finished" : "runs");
+}
+
+// The run list, once it has `tag`: right after a run ends the server can list
+// runs before it lists the one that just finished, so ask again for a few
+// seconds rather than follow the run before it.
+export async function waitForRun(tag) {
+  await loadRuns();
+  for (let i = 0; tag && i < 8 && !contextRow(tag, state.designDir); i++) {
+    await new Promise((r) => setTimeout(r, 700));
+    await loadRuns();
+  }
+  return !tag || !!contextRow(tag, state.designDir);
 }
 
 // ---------------------------------------------------------------- scope

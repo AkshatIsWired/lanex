@@ -230,6 +230,51 @@ export function worstStatus(checks) {
   return st.length ? "skipped" : "not_run";
 }
 
+// How a run's verdict reads, from the server's verdict and flow state:
+// { tone: pass|warn|fail, title, short, sub }. One wording for every page
+// (Verify, Flow, the toast and the notification): rule 10 of the spec.
+// "Clean" means LibreLane's checks passed, never "tape-out ready": gate-level
+// simulation, a shuttle's precheck and the foundry's decks are not covered.
+export function verdictCopy(rep) {
+  const v = rep.verdict, f = rep.flow_state || {};
+  const by = new Map((rep.checks || []).map((c) => [c.id, c]));
+  const names = (ids) => ids.map((id) => (by.get(id) || {}).name || id);
+  const ran = (rep.checks || []).filter((c) => ["pass", "fail", "warn", "info"].includes(c.status)).length;
+  const stop = f.stopped_step;
+  if (v.state === "blocked") {
+    const k = v.blocker_ids.length;
+    const title = (f.state === "stopped" && stop)
+      ? "Stopped at step " + stop.n + ": " + names(v.blocker_ids).join(", ")
+      : k + (k === 1 ? " problem blocks" : " problems block") + " tape-out";
+    let sub = (f.state === "stopped")
+      ? "LibreLane stopped the flow on this check, so nothing after it was built or checked."
+      : "Fix them from the top: a problem early in the flow often causes the ones after it.";
+    if (f.state === "deferred_errors") sub = "LibreLane finished every step, then failed the run on " + names(v.blocker_ids).join(", ") + ". " + sub;
+    return { tone: "fail", title, sub, short: k + (k === 1 ? " check failed" : " checks failed") };
+  }
+  if (v.state === "stopped") {
+    return { tone: "fail", title: "The flow stopped at step " + (stop ? stop.n : "?"), short: "not checked",
+      sub: (stop ? (stop.id || stop.dir) + " didn't finish. " : "") + ran + " of " + v.total + " checks ran before it stopped. The run log has the reason." };
+  }
+  if (v.state === "incomplete") {
+    const miss = v.missing_core.map((id) => id === "drc" ? "DRC" : ((by.get(id) || {}).name || id));
+    const off = (v.skipped_core || []).map((id) => (by.get(id) || {}).name || id);
+    return { tone: "warn", title: "Not enough to call it", short: "not enough to call it",
+      sub: "No result for " + miss.join(", ") + "." + (off.length ? " Turned off in this run's config: " + off.join(", ") + "." : "") +
+        " Nothing failed, but these have to pass before the layout can go to a foundry." };
+  }
+  const w = v.warning_ids.length;
+  if (!w) return { tone: "pass", title: "Clean", short: "clean", sub: "Every check LibreLane makes on this layout passed." };
+  // LibreLane passed the run, but some checks only warn here (setup outside
+  // TIMING_VIOLATION_CORNERS, for one): never call that plain "clean".
+  const warned = names(v.warning_ids);
+  const gates = v.warning_ids.map((id) => (by.get(id) || {}).gate_note).filter(Boolean);
+  const n = w + (w === 1 ? " warning" : " warnings");
+  return { tone: "warn", title: "Clean, with " + n, short: "clean, " + n, warned,
+    sub: "Every check that fails a run passed. " + warned.join(", ") + (w === 1 ? " warns" : " warn") +
+      " instead of failing it" + (gates.length ? " (" + gates.join("; ") + ")" : "") + ": worth a look before tape-out." };
+}
+
 export function isNum(v) { return typeof v === "number" && Number.isFinite(v); }
 
 // Change of status from a baseline report to this one, per check id.

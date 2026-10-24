@@ -1266,6 +1266,28 @@ check("keys: number keys follow the rail, Pipeline never claims a run that did n
   for (const id of ["analytics-runbar", "verify-runbar", "layout-runbar"]) assert.ok(html.includes('id="' + id + '"'), id + " missing");
 });
 
+// ---------- one verdict, worded once ------------------------------------------------
+check("one verdict: Verify and Flow say 'Clean', never 'tape-out ready'", () => {
+  const rep = { verdict: { state: "ready", blocker_ids: [], warning_ids: [], missing_core: [], total: 23 }, flow_state: {}, checks: [] };
+  const v = VM.verdictCopy(rep);
+  assert.equal(v.title, "Clean");
+  assert.equal(v.short, "clean");
+  const vjs = readFileSync(resolve(MOD, "verify.js"), "utf8");
+  assert.ok(/V\.verdictCopy\(_rep\)/.test(vjs) && !/Tape-out ready/.test(vjs), "Verify words its verdict through verify-model.js");
+  const blocked = VM.verdictCopy({ verdict: { state: "blocked", blocker_ids: ["setup", "hold"], warning_ids: [], missing_core: [], total: 23 },
+    flow_state: { state: "deferred_errors" }, checks: [{ id: "setup", name: "Setup" }, { id: "hold", name: "Hold" }] });
+  assert.equal(blocked.short, "2 checks failed");
+  // LibreLane passes a run whose setup fails outside TIMING_VIOLATION_CORNERS:
+  // that is "clean, with 1 warning", amber, never plain "clean".
+  const warned = { verdict: { state: "ready", blocker_ids: [], warning_ids: ["setup"], missing_core: [], total: 23 }, flow_state: { state: "complete" },
+    checks: [{ id: "setup", name: "Setup violations", gate_note: "TIMING_VIOLATION_CORNERS = *tt*" }] };
+  const vw = VM.verdictCopy(warned);
+  assert.equal(vw.tone, "warn");
+  assert.equal(vw.title, "Clean, with 1 warning");
+  assert.match(vw.sub, /Setup violations warns instead of failing it \(TIMING_VIOLATION_CORNERS = \*tt\*\)/);
+  assert.match(blocked.sub, /finished every step, then failed the run on Setup, Hold/);
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

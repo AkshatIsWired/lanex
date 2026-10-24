@@ -263,38 +263,9 @@ function jumpTo(id, openCheck) {
 
 // ---------- 1. overview -------------------------------------------------------------
 
-function verdictCopy() {
-  const v = _rep.verdict, f = _rep.flow_state || {};
-  const by = byId();
-  const names = (ids) => ids.map((id) => (by.get(id) || {}).name || id);
-  const ran = (_rep.checks || []).filter((c) => ["pass", "fail", "warn", "info"].includes(c.status)).length;
-  const stop = f.stopped_step;
-  if (v.state === "blocked") {
-    const k = v.blocker_ids.length;
-    const title = (f.state === "stopped" && stop)
-      ? "Stopped at step " + stop.n + ": " + names(v.blocker_ids).join(", ")
-      : k + (k === 1 ? " problem blocks" : " problems block") + " tape-out";
-    let sub = (f.state === "stopped")
-      ? "LibreLane stopped the flow on this check, so nothing after it was built or checked."
-      : "Fix them from the top: a problem early in the flow often causes the ones after it.";
-    if (f.state === "deferred_errors") sub = "LibreLane finished every step, then failed the run on these. " + sub;
-    return { tone: "fail", title, sub };
-  }
-  if (v.state === "stopped") {
-    return { tone: "fail", title: "The flow stopped at step " + (stop ? stop.n : "?"),
-      sub: (stop ? (stop.id || stop.dir) + " didn't finish. " : "") + ran + " of " + v.total + " checks ran before it stopped. The run log has the reason." };
-  }
-  if (v.state === "incomplete") {
-    const miss = v.missing_core.map((id) => id === "drc" ? "DRC" : ((by.get(id) || {}).name || id));
-    const off = (v.skipped_core || []).map((id) => (by.get(id) || {}).name || id);
-    return { tone: "warn", title: "Not enough to call it",
-      sub: "No result for " + miss.join(", ") + "." + (off.length ? " Turned off in this run's config: " + off.join(", ") + "." : "") +
-        " Nothing failed, but these have to pass before the layout can go to a foundry." };
-  }
-  const w = v.warning_ids.length;
-  return { tone: "pass", title: "Tape-out ready",
-    sub: "Every check LibreLane makes on this layout passed" + (w ? "; " + w + (w === 1 ? " warning doesn't" : " warnings don't") + " block it." : ".") };
-}
+// The verdict's words come from verify-model.js, so Flow and the end-of-run
+// toast say the same thing about the same run.
+const verdictCopy = () => V.verdictCopy(_rep);
 
 function renderOverview() {
   const el = document.getElementById("vf-overview");

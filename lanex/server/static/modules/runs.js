@@ -362,7 +362,9 @@ async function reproduceRun(tag) {
     "Nothing has started yet.";
   // E4.4 — offer the EXACT CLI command this run was launched with (persisted in
   // gui-run.json, not rebuilt), so a terminal user can reproduce it verbatim.
-  const cli = (meta.cli_command || "").trim();
+  // gui-run.json keeps the command per engine ({container, local, recommended}).
+  const cc = meta.cli_command;
+  const cli = String((cc && typeof cc === "object" ? (cc[cc.recommended] || cc.container || cc.local) : cc) || "").trim();
   const choices = cli ? [{ label: "Copy the run's CLI command", value: "copy" }] : [];
   const pick = await choiceDialog({
     title: "Loaded " + tag + " into Setup",

@@ -14,7 +14,7 @@
 export const STAGES = [
   { id: "synthesis", label: "Synthesis",
     blurb: "Yosys turns your Verilog into a netlist of standard cells, after a lint check.",
-    steps: "lint linttimingconstructs linterrors lintwarnings jsonheader synthesis yosysunmappedcells yosyssynthchecks netlistassignstatements checksdcfiles checkmacroinstances staprepnr eqy equivalence" },
+    steps: "lint linttimingconstructs linterrors lintwarnings jsonheader synthesis yosysunmappedcells yosyssynthchecks netlistassignstatements checksdcfiles checkmacroinstances staprepnr" },
   { id: "floorplan", label: "Floorplan",
     blurb: "The die and the core area, the rows the cells will sit in, and the tap and end-cap cells.",
     steps: "floorplan dumprcvalues checkmacroantennaproperties setpowerconnections manualmacroplacement macroplacement cutrows tapendcapinsertion" },
@@ -32,7 +32,7 @@ export const STAGES = [
     steps: "globalrouting checkantennas diodesonports heuristicdiodeinsertion repairantennas resizertimingpostgrt detailedrouting removeroutingobstructions trdrc reportdisconnectedpins disconnectedpins reportwirelength wirelength fillinsertion" },
   { id: "signoff", label: "Sign-off",
     blurb: "Final timing, the GDS, and the checks: DRC, LVS, antenna, XOR, timing violations.",
-    steps: "cellfrequencytables rcx stapostpnr irdropreport streamout render writelef checkdesignantennaproperties xor drc magicdrc klayoutdrc spiceextraction illegaloverlap lvs setupviolations holdviolations maxslewviolations maxcapviolations reportmanufacturability timingviolations" },
+    steps: "cellfrequencytables rcx stapostpnr irdropreport streamout render writelef checkdesignantennaproperties xor drc magicdrc klayoutdrc spiceextraction illegaloverlap lvs setupviolations holdviolations maxslewviolations maxcapviolations reportmanufacturability timingviolations eqy equivalence" },
 ];
 
 const BY_STEP = {};

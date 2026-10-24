@@ -56,6 +56,15 @@ def test_classic_flow_walks_the_stages_in_order():
     assert ids[CLASSIC.index("55-openroad-stapostpnr")] == "signoff"
 
 
+def test_equivalence_check_sits_where_it_runs():
+    # Classic runs Yosys.EQY (when RUN_EQY is on) near the end, after LVS; listed
+    # under Synthesis it pulled the run's last steps back into the first stage.
+    with_eqy = CLASSIC[:-1] + ["77-yosys-eqy", CLASSIC[-1]]
+    ids = flowstages.stages_of(with_eqy)
+    assert ids[with_eqy.index("77-yosys-eqy")] == "signoff"
+    assert flowstages.listed_stage("Yosys.EQY") == "signoff"
+
+
 def test_step_ids_and_folders_name_the_same_step():
     assert flowstages.step_core("OpenROAD.STAMidPNR-3") == "stamidpnr"
     assert flowstages.step_core("43-openroad-stamidpnr-3") == "stamidpnr"

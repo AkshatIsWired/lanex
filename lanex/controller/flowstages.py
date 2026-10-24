@@ -20,7 +20,7 @@ STAGES: List[Dict[str, str]] = [
     {"id": "synthesis", "label": "Synthesis",
      "blurb": "Yosys turns your Verilog into a netlist of standard cells, after a lint check.",
      "steps": "lint linttimingconstructs linterrors lintwarnings jsonheader synthesis yosysunmappedcells "
-              "yosyssynthchecks netlistassignstatements checksdcfiles checkmacroinstances staprepnr eqy equivalence"},
+              "yosyssynthchecks netlistassignstatements checksdcfiles checkmacroinstances staprepnr"},
     {"id": "floorplan", "label": "Floorplan",
      "blurb": "The die and the core area, the rows the cells will sit in, and the tap and end-cap cells.",
      "steps": "floorplan dumprcvalues checkmacroantennaproperties setpowerconnections manualmacroplacement "
@@ -46,7 +46,7 @@ STAGES: List[Dict[str, str]] = [
      "steps": "cellfrequencytables rcx stapostpnr irdropreport streamout render writelef "
               "checkdesignantennaproperties xor drc magicdrc klayoutdrc spiceextraction illegaloverlap lvs "
               "setupviolations holdviolations maxslewviolations maxcapviolations reportmanufacturability "
-              "timingviolations"},
+              "timingviolations eqy equivalence"},
 ]
 
 _BY_STEP = {n: st["id"] for st in STAGES for n in st["steps"].split()}

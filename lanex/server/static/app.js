@@ -412,7 +412,7 @@ function handle(ev) {
       renderRuns();
       renderRuntimeline();
       // Results pages follow the new run if the user was on the newest one.
-      noteRunFinished().catch(() => {});
+      noteRunFinished(ev.tag).catch(() => {});
       paintOnboardChecklist();
       if (!ev.error && !ev.cancelled) {
         maybeShowPostRunPanel();
