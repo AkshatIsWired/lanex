@@ -395,7 +395,7 @@ begin
   ForceDirectories(LogDir);
   // Append, so this interleaves correctly with the command output that cmd.exe
   // redirects into the same file (see RunLogged).
-  SaveStringToFile(LogFile, S + #13#10, True);
+  SaveStringsToUTF8FileWithoutBOM(LogFile, [S], True);
 end;
 
 procedure RotateInstallLog;
@@ -726,23 +726,25 @@ begin
   ScriptFile := ExpandConstant('{tmp}\ps-runner.ps1');
   DeleteFile(OutFile);
   DeleteFile(ScriptFile);
-  SaveStringToFile(ScriptFile,
-    '$OutputEncoding = [System.Text.Encoding]::UTF8;' + #13#10 +
-    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;' + #13#10 +
-    '$utf8NoBom = New-Object System.Text.UTF8Encoding($false);' + #13#10 +
-    'try {' + #13#10 +
-    '  $res = & { ' + Snippet + ' }' + #13#10 +
-    '  if ($null -ne $res) { [IO.File]::WriteAllText(''' + OutFile + ''', ($res | Out-String), $utf8NoBom) }' + #13#10 +
-    '} catch {' + #13#10 +
-    '  [IO.File]::WriteAllText(''' + OutFile + ''', ($_.ToString() + [Environment]::NewLine + $_.ScriptStackTrace), $utf8NoBom);' + #13#10 +
-    '  exit 1;' + #13#10 +
-    '}' + #13#10, False);
+  // UTF-8 with a BOM: Windows PowerShell 5.1 reads a BOM-less script in the
+  // ANSI code page, which turns a user folder like C:\Users\José into garbage.
+  SaveStringsToUTF8File(ScriptFile, [
+    '$OutputEncoding = [System.Text.Encoding]::UTF8;',
+    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;',
+    '$utf8NoBom = New-Object System.Text.UTF8Encoding($false);',
+    'try {',
+    '  $res = & { ' + Snippet + ' }',
+    '  if ($null -ne $res) { [IO.File]::WriteAllText(' + PSQuote(OutFile) + ', ($res | Out-String), $utf8NoBom) }',
+    '} catch {',
+    '  [IO.File]::WriteAllText(' + PSQuote(OutFile) + ', ($_.ToString() + [Environment]::NewLine + $_.ScriptStackTrace), $utf8NoBom);',
+    '  exit 1;',
+    '}'], False);
   Params := '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + ScriptFile + '"';
   Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
   if not Result then
     Result := Exec('powershell.exe', Params, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
   if FileExists(OutFile) and LoadStringFromFile(OutFile, Raw) then
-    Output := Trim(StripNulls(String(Raw)));
+    Output := Trim(StripNulls(UTF8Decode(Raw)));
   DeleteFile(ScriptFile);
 end;
 
@@ -775,7 +777,7 @@ begin
   RunDir := ExpandConstant('{tmp}\run-') + IntToStr(RunCounter);
   DelTree(RunDir, True, True, True);
   ForceDirectories(RunDir);
-  SaveStringToFile(RunDir + '\command.txt', FileName + #13#10 + Params + #13#10, False);
+  SaveStringsToUTF8File(RunDir + '\command.txt', [FileName, Params], False);
   DistroCommand := Pos('-d ' + DistroNameValue + ' ', Params) = 1;
   ImportCommand := Pos('--import', Params) > 0;
 
@@ -1230,7 +1232,7 @@ begin
     // disappear even though PSQuote is correct PowerShell syntax. Stage JSON in
     // a UTF-8 file and pass only its quoted path across the process boundary.
     StagedChoices := ExpandConstant('{tmp}\choices-input.json');
-    if not SaveStringToFile(StagedChoices, InputJson, False) then
+    if not SaveStringsToUTF8FileWithoutBOM(StagedChoices, [InputJson], False) then
     begin
       Failure := 'Setup could not stage the selected component choices.';
       Exit;
@@ -1852,7 +1854,7 @@ begin
   begin
     if LoadStringFromFile(StateFile, RawState) then
     begin
-      StateContent := String(RawState);
+      StateContent := UTF8Decode(RawState);
       SavedProfile := ExtractJsonStringValue(StateContent, 'profile');
       if SavedProfile = 'minimal' then
         ProfileRadioMinimal.Checked := True
@@ -2171,7 +2173,7 @@ begin
   Manifest := ExpandConstant('{tmp}\build-manifest.json');
   ManifestHashValue := Lowercase(GetSHA256OfFile(Manifest));
   StagedChoices := ExpandConstant('{tmp}\choices-state.json');
-  if not SaveStringToFile(StagedChoices, ChoicesJsonValue, False) then
+  if not SaveStringsToUTF8FileWithoutBOM(StagedChoices, [ChoicesJsonValue], False) then
   begin
     Result := 'LanEx could not stage its selected component choices.'
       + #13#10#13#10 + 'No WSL distribution or user data was changed.';
@@ -2187,7 +2189,7 @@ begin
   begin
     StateContent := '';
     if LoadStringFromFile(StateFile, RawState) then
-      StateContent := String(RawState);
+      StateContent := UTF8Decode(RawState);
     ExistingManifestHash := Lowercase(ExtractJsonStringValue(StateContent, 'manifestHash'));
     if (ExistingManifestHash <> '') and (CompareText(ExistingManifestHash, ManifestHashValue) <> 0) then
       OperationName := 'update'
@@ -2232,7 +2234,7 @@ begin
     Exit;
   end;
   if LoadStringFromFile(StateFile, RawState) then
-    StateContent := String(RawState)
+    StateContent := UTF8Decode(RawState)
   else
     StateContent := Output;
 
@@ -2374,7 +2376,7 @@ begin
     ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '',
     SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
   if FileExists(OutputFile) and LoadStringFromFile(OutputFile, Raw) then
-    LogLine('feature helper result: ' + Trim(String(Raw)))
+    LogLine('feature helper result: ' + Trim(UTF8Decode(Raw)))
   else
     Result := False;
   if not Result then
@@ -3361,7 +3363,7 @@ begin
     Exit;
 
   // Terminate any running LanEx launcher process for this specific installation
-  Exec('powershell.exe', '-NoProfile -WindowStyle Hidden -Command "Get-Process -Name LanEx -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ''' + ExpandConstant('{app}') + '\*'' } | Stop-Process -Force"', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Exec('powershell.exe', '-NoProfile -WindowStyle Hidden -Command "Get-Process -Name LanEx -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ' + PSQuote(ExpandConstant('{app}') + '\*') + ' } | Stop-Process -Force"', '', SW_HIDE, ewWaitUntilTerminated, Code);
 
   // Remove dynamically written launcher configuration
   DeleteFile(ExpandConstant('{app}\appliance.json'));
@@ -3380,7 +3382,7 @@ begin
     + '","distroName":"' + DistroNameValue
     + '","sourceSha":"{#LanexSourceSha}","manifestHash":"'
     + ManifestHashValue + '"}' + #13#10;
-  if not SaveStringToFile(ExpandConstant('{app}\appliance.json'), Config, False) then
+  if not SaveStringsToUTF8FileWithoutBOM(ExpandConstant('{app}\appliance.json'), [Config], False) then
   begin
     LogLine('ERROR: could not write launcher appliance identity');
     RecordSetupOutcome('failed', 'Could not write launcher appliance identity to ' + ExpandConstant('{app}\appliance.json'));
