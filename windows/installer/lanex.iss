@@ -220,7 +220,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; the version and the reason.
 ; Shown by Windows' uninstaller right after LanEx's own keep-or-remove question,
 ; so it must not say "completely remove ... all of its components".
-PrepareToInstallNeedsRestart=Windows needs to restart once to finish. LanEx Setup opens again by itself after you sign in and carries on.%n%nSave your work, then restart now?
+PrepareToInstallNeedsRestart=Windows needs to restart once to finish turning on WSL. LanEx Setup opens again by itself after you sign in and carries on.%n%nSave your work, then restart now?
 ConfirmUninstall=Remove the LanEx app now? What happens to your projects, tools and PDKs follows the choice you just made.
 WindowsVersionNotSupported=LanEx needs Windows 10 version 21H2 (build 19044) or newer for WSLg desktop tools. Windows 11 x64 is recommended.
 ; The wizard's own words, in the language of the person we are installing for.
@@ -1087,15 +1087,18 @@ end;
 // RunPreflight asks the versioned worker for one structured snapshot. Inno uses
 // three stable fields to drive UI; the complete JSON goes to install.log so a
 // query failure never gets collapsed into a misleading BIOS message.
-function RunPreflight(var Failure: String): Boolean;
+function RunPreflight(const FirstLook: Boolean; var Failure: String): Boolean;
 var
-  Worker, Output, Snippet, JsonLine: String;
+  Worker, Output, Snippet, JsonLine, KernelArg: String;
 begin
   Failure := '';
   ExtractTemporaryFile('setup.ps1');
   Worker := ExpandConstant('{tmp}\setup.ps1');
+  // The first look skips starting WSL so the wizard opens at once; the check
+  // before Install starts it and waits for a slow first start.
+  if FirstLook then KernelArg := ' -KernelProbeSeconds 0' else KernelArg := '';
   Snippet := '$p = (& ' + PSQuote(Worker)
-    + ' -Action Preflight | ConvertFrom-Json); '
+    + ' -Action Preflight' + KernelArg + ' | ConvertFrom-Json); '
     + '$p.decision.code; $p.bootIdentity; '
     + '(($p.computer.manufacturer + '' '' + $p.computer.model) -replace ''[\r\n\t]'','' '').Trim(); '
     + '$p.decision.firmwareNotice; $p.memory.low; $p.memory.gb; '
@@ -2143,7 +2146,7 @@ begin
   BaseProvisionedForEstimate := False;
   EstimateReuseApplied := False;
 
-  if not RunPreflight(Failure) then
+  if not RunPreflight(True, Failure) then
   begin
     LogLine('preflight failed: ' + Failure);
     if not WizardSilent then MsgBox('LanEx could not inspect this PC''s Windows and WSL prerequisites.'
@@ -3113,7 +3116,7 @@ begin
     SetThreadExecutionState($80000000);
   end;
   // Every message that stops Setup says where the full log is.
-  if (Result <> '') and (Pos(LogFile, Result) = 0) then
+  if (Result <> '') and (not NeedsRestart) and (Pos(LogFile, Result) = 0) then
     Result := Result + #13#10#13#10 + 'Install log: ' + LogFile;
   if Result <> '' then
     LogLine('setup stopped: ' + Result);
@@ -3121,8 +3124,12 @@ begin
   if (Result <> '') and (ProgressContainer <> nil) then
     ProgressContainer.Visible := False;
   // A restart is a normal step, not an error: no red cross for it.
+  // Inno shows the image after this returns, so it is emptied, not hidden.
   if NeedsRestart and (WizardForm <> nil) then
+  begin
     WizardForm.PreparingErrorBitmapImage.Visible := False;
+    WizardForm.PreparingErrorBitmapImage.Width := 0;
+  end;
 end;
 
 function PrepareToInstallCore(var NeedsRestart: Boolean): String;
@@ -3174,7 +3181,8 @@ begin
 
   // Revalidate immediately before every machine-level or large operation. The
   // wizard may have been open for a while, and resume never trusts stale facts.
-  if not RunPreflight(Output) then
+  LogLine('Starting WSL once to check that it works. The first start after a restart can take a few minutes.');
+  if not RunPreflight(False, Output) then
   begin
     Result := 'LanEx could not recheck Windows/WSL prerequisites.'
       + #13#10#13#10 + Output + #13#10#13#10
@@ -3205,8 +3213,8 @@ begin
 
   if PreflightDecision = 'wsl-not-responding' then
   begin
-    Result := 'Windows Subsystem for Linux did not respond. Setup asked it twice to start '
-      + 'and waited a minute each time. This can happen right after Windows starts or updates.'
+    Result := 'Windows Subsystem for Linux did not start. Setup waited six minutes for it. '
+      + 'This can happen right after Windows starts or updates.'
       + #13#10#13#10 + 'Restart Windows, then ';
     if IsContinuationRun then
       Result := Result + 'open "Continue LanEx Setup" from the Start menu.'
@@ -3258,9 +3266,8 @@ begin
     end;
     WslPending := True;
     NeedsRestart := True;
-    Result := 'Windows needs to restart to complete WSL setup.' + #13#10#13#10
-      + 'If Setup does not open by itself after you sign in, open "Continue LanEx Setup" from the Start menu.' + #13#10#13#10
-      + 'Your component and PDK choices are saved.';
+    Result := 'Your choices are saved. If Setup does not open by itself after you sign in, '
+      + 'open "Continue LanEx Setup" from the Start menu.';
     Exit;
   end;
 
@@ -3275,9 +3282,8 @@ begin
     end;
     WslPending := True;
     NeedsRestart := True;
-    Result := 'Windows needs to restart to complete WSL setup.' + #13#10#13#10
-      + 'If Setup does not open by itself after you sign in, open "Continue LanEx Setup" from the Start menu.' + #13#10#13#10
-      + 'Your component and PDK choices are saved.';
+    Result := 'Your choices are saved. If Setup does not open by itself after you sign in, '
+      + 'open "Continue LanEx Setup" from the Start menu.';
     Exit;
   end;
 
@@ -3348,7 +3354,7 @@ begin
       RecordSetupOutcome('cancelled', Result);
       Exit;
     end;
-    if not RunPreflight(Output) then
+    if not RunPreflight(False, Output) then
     begin
       Result := 'WSL updated, but Setup could not verify its capabilities.'
         + #13#10#13#10 + Output;
@@ -3364,9 +3370,8 @@ begin
       end;
       WslPending := True;
       NeedsRestart := True;
-      Result := 'Windows needs to restart to complete WSL setup.' + #13#10#13#10
-        + 'If Setup does not open by itself after you sign in, open "Continue LanEx Setup" from the Start menu.' + #13#10#13#10
-        + 'Your component and PDK choices are saved.';
+      Result := 'Your choices are saved. If Setup does not open by itself after you sign in, '
+        + 'open "Continue LanEx Setup" from the Start menu.';
       Exit;
     end;
     if PreflightDecision <> 'ready' then

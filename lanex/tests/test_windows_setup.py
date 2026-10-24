@@ -890,6 +890,15 @@ def test_vm_whose_kernel_reports_no_hypervisor_is_nested_off(tmp_path: Path) -> 
     assert result["decision"]["code"] == "vm-nested-virtualization-off"
 
 
+def test_first_look_without_kernel_start_does_not_block(tmp_path: Path) -> None:
+    result = _preflight(tmp_path, _base_preflight(
+        wsl={"present": True, "statusUsable": True, "version": "3.0.1.0",
+             "systemdCapable": True, "kernelUsable": False, "kernelError": "not-checked"}))
+    assert result["decision"]["code"] == "ready"
+    body = INNO.read_text(encoding="utf-8")
+    assert "RunPreflight(True, Failure)" in body and "-KernelProbeSeconds 0" in body
+
+
 def test_preflight_bounds_every_wsl_call() -> None:
     body = SETUP.read_text(encoding="utf-8")
     facts = body[body.index("function Get-LivePreflightFacts"):body.index("function Get-PreflightDecision")]

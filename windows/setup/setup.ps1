@@ -45,6 +45,9 @@ param(
     [string]$SelftestPath,
     [string]$ConstraintsPath,
     [string]$LockPath,
+    # How long the preflight waits for WSL to start its kernel; 0 skips that
+    # test (the wizard's first look, rechecked in full before Install).
+    [int]$KernelProbeSeconds = 360,
     [string]$PdkAssetsPath,
     [string]$AptSnapshot,
     [string]$RootfsUrls,
@@ -547,14 +550,12 @@ function Invoke-WslBounded([string]$WslExe, [string[]]$Arguments, [int]$TimeoutS
 }
 
 function Invoke-WslKernelProbe([string]$WslExe, [string[]]$Arguments) {
-    <# A kernel-starting wsl.exe call, retried once after wsl --shutdown when it
-       hangs. error is 'timeout' or WSL's own message when it still fails. #>
-    $run = Invoke-WslBounded $WslExe $Arguments 60
-    if ($run.timedOut) {
-        Invoke-WslBounded $WslExe @('--shutdown') 30 | Out-Null
-        Start-Sleep -Seconds 5
-        $run = Invoke-WslBounded $WslExe $Arguments 60
-    }
+    <# A kernel-starting wsl.exe call. On Windows 10 the first WSL start after
+       the feature restart waits minutes for Windows to set up WSL's network
+       (seen: 4 min 40 s; the next start took a second), and killing or
+       restarting it does not speed that up, so this waits once, long.
+       error is 'timeout' or WSL's own message when it fails. #>
+    $run = Invoke-WslBounded $WslExe $Arguments $KernelProbeSeconds
     $errorText = ''
     if ($run.timedOut) {
         $errorText = 'timeout'
@@ -636,7 +637,9 @@ function Get-LivePreflightFacts {
     $systemdCapable = $false
     try { $systemdCapable = ([version]$wslVersion -ge [version]'0.67.6') } catch {}
     $kernelUsable = $false
-    if ($wslPresent -and $statusUsable -and $systemdCapable) {
+    if ($wslPresent -and $statusUsable -and $systemdCapable -and $KernelProbeSeconds -le 0) {
+        $kernelError = 'not-checked'
+    } elseif ($wslPresent -and $statusUsable -and $systemdCapable) {
         try {
             $listRun = Invoke-WslBounded $wslExe @('--list', '--quiet') 30
             $distroList = @($listRun.output -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
@@ -796,6 +799,9 @@ function Get-PreflightDecision($Facts) {
         $firmwareNotice = ([string]$Facts.firmwareVirtualization -eq 'unknown')
     } elseif ($Facts.wsl.statusUsable -ne $true -or $Facts.wsl.systemdCapable -ne $true) {
         $code = 'wsl-update-required'
+    } elseif ([string]$Facts.wsl.kernelError -eq 'not-checked') {
+        # First look only; the full preflight before Install starts the kernel.
+        $code = 'ready'
     } elseif ($Facts.wsl.kernelUsable -ne $true -and [string]$Facts.wsl.kernelError -eq 'timeout') {
         $code = 'wsl-not-responding'; $blocked = $true
     } elseif ($Facts.wsl.kernelUsable -ne $true) {
