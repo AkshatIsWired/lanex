@@ -3181,6 +3181,11 @@ begin
 
   // Revalidate immediately before every machine-level or large operation. The
   // wizard may have been open for a while, and resume never trusts stale facts.
+  // WSL opens its own "Welcome to WSL" tour the first time any distribution
+  // is imported, behind Setup, in the middle of the install. Marked as seen
+  // only when WSL has not recorded it yet.
+  if not RegValueExists(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Lxss', 'OOBEComplete') then
+    RegWriteDWordValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Lxss', 'OOBEComplete', 1);
   LogLine('Starting WSL once to check that it works. The first start after a restart can take a few minutes.');
   if not RunPreflight(False, Output) then
   begin
