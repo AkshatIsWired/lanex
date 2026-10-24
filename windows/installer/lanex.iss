@@ -218,6 +218,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Messages]
 ; Inno's stock text for an unsupported Windows version is generic; ours names
 ; the version and the reason.
+; Shown by Windows' uninstaller right after LanEx's own keep-or-remove question,
+; so it must not say "completely remove ... all of its components".
+ConfirmUninstall=Remove the LanEx app now? What happens to your projects, tools and PDKs follows the choice you just made.
 WindowsVersionNotSupported=LanEx needs Windows 10 version 21H2 (build 19044) or newer for WSLg desktop tools. Windows 11 x64 is recommended.
 ; The wizard's own words, in the language of the person we are installing for.
 WelcomeLabel2=This installs [name/ver], the chip design app, on your computer.%n%nLanEx runs in its own private Linux environment (WSL). Your other WSL distributions are not changed.%n%nSetup downloads the design tools and a chip process kit (PDK): a few GB, so a steady connection helps. If WSL is not on yet, Windows asks for permission and restarts once; Setup then carries on by itself.%n%nUninstalling keeps your projects unless you choose otherwise.
@@ -3799,6 +3802,13 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    // Setup's continuation shortcut lives in this folder, so Inno does not
+    // own it; remove it once it is empty.
+    RemoveDir(ExpandConstant('{userprograms}\{#AppGroupName}'));
+    Exit;
+  end;
   if CurUninstallStep <> usUninstall then
     Exit;
   StopLanExLauncher;
