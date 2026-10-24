@@ -28,6 +28,7 @@ from typing import Dict, List, Tuple
 # What each test file protects — the "implication" column. A file not listed
 # gets the generic regression note (still counted, never hidden).
 IMPLICATIONS: Dict[str, str] = {
+    "test_pdkfeed": "PDK files are fetched from the mirror first, resumed, and used only when their SHA-256 matches the pin.",
     "test_goldens": "Metric passthrough is byte/value-faithful; non-finite metrics never reach the wire raw (Fear A).",
     "test_failing_run": "A run that FAILED signoff (real DRC/LVS/timing) is never shown as tape-out ready (Fear A, known-bad).",
     "test_verify": "The signoff verdict stays 3-state — pass / fail / unknown never collapse to two.",

@@ -141,11 +141,12 @@ def test_provisioning_preserves_dns_and_uses_scoped_ip_fallbacks() -> None:
 def test_provisioning_checks_real_endpoints_and_protocol_statuses() -> None:
     script = (REPO / "windows" / "provision" / "provision.sh").read_text()
     for endpoint in (
-        "archive.ubuntu.com", "download.docker.com", "pypi.org/simple/",
-        "ghcr.io/v2/", "ciel/releases/latest",
+        "archive.ubuntu.com", "snapshot.ubuntu.com", "pypi.org/simple/",
+        "ghcr.io/v2/", "ciel-releases/releases", "files.pythonhosted.org",
     ):
         assert endpoint in script
-    assert "2??|3??|401|405" in script
+    # 403/404 from a host root still prove it answered (files.pythonhosted.org).
+    assert "2??|3??|401|403|404|405" in script
     assert "407" in script and "429" in script
 
 
