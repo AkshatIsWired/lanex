@@ -3925,6 +3925,8 @@ begin
     // Setup's continuation shortcut lives in this folder, so Inno does not
     // own it; remove it once it is empty.
     RemoveDir(ExpandConstant('{userprograms}\{#AppGroupName}'));
+    // The app folder stayed behind empty on the VM.
+    RemoveDir(ExpandConstant('{app}'));
     Exit;
   end;
   if CurUninstallStep <> usUninstall then
