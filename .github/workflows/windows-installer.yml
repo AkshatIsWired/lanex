@@ -40,8 +40,8 @@ on:
     tags: ["v*"]
   pull_request:
   schedule:
-    # Weekly, for the rootfs pin: releases.ubuntu.com deletes a point release's
-    # files when the next one ships, so a stale pin is a broken installer.
+    # Weekly, for the rootfs pin: releases.ubuntu.com moves a point release to
+    # old-releases.ubuntu.com some time after the next one ships.
     - cron: "0 7 * * 1"
   workflow_dispatch:
     inputs:
@@ -739,21 +739,23 @@ jobs:
           echo "upstream: $up_url"
           echo "          $up_sha"
 
+          # The pin is frozen on purpose (Ship line): a newer 24.04 image is
+          # news, not a failure. Setup tries our mirror, the point-release
+          # folder and old-releases in turn, so the pin is only broken when
+          # none of the upstream locations serves the pinned file.
           fail=0
-          if [ "$code" != "200" ]; then
-            echo "::error::the pinned Ubuntu image is gone (HTTP $code). Update RootfsUrl/RootfsSha256/RootfsFile in $iss to: $up_url ($up_sha)"
+          old_url="https://old-releases.ubuntu.com/releases/24.04.4/${pin_url##*/}"
+          old_code=$(curl -o /dev/null -sIL -w '%{http_code}' --max-time 60 "$old_url")
+          if [ "$code" != "200" ] && [ "$old_code" != "200" ]; then
+            echo "::error::the pinned Ubuntu image is at neither $pin_url (HTTP $code) nor $old_url (HTTP $old_code). Only our mirror copy (scripts/mirror_deps.py) is left."
             fail=1
           fi
           if [ "$pin_url" != "$up_url" ] || [ "$pin_sha" != "$up_sha" ]; then
-            echo "::error::Ubuntu shipped a newer 24.04 image. Update $iss to: $up_url ($up_sha) — and set RootfsFile to ${up_url##*/}"
-            fail=1
-          fi
-          if [ "$fail" = "0" ]; then
-            echo "pin matches upstream and is reachable — OK"
+            echo "::warning::Ubuntu ships a newer 24.04 image ($up_url). The pin stays until a deliberate dependency update."
           fi
           {
             echo "## Ubuntu rootfs pin"
-            echo "- pinned: \`$pin_url\` (HTTP $code)"
+            echo "- pinned: \`$pin_url\` (HTTP $code); old-releases HTTP $old_code"
             echo "- upstream: \`$up_url\`"
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$fail"
