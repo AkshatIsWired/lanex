@@ -364,6 +364,10 @@ var
   StepLabel: String;
   BaseProvisionedForEstimate: Boolean;
   EstimateReuseApplied: Boolean;
+  // An install that is already ready: its components are reused, so the
+  // Configure page counts only what a different choice would add.
+  ExistingReady, BaselineCaptured: Boolean;
+  BaselineDownloadMB, BaselineAppMB: Int64;
   // The .part file curl is writing (RunLogged shows its size as progress).
   DownloadWatchPath: String;
   DownloadWatchMB: Integer;
@@ -1508,17 +1512,39 @@ begin
     AppMB := InstalledMB + HeadroomMB + ExtractMB;
   end;
 
+  if ExistingReady then
+  begin
+    // The first call is the saved choice: what is installed now.
+    if not BaselineCaptured then
+    begin
+      BaselineDownloadMB := DownloadMB;
+      BaselineAppMB := AppMB;
+      BaselineCaptured := True;
+    end;
+    DownloadMB := DownloadMB - BaselineDownloadMB;
+    AppMB := AppMB - BaselineAppMB;
+    // The app itself, its Python packages and the update's rollback copy.
+    if DownloadMB < 150 then DownloadMB := 150;
+    if AppMB < 2048 then AppMB := 2048;
+    TempMB := 0;
+  end;
+
   EstimateDownloadMB := DownloadMB;
   EstimateInstalledMB := InstalledMB;
   RequiredAppMB := AppMB;
   RequiredTempMB := TempMB;
 
-  if EstimateDownloadMB >= 1024 then
+  if ExistingReady and (EstimateDownloadMB <= 150) then
+    SummaryDownloadLabel.Caption := 'Download required: little; what you have is reused and only changed parts are fetched'
+  else if EstimateDownloadMB >= 1024 then
     SummaryDownloadLabel.Caption := 'Download required: about ' + IntToStr(EstimateDownloadMB div 1024) + '.' + IntToStr((EstimateDownloadMB mod 1024) * 10 div 1024) + ' GB (' + IntToStr(EstimateDownloadMB) + ' MB)'
   else
     SummaryDownloadLabel.Caption := 'Download required: about ' + IntToStr(EstimateDownloadMB) + ' MB';
 
-  if RequiredAppMB >= 1024 then
+  if ExistingReady then
+    SummaryDiskLabel.Caption := 'Additional disk space: about '
+      + IntToStr(RequiredAppMB div 1024) + '.' + IntToStr((RequiredAppMB mod 1024) * 10 div 1024) + ' GB'
+  else if RequiredAppMB >= 1024 then
     SummaryDiskLabel.Caption := 'Disk space required: about ' + IntToStr(RequiredAppMB div 1024) + '.' + IntToStr((RequiredAppMB mod 1024) * 10 div 1024) + ' GB'
   else
     SummaryDiskLabel.Caption := 'Disk space required: about ' + IntToStr(RequiredAppMB) + ' MB';
@@ -1914,6 +1940,7 @@ begin
     if LoadStringFromFile(StateFile, RawState) then
     begin
       StateContent := UTF8Decode(RawState);
+      ExistingReady := ExtractJsonStringValue(StateContent, 'phase') = 'ready';
       SavedProfile := ExtractJsonStringValue(StateContent, 'profile');
       if SavedProfile = 'minimal' then
         ProfileRadioMinimal.Checked := True
@@ -3514,6 +3541,7 @@ begin
         Result := False;
         Exit;
       end;
+      if ExistingReady then CalculateEstimatesFast;
       if not CheckSelectionSpace(Failure) then
       begin
         MsgBox(Failure + #13#10#13#10 +
