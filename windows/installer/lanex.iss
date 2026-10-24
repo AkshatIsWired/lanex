@@ -373,6 +373,7 @@ var
   ExistingReady, BaselineCaptured: Boolean;
   // Preparation ended with a message: the Preparing page must show it.
   PrepareResultShown: Boolean;
+  UninstallMode, UninstallExportFile: String;
   // Why the elevated feature step failed, in Windows' own words.
   FeatureFailure: String;
   BaselineDownloadMB, BaselineAppMB: Int64;
@@ -3779,6 +3780,9 @@ begin
   // Only the launcher of this installation (by path); the distro is stopped by
   // the worker when it is removed, and left alone when it is kept.
   Exec('powershell.exe', '-NoProfile -WindowStyle Hidden -Command "Get-Process -Name LanEx -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ' + PSQuote(ExpandConstant('{app}') + '\*') + ' } | Stop-Process -Force"', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  // The app window is a browser in app mode with its own profile; it stayed
+  // open on a dead page after the launcher was stopped.
+  Exec('powershell.exe', '-NoProfile -WindowStyle Hidden -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ' + PSQuote('*' + AppDataRoot + '\app-profile*') + ' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
 function KeptDataText: String;
@@ -3793,31 +3797,27 @@ begin
     + 'instead, see "Uninstalling" in the LanEx README (one wsl command and one folder).';
 end;
 
+// The questions are asked here, but nothing is done until Windows' own "Remove
+// the LanEx app now?" confirmation (ConfirmUninstall) has been answered Yes:
+// the environment was once removed first, and No at that prompt then left
+// the app without its environment.
 function InitializeUninstall(): Boolean;
 var
   Choice: Integer;
-  Output, ExportFile, Snippet: String;
 begin
   Result := False;
+  UninstallMode := '';
+  UninstallExportFile := '';
   Choice := MsgBox('Keep your LanEx projects, tools and PDKs? (Recommended)' + #13#10#13#10
     + 'Yes: remove the LanEx app and its shortcuts, keep everything else, so '
     + 'installing again takes minutes instead of downloading gigabytes.' + #13#10#13#10
-    + 'No: choose between a backup and removing everything.' + #13#10#13#10
+    + 'No: choose between a backup and removing the LanEx environment.' + #13#10#13#10
     + 'Cancel: do not uninstall.',
     mbConfirmation, MB_YESNOCANCEL or MB_DEFBUTTON1);
   if Choice = IDCANCEL then Exit;
-  StopLanExLauncher;
-
   if Choice = IDYES then
   begin
-    if FileExists(StateFile) then
-    begin
-      if not UninstallWorker('-Action ClearResume -StatePath ' + PSQuote(StateFile), Output) then
-        LogLine('WARNING: could not clear continuation hook during uninstall: ' + Output);
-    end;
-    MsgBox('The LanEx app and its shortcuts will be removed.' + #13#10#13#10 + KeptDataText
-      + #13#10#13#10 + 'Your other WSL distributions and Windows features are not changed.',
-      mbInformation, MB_OK);
+    UninstallMode := 'keep';
     Result := True;
     Exit;
   end;
@@ -3831,25 +3831,10 @@ begin
   begin
     // Not Documents: OneDrive often syncs it, and this file is several GB.
     ForceDirectories(AppDataRoot + '\backups');
-    ExportFile := AppDataRoot + '\backups\LanEx-environment-backup.tar';
-    if not GetSaveFileName('Save a backup of the LanEx environment (several GB)', ExportFile,
+    UninstallExportFile := AppDataRoot + '\backups\LanEx-environment-backup.tar';
+    if not GetSaveFileName('Save a backup of the LanEx environment (several GB)', UninstallExportFile,
         AppDataRoot + '\backups', 'WSL tar archive (*.tar)|*.tar', 'tar') then Exit;
-    if not UninstallWorker('-Action ExportAppliance -StatePath ' + PSQuote(StateFile)
-        + ' -ExportPath ' + PSQuote(ExportFile), Output) then
-    begin
-      MsgBox('The backup did not complete, so uninstall stopped and all LanEx data '
-        + 'was kept.' + #13#10#13#10 + Output, mbError, MB_OK);
-      Exit;
-    end;
-    if not UninstallWorker('-Action ClearResume -StatePath ' + PSQuote(StateFile), Output) then
-    begin
-      MsgBox('The backup completed, but LanEx could not clear its continuation hook. '
-        + 'Uninstall stopped; the environment and the backup are kept.' + #13#10#13#10
-        + Output, mbError, MB_OK);
-      Exit;
-    end;
-    MsgBox('Backup saved to:' + #13#10 + ExportFile + #13#10#13#10 + KeptDataText,
-      mbInformation, MB_OK);
+    UninstallMode := 'backup';
     Result := True;
     Exit;
   end;
@@ -3860,18 +3845,48 @@ begin
       + 'Projects in ' + ExpandConstant('{%USERPROFILE}') + '\LanEx-Projects are NOT deleted. '
       + 'Your other WSL distributions and Windows features are not changed.',
       mbError, MB_YESNO or MB_DEFBUTTON2) <> IDYES then Exit;
+  UninstallMode := 'remove';
+  Result := True;
+end;
+
+// Runs the choice made in InitializeUninstall, after Windows' confirmation and
+// before the app's files go. Every failure keeps the environment.
+procedure RunUninstallChoice;
+var
+  Output, Snippet: String;
+begin
+  if (UninstallMode = 'keep') or (UninstallMode = 'backup') then
+  begin
+    if UninstallMode = 'backup' then
+    begin
+      if UninstallWorker('-Action ExportAppliance -StatePath ' + PSQuote(StateFile)
+          + ' -ExportPath ' + PSQuote(UninstallExportFile), Output) then
+        MsgBox('Backup saved to:' + #13#10 + UninstallExportFile, mbInformation, MB_OK)
+      else
+        MsgBox('The backup did not complete. Nothing was deleted: the LanEx environment '
+          + 'is kept, and only the app is removed.' + #13#10#13#10 + Output, mbError, MB_OK);
+    end;
+    if FileExists(StateFile) and
+       not UninstallWorker('-Action ClearResume -StatePath ' + PSQuote(StateFile), Output) then
+      LogLine('WARNING: could not clear continuation hook during uninstall: ' + Output);
+    MsgBox('The LanEx app and its shortcuts are being removed.' + #13#10#13#10 + KeptDataText
+      + #13#10#13#10 + 'Your other WSL distributions and Windows features are not changed.',
+      mbInformation, MB_OK);
+    Exit;
+  end;
+  if UninstallMode <> 'remove' then
+    Exit;
   Snippet := '-Action RemoveAppliance -StatePath ' + PSQuote(StateFile)
     + ' -OwnedDataRoot ' + PSQuote(AppDataRoot)
     + ' -ConfirmedInstallId $((Get-Content -LiteralPath ' + PSQuote(StateFile)
     + ' -Raw | ConvertFrom-Json).installId)';
-  if not UninstallWorker(Snippet, Output) then
-  begin
-    MsgBox('Removing the LanEx environment did not complete. Nothing more was deleted, '
-      + 'so the problem can be looked at safely.' + #13#10#13#10
-      + Output, mbError, MB_OK);
-    Exit;
-  end;
-  Result := True;
+  if UninstallWorker(Snippet, Output) then
+    // What the worker leaves: the app window's browser profile.
+    DelTree(AppDataRoot, True, True, True)
+  else
+    MsgBox('Removing the LanEx environment did not complete, so it was kept and nothing '
+      + 'more was deleted; only the app is removed. To remove the environment yourself, '
+      + 'see "Uninstalling" in the LanEx README.' + #13#10#13#10 + Output, mbError, MB_OK);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -3886,6 +3901,7 @@ begin
   if CurUninstallStep <> usUninstall then
     Exit;
   StopLanExLauncher;
+  RunUninstallChoice;
   // Written by code at install time, so Inno's uninstall log does not know them.
   DeleteFile(ExpandConstant('{app}\appliance.json'));
   DeleteFile(ExpandConstant('{userdesktop}\{#AppName}.lnk'));

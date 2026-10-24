@@ -828,7 +828,10 @@ def test_m6_update_rollback_and_uninstall_are_narrowly_scoped() -> None:
     assert "Remove-Item -LiteralPath ([IO.Path]::GetFullPath($OwnedDataRoot)) -Recurse" not in worker
     assert "legacy-generic-profile" not in worker
     assert "InitializeUninstall" in inno and "MB_DEFBUTTON1" in inno
-    assert "The backup did not complete, so uninstall stopped" in inno
+    # Nothing is done before Windows' own confirmation; a failure keeps the environment.
+    assert "The backup did not complete. Nothing was deleted" in inno
+    init = inno[inno.index("function InitializeUninstall"):inno.index("procedure RunUninstallChoice")]
+    assert "UninstallWorker" not in init
     assert "CompleteUpdateCheckpoint(True)" in inno
 
 
