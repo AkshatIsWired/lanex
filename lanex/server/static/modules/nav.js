@@ -46,8 +46,20 @@ const FOCUS = {
     await m.renderCells({ pdk: p.pdk, scl: p.scl, cell: p.cell });
     document.getElementById("cl-library")?.scrollIntoView({ block: "start" });
   },
-  pipeline: (p) => {
-    if (p.pane) document.querySelector('.side-pane-tab[data-itab="' + p.pane + '"]')?.click();
+  pipeline: async (p) => {
+    if (!p.step && !p.stage) return;
+    const m = await import("./flow.js");
+    await m.revealInFlow(p);
+  },
+  layout: async (p) => {
+    if (!p.source) return;
+    const m = await import("./layout.js");
+    await m.revealSource(p.source);
+  },
+  setup: async (p) => {
+    if (!p.setting) return;
+    const m = await import("./config.js");
+    await m.revealSetting(p.setting);
   },
   verify: async (p) => {
     if (!p.check) return;
@@ -71,7 +83,7 @@ function here() {
 function describe(e) {
   const p = e.params || {};
   const sec = p.section && document.querySelector('#sec-' + e.tab + ' [data-jump="' + p.section + '"]');
-  const what = p.cell || p.rel || p.check || p.label || (sec ? sec.textContent.trim() : "");
+  const what = p.cell || p.rel || p.check || p.setting || p.step || p.label || (sec ? sec.textContent.trim() : "");
   return tabLabel(e.tab) + (what ? " · " + what : "");
 }
 
@@ -117,9 +129,11 @@ function show(entry, { fresh }) {
   const p = entry.params || {};
   const focus = FOCUS[entry.tab];
   const done = Promise.resolve(focus && fresh ? focus(p) : null).catch((e) => console.error("nav focus", e));
-  if (fresh && p.section) {
-    done.then(() => revealSection(entry.tab, p.section));
-  } else if (changed && !(fresh && (p.cell || p.check || p.rel))) {
+  // A focus handler may answer with the id of the element it found (a setting's
+  // row): that is held in view like a section while the page fills in.
+  if (fresh && (p.section || p.setting)) {
+    done.then((id) => revealSection(entry.tab, p.section || id));
+  } else if (changed && !(fresh && (p.cell || p.check || p.rel || p.setting || p.step || p.stage))) {
     restoreScroll(!fresh && _entryScroll[entry.id] != null ? _entryScroll[entry.id] : (_scroll[entry.tab] || 0));
   }
 }
@@ -224,12 +238,17 @@ export function setupNav() {
     e.preventDefault();
     if (e.key === "ArrowLeft") history.back(); else history.forward();
   });
-  // Any [data-go="tab"] (and data-go-section="id") is a link to that page.
+  // Any [data-go="tab"] is a link to that page; data-go-<name>="value" adds a
+  // param (data-go-section, -setting, -source, -step, -stage, -check).
   document.addEventListener("click", (e) => {
     const a = e.target.closest && e.target.closest("[data-go]");
     if (!a || a.disabled) return;
     e.preventDefault();
-    go(a.dataset.go, a.dataset.goSection ? { section: a.dataset.goSection } : {});
+    const params = {};
+    for (const [k, v] of Object.entries(a.dataset)) {
+      if (k.length > 2 && k.startsWith("go")) params[k[2].toLowerCase() + k.slice(3)] = v;
+    }
+    go(a.dataset.go, params);
   });
   const b = document.getElementById("nav-back");
   if (b) {

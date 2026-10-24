@@ -28,7 +28,7 @@ function tab(name) {
 function actions() {
   return [
     { id: "go-setup", title: "Go to Setup", hint: "tab", icon: icon("folder"), run: () => tab("setup") },
-    { id: "go-pipeline", title: "Go to Pipeline", hint: "tab", icon: icon("flow"), run: () => tab("pipeline") },
+    { id: "go-pipeline", title: "Go to Flow", hint: "tab", icon: icon("flow"), run: () => tab("pipeline") },
     { id: "go-runs", title: "Go to Runs", hint: "tab", icon: icon("clock"), run: () => tab("runs") },
     { id: "go-tools", title: "Go to Tools", hint: "tab", icon: icon("tools"), run: () => tab("tools") },
     { id: "go-analytics", title: "Go to Analytics", hint: "tab", icon: icon("chart"), run: () => tab("analytics") },

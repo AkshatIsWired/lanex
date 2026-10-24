@@ -28,19 +28,6 @@ export function setupTabs() {
     tab.setAttribute("tabindex", active ? "0" : "-1");
     tab.addEventListener("keydown", (e) => onTabKey(e, tabs, tab));
   }
-  // Side-pane tabs (right) for Live Logs / Metrics / Advisor.
-  document.querySelectorAll(".side-pane-tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      const id = tab.dataset.itab;
-      const tabset = tab.parentElement;
-      tabset.querySelectorAll(".side-pane-tab").forEach((t) =>
-        t.classList.toggle("side-pane-tab-active", t === tab),
-      );
-      document.querySelectorAll(".side-pane-section").forEach((p) =>
-        p.classList.toggle("side-pane-section-active", p.id === "spane-" + id),
-      );
-    });
-  });
 }
 
 // Arrow / Home / End keyboard navigation across the tablist.

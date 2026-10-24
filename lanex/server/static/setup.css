@@ -757,3 +757,11 @@ body:not(.theme-light) .pf-node.is-ok .pf-state { color: var(--met3); }
 .pm-danger { color: var(--fail); }
 .pm-danger:hover { border-color: var(--fail); color: var(--fail); }
 .project-more { font-size: 14px; color: var(--text-muted); }
+
+/* A setting a link pointed at (Flow's "Change in Settings", nav.js { setting }). */
+.var-row.is-flash { animation: var-flash 2.4s var(--ease-out); border-radius: var(--r-sm); }
+@keyframes var-flash {
+  0%, 35% { box-shadow: 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  100% { box-shadow: 0 0 0 2px transparent; background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .var-row.is-flash { animation: none; box-shadow: 0 0 0 2px var(--accent); } }

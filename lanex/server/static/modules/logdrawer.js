@@ -1,5 +1,5 @@
 // logdrawer.js — the Logs panel: streamed output from work that happens outside
-// the Pipeline (tool / PDK / GDS3D installs, removals). It rises from the status
+// a run (tool / PDK / GDS3D installs, removals, the engine). It rises from the status
 // line, and like every overlay it closes when you click anywhere else or press
 // Esc. The status-line "Logs" button reopens it; the last output stays until
 // cleared, and a count shows how many lines arrived while it was closed.

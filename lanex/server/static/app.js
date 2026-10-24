@@ -4,7 +4,7 @@ import { api, sse, fmt } from "./modules/api.js";
 import { state, safeStorage } from "./modules/state.js";
 import { setupTabs } from "./modules/tabs.js";
 import { setupNav, startAt, go } from "./modules/nav.js";
-import { noteRunStarted, noteRunFinished, loadRuns, onContext } from "./modules/context.js";
+import { noteRunStarted, noteRunFinished } from "./modules/context.js";
 import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkPill, paintOnboardChecklist } from "./modules/setup.js";
 import { setupTheme, toggleTheme } from "./modules/theme.js";
 import { setupHotkeys } from "./modules/hotkeys.js";
@@ -14,16 +14,12 @@ import { setupZoom } from "./modules/zoom.js";
 import { setupPalette, openPalette } from "./modules/palette.js";
 import { setupRunMode } from "./modules/runmode.js";
 import { renderConfig } from "./modules/config.js";
-import { renderRuntimeline, noteStepEvent, resetTimeline, notePhase } from "./modules/runtimeline.js";
+import { renderFlow, flowEvent } from "./modules/flow.js";
 import { runStarted, runProgress, runFinished } from "./modules/runend.js";
 import { renderRuns } from "./modules/runs.js";
 import { renderTools, updatePullProgress, finishPull } from "./modules/tools.js";
-import { renderAdvisor } from "./modules/advisor.js";
-import { renderTimingAdvisor } from "./modules/timingAdvisor.js";
 import { renderAnalyticsFull } from "./modules/analytics.js";
-import { renderLogs, setupLogs } from "./modules/logs.js";
-import { setupStepOutput } from "./modules/stepoutput.js";
-import { populateReportsList, setupViolations } from "./modules/violations.js";
+import { renderLogs } from "./modules/logs.js";
 import { help } from "./modules/help.js";
 import { toast } from "./modules/toast.js";
 import { setupWizard } from "./modules/wizard.js";
@@ -92,12 +88,9 @@ async function boot() {
     import("./modules/logdrawer.js").then((d) => d.setupLogDrawer()).catch(() => {});
     setupPalette();
     setupRunMode();
-    setupLogs();
-    setupStepOutput();
     setupSetup();
     setupShell();
     setupHotkeys();
-    setupViolations();
     setupWizard();
     setupLearn();
     setupFullscreen();
@@ -111,8 +104,6 @@ async function boot() {
     document.getElementById("tools-icon")?.addEventListener("click", () => go("tools", {}, { link: false }));
     document.getElementById("palette-btn")?.addEventListener("click", openPalette);
     document.getElementById("theme-btn")?.addEventListener("click", toggleTheme);
-    // The "Parse" button is wired once by setupViolations() (smart kind
-    // detection). The old inline handler here double-bound it — removed.
 
     try {
       const health = await api.health();
@@ -138,8 +129,6 @@ async function boot() {
     await populatePdkPicker();
     setStatus("rendering panels…");
     renderConfig();
-    renderRuntimeline();
-    renderTimingAdvisor();
 
     // Subscribe to the event stream. SSE is optional; don't block boot.
     try {
@@ -148,7 +137,6 @@ async function boot() {
     try {
       sse.on(handle);
     } catch (_e) { /* ignore */ }
-    renderLogs.setStepsInfo(state.steps);
 
     if (state.steps.length) {
       state.selectedStepId = state.steps[0].id;
@@ -211,7 +199,7 @@ async function boot() {
   }
 }
 
-// Isolate one view's render from another: a throw in renderRuntimeline must not
+// Isolate one view's render from another: a throw in one page's render must not
 // skip renderRuns for the same event. (The SSE loop itself is
 // already protected by api._broadcast's per-handler try/catch.)
 function R(label, fn) {
@@ -232,23 +220,30 @@ function handle(ev) {
       // the previous run's progress. Seeding pending here fixes that immediately.
       state.stepStatuses = {};
       state.lastFlow = null;
+      state.paused = false;
       for (const s of ev.step_graph) state.stepStatuses[s.id] = s.status || "pending";
-      resetTimeline();        // a fresh run is starting; clear old step timings
-      R("runtimeline", renderRuntimeline);
+      resetTimings();         // a fresh run is starting; clear old step timings
+      renderLogs.clear();
       R("runs", renderRuns);  // surface the just-created run dir immediately
-      // The user stays on their page (setup.js shows Pipeline only when the run
-      // came from Setup's Run flow or is their first). Pipeline's console shows
-      // the live log when they get there.
-      document.querySelector('.side-pane-tab[data-itab="logs"]')?.click();
+      // setup.js shows Flow when a run starts, unless the Run menu says to stay
+      // on the page you're on.
       noteRunStarted();
       runStarted(ev.tag);
+      flowEvent(ev);
     }
-    if (ev.message) renderLogs.append(ev);
+    if (ev.message) {
+      renderLogs.append(ev);
+      // Step by step: the runner waits for "Next step".
+      if (/^paused/.test(ev.message)) { state.paused = true; flowEvent(ev); }
+    }
   } else if (ev.type === "phase") {
     // Container pre-step milestone — show the "preparing" hero with a timer.
     state.status.running = true;
-    notePhase(ev.label || "Preparing…");
+    if (!state.prepStart) state.prepStart = Date.now();
+    state.prepPhase = ev.label || "Preparing…";
+    if (ev.tag) state.liveTag = ev.tag;
     if (ev.label) renderLogs.append({ type: "log", payload: { message: "• " + ev.label } });
+    flowEvent(ev);
   } else if (ev.type === "log") {
     renderLogs.append(ev);
   } else if (ev.type === "dse_config_started") {
@@ -257,9 +252,10 @@ function handle(ev) {
     // the next container spins up (its step_graph arrives a few seconds later).
     for (const p of (state.pipeline || [])) state.stepStatuses[p.id] = "pending";
     state.status.running = true;
-    resetTimeline();
-    notePhase("DSE config " + (((ev.index || 0) + 1)) + "/" + (ev.total || "?") + ": preparing…");
-    renderRuntimeline();
+    resetTimings();
+    state.prepStart = Date.now();
+    state.prepPhase = "DSE config " + (((ev.index || 0) + 1)) + "/" + (ev.total || "?") + ": preparing…";
+    flowEvent(ev);
   } else if (ev.type === "manual_started" || ev.type === "manual_line" || ev.type === "manual_done") {
     import("./modules/manual.js").then((m) => m.onManualEvent(ev));
   } else if (ev.type === "installer_result") {
@@ -268,9 +264,6 @@ function handle(ev) {
     // logs the guidance, chains the engine→image pull, and re-probes the tab.
     import("./modules/tools.js").then((m) => m.onInstallerResult && m.onInstallerResult(ev));
   } else if (ev.type === "installer_line" || ev.type === "installer_started" || ev.type === "installer_done" || ev.type === "installer_error" || ev.type === "installer_info") {
-    if (ev.line) {
-      renderLogs.append({ type: "installer_line", payload: { message: ev.line } });
-    }
     const isImagePull = ev.key === "container:image";
     if (isImagePull && ev.type === "installer_line") {
       updatePullProgress(ev.line);   // heartbeat on the runtime card
@@ -309,9 +302,6 @@ function handle(ev) {
         // The pull owns the runtime card; finishPull re-probes + reports.
         finishPull(ev.type === "installer_done" ? (ev.rc ?? 0) : (typeof ev.rc === "number" ? ev.rc : 1));
       } else {
-        if (ev.type === "installer_done" && ev.rc !== undefined) {
-          logInstallerLine("→ installer rc=" + ev.rc + " (recheck Tools tab)");
-        }
         renderTools();
         // A finished PDK install changes what Setup can offer — re-fetch the
         // PDK list and repopulate the picker so the new PDK appears without a
@@ -330,7 +320,7 @@ function handle(ev) {
     };
     paintProgress(Math.min(ev.done || 0, ev.total || 0), ev.total || 0);
     runProgress();
-    R("runtimeline", renderRuntimeline);
+    flowEvent(ev);
   } else if (ev.type === "run_status_resync") {
     // The SSE stream dropped and reconnected past events the server's ring had
     // already evicted (e.g. laptop sleep during a verbose flow) — our step
@@ -345,7 +335,9 @@ function handle(ev) {
       }
     }
     if (typeof ev.running === "boolean") state.status.running = ev.running;
-    R("runtimeline", renderRuntimeline);
+    if (typeof ev.paused === "boolean") state.paused = ev.paused;
+    if (ev.run_dir) state.liveTag = String(ev.run_dir).split(/[\\/]/).pop();
+    flowEvent(ev);
     R("runs", renderRuns);
   } else if (
     ev.type === "step_started" ||
@@ -362,20 +354,14 @@ function handle(ev) {
     };
     if (id) {
       state.stepStatuses[id] = statusMap[ev.type];
-      noteStepEvent(ev.type, id);
+      noteTiming(ev.type, id);
+      // What the run prints next belongs to this step (Flow shows it live).
+      if (ev.type === "step_started") { renderLogs.markStep(id); state.paused = false; state.prepPhase = null; }
       if (ev.tag) state.liveTag = ev.tag;
       runProgress();
-      // Drop a navigable divider into the Live Logs at each step's start so the
-      // log can later be jumped to that tool's instantiation point (issue #8b).
-      if (ev.type === "step_started") {
-        renderLogs.markStep(id, ev.long_name || ev.label || ev.payload?.long_name);
-      }
-      R("runtimeline", renderRuntimeline);
+      flowEvent(ev);
     }
-    if (ev.type === "step_failed") {
-      // Told once, when the run ends, with the reason (runend.js).
-      renderAdvisor.pushFromAlert({ payload: { message: ev.message || "" } });
-    }
+    // A failed step is told once, when the run ends, with the reason (runend.js).
   } else if (ev.type === "flow_done") {
     // Reset run state + re-enable the Run button FIRST, before any rendering.
     // A throw in one of the renders below must never leave the button disabled
@@ -404,9 +390,9 @@ function handle(ev) {
         const total = graph.length || state.runProgress?.total || 0;
         if (total) state.runProgress = { done: total, total, current: "" };
       }
-      renderAdvisorAndRefreshMetrics();
+      refreshMetrics();
       renderRuns();
-      renderRuntimeline();
+      flowEvent(ev);
       // Results pages follow the new run if the user was on the newest one.
       noteRunFinished(ev.tag).catch(() => {});
       paintOnboardChecklist();
@@ -419,20 +405,29 @@ function handle(ev) {
   }
 }
 
-async function renderAdvisorAndRefreshMetrics() {
+// The newest run's metrics, for the watch list (watch.js).
+async function refreshMetrics() {
   try {
     state.runs = await api.runs();
-    const target = state.selectedRunTag || (state.runs[0] && state.runs[0].tag);
+    const target = state.runs[0] && state.runs[0].tag;
     if (!target) return;
     const view = await api.run(target);
     state.metrics = view.metrics?.values || {};
-    populateReportsList(state.designDir, target);
-    renderTimingAdvisor();
   } catch (_e) {}
 }
 
-function logInstallerLine(line) {
-  renderLogs.append({ type: "installer_line", payload: { message: line } });
+// Per-step wall time for the live run (Flow shows it until the step's own
+// runtime.txt is written).
+function resetTimings() {
+  state.stepTiming = {};
+  state.prepPhase = null;
+  state.prepStart = null;
+}
+function noteTiming(type, id) {
+  state.stepTiming = state.stepTiming || {};
+  const rec = state.stepTiming[id] || (state.stepTiming[id] = {});
+  if (type === "step_started") { rec.start = Date.now(); rec.end = null; }
+  else { if (!rec.start) rec.start = Date.now(); rec.end = Date.now(); }
 }
 
 // A privileged install is waiting for a password it can only read from the
@@ -569,16 +564,9 @@ const RENDER = {
     import("./modules/analytics.js").then((m) => m.renderAnalyticsFull());
     import("./modules/compare.js").then((m) => m.renderCompare());
     import("./modules/watch.js").then((m) => m.renderWatch());
-    // The "Advisor & reports" card (failure advisor + DRC/LVS report parser)
-    // used to populate only on flow_done, so after a reload it sat empty. Refill
-    // it for the currently-selected run whenever Analytics is opened.
-    const tag = state.selectedRunTag || (state.runs && state.runs[0] && state.runs[0].tag);
-    if (tag && state.designDir) populateReportsList(state.designDir, tag);
-    renderTimingAdvisor();
   },
   runs: () => renderRuns(),
-  // Idle, Pipeline names the run the results pages show.
-  pipeline: () => loadRuns().then(() => R("runtimeline", renderRuntimeline)),
+  pipeline: () => renderFlow(),
   ide: () => import("./modules/ide/main.js").then((m) => m.initIde({ designDir: state.designDir, runMode: state.runMode })),
   layout: () => import("./modules/layout.js").then((m) => m.renderLayout()),
   verify: () => import("./modules/verify.js").then((m) => m.renderVerify()),
@@ -586,7 +574,6 @@ const RENDER = {
   cells: () => import("./modules/cells.js").then((m) => m.renderCells()),
   manual: () => import("./modules/manual.js").then((m) => m.renderManual()),
 };
-onContext(() => { if (!state.status.running) R("runtimeline", renderRuntimeline); });
 document.addEventListener("g:tab_activated", (e) => {
   const r = RENDER[e.detail?.tab];
   if (r) Promise.resolve().then(r).catch((err) => console.error("render " + e.detail.tab, err));

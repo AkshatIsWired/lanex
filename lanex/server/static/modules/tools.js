@@ -2,7 +2,11 @@
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
-import { renderLogs } from "./logs.js";
+// Tool work (installs, removals, the engine) is told in the Logs panel, with
+// the install output it belongs to; the run's own log is Flow's.
+const renderLogs = {
+  append: (e) => import("./logdrawer.js").then((d) => d.appendDrawer((e.payload || e).message || "")).catch(() => {}),
+};
 import { toast } from "./toast.js";
 import { confirmDialog } from "./dialog.js";
 import { icon } from "./icons.js";

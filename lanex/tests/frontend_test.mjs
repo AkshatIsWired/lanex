@@ -661,7 +661,7 @@ check("SSE: reconnect past ring eviction re-hydrates from run/status (N3)", () =
   assert.ok(i >= 0, "app.js has no run_status_resync branch");
   const branch = appSrc.slice(i, i + 1100);
   assert.match(branch, /step_statuses/, "resync branch ignores step_statuses");
-  assert.match(branch, /renderRuntimeline/, "resync branch does not repaint the timeline");
+  assert.match(branch, /flowEvent\(ev\)/, "resync branch does not repaint Flow");
 });
 
 // ------------------------------------------------ partial-sim badge (N2)
@@ -751,7 +751,9 @@ check("decision surfaces never render a rounded metric without the raw escape", 
   // Static invariant: the files that round a metric a user makes a tape-out call
   // on (compare grid, DSE sweep grid, timing-closure advisor) must wire the raw
   // escape. Losing titleAttr here silently re-opens the precision hole (gap #2).
-  for (const f of ["compare.js", "dse.js", "timingAdvisor.js"]) {
+  // (Flow's report card carries the exact value in its own title: see the
+  // "run report card" check.)
+  for (const f of ["compare.js", "dse.js"]) {
     const src = readFileSync(resolve(MOD, f), "utf8");
     assert.match(src, /fmt\.metric\(/, `${f}: precondition — it does round a metric`);
     assert.match(src, /titleAttr\(/, `${f}: rounds a metric but carries no raw escape`);
@@ -1255,19 +1257,48 @@ check("links: every page change goes through nav.go(), none clicks the rail", ()
   assert.ok(!readdirSync(MOD).includes("runscope.js"), "runscope.js merged into context.js");
 });
 
-check("keys: number keys follow the rail, Pipeline never claims a run that did not happen", () => {
+check("keys: number keys follow the rail, Flow never claims a run that did not happen", () => {
   const hk = readFileSync(resolve(MOD, "hotkeys.js"), "utf8");
   assert.ok(/railKeys\(\)/.test(hk) && !/TAB_KEYS/.test(hk), "number keys come from the rail order");
-  const rt = readFileSync(resolve(MOD, "runtimeline.js"), "utf8");
-  assert.ok(!/Preview tab/.test(rt), "Pipeline still points at the Preview tab");
-  assert.ok(!/if \(!running && !failed\) done = total/.test(rt), "an idle Pipeline must not count every step as done");
+  const fl = readFileSync(resolve(MOD, "flow.js"), "utf8");
+  assert.ok(!/Preview tab/.test(fl), "Flow points at the old Preview tab");
+  assert.ok(!/All " \+ total \+ " steps done/.test(fl), "an idle Flow must not count every step as done");
+  assert.ok(/stripIdle/.test(fl) && /FS\.STAGES/.test(fl), "with no run, Flow shows the seven stages");
   const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
   assert.ok(!/Preview tab/.test(html), "index.html still points at the Preview tab");
-  for (const id of ["analytics-runbar", "verify-runbar", "layout-runbar"]) assert.ok(html.includes('id="' + id + '"'), id + " missing");
+  for (const id of ["analytics-runbar", "verify-runbar", "layout-runbar", "flow-runbar"]) assert.ok(html.includes('id="' + id + '"'), id + " missing");
 });
 
-// ---------- the run moment: one summary, one verdict --------------------------------
+// ---------- P1 Flow: the run moment, the reason first, one verdict ------------------
+const LV = await import(toUrl(resolve(MOD, "logview.js"))).catch(() => null);
 const RC = await import(toUrl(resolve(MOD, "reportcard.js")));
+check("log viewer: errors and warnings are found the way the tools print them", () => {
+  assert.ok(LV, "logview.js imports without a DOM");
+  const k = LV.lineKind;
+  assert.equal(k("[ERROR GPL-0301] Utilization 207.290 % exceeds 100%."), "err");
+  assert.equal(k("[15:43:11] ERROR    [GPL-0301] Utilization 207.290 % exceeds"), "err");
+  assert.equal(k("Error: gpl.tcl, 82 GPL-0301"), "err");
+  assert.equal(k("[WARNING GPL-0302] Target density 0.1200 is too low"), "warn");
+  assert.equal(k("[INFO GPL-0019] Utilization:  207.290 %"), "");
+  assert.equal(k("errors: 0"), "", "a count of zero errors is not an error line");
+  // LibreLane's console rules a line with each step's name: the output marks it.
+  assert.equal(k("──────────────── Static Timing Analysis (Mid-PnR) ────────────────"), "head");
+  assert.equal(k("----------------------------------------------------------"), "", "a plain dashed line is not a step");
+});
+
+check("flow page: every step stays in view, Run shows the run, one screen", () => {
+  const flow = readFileSync(resolve(MOD, "flow.js"), "utf8");
+  // The steps are one list under stage headings: nothing folds them away.
+  assert.ok(!/aria-expanded|smallOpen|checks and small steps/.test(flow), "Flow folds steps again");
+  assert.ok(/scrollListTo\(F\.rows\.get\(running\.id\)/.test(flow), "the list no longer follows the running step");
+  // Pressing Run opens Flow unless the user turned it off in the Run menu.
+  const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+  assert.ok(/ll\.showFlowOnRun"\) !== "0"/.test(setup), "a run start no longer shows Flow by default");
+  const css = readFileSync(resolve(MOD, "..", "flow.css"), "utf8");
+  assert.ok(/#sec-pipeline\.section-active \{[^}]*min-height: 100%/.test(css), "Flow is no longer one screen tall");
+  assert.ok(/\.fl-steps-scroll \{[^}]*overflow: auto/.test(css), "the step list must scroll inside its pane");
+});
+
 check("run report card: one summary for the toast, the title and the notification", () => {
   assert.equal(RC.fmtDur(4.12), "4.1 s");
   assert.equal(RC.fmtDur(44), "44 s");
@@ -1312,6 +1343,20 @@ check("one verdict: Verify and Flow say 'Clean', never 'tape-out ready'", () => 
   assert.match(blocked.sub, /finished every step, then failed the run on Setup, Hold/);
 });
 
+check("flow: what Flow replaced is gone, and runs no longer read From/To/Skip fields", () => {
+  for (const f of ["runtimeline.js", "stepoutput.js", "advisor.js", "timingAdvisor.js", "violations.js"]) {
+    assert.ok(!readdirSync(MOD).includes(f), f + " should be gone");
+  }
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  for (const id of ["run-tag-input", "run-from", "run-to", "run-skip", "pipe-console", "log-search", "btn-cancel-2"]) {
+    assert.ok(!html.includes('id="' + id + '"'), id + " is still in the page");
+  }
+  const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+  assert.ok(!/run-from|run-skip|run-tag-input/.test(setup), "setup.js still reads the old Pipeline fields");
+  assert.ok(/run-stop-after/.test(setup), "the Run menu's 'Run up to' sets --to");
+  const tools = readFileSync(resolve(MOD, "tools.js"), "utf8");
+  assert.ok(!/from "\.\/logs\.js"/.test(tools), "tool output belongs in the Logs panel, not the run's log");
+});
 
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));

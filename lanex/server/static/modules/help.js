@@ -14,7 +14,7 @@ const CATALOG = {
       "Before the long run, write and simulate in the <b>RTL IDE</b>: Check syntax, then Simulate a testbench and read the waveform. Minutes saved per mistake.",
       "<b>PDK</b>: sky130A with <code>sky130_fd_sc_hd</code> is the usual first choice and is set by default.",
       "<b>Settings</b> holds the handful of LibreLane variables most projects change, each with when to change it. They're saved in <code>config.json</code>, so a terminal run of the same folder builds the same chip.",
-      "When <b>Ready to run?</b> is green, press <b>Run flow</b> (or Run in the top bar, from any tab) and follow it on the Pipeline tab.",
+      "When <b>Ready to run?</b> is green, press <b>Run flow</b> (or Run in the top bar, from any tab) and follow it on the Flow page.",
       "<b>All settings</b> lists every LibreLane variable by stage. Values there go with LanEx's runs as overrides and leave <code>config.json</code> alone, which suits one-off experiments.",
     ],
     samples: [
@@ -31,19 +31,21 @@ const CATALOG = {
     ],
   },
   pipeline: {
-    title: "Pipeline tab",
-    goal: "Monitor flow step execution in real time or execute targeted flow stages.",
+    title: "Flow",
+    goal: "Watch a run stage by stage, and when it stops, see why and what to change.",
     how: [
-      "The timeline lists each flow step (such as Yosys.Synthesis or OpenROAD.Placement) and updates its status live. Click any step row to inspect its log output.",
-      "The From, To, and Skip inputs accept step IDs to bound flow execution (passed to flow.start).",
-      "Step-by-step mode pauses execution after each flow stage, allowing intermediate log and output inspection.",
+      "The seven tiles are the stages every page uses: Synthesis, Floorplan, Power grid, Placement, Clock tree, Routing, Sign-off. Each shows its time (against the run it is compared with), one number from the end of the stage, and the chip at that point.",
+      "Below them is every step in flow order, under its stage, and beside it the run's output as LibreLane prints it. While a run goes the list keeps the running step in view; scroll it yourself and a chip brings you back. Pick a step to see only its log, what it does, the settings it reads and its reports.",
+      "A run that stops says why first, in plain words, with the line from the log and what to change. A run that finishes shows its report card: the verdict, the key numbers, and its warnings counted by code.",
+      "The Run menu can stop a run after any stage: Synthesis alone gives the cell count and area in seconds.",
     ],
     samples: [
-      { key: "From", sample: "Yosys.JsonHeader" },
-      { key: "To", sample: "Magic.StreamOut" },
+      { key: "Run up to", sample: "Synthesis" },
+      { key: "Step ID", sample: "OpenROAD.GlobalPlacement" },
     ],
     pitfalls: [
-      "Skipping earlier steps requires pre-existing intermediate deliverables. The flow cannot proceed without required inputs.",
+      "A run started elsewhere (your own terminal) shows here once it has finished; Flow follows runs LanEx started.",
+      "Clean means LibreLane's checks passed. It does not cover gate-level simulation, a shuttle's precheck or the foundry's own decks.",
     ],
   },
   runs: {
@@ -76,7 +78,7 @@ const CATALOG = {
     ],
     pitfalls: [
       "Stage snapshots before the final GDS come from each step's DEF, so cells are drawn as their LEF outlines and pins. Only the Final GDS has the transistor-level shapes.",
-      "A run that stopped early shows the last stage it reached. If there is no stage at all, the run stopped before the floorplan; the Pipeline tab says where.",
+      "A run that stopped early shows the last stage it reached. If there is no stage at all, the run stopped before the floorplan; the Flow page says where and why.",
       "The picture is what the tools wrote. It is not a sign-off; check Verify and the foundry decks before tape-out.",
     ],
   },

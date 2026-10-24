@@ -14,7 +14,7 @@ export const SHORTCUTS = [
   { keys: "Alt ← / Alt →", desc: "Back and forward between pages (the mouse's side buttons too)" },
   { keys: "r", desc: "Start a run" },
   { keys: "s", desc: "Stop the running flow" },
-  { keys: "/", desc: "Filter the pipeline log" },
+  { keys: "/", desc: "Filter the step log on Flow" },
   { keys: "t", desc: "Switch light or dark" },
   { keys: "d", desc: "Compact spacing on or off" },
   { keys: "?", desc: "Open this help" },
@@ -68,12 +68,9 @@ export function setupHotkeys() {
     if (e.key === "r" && !(state.status && state.status.running)) document.getElementById("btn-run-global")?.click();
     if (e.key === "s") document.getElementById("btn-cancel")?.click();
     if (e.key === "/") {
-      const s = document.getElementById("log-search");
-      if (s) {
-        document.querySelector('.side-pane-tab[data-itab="logs"]')?.click();
-        s.focus();
-        e.preventDefault();
-      }
+      // Flow: filter the log of the step on screen.
+      const s = document.querySelector("#sec-pipeline.section-active .fl-insp .lv-q input");
+      if (s) { s.focus(); e.preventDefault(); }
     }
   });
 }

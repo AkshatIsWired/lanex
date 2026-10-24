@@ -442,6 +442,23 @@ async function showOverrideTrail(varName, value) {
 
 // Reflect the current SYNTH_SHOW override into the quick toggle (e.g. after a
 // preset reset cleared it).
+// A link to one setting (nav.js go("setup", { setting })): open All settings
+// filtered to it, focus its field and flash the row. Returns the row's id so
+// nav.js keeps it in view while the page settles.
+export async function revealSetting(name) {
+  const card = document.getElementById("cfg-card");
+  if (card && !card.open) card.open = true;
+  const search = document.getElementById("var-search");
+  if (search) { search.value = name; _searchTerm = String(name).toUpperCase(); paint(); }
+  const row = document.querySelector('#vars-form .var-row[data-var="' + cssEscape(name) + '"]');
+  if (!row) return null;
+  row.id = "var-row-" + name;
+  row.classList.add("is-flash");
+  setTimeout(() => row.classList.remove("is-flash"), 2600);
+  row.querySelector("input, select, textarea")?.focus({ preventScroll: true });
+  return row.id;
+}
+
 function syncReportToggles() {
   const ss = document.getElementById("cfg-synth-show");
   if (ss) ss.checked = state.varsValues.SYNTH_SHOW === true || state.varsValues.SYNTH_SHOW === "true";

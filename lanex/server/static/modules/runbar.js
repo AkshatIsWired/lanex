@@ -4,6 +4,8 @@
 // run here picks it on every page.
 //
 //   mountRunBar(host, { baseline: true })
+//   mountRunBar(host, { baseline: true, live: () => tag })   (Flow: while a run
+//     is going and the page shows it, the field shows that run, marked live)
 //
 // Each field is a button showing the run's verdict, name and time; it opens a
 // list of runs (verdict, runtime, setup slack, when), filterable when long,
@@ -18,7 +20,7 @@ import * as ctx from "./context.js";
 const esc = (s) => fmt.escape(String(s ?? ""));
 let _seq = 0;
 
-export function mountRunBar(host, { baseline = false } = {}) {
+export function mountRunBar(host, { baseline = false, live = null } = {}) {
   if (!host) return null;
   if (host._rb) return host._rb;
   const id = "rb" + (++_seq);
@@ -31,7 +33,9 @@ export function mountRunBar(host, { baseline = false } = {}) {
   const S = { which: null, items: [], active: 0, q: "" };
 
   const paint = () => {
-    paintPick(host.querySelector("[data-rb='run']"), ctx.contextRow(), { empty: "No runs yet" });
+    const lt = live && live();
+    if (lt) paintLive(host.querySelector("[data-rb='run']"), lt);
+    else paintPick(host.querySelector("[data-rb='run']"), ctx.contextRow(), { empty: "No runs yet" });
     const b = host.querySelector("[data-rb='base']");
     if (b) {
       const tag = ctx.contextBaseline();
@@ -202,6 +206,16 @@ function paintPick(btn, row, { empty, hint = "" }) {
     (row && all && ctx.normDir(row._design) !== ctx.normDir(state.designDir) ? "<span class='rb-tag'>" + esc(ctx.designLabel(row._design)) + "</span>" : "") +
     (row && isNewest(row) && btn.dataset.rb === "run" ? "<span class='rb-tag is-new'>newest</span>" : "");
   btn.disabled = btn.dataset.rb === "run" ? !row : !ctx.baselineChoices().length && !row;
+}
+
+// The run going now (Flow): its folder may not be in the run list yet.
+function paintLive(btn, tag) {
+  if (!btn) return;
+  btn.querySelector(".rb-mark").className = "rb-mark is-run";
+  btn.querySelector(".rb-name").textContent = tag;
+  btn.querySelector(".rb-meta").textContent = "running";
+  btn.querySelector(".rb-tags").innerHTML = "<span class='rb-tag is-new'>live</span>";
+  btn.disabled = false;
 }
 
 function optionHtml(id, it, i) {

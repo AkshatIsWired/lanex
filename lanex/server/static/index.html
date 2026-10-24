@@ -163,8 +163,8 @@
       </div>
       <div class="rail-group" style="--n:3">
         <span class="rail-label">Run</span>
-        <button class="side-tab" data-tab="pipeline" data-tip="The flow, step by step, with live status">
-          <span class="ico"></span><span class="label">Pipeline</span>
+        <button class="side-tab" data-tab="pipeline" data-tip="A run stage by stage: where it is, how long it took, why it stopped">
+          <span class="ico"></span><span class="label">Flow</span>
         </button>
         <button class="side-tab" data-tab="runs" data-tip="Every past run; pick one to inspect">
           <span class="ico"></span><span class="label">Runs</span>
@@ -406,7 +406,7 @@
                 <button class="btn btn-warn" id="btn-cancel" disabled hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg> Stop</button>
                 <button class="btn btn-ghost" id="btn-resume" hidden title="In Step by step mode the flow pauses after each step."><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg> Next step</button>
               </div>
-              <p class="launch-note">Verilog to GDSII · 5 to 60 minutes · follow it on the Pipeline tab</p>
+              <p class="launch-note">Verilog to GDSII · 5 to 60 minutes · follow it on the Flow page</p>
               <label class="launch-name" for="run-name-input"><span>Run name</span>
                 <input type="text" id="run-name-input" placeholder="first-try" autocomplete="off" spellcheck="false"/>
                 <small>Names the run's folder in <code>runs/</code>. Leave it empty to use the date and time.</small></label>
@@ -450,38 +450,30 @@
 
     </section>
 
-    <!-- PIPELINE -->
+    <!-- FLOW (rail "Flow"; the id stays "pipeline", spec decision 1): one run,
+         stage by stage, and why it stopped (modules/flow.js). -->
     <section class="section" id="sec-pipeline">
-      <!-- Live RTL→GDS run timeline: which tool, which step, since when.
-           Click a step row to load its log/reports in the console below. -->
-      <div id="run-timeline" class="run-timeline"></div>
-
-      <!-- Lower console: live tool logs + per-step output (click a step above). -->
-      <div class="pipe-console" id="pipe-console">
-        <nav class="side-pane-tabs" role="tablist">
-          <button class="side-pane-tab side-pane-tab-active" data-itab="logs">Live Logs</button>
-          <button class="side-pane-tab" data-itab="stepout">Step Output</button>
-        </nav>
-        <section class="side-pane-section side-pane-section-active" id="spane-logs">
-          <div class="log-toolbar">
-            <input type="search" id="log-search" class="log-search" placeholder="filter logs…" autocomplete="off"/>
-            <select id="log-level" class="log-level" title="Minimum level">
-              <option value="all">All</option>
-              <option value="warn">Warnings+</option>
-              <option value="error">Errors</option>
-            </select>
-            <label class="log-auto" title="Stick to newest line"><input type="checkbox" id="log-autoscroll" checked/> auto</label>
-            <button id="log-copy" class="btn btn-ghost log-btn">copy</button>
-            <button id="log-clear" class="btn btn-ghost log-btn">clear</button>
-            <button class="btn btn-ghost log-btn panel-fs-btn" data-fs-target="pipe-console" title="Fullscreen console"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
-            <span class="muted log-count" id="log-count"></span>
-          </div>
-          <div id="logs" class="logs" role="log" aria-live="polite" aria-label="Live logs"></div>
+      <div class="an-runbar fl-runbar">
+        <div class="rb-host" id="flow-runbar"></div>
+        <span class="bar-spacer"></span>
+        <button class="btn btn-ghost btn-sm" id="fl-live" hidden><span class="fl-live-dot"></span> Back to the live run</button>
+        <button class="btn btn-ghost btn-sm" id="fl-copy-cmd" title="Copy the librelane command this run used, to run it in a terminal or CI"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg> Command</button>
+      </div>
+      <div id="fl-head"></div>
+      <ol class="fl-strip" id="fl-strip" aria-label="The flow, stage by stage"></ol>
+      <!-- Every step, and the output: two panes of one height that fill the
+           window, each scrolling inside itself. -->
+      <div class="fl-body" id="fl-body" hidden>
+        <section class="fl-pane fl-steps" aria-label="Steps">
+          <div class="fl-pane-h" id="fl-steps-h"></div>
+          <div class="fl-steps-scroll" id="fl-steps" tabindex="-1"></div>
+          <button class="fl-now" id="fl-now" type="button" hidden></button>
         </section>
-        <section class="side-pane-section" id="spane-stepout">
-          <div id="step-output" class="step-output">
-            <div class="empty"><span class="ico"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5"/></svg></span><h3>Step output</h3>
-              <p>Click any step row in the timeline above to load that step's log and reports here.</p></div>
+        <section class="fl-pane fl-insp" id="fl-insp" aria-label="Output">
+          <div class="fl-pane-h fl-insp-h" id="fl-insp-h"></div>
+          <div class="fl-insp-body">
+            <div class="fl-log" id="fl-log"></div>
+            <div class="fl-page" id="fl-page" hidden></div>
           </div>
         </section>
       </div>

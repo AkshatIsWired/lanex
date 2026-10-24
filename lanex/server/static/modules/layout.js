@@ -72,9 +72,21 @@ const STAGE_NO = Object.fromEntries(FLOW_STAGES.map((s, i) => [s.id, i + 1]));
 const esc = (s) => fmt.escape(String(s ?? ""));
 
 // ------------------------------------------------------------------ entry points
+let _loading = null;
 export async function renderLayout() {
   wireOnce();
-  await loadRuns();
+  _loading = loadRuns();
+  await _loading;
+}
+
+// A link to one stage or step of the run on screen (nav.js go("layout", { source })),
+// e.g. Flow's "Show in Layout".
+export async function revealSource(source) {
+  await new Promise((r) => setTimeout(r, 0));   // let the tab's own render start first
+  if (_loading) await _loading; else await renderLayout();
+  if (!source || !S.src) return;
+  const all = [...(S.src.stages || []), ...(S.src.steps || []), ...(S.src.variants || [])];
+  if (all.some((s) => s.source === source) && S.source !== source) { stopPlay(); await openSource(source); }
 }
 
 // ------------------------------------------------------------------ runs
@@ -123,8 +135,8 @@ async function openRun(tag) {
     S.info = null;
     renderStages();
     showMsg("<h3>Nothing to draw yet</h3><p>This run stopped before the floorplan was written, so it has no layout. " +
-      "The Pipeline tab shows where it stopped.</p>" +
-      "<button class='btn btn-ghost btn-sm' data-go='pipeline'>Open Pipeline</button>");
+      "Flow shows where it stopped and why.</p>" +
+      "<button class='btn btn-ghost btn-sm' data-go='pipeline'>Open Flow</button>");
     setNote("");
     return;
   }
