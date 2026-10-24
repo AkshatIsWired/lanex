@@ -1363,9 +1363,15 @@ def _run_argv(argv: List[str], *, label: str, key: str,
                 unpacking = rate < 64 * 1024 and wr_rate > 1024 * 1024
                 if expect_bytes and received is not None:
                     percent = min(99, int(received * 100 / max(1, expect_bytes)))
+                    no_data_s = int(now - last_rx_activity[0])
                     if unpacking:
                         msg = (f"{_human_bytes(received)} downloaded; unpacking "
                                f"({_human_bytes(wr_rate)}/s written), {time_str} elapsed")
+                    elif no_data_s >= 30:
+                        # A dropped connection read as "11 B/s" on the VM; say it.
+                        msg = (f"{_human_bytes(received)} of ~{_human_bytes(expect_bytes)} downloaded; "
+                               f"no data for {no_data_s} s, waiting for the connection "
+                               f"(LanEx retries by itself), {time_str} elapsed")
                     else:
                         msg = (f"{_human_bytes(received)} of ~{_human_bytes(expect_bytes)} downloaded"
                                f" ({_human_bytes(rate)}/s), {time_str} elapsed")

@@ -389,8 +389,11 @@ def test_dependency_ceiling_matches_compat_range() -> None:
     if not pyproject.is_file():
         pytest.skip("repo pyproject not present (installed copy)")
     text = pyproject.read_text(encoding="utf-8")
-    expected = f'"librelane>={compat.KNOWN_GOOD_MIN},<{compat.KNOWN_GOOD_MAX_EXCL}"'
-    assert expected in text, (
+    # Since the Ship line the release pins one exact version, which must sit
+    # inside the known-good range.
+    ranged = f'"librelane>={compat.KNOWN_GOOD_MIN},<{compat.KNOWN_GOOD_MAX_EXCL}"'
+    exact = f'"librelane=={compat.KNOWN_GOOD_MIN}"'
+    assert ranged in text or exact in text, (
         "pyproject dependency pin must mirror compat.KNOWN_GOOD_* — bump both together"
     )
 
