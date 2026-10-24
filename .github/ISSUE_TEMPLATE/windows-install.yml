@@ -43,8 +43,7 @@ body:
     id: log
     attributes:
       label: Install log
-      description: Drag install.log here, or paste its last 100 lines.
-      render: text
+      description: Drag install.log into this box (GitHub attaches the file). If that does not work, paste its last 100 lines.
     validations:
       required: true
   - type: input
