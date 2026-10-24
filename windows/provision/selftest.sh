@@ -48,10 +48,12 @@ check "passwordless sudo works"        "runuser -l '$APP_USER' -c 'sudo -n true'
 check "wsl.conf: systemd = true"       "grep -Eq '^systemd *= *true' /etc/wsl.conf"
 check "wsl.conf: default = $APP_USER"  "grep -Eq '^default *= *$APP_USER' /etc/wsl.conf"
 check "wsl.conf: interop enabled"      "grep -Eq '^enabled *= *true' /etc/wsl.conf"
+check "appliance identity marker"      "grep -q '\"installId\"' /etc/lanex/appliance.json"
 case "$ENGINE" in
     docker)
         check "docker is installed"            "command -v docker"
         check "$APP_USER is in the docker group" "id -nG '$APP_USER' | grep -qw docker"
+        check "the docker daemon answers"      "timeout 60 docker info >/dev/null 2>&1"
         ;;
     podman) check "podman is installed" "command -v podman" ;;
     none) ok "engine: none (minimal profile)" ;;

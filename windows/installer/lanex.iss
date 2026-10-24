@@ -105,7 +105,17 @@
 #define RootfsUrl      "https://releases.ubuntu.com/24.04.4/ubuntu-24.04.4-wsl-amd64.wsl"
 #define RootfsSha256   "9b2f7730dc68227dd04a9f3e5eab86ad85caf556b8606ad94f1f29ff5c4fd3f5"
 #define RootfsFile     "ubuntu-24.04.4-wsl-amd64.wsl"
-#define RootfsSizeMB   "373"
+; 391,541,571 bytes. Shown to the user only; nothing compares a size.
+#define RootfsSizeMB   "374"
+; Where Setup looks for the image, in order: our own copy (a GitHub release of
+; this repository, uploaded by scripts/mirror_deps.py; a 404 until it is
+; published costs one request), the point-release folder, and old-releases,
+; where Canonical moves a point release once a newer one ships. The SHA-256
+; above decides; the location never does.
+#ifndef MirrorBase
+  #define MirrorBase   "https://github.com/AkshatIsWired/lanex/releases/download/deps-v1"
+#endif
+#define RootfsUrls     MirrorBase + "/" + RootfsFile + "|" + RootfsUrl + "|https://old-releases.ubuntu.com/releases/24.04.4/" + RootfsFile
 
 ; ---------------------------------------------------------------------------
 ; Phase 2a — the pre-baked appliance image (optional at compile time).
@@ -210,7 +220,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; the version and the reason.
 WindowsVersionNotSupported=LanEx needs Windows 10 version 21H2 (build 19044) or newer for WSLg desktop tools. Windows 11 x64 is recommended.
 ; The wizard's own words, in the language of the person we are installing for.
-WelcomeLabel2=This will install [name/ver] on your computer.%n%nLanEx sets up its own private, self-contained environment. It preserves your existing WSL distributions and their data. If required, Windows asks separately before Setup enables WSL features or updates WSL.%n%nRemoving the Windows app preserves your projects and environment by default.%n%nBefore installing, Setup shows an honest estimate for your selected tools and PDKs. Actual download and disk use varies with reusable caches and selected libraries.
+WelcomeLabel2=This installs [name/ver], the chip design app, on your computer.%n%nLanEx runs in its own private Linux environment (WSL). Your other WSL distributions are not changed.%n%nSetup downloads the design tools and a chip process kit (PDK): a few GB, so a steady connection helps. If WSL is not on yet, Windows asks for permission and restarts once; Setup then carries on by itself.%n%nUninstalling keeps your projects unless you choose otherwise.
 
 
 [Files]
@@ -231,6 +241,7 @@ Source: "..\setup\run-streamed.ps1"; Flags: dontcopy
 ; validation, verified export, resume cleanup, and explicit removal.
 Source: "..\setup\setup.ps1"; DestDir: "{app}"; DestName: "setup-worker.ps1"; Flags: ignoreversion
 Source: "..\setup\constraints.txt"; Flags: dontcopy
+Source: "..\setup\requirements.lock"; Flags: dontcopy
 Source: "..\setup\build-manifest.json"; Flags: dontcopy
 Source: "{#LanexWheel}"; DestName: "{#LanexWheelFile}"; Flags: dontcopy
 
@@ -305,6 +316,8 @@ var
   BootIdentityValue: String;
   ComputerDisplayValue: String;
   FirmwareNoticeValue: Boolean;
+  LowMemoryValue: Boolean;
+  MemoryGBValue: String;
   ConfigurePage: TWizardPage;
   ProfileRadioRecommended, ProfileRadioComplete, ProfileRadioCustom, ProfileRadioMinimal: TRadioButton;
   ProfileDescLabel, SharedHelperLabel, ChangeChoicesLabel: TLabel;
@@ -346,6 +359,9 @@ var
   StepLabel: String;
   BaseProvisionedForEstimate: Boolean;
   EstimateReuseApplied: Boolean;
+  // The .part file curl is writing (RunLogged shows its size as progress).
+  DownloadWatchPath: String;
+  DownloadWatchMB: Integer;
 
 // ---------------------------------------------------------------- locations --
 
@@ -461,6 +477,21 @@ begin
   // jumps back and makes the user think everything restarted.
   if Pct > ProgressBar.Position then
     ProgressBar.Position := Pct;
+end;
+
+// Called from RunLogged's caption refresh while curl writes the .part file:
+// the size on disk is the only progress signal that survives a resume.
+procedure RefreshDownloadProgress;
+var
+  Size, Pct: Integer;
+begin
+  if (DownloadWatchPath = '') or (DownloadWatchMB <= 0) then Exit;
+  if not FileSize(DownloadWatchPath, Size) then Size := 0;
+  Pct := (Size div 1048576) * 100 div DownloadWatchMB;
+  if Pct > 100 then Pct := 100;
+  ProgressActivity := Format('Downloading the LanEx environment... %d of about %d MB', [
+    Size div 1048576, DownloadWatchMB]);
+  SetBarAtLeast(PhasePercent(2) + (Pct * 10 div 100));
 end;
 
 procedure RefreshProgressCaption;
@@ -860,6 +891,10 @@ begin
         // 3. after 40 s the runner kills the command's process tree. An import
         //    is local disk work that should finish; interrupting it could leave
         //    a half-registered distro, so it is only abandoned on Force stop.
+        //    A download (curl) has nothing to wind down: stop it at once; the
+        //    .part file stays for the next run to resume.
+        if (not KillSent) and (DownloadWatchPath <> '') then
+          CancelAge := CancelAge + 40000;
         if (not KillSent) and (CancelAge > 40000) and ((not ImportCommand) or ForceStopRequested) then
         begin
           KillSent := True;
@@ -876,6 +911,7 @@ begin
 
       if GetTickCount - LastCaptionTick > 500 then
       begin
+        RefreshDownloadProgress;
         RefreshProgressCaption;
         LastCaptionTick := GetTickCount;
       end;
@@ -1034,7 +1070,7 @@ begin
     + ' -Action Preflight | ConvertFrom-Json); '
     + '$p.decision.code; $p.bootIdentity; '
     + '(($p.computer.manufacturer + '' '' + $p.computer.model) -replace ''[\r\n\t]'','' '').Trim(); '
-    + '$p.decision.firmwareNotice; '
+    + '$p.decision.firmwareNotice; $p.decision.lowMemory; $p.decision.memoryGB; '
     + '($p | ConvertTo-Json -Depth 20 -Compress)';
   Result := PowerShellCapture(Snippet, Output);
   if not Result then
@@ -1046,6 +1082,8 @@ begin
   BootIdentityValue := TakeLine(Output);
   ComputerDisplayValue := TakeLine(Output);
   FirmwareNoticeValue := CompareText(TakeLine(Output), 'true') = 0;
+  LowMemoryValue := CompareText(TakeLine(Output), 'true') = 0;
+  MemoryGBValue := TakeLine(Output);
   JsonLine := TakeLine(Output);
   LogLine('preflight: ' + JsonLine);
   Result := (PreflightDecision <> '') and (BootIdentityValue <> '');
@@ -2075,6 +2113,29 @@ begin
     Result := False;
     Exit;
   end;
+  if PreflightDecision = 'wsl-blocked-by-policy' then
+  begin
+    if not WizardSilent then MsgBox('Windows Subsystem for Linux is switched off by a policy on this PC.'
+      + #13#10#13#10 + 'LanEx runs inside WSL, so it cannot be installed here until the policy '
+      + 'allows it. On a work or school PC, ask the IT administrator to allow WSL '
+      + '(policy "Allow the Windows Subsystem For Linux"), then run Setup again.'
+      + #13#10#13#10 + 'Nothing was changed. Log: ' + LogFile, mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+  if PreflightDecision = 'not-enough-memory' then
+  begin
+    if not WizardSilent then MsgBox('This PC has ' + MemoryGBValue + ' GB of memory (RAM). LanEx needs '
+      + 'at least 6 GB: Windows gives its Linux environment half of the memory, and a chip '
+      + 'design run needs more than what would be left.'
+      + #13#10#13#10 + 'Nothing was changed. Log: ' + LogFile, mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+  if LowMemoryValue and not WizardSilent then
+    MsgBox('This PC has ' + MemoryGBValue + ' GB of memory (RAM). LanEx works, and the example '
+      + 'designs run, but large designs can run out of memory. 8 GB or more is recommended.',
+      mbInformation, MB_OK);
   if PreflightDecision = 'preflight-query-failed' then
   begin
     if not WizardSilent then MsgBox('Windows did not allow Setup to determine the required WSL feature '
@@ -2168,6 +2229,7 @@ begin
   ExtractTemporaryFile('build-manifest.json');
   ExtractTemporaryFile('install.sh');
   ExtractTemporaryFile('constraints.txt');
+  ExtractTemporaryFile('requirements.lock');
   ExtractTemporaryFile('{#LanexWheelFile}');
   Worker := ExpandConstant('{tmp}\setup.ps1');
   Manifest := ExpandConstant('{tmp}\build-manifest.json');
@@ -2422,18 +2484,55 @@ begin
   Result := not CancelRequested;
 end;
 
-// FetchRootfs downloads one image unless a copy that matches Sha256 is already
-// cached. Returns '' on success, or a message that is shown to the user on the
-// Ubuntu path and merely LOGGED on the baked path (see EnsureRootfs).
-function FetchRootfs(const Url, FileName, Sha256, Dest, SizeMB: String): String;
+// The next URL from a '|'-separated list ('' when the list is used up).
+function NextUrl(var List: String): String;
 var
-  Downloaded: String;
+  P: Integer;
+begin
+  P := Pos('|', List);
+  if P = 0 then
+  begin
+    Result := Trim(List);
+    List := '';
+  end
+  else
+  begin
+    Result := Trim(Copy(List, 1, P - 1));
+    List := Copy(List, P + 1, Length(List) - P);
+  end;
+end;
+
+// CurlFetch downloads Url into PartFile, resuming whatever is already there.
+// Returns curl's exit code (0 = complete). curl.exe ships with Windows 10 1803
+// and later; it resumes with -C - where Inno's own downloader starts over.
+function CurlFetch(const Url, PartFile: String): Integer;
+var
+  Code: Integer;
+begin
+  Result := -1;
+  if not FileExists(ExpandConstant('{sys}\curl.exe')) then Exit;
+  RunLogged(ExpandConstant('{sys}\curl.exe'),
+    '-fsSL --ssl-revoke-best-effort --connect-timeout 30 --speed-limit 2048 --speed-time 60 '
+    + '-C - -o "' + PartFile + '" "' + Url + '"', Code);
+  Result := Code;
+end;
+
+// FetchRootfs puts a copy of the image whose SHA-256 is Sha256 at Dest, trying
+// each URL of the '|'-separated Urls in order (our mirror first, then the
+// upstream locations). A partial download is kept as Dest.part and resumed;
+// only a file that hashes right is ever moved to Dest, so a cut, corrupt or
+// substituted download can never reach `wsl --import`. Returns '' on success,
+// or a message that is shown to the user on the Ubuntu path and merely LOGGED
+// on the baked path (see EnsureRootfs). No size field is ever checked.
+function FetchRootfs(const Urls, FileName, Sha256, Dest, SizeMB: String): String;
+var
+  Downloaded, Part, Remaining, Url, LastError: String;
+  Code, Attempt, WaitSec, Answer: Integer;
+  Tried: Boolean;
 begin
   Result := '';
   ForceDirectories(CacheDir);
-  // A cached file is only trusted after it re-hashes: a half-finished download
-  // from a cancelled run is exactly the file that would otherwise import into a
-  // broken distro.
+  // A cached file is only trusted after it re-hashes.
   if FileExists(Dest) then
   begin
     SetPhase(2, 6, 'Checking the downloaded LanEx environment...');
@@ -2442,31 +2541,135 @@ begin
       LogLine('cached rootfs verified: ' + Dest);
       Exit;
     end;
-    LogLine('cached rootfs failed its checksum — downloading again: ' + Dest);
+    LogLine('cached rootfs failed its checksum; downloading again: ' + Dest);
     DeleteFile(Dest);
   end;
-  SetPhase(2, 6, 'Downloading the LanEx environment (about ' + SizeMB + ' MB)...');
-  try
-    // Inno verifies the SHA256 itself and raises if it differs, so a corrupted
-    // or substituted download can never reach `wsl --import`.
-    // Cancel during the download goes through RequestSetupCancel, which makes
-    // OnDownloadProgress return False and aborts the transfer cleanly.
-    WorkerRunning := True;
-    try
-      DownloadTemporaryFile(Url, FileName, Sha256, @OnDownloadProgress);
-    finally
-      WorkerRunning := False;
-    end;
-    Downloaded := ExpandConstant('{tmp}\') + FileName;
-    if not FileCopy(Downloaded, Dest, False) then
+  Part := Dest + '.part';
+  repeat
+    LastError := '';
+    Remaining := Urls;
+    Tried := False;
+    while (Remaining <> '') and not CancelRequested do
     begin
-      Result := 'Could not save the downloaded file to' + #13#10 + Dest;
+      Url := NextUrl(Remaining);
+      if Url = '' then Continue;
+      // A dropped connection, a sleeping PC or a stalled server: retry the
+      // same URL with growing pauses, resuming the .part file each time.
+      for Attempt := 1 to 8 do
+      begin
+        if CancelRequested then Break;
+        SetPhase(2, 6, 'Downloading the LanEx environment (about ' + SizeMB + ' MB)...');
+        LogLine('rootfs download attempt ' + IntToStr(Attempt) + ': ' + Url);
+        DownloadWatchPath := Part;
+        DownloadWatchMB := StrToIntDef(SizeMB, 0);
+        try
+          Code := CurlFetch(Url, Part);
+        finally
+          DownloadWatchPath := '';
+        end;
+        Tried := Tried or (Code <> -1);
+        if Code = -1 then Break;                 // no curl.exe: fall through
+        if Code = 0 then
+        begin
+          SetStatus('Checking the download...');
+          if CompareText(GetSHA256OfFile(Part), Sha256) = 0 then
+          begin
+            DeleteFile(Dest);
+            if RenameFile(Part, Dest) then
+            begin
+              LogLine('rootfs downloaded and verified from ' + Url);
+              Exit;
+            end;
+            Result := 'Could not save the downloaded file to' + #13#10 + Dest;
+            Exit;
+          end;
+          LogLine('download from ' + Url + ' did not match the pinned SHA-256; discarded');
+          DeleteFile(Part);
+          LastError := 'The file from ' + Url + ' did not match its pinned SHA-256.';
+          Break;                                 // next URL
+        end;
+        if (Code = 22) or (Code = 33) or (Code = 36) then
+        begin
+          // HTTP error (404 on a mirror that is not published yet, 416 when a
+          // stale .part does not fit this server's file) or no range support.
+          LogLine('curl exit ' + IntToStr(Code) + ' for ' + Url + '; trying the next location');
+          if (Code = 33) or (Code = 36) then DeleteFile(Part);
+          LastError := 'The server at ' + Url + ' refused the download (curl exit '
+            + IntToStr(Code) + ').';
+          Break;
+        end;
+        LastError := 'The connection to ' + Url + ' failed (curl exit ' + IntToStr(Code) + ').';
+        WaitSec := 5 * Attempt;
+        if WaitSec > 30 then WaitSec := 30;
+        SetStatus(Format('The connection dropped. Retrying in %d seconds (attempt %d of 8); '
+          + 'the part already downloaded is kept.', [WaitSec, Attempt]));
+        WorkerRunning := True;
+        try
+          for Code := 1 to WaitSec * 10 do
+          begin
+            if CancelRequested then Break;
+            ProcessSystemMessages;
+            Sleep(100);
+          end;
+        finally
+          WorkerRunning := False;
+        end;
+      end;
+    end;
+    if CancelRequested then
+    begin
+      Result := 'The download was cancelled. The part already downloaded is kept for next time.';
       Exit;
     end;
-  except
-    Result := 'The download did not finish.' + #13#10#13#10 + GetExceptionMessage
-      + #13#10#13#10 + 'Check your internet connection (and any company proxy or '
-      + 'VPN), then run Setup again — it continues from where it stopped.';
+    if Tried then
+    begin
+      if WizardSilent then Answer := IDCANCEL
+      else Answer := MsgBox('The LanEx environment (about ' + SizeMB + ' MB) could not be downloaded.'
+        + #13#10#13#10 + LastError + #13#10#13#10
+        + 'Check the internet connection (and any company proxy or VPN). Retry continues '
+        + 'from the part already downloaded.' + #13#10#13#10 + 'Install log: ' + LogFile,
+        mbError, MB_RETRYCANCEL);
+      if Answer <> IDRETRY then
+      begin
+        Result := 'The download did not finish.' + #13#10#13#10 + LastError + #13#10#13#10
+          + 'Check your internet connection (and any company proxy or VPN), then run '
+          + 'Setup again: it continues from the part already downloaded.'
+          + #13#10#13#10 + 'Install log: ' + LogFile;
+        Exit;
+      end;
+    end;
+  until not Tried;
+  // No usable curl.exe on this PC: Inno's own downloader, one location after
+  // another (no resume, same SHA-256 check before anything is kept).
+  Remaining := Urls;
+  Result := 'No download location was configured.';
+  while (Remaining <> '') and not CancelRequested do
+  begin
+    Url := NextUrl(Remaining);
+    if Url = '' then Continue;
+    SetPhase(2, 6, 'Downloading the LanEx environment (about ' + SizeMB + ' MB)...');
+    LogLine('rootfs download (built-in downloader): ' + Url);
+    try
+      // Cancel goes through RequestSetupCancel, which makes OnDownloadProgress
+      // return False and aborts the transfer cleanly.
+      WorkerRunning := True;
+      try
+        DownloadTemporaryFile(Url, FileName, Sha256, @OnDownloadProgress);
+      finally
+        WorkerRunning := False;
+      end;
+      Downloaded := ExpandConstant('{tmp}\') + FileName;
+      if FileCopy(Downloaded, Dest, False) then
+        Result := ''
+      else
+        Result := 'Could not save the downloaded file to' + #13#10 + Dest;
+      Exit;
+    except
+      LogLine('built-in download failed from ' + Url + ': ' + GetExceptionMessage);
+      Result := 'The download did not finish.' + #13#10#13#10 + GetExceptionMessage
+        + #13#10#13#10 + 'Check your internet connection (and any company proxy or '
+        + 'VPN), then run Setup again.' + #13#10#13#10 + 'Install log: ' + LogFile;
+    end;
   end;
 end;
 
@@ -2533,7 +2736,7 @@ begin
     Exit;
   end;
   ImportPath := RootfsPath;
-  Result := FetchRootfs('{#RootfsUrl}', '{#RootfsFile}', '{#RootfsSha256}',
+  Result := FetchRootfs('{#RootfsUrls}', '{#RootfsFile}', '{#RootfsSha256}',
                         RootfsPath, '{#RootfsSizeMB}');
 end;
 
@@ -2552,9 +2755,32 @@ begin
     LogLine('WARNING: could not record setup outcome: ' + Output);
 end;
 
+function RecordReadyWithRetry: Boolean;
+var
+  Worker, ManifestFile, Output: String;
+  Attempt: Integer;
+begin
+  Result := False;
+  Worker := ExpandConstant('{tmp}\setup.ps1');
+  ManifestFile := ExpandConstant('{tmp}\build-manifest.json');
+  for Attempt := 1 to 3 do
+  begin
+    if PowerShellCapture('& ' + PSQuote(Worker) + ' -Action RecordOutcome -StatePath '
+        + PSQuote(StateFile) + ' -Outcome ready -OutcomeMessage '
+        + PSQuote('All selected components passed strict readiness.')
+        + ' -ManifestPath ' + PSQuote(ManifestFile), Output) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    LogLine('could not record ready (attempt ' + IntToStr(Attempt) + '): ' + Output);
+    Sleep(1000);
+  end;
+end;
+
 function ProvisionDistro: String;
 var
-  ScriptPath, InstallPath, WheelPath, ConstraintPath, ManifestPath, LinuxPath, LinuxInstall,
+  ScriptPath, InstallPath, WheelPath, ConstraintPath, LockPath, ManifestPath, LinuxPath, LinuxInstall,
   LinuxWheel, LinuxConstraint, LinuxManifest, LinuxChoices, Params, UpdateModeValue: String;
   Code, Answer: Integer;
 begin
@@ -2565,6 +2791,7 @@ begin
   InstallPath := ExpandConstant('{tmp}\install.sh');
   WheelPath := ExpandConstant('{tmp}\{#LanexWheelFile}');
   ConstraintPath := ExpandConstant('{tmp}\constraints.txt');
+  LockPath := ExpandConstant('{tmp}\requirements.lock');
   ManifestPath := ExpandConstant('{tmp}\build-manifest.json');
   LinuxPath := WindowsToWslPath(ScriptPath);
   LinuxInstall := WindowsToWslPath(InstallPath);
@@ -2587,6 +2814,7 @@ begin
     + 'LANEX_MANIFEST_HASH="' + ManifestHashValue + '" '
     + 'LANEX_INSTALL_SCRIPT="' + LinuxInstall + '" LANEX_FROM="' + LinuxWheel + '" '
     + 'LANEX_PIP_CONSTRAINT="' + LinuxConstraint + '" '
+    + 'LANEX_PIP_LOCK="' + WindowsToWslPath(LockPath) + '" '
     + 'LANEX_BUILD_MANIFEST="' + LinuxManifest + '" LANEX_SETUP_CHOICES="' + LinuxChoices + '" '
     + 'LANEX_UPDATE_MODE="' + UpdateModeValue + '" '
     + 'bash "' + LinuxPath + '" base';
@@ -2755,9 +2983,9 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
-  Code: Integer;
-  Output, Worker, IdentityFailure: String;
-  NeedProvision: Boolean;
+  Code, Answer: Integer;
+  Output, Worker, IdentityFailure, NetProfile, NeedRootfsArg: String;
+  NeedProvision, NetOk: Boolean;
 begin
   Result := '';
   RotateInstallLog;
@@ -2965,6 +3193,36 @@ begin
       + #13#10#13#10 + 'No existing distribution was stopped or changed.';
     Exit;
   end;
+
+  // Every host the install downloads from, checked through the Windows proxy
+  // settings before anything large starts: a blocked host is named here, not
+  // discovered an hour into the download.
+  repeat
+    SetPhase(1, 6, 'Checking the connection to the download servers...');
+    Worker := ExpandConstant('{tmp}\setup.ps1');
+    Output := '';
+    if Pos('"minimal"', ChoicesJsonValue) > 0 then NetProfile := 'minimal' else NetProfile := 'full';
+    if DistroExists then NeedRootfsArg := '0' else NeedRootfsArg := '1';
+    NetOk := PowerShellCapture('$r = & ' + PSQuote(Worker) + ' -Action NetworkCheck -NetworkProfile '
+      + NetProfile + ' -NeedRootfs ' + NeedRootfsArg + ' | ConvertFrom-Json; '
+      + 'if ($r.ok) { ''ok'' } else { ($r.failed | ForEach-Object { ''- '' + $_.name + '' ('' + $_.url + ''): '' + $_.error }) -join [Environment]::NewLine }',
+      Output);
+    LogLine('network check: ' + Output);
+    if NetOk and (Trim(Output) = 'ok') then Break;
+    if WizardSilent then Answer := IDCANCEL
+    else Answer := MsgBox('Setup cannot reach some of the servers it downloads from:' + #13#10#13#10
+      + Output + #13#10#13#10
+      + 'Check that this PC is online. A company network, VPN, proxy or firewall can block '
+      + 'these sites; ask the network administrator to allow them, or try another network.'
+      + #13#10#13#10 + 'Nothing has been downloaded or changed yet. Log: ' + LogFile,
+      mbError, MB_RETRYCANCEL);
+    if Answer <> IDRETRY then
+    begin
+      Result := 'Setup could not reach its download servers:' + #13#10#13#10 + Output
+        + #13#10#13#10 + 'Run Setup again when the connection works. Log: ' + LogFile;
+      Exit;
+    end;
+  until False;
 
   // Download and import — skipped when the appliance distro is already registered.
   if not DistroExists then
@@ -3278,18 +3536,41 @@ begin
     + ' ' + Snippet, Output);
 end;
 
+procedure StopLanExLauncher;
+var
+  Code: Integer;
+begin
+  // Only the launcher of this installation (by path); the distro is stopped by
+  // the worker when it is removed, and left alone when it is kept.
+  Exec('powershell.exe', '-NoProfile -WindowStyle Hidden -Command "Get-Process -Name LanEx -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ' + PSQuote(ExpandConstant('{app}') + '\*') + ' } | Stop-Process -Force"', '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+function KeptDataText: String;
+begin
+  Result := 'Kept on this PC:' + #13#10
+    + '- your projects in ' + ExpandConstant('{%USERPROFILE}') + '\LanEx-Projects'
+    + ' (or, if your Windows user name has a space, inside the LanEx environment)' + #13#10
+    + '- the LanEx environment with its tools, PDKs and run results: '
+    + ApplianceRoot + #13#10
+    + '- the download cache and logs in ' + AppDataRoot + #13#10#13#10
+    + 'Installing LanEx again finds and reuses all of it. To remove it for good '
+    + 'instead, see "Uninstalling" in the LanEx README (one wsl command and one folder).';
+end;
+
 function InitializeUninstall(): Boolean;
 var
   Choice: Integer;
   Output, ExportFile, Snippet: String;
 begin
   Result := False;
-  Choice := MsgBox('Keep your LanEx environment and data? (Recommended)' + #13#10#13#10
-    + 'Yes keeps projects, run results, PDKs, caches, and the private WSL environment '
-    + 'for a later reinstall.' + #13#10#13#10
-    + 'No opens export and permanent-removal choices. Cancel stops uninstall.',
+  Choice := MsgBox('Keep your LanEx projects, tools and PDKs? (Recommended)' + #13#10#13#10
+    + 'Yes: remove the LanEx app and its shortcuts, keep everything else, so '
+    + 'installing again takes minutes instead of downloading gigabytes.' + #13#10#13#10
+    + 'No: choose between a backup and removing everything.' + #13#10#13#10
+    + 'Cancel: do not uninstall.',
     mbConfirmation, MB_YESNOCANCEL or MB_DEFBUTTON1);
   if Choice = IDCANCEL then Exit;
+  StopLanExLauncher;
 
   if Choice = IDYES then
   begin
@@ -3298,48 +3579,50 @@ begin
       if not UninstallWorker('-Action ClearResume -StatePath ' + PSQuote(StateFile), Output) then
         LogLine('WARNING: could not clear continuation hook during uninstall: ' + Output);
     end;
-    MsgBox('The Windows launcher and shortcuts will be removed. Your private LanEx '
-      + 'environment remains at:' + #13#10 + ApplianceRoot + #13#10#13#10
-      + 'Run LanEx Setup later to verify and reuse it. Other WSL distributions and '
-      + 'Windows WSL features are unchanged.', mbInformation, MB_OK);
+    MsgBox('The LanEx app and its shortcuts will be removed.' + #13#10#13#10 + KeptDataText
+      + #13#10#13#10 + 'Your other WSL distributions and Windows features are not changed.',
+      mbInformation, MB_OK);
     Result := True;
     Exit;
   end;
 
-  Choice := MsgBox('Choose what happens to the private LanEx environment.' + #13#10#13#10
-    + 'Yes exports a backup, then keeps the environment.' + #13#10
-    + 'No permanently removes the verified LanEx environment and its owned data.' + #13#10
-    + 'Cancel stops uninstall.', mbConfirmation, MB_YESNOCANCEL or MB_DEFBUTTON1);
+  Choice := MsgBox('Back up the LanEx environment first?' + #13#10#13#10
+    + 'Yes: save a backup file (several GB) of the environment, then remove only the app.' + #13#10
+    + 'No: remove the LanEx environment and everything in it, for good.' + #13#10
+    + 'Cancel: do not uninstall.', mbConfirmation, MB_YESNOCANCEL or MB_DEFBUTTON1);
   if Choice = IDCANCEL then Exit;
   if Choice = IDYES then
   begin
-    ExportFile := ExpandConstant('{userdocs}\LanEx-environment-backup.tar');
-    if not GetSaveFileName('Export the LanEx environment before uninstalling', ExportFile,
-        ExpandConstant('{userdocs}'), 'WSL tar archive (*.tar)|*.tar', 'tar') then Exit;
+    // Not Documents: OneDrive often syncs it, and this file is several GB.
+    ForceDirectories(AppDataRoot + '\backups');
+    ExportFile := AppDataRoot + '\backups\LanEx-environment-backup.tar';
+    if not GetSaveFileName('Save a backup of the LanEx environment (several GB)', ExportFile,
+        AppDataRoot + '\backups', 'WSL tar archive (*.tar)|*.tar', 'tar') then Exit;
     if not UninstallWorker('-Action ExportAppliance -StatePath ' + PSQuote(StateFile)
         + ' -ExportPath ' + PSQuote(ExportFile), Output) then
     begin
-      MsgBox('The export did not complete, so uninstall stopped and all LanEx data '
-        + 'was preserved.' + #13#10#13#10 + Output, mbError, MB_OK);
+      MsgBox('The backup did not complete, so uninstall stopped and all LanEx data '
+        + 'was kept.' + #13#10#13#10 + Output, mbError, MB_OK);
       Exit;
     end;
     if not UninstallWorker('-Action ClearResume -StatePath ' + PSQuote(StateFile), Output) then
     begin
       MsgBox('The backup completed, but LanEx could not clear its continuation hook. '
-        + 'Uninstall stopped; the environment and export are preserved.' + #13#10#13#10
+        + 'Uninstall stopped; the environment and the backup are kept.' + #13#10#13#10
         + Output, mbError, MB_OK);
       Exit;
     end;
-    MsgBox('The verified backup was saved to:' + #13#10 + ExportFile + #13#10#13#10
-      + 'The private environment is also being kept.', mbInformation, MB_OK);
+    MsgBox('Backup saved to:' + #13#10 + ExportFile + #13#10#13#10 + KeptDataText,
+      mbInformation, MB_OK);
     Result := True;
     Exit;
   end;
 
-  if MsgBox('Permanently remove this LanEx environment and its projects, run results, '
-      + 'PDKs, caches, and owned browser profile?' + #13#10#13#10
-      + 'This cannot be undone. Other WSL distributions, the pre-existing generic '
-      + 'LanEx browser profile, and Windows WSL features will not be changed.',
+  if MsgBox('Remove the LanEx environment for good?' + #13#10#13#10
+      + 'This deletes the LanEx tools, PDKs, run results and any projects stored inside '
+      + 'the environment, the download cache and the logs. It cannot be undone.' + #13#10#13#10
+      + 'Projects in ' + ExpandConstant('{%USERPROFILE}') + '\LanEx-Projects are NOT deleted. '
+      + 'Your other WSL distributions and Windows features are not changed.',
       mbError, MB_YESNO or MB_DEFBUTTON2) <> IDYES then Exit;
   Snippet := '-Action RemoveAppliance -StatePath ' + PSQuote(StateFile)
     + ' -OwnedDataRoot ' + PSQuote(AppDataRoot)
@@ -3347,8 +3630,8 @@ begin
     + ' -Raw | ConvertFrom-Json).installId)';
   if not UninstallWorker(Snippet, Output) then
   begin
-    MsgBox('Permanent removal did not complete. LanEx preserved the VHDX, state, '
-      + 'caches, and logs so the problem can be diagnosed safely.' + #13#10#13#10
+    MsgBox('Removing the LanEx environment did not complete. Nothing more was deleted, '
+      + 'so the problem can be looked at safely.' + #13#10#13#10
       + Output, mbError, MB_OK);
     Exit;
   end;
@@ -3356,17 +3639,13 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  Code: Integer;
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
-
-  // Terminate any running LanEx launcher process for this specific installation
-  Exec('powershell.exe', '-NoProfile -WindowStyle Hidden -Command "Get-Process -Name LanEx -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ' + PSQuote(ExpandConstant('{app}') + '\*') + ' } | Stop-Process -Force"', '', SW_HIDE, ewWaitUntilTerminated, Code);
-
-  // Remove dynamically written launcher configuration
+  StopLanExLauncher;
+  // Written by code at install time, so Inno's uninstall log does not know them.
   DeleteFile(ExpandConstant('{app}\appliance.json'));
+  DeleteFile(ExpandConstant('{userdesktop}\{#AppName}.lnk'));
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -3413,8 +3692,14 @@ begin
     LogLine('created desktop shortcut');
   end;
 
-  // 4. Commit final readiness now that Windows files, appliance.json, and Linux appliance are verified
-  RecordSetupOutcome('ready', 'All selected components passed strict readiness.');
+  // 4. Commit final readiness now that Windows files, appliance.json, and Linux
+  //    appliance are verified. The launcher refuses to start without it, so a
+  //    failure here is retried and then said out loud, never only logged.
+  if not RecordReadyWithRetry then
+    MsgBox('LanEx installed, but Setup could not record that it is ready, so LanEx '
+      + 'may refuse to start.' + #13#10#13#10 + 'Run Repair LanEx from the Start menu; it '
+      + 'only checks and records the state.' + #13#10#13#10 + 'Install log: ' + LogFile,
+      mbError, MB_OK);
 
   // 5. Commit update checkpoint (clearing rollback state now that installation succeeded)
   CompleteUpdateCheckpoint(False);

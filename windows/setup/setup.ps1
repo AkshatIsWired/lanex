@@ -13,7 +13,7 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('NewManifest', 'InitializeState', 'ResolveAppliance', 'BindAppliance', 'SetComponent', 'ReadState',
         'Preflight', 'EnableFeatures', 'StageInstaller', 'RegisterResume', 'ClearResume', 'PlanChoices', 'RecordOutcome',
-        'ValidateUninstall', 'ExportAppliance', 'RemoveAppliance', 'CommitUpdate', 'RollbackUpdate')]
+        'ValidateUninstall', 'ExportAppliance', 'RemoveAppliance', 'CommitUpdate', 'RollbackUpdate', 'NetworkCheck')]
     [string]$Action,
     [string]$StatePath,
     [string]$ManifestPath,
@@ -44,6 +44,10 @@ param(
     [string]$ProvisionScriptPath,
     [string]$SelftestPath,
     [string]$ConstraintsPath,
+    [string]$LockPath,
+    [string]$PdkAssetsPath,
+    [string]$AptSnapshot,
+    [string]$RootfsUrls,
     [string]$CatalogPath,
     [string]$PdkPinsPath,
     [string]$RootfsUrl,
@@ -71,12 +75,21 @@ param(
     [string]$TestWslFixturePath,
     [string]$ExportPath,
     [string]$ConfirmedInstallId,
-    [string]$OwnedDataRoot
+    [string]$OwnedDataRoot,
+    [ValidateSet('full', 'minimal')]
+    [string]$NetworkProfile = 'full',
+    [ValidateSet('0', '1')]
+    [string]$NeedRootfs = '0'
 )
 
 $ErrorActionPreference = 'Stop'
 $StateSchema = 1
 $ManifestSchema = 1
+# Below this much RAM Setup stops: WSL gets half of it, which leaves too little
+# for Docker and one LibreLane run. Below RecommendedMemoryBytes it warns.
+# Measured on the 8 GB Ship line VM (see installer-workspace/outputs).
+$MinMemoryBytes = [int64]5GB
+$RecommendedMemoryBytes = [int64]7GB
 
 function Get-Sha256([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -599,6 +612,16 @@ function Get-LivePreflightFacts {
             }
         } catch {}
     }
+    # Group Policy / Intune can switch WSL off (WSL's ADMX writes these values).
+    $wslPolicy = 'none'
+    try {
+        $pol = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Policies\WSL' -ErrorAction Stop
+        if ($null -ne $pol.AllowWSL -and [int]$pol.AllowWSL -eq 0) { $wslPolicy = 'wsl-disabled' }
+    } catch {}
+    $memoryBytes = [int64]0
+    if ($null -ne $computerSystem -and $null -ne $computerSystem.TotalPhysicalMemory) {
+        $memoryBytes = [int64]$computerSystem.TotalPhysicalMemory
+    }
     $boot = ''
     if ($null -ne $operatingSystem -and $null -ne $operatingSystem.LastBootUpTime) {
         try { $boot = $operatingSystem.LastBootUpTime.ToUniversalTime().ToString('o') } catch {}
@@ -629,6 +652,8 @@ function Get-LivePreflightFacts {
         }
         hypervisorPresent = $hypervisor
         firmwareVirtualization = $firmware
+        memoryBytes = $memoryBytes
+        wslPolicy = $wslPolicy
         features = [pscustomobject][ordered]@{
             wsl = Get-FeatureState 'Microsoft-Windows-Subsystem-Linux'
             virtualMachinePlatform = Get-FeatureState 'VirtualMachinePlatform'
@@ -655,6 +680,11 @@ function Get-PreflightDecision($Facts) {
         $code = 'unsupported-architecture'; $blocked = $true
     } elseif ([int]$Facts.windowsBuild -lt 19044) {
         $code = 'unsupported-windows'; $blocked = $true
+    } elseif ([string]$Facts.wslPolicy -eq 'wsl-disabled') {
+        $code = 'wsl-blocked-by-policy'; $blocked = $true
+    } elseif ($null -ne $Facts.memoryBytes -and [int64]$Facts.memoryBytes -gt 0 -and
+            [int64]$Facts.memoryBytes -lt [int64]$MinMemoryBytes) {
+        $code = 'not-enough-memory'; $blocked = $true
     } elseif ($Facts.hypervisorPresent -ne $true -and
             [string]$Facts.firmwareVirtualization -eq 'disabled' -and
             $Facts.wsl.statusUsable -ne $true) {
@@ -683,7 +713,44 @@ function Get-PreflightDecision($Facts) {
         needsElevation = $needsElevation
         needsRestart = $needsRestart
         firmwareNotice = $firmwareNotice
+        lowMemory = ($null -ne $Facts.memoryBytes -and [int64]$Facts.memoryBytes -gt 0 -and
+            [int64]$Facts.memoryBytes -lt [int64]$RecommendedMemoryBytes)
+        memoryGB = if ($null -ne $Facts.memoryBytes) { [math]::Round([int64]$Facts.memoryBytes / 1GB, 1) } else { 0 }
     }
+}
+
+function Test-RequiredHosts {
+    <# One HEAD request per host Setup will download from, through the same
+       Windows proxy settings the browser uses. Returns the hosts that failed. #>
+    $targets = @(
+        @{ name = 'Ubuntu package snapshot'; url = 'https://snapshot.ubuntu.com/' },
+        @{ name = 'Python packages (pypi.org)'; url = 'https://pypi.org/simple/pip/' },
+        @{ name = 'Python package files'; url = 'https://files.pythonhosted.org/' }
+    )
+    if ($NetworkProfile -ne 'minimal') {
+        $targets += @{ name = 'LibreLane tool image (ghcr.io)'; url = 'https://ghcr.io/v2/' }
+        $targets += @{ name = 'PDK downloads (github.com)'; url = 'https://github.com/fossi-foundation/ciel-releases/releases' }
+    }
+    if ($NeedRootfs -eq '1') {
+        $targets += @{ name = 'Ubuntu image (releases.ubuntu.com)'; url = 'https://releases.ubuntu.com/24.04.4/SHA256SUMS' }
+    }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $failed = @()
+    foreach ($t in $targets) {
+        $ok = $false; $why = ''
+        for ($i = 0; $i -lt 2 -and -not $ok; $i++) {
+            try {
+                $r = Invoke-WebRequest -Uri $t.url -Method Head -UseBasicParsing -TimeoutSec 20 -MaximumRedirection 5
+                $ok = ([int]$r.StatusCode -lt 500)
+            } catch {
+                $resp = $_.Exception.Response
+                if ($null -ne $resp -and [int]$resp.StatusCode -in @(401, 403, 404, 405)) { $ok = $true }
+                else { $why = $_.Exception.Message }
+            }
+        }
+        if (-not $ok) { $failed += [pscustomobject][ordered]@{ name = $t.name; url = $t.url; error = $why } }
+    }
+    return [pscustomobject][ordered]@{ schema = 1; ok = ($failed.Count -eq 0); failed = $failed }
 }
 
 function Invoke-Preflight {
@@ -1022,7 +1089,7 @@ function Reset-ChangedComponents($State, $Manifest) {
 function New-BuildManifest {
     foreach ($required in @($OutputPath, $SourceSha, $WheelPath, $InstallScriptPath,
             $ProvisionScriptPath, $SelftestPath, $ConstraintsPath, $CatalogPath, $PdkPinsPath,
-            $RootfsUrl, $RootfsSha256, $ImageDigest, $Gds3dCommit)) {
+            $RootfsUrl, $RootfsSha256, $ImageDigest, $Gds3dCommit, $LockPath, $PdkAssetsPath, $AptSnapshot)) {
         if ([string]::IsNullOrWhiteSpace($required)) { throw 'NewManifest is missing a required argument.' }
     }
     if ($SourceSha -notmatch '^[0-9a-fA-F]{40}$') { throw 'SourceSha must be a full commit SHA.' }
@@ -1032,6 +1099,8 @@ function New-BuildManifest {
     }
     if ($ImageDigest -notmatch '^sha256:[0-9a-fA-F]{64}$') { throw 'ImageDigest must be an immutable sha256 digest.' }
     if ($Gds3dCommit -notmatch '^[0-9a-fA-F]{40}$') { throw 'Gds3dCommit must be a full commit SHA.' }
+    if ($AptSnapshot -notmatch '^[0-9]{8}T[0-9]{6}Z$') { throw 'AptSnapshot must be a snapshot.ubuntu.com ID like 20261023T000000Z.' }
+    $pdkAssets = Read-JsonFile $PdkAssetsPath 'PDK asset pins'
     $catalog = Read-JsonFile $CatalogPath 'Capability catalog'
     $pins = Read-JsonFile $PdkPinsPath 'PDK pins'
     $payload = [ordered]@{
@@ -1041,6 +1110,7 @@ function New-BuildManifest {
         selftestSha256 = Get-Sha256 $SelftestPath
         setupWorkerSha256 = Get-Sha256 $PSCommandPath
         constraintsSha256 = Get-Sha256 $ConstraintsPath
+        lockSha256 = Get-Sha256 $LockPath
         catalogSha256 = Get-Sha256 $CatalogPath
         pdkPinsSha256 = Get-Sha256 $PdkPinsPath
     }
@@ -1054,7 +1124,14 @@ function New-BuildManifest {
         source = [ordered]@{ repository = $SourceRepository; ref = $SourceRef; sha = $SourceSha.ToLowerInvariant() }
         app = [ordered]@{ version = $AppVersion; channel = $Channel }
         target = [ordered]@{ os = 'windows'; architecture = 'amd64'; minBuild = 19044; primary = 'windows-11-x64' }
-        rootfs = [ordered]@{ url = $RootfsUrl; sha256 = $RootfsSha256.ToLowerInvariant(); sizeBytes = $RootfsSizeBytes }
+        rootfs = [ordered]@{
+            url = $RootfsUrl
+            urls = if ($RootfsUrls) { @($RootfsUrls -split '\|' | Where-Object { $_ }) } else { @($RootfsUrl) }
+            sha256 = $RootfsSha256.ToLowerInvariant()
+            # Informational only: shown in estimates, never compared to a download.
+            sizeBytes = $RootfsSizeBytes
+        }
+        apt = [ordered]@{ snapshot = $AptSnapshot; source = 'https://snapshot.ubuntu.com/ubuntu/' + $AptSnapshot + '/' }
         bakedRootfs = if ($BakedRootfsSha256) {
             [ordered]@{
                 file = $BakedRootfsFile
@@ -1066,12 +1143,13 @@ function New-BuildManifest {
             }
         } else { $null }
         payload = $payload
-        python = [ordered]@{ supported = @('3.10', '3.11', '3.12', '3.13'); constraintsFile = [IO.Path]::GetFileName($ConstraintsPath) }
+        python = [ordered]@{ supported = @('3.12'); constraintsFile = [IO.Path]::GetFileName($ConstraintsPath); lockFile = [IO.Path]::GetFileName($LockPath) }
         dependencies = [ordered]@{ librelane = '3.0.4'; ciel = '2.6.1' }
         image = [ordered]@{ reference = $ImageReference; digest = $ImageDigest.ToLowerInvariant() }
         gds3d = [ordered]@{ repository = 'trilomix/GDS3D'; commit = $Gds3dCommit.ToLowerInvariant() }
         pdkPins = $pins
         pdkCatalog = $catalog.pdk_catalog
+        pdkAssets = $pdkAssets
         sizeEstimates = [ordered]@{
             rootfsDownloadBytes = $RootfsSizeBytes
             measuredBaseInstalledBytes = [int64]1395864372
@@ -1088,6 +1166,7 @@ function New-BuildManifest {
     $manifest.componentFingerprints.rootfs = Get-TextSha256 ($manifest.rootfs | ConvertTo-Json -Compress)
     $manifest.componentFingerprints.image = Get-TextSha256 ($manifest.image | ConvertTo-Json -Compress)
     $manifest.componentFingerprints.pdks = Get-TextSha256 (($manifest.pdkPins | ConvertTo-Json -Depth 20 -Compress) + ($manifest.pdkCatalog | ConvertTo-Json -Depth 20 -Compress))
+    $manifest.componentFingerprints.app = Get-TextSha256 ($manifest.componentFingerprints.app + ($manifest.apt | ConvertTo-Json -Compress))
     Write-AtomicJson $OutputPath $manifest
     return $manifest
 }
@@ -1326,6 +1405,7 @@ $result = switch ($Action) {
     'RemoveAppliance' { Remove-OwnedAppliance }
     'CommitUpdate' { Complete-Update $false }
     'RollbackUpdate' { Complete-Update $true }
+    'NetworkCheck' { Test-RequiredHosts }
     'ReadState' {
         $s = Migrate-State (Read-JsonFile $StatePath 'Install state')
         Assert-StateOwner $s (Get-OwnerSid)

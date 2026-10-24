@@ -13,6 +13,21 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Pinned inputs that are not files in the repository. The rootfs is tried at
+# each URL in order (our mirror first); only its SHA-256 decides. The apt
+# snapshot fixes every Ubuntu package version for every install.
+MIRROR_BASE = "https://github.com/AkshatIsWired/lanex/releases/download/deps-v1"
+ROOTFS_FILE = "ubuntu-24.04.4-wsl-amd64.wsl"
+ROOTFS_URL = f"https://releases.ubuntu.com/24.04.4/{ROOTFS_FILE}"
+ROOTFS_URLS = "|".join([
+    f"{MIRROR_BASE}/{ROOTFS_FILE}",
+    ROOTFS_URL,
+    f"https://old-releases.ubuntu.com/releases/24.04.4/{ROOTFS_FILE}",
+])
+ROOTFS_SHA256 = "9b2f7730dc68227dd04a9f3e5eab86ad85caf556b8606ad94f1f29ff5c4fd3f5"
+ROOTFS_SIZE_BYTES = 391541571  # informational; nothing compares it to a download
+APT_SNAPSHOT = "20261023T000000Z"
+
 def run_cmd(cmd: list[str] | str, cwd: Path = REPO_ROOT, shell: bool = False) -> None:
     print(f"==> Running: {cmd if isinstance(cmd, str) else ' '.join(cmd)}")
     res = subprocess.run(cmd, cwd=cwd, shell=shell)
@@ -63,7 +78,7 @@ def main() -> int:
     # 2. Build Python wheel
     print("[*] Building Python wheel...")
     dist_dir = REPO_ROOT / "dist"
-    run_cmd([sys.executable, "-m", "build", "-w"])
+    run_cmd([sys.executable, "-I", "-m", "build", "-w"])
     wheels = sorted(dist_dir.glob("*.whl"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not wheels:
         raise SystemExit("No wheel built in dist/")
@@ -130,11 +145,15 @@ def main() -> int:
             ProvisionScriptPath = 'windows/provision/provision.sh'
             SelftestPath = 'windows/provision/selftest.sh'
             ConstraintsPath = 'windows/setup/constraints.txt'
+            LockPath = 'windows/setup/requirements.lock'
+            PdkAssetsPath = 'windows/setup/pdk-assets.json'
+            AptSnapshot = '{APT_SNAPSHOT}'
+            RootfsUrls = '{ROOTFS_URLS}'
             CatalogPath = 'docs/windows-installer-handoff/CAPABILITY-INVENTORY.json'
             PdkPinsPath = 'windows/setup/pdk-pins.json'
-            RootfsUrl = 'https://releases.ubuntu.com/24.04.4/ubuntu-24.04.4-wsl-amd64.wsl'
-            RootfsSha256 = '9b2f7730dc68227dd04a9f3e5eab86ad85caf556b8606ad94f1f29ff5c4fd3f5'
-            RootfsSizeBytes = 391118848
+            RootfsUrl = '{ROOTFS_URL}'
+            RootfsSha256 = '{ROOTFS_SHA256}'
+            RootfsSizeBytes = {ROOTFS_SIZE_BYTES}
             ImageReference = 'ghcr.io/librelane/librelane:3.0.4'
             ImageDigest = 'sha256:eab07a50fa9ae481f631d904bd9fbaa99752c587fdbddb7c8cf2ac04208eecd9'
             Gds3dCommit = 'dc6d965225c9f5ed2a6faefb7ea30665429060fe'
@@ -167,6 +186,7 @@ def main() -> int:
         f"/DLanexWheel={wheel_path}",
         f"/DSetupWorkerSha256={worker_hash}",
         r"/DLauncherExe=..\launcher\LanEx.exe",
+        f"/DMirrorBase={MIRROR_BASE}",
         f"/O{out_dir}",
         str(REPO_ROOT / "windows" / "installer" / "lanex.iss")
     ]
