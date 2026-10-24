@@ -372,6 +372,8 @@ var
   ExistingReady, BaselineCaptured: Boolean;
   // Preparation ended with a message: the Preparing page must show it.
   PrepareResultShown: Boolean;
+  // Why the elevated feature step failed, in Windows' own words.
+  FeatureFailure: String;
   BaselineDownloadMB, BaselineAppMB: Int64;
   // The .part file curl is writing (RunLogged shows its size as progress).
   DownloadWatchPath: String;
@@ -2545,7 +2547,10 @@ begin
   finally
     WorkerRunning := False;
   end;
+  FeatureFailure := '';
   Result := LoadStringFromFile(OutputFile + '.done', Raw) and (Pos('ok', String(Raw)) = 1);
+  if (not Result) and (Length(Raw) > 0) then
+    FeatureFailure := Trim(StripNulls(String(Raw)));
   if FileExists(OutputFile) and LoadStringFromFile(OutputFile, Raw) then
     LogLine('feature helper result: ' + Trim(UTF8Decode(Raw)));
   if not Result then
@@ -3214,7 +3219,10 @@ begin
     SetPhase(1, 6, 'Requesting permission for two Windows features...');
     if not EnableWsl then
     begin
-      Result := 'Windows Subsystem for Linux could not be turned on.' + #13#10#13#10
+      Result := 'Windows Subsystem for Linux could not be turned on.' + #13#10#13#10;
+      if FeatureFailure <> '' then
+        Result := Result + 'Windows reported: ' + FeatureFailure + #13#10#13#10;
+      Result := Result
         + 'The administrator prompt may have been cancelled, or company policy '
         + 'may block Windows Subsystem for Linux / Virtual Machine Platform. '
         + 'An administrator must enable those features; Setup cannot bypass policy.'

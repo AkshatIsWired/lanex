@@ -851,9 +851,22 @@ function Enable-WindowsFeatures {
         }
         if ($failed.Count -eq 0 -and (Test-Path -LiteralPath $wslExe -PathType Leaf)) {
             $env:WSL_UTF8 = '1'
-            $text = (& $wslExe --install --no-distribution 2>&1 | Out-String) -replace "`0", ''
+            # Best effort only. On Windows 10 before the restart wsl.exe writes
+            # "Catastrophic failure" to stderr, which Windows PowerShell turns
+            # into a terminating error under ErrorActionPreference=Stop; that
+            # must not undo the two features that did turn on.
+            $previousPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $text = (& $wslExe --install --no-distribution 2>&1 | ForEach-Object { [string]$_ } | Out-String) -replace "`0", ''
+                $packageExit = [int]$LASTEXITCODE
+            } catch {
+                $text = [string]$_.Exception.Message; $packageExit = -1
+            } finally {
+                $ErrorActionPreference = $previousPreference
+            }
             Add-OrSet $result 'wslPackage' ([pscustomobject][ordered]@{
-                exitCode = [int]$LASTEXITCODE; output = $text.Trim() })
+                exitCode = $packageExit; output = $text.Trim() })
         }
     }
     if ($OutputPath) { Write-AtomicJson $OutputPath $result }
