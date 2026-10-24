@@ -458,7 +458,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
     active_step: List[str] = []
 
     sizes = plan["manifest"].get("sizeEstimates") or {}
-    image_bytes = int(sizes.get("estimatedImageDownloadBytes") or 3.2 * _GIB)
+    image_bytes = int(sizes.get("estimatedImageDownloadBytes") or 1.48 * _GIB)
     download_total = 0.0
     if plan["image"] and not initial["checks"].get("container:image", {}).get("ready"):
         download_total += image_bytes

@@ -1445,14 +1445,16 @@ var
 begin
   if (ProfileRadioRecommended <> nil) and ProfileRadioRecommended.Checked then
   begin
-    DownloadMB := 4200;
+    // Measured on the clean Windows 10 and 11 VMs (2026-10-25): 2.35 GB
+    // downloaded, 13.9 GB on disk after the install.
+    DownloadMB := 2400;
     InstalledMB := 14036;
     AppMB := 22500;
     TempMB := 0;
   end
   else if (ProfileRadioComplete <> nil) and ProfileRadioComplete.Checked then
   begin
-    DownloadMB := 7800;
+    DownloadMB := 6100;
     InstalledMB := 36500;
     AppMB := 42000;
     TempMB := 0;
@@ -1485,18 +1487,18 @@ begin
     begin
       if CustomCheckListBox.Checked[IdxSky130A] or CustomCheckListBox.Checked[IdxSky130B] then
       begin
-        PdkDownloadMB := PdkDownloadMB + 2560;
+        PdkDownloadMB := PdkDownloadMB + 2950;
         PdkInstalledMB := PdkInstalledMB + 15800;
       end;
       if CustomCheckListBox.Checked[IdxGf180A] or CustomCheckListBox.Checked[IdxGf180B] or
          CustomCheckListBox.Checked[IdxGf180C] or CustomCheckListBox.Checked[IdxGf180D] then
       begin
-        PdkDownloadMB := PdkDownloadMB + 1844;
+        PdkDownloadMB := PdkDownloadMB + 655;
         PdkInstalledMB := PdkInstalledMB + 8500;
       end;
       if CustomCheckListBox.Checked[IdxIhp] then
       begin
-        PdkDownloadMB := PdkDownloadMB + 1946;
+        PdkDownloadMB := PdkDownloadMB + 410;
         PdkInstalledMB := PdkInstalledMB + 4000;
       end;
     end;
@@ -1505,8 +1507,9 @@ begin
       (CustomCheckListBox.Checked[IdxImage] or (PdkDownloadMB > 0));
     if HasImage then
     begin
-      DownloadMB := DownloadMB + 3200;
-      InstalledMB := InstalledMB + 7175;
+      // The LibreLane image: 1.48 GB pulled, 7.5 GB unpacked (measured).
+      DownloadMB := DownloadMB + 1500;
+      InstalledMB := InstalledMB + 7700;
       HeadroomMB := 4096;
     end
     else
@@ -1516,7 +1519,7 @@ begin
     DownloadMB := DownloadMB + PdkDownloadMB;
 
     if HasImage then
-      ExtractMB := ((3200 + PdkDownloadMB) * 35 + 99) div 100
+      ExtractMB := ((1500 + PdkDownloadMB) * 35 + 99) div 100
     else
       ExtractMB := (PdkDownloadMB * 35 + 99) div 100;
 

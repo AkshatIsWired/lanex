@@ -1295,8 +1295,8 @@ function New-BuildManifest {
             measuredBaseNetworkBytes = [int64]966367642
             estimatedNativeInstalledBytes = [int64]1288490189
             estimatedNativeNetworkBytes = [int64]751619277
-            estimatedImageDownloadBytes = [int64]3221225472
-            estimatedImageInstalledBytes = [int64]4294967296
+            estimatedImageDownloadBytes = [int64]1589137899
+            estimatedImageInstalledBytes = [int64]8074035200
             practicalRunHeadroomBytes = [int64]4294967296
         }
         componentFingerprints = [ordered]@{}
