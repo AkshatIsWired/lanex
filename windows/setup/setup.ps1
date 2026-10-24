@@ -622,6 +622,8 @@ function Get-LivePreflightFacts {
     if ($null -ne $computerSystem -and $null -ne $computerSystem.TotalPhysicalMemory) {
         $memoryBytes = [int64]$computerSystem.TotalPhysicalMemory
     }
+    $ubr = 0
+    try { $ubr = [int](Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop).UBR } catch {}
     $boot = ''
     if ($null -ne $operatingSystem -and $null -ne $operatingSystem.LastBootUpTime) {
         try { $boot = $operatingSystem.LastBootUpTime.ToUniversalTime().ToString('o') } catch {}
@@ -646,7 +648,7 @@ function Get-LivePreflightFacts {
     return [pscustomobject][ordered]@{
         nativeArchitecture = $nativeArchitecture.ToUpperInvariant()
         windowsBuild = [Environment]::OSVersion.Version.Build
-        windowsUbr = try { [int](Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop).UBR } catch { 0 }
+        windowsUbr = $ubr
         computer = [pscustomobject][ordered]@{
             manufacturer = if ($null -eq $computerSystem) { '' } else { [string]$computerSystem.Manufacturer }
             model = if ($null -eq $computerSystem) { '' } else { [string]$computerSystem.Model }
