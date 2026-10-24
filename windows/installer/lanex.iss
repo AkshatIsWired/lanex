@@ -716,6 +716,7 @@ begin
              (Pos('Processing triggers for', Line) > 0) or
              (Pos('Setting up lib', Line) > 0) or
              (Pos('Remainder of file ignored', Line) > 0) or
+             (Pos('(Reading database', Line) = 1) or
              (Pos('Error processing line', Line) > 0);
 
   if not IsNoise then
@@ -851,6 +852,10 @@ begin
     while True do
     begin
       ProcessSystemMessages;
+      // Inno greys Cancel while PrepareToInstall runs; a step that can run
+      // for an hour must stay cancellable (CancelButtonClick stops it safely).
+      if (WizardForm <> nil) and not WizardForm.CancelButton.Enabled then
+        WizardForm.CancelButton.Enabled := True;
       // Hand over every finished chunk, in order.
       ChunkFile := RunDir + '\chunk-' + Format('%.6d', [Seq]) + '.txt';
       while FileExists(ChunkFile) do
