@@ -1,0 +1,71 @@
+name: Windows install problem
+description: LanEx Setup failed, stopped, or LanEx will not start after installing.
+title: "[Windows install] "
+labels: ["windows-install"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying the LanEx beta. The install log tells us exactly which step failed, so please attach it.
+
+        **Where the install log is:** press <kbd>Win</kbd>+<kbd>R</kbd>, paste the line below, press Enter, and attach `install.log` (and `launcher.log` if LanEx would not start) from the folder that opens:
+
+        ```
+        %LOCALAPPDATA%\LanEx\logs
+        ```
+
+        The full path looks like `C:\Users\<your name>\AppData\Local\LanEx\logs\install.log`. Setup's error dialogs also show this path. The log contains no passwords; it does contain your Windows user name in file paths.
+  - type: dropdown
+    id: step
+    attributes:
+      label: Where did it stop?
+      options:
+        - Before the wizard opened (a Windows message)
+        - Checking this PC (virtualization, memory, disk, WSL)
+        - Turning on WSL / the restart
+        - Downloading the LanEx environment (Ubuntu image)
+        - Preparing the base environment
+        - Installing tools, the LibreLane image or PDKs
+        - Setup finished, but LanEx does not start
+        - LanEx starts, but a design run fails
+        - Uninstall or reinstall
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: The message you saw (a screenshot is welcome), and what you clicked before it.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Install log
+      description: Drag install.log here, or paste its last 100 lines.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: Press Win+R, type `winver`, press Enter. For example "Windows 11 Home 24H2 (build 26100.4061)".
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Memory and free disk
+      description: For example "8 GB RAM, 60 GB free on C:".
+  - type: textarea
+    id: environment
+    attributes:
+      label: Anything special about this PC?
+      description: Work or school PC, VPN, company proxy, antivirus other than Microsoft Defender, other WSL distributions or Docker Desktop, a user name with spaces or accents, a virtual machine.
+  - type: input
+    id: setup
+    attributes:
+      label: Which Setup file?
+      description: The name of the release you downloaded LanEx-Setup.exe from.
