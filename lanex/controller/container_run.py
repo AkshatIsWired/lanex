@@ -162,6 +162,7 @@ def build_dockerized_argv(
     extra_sources: Optional[Sequence[str]] = None,
     extra_extras: Optional[Sequence[str]] = None,
     overwrite: bool = False,
+    initial_state: Optional[str] = None,
     python_exe: Optional[str] = None,
     entry_module: str = "librelane",
 ) -> List[str]:
@@ -175,7 +176,8 @@ def build_dockerized_argv(
 
     The container's working directory is the host CWD (the design dir), so we
     pass the config as a path **relative** to the design dir when possible —
-    that is mount-safe on Linux/macOS/Windows alike.
+    that is mount-safe on Linux/macOS/Windows alike. *initial_state* (``-i``,
+    another run's ``state_out.json``) is relativised the same way.
     """
     python_exe = python_exe or sys.executable or "python3"
     design_dir = Path(design_dir)
@@ -219,6 +221,12 @@ def build_dockerized_argv(
         inner += ["--run-tag", str(tag)]
     if overwrite:
         inner += ["--overwrite"]
+    if initial_state:
+        try:
+            st = str(Path(initial_state).resolve().relative_to(design_dir.resolve()))
+        except Exception:
+            st = str(initial_state)
+        inner += ["-i", st]
     if frm:
         inner += ["-F", str(frm)]
     if to:

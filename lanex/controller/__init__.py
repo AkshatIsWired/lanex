@@ -16,7 +16,6 @@ Public API
 
 from __future__ import annotations
 
-from . import alerts
 from . import events
 from . import fsbrowser
 from . import history
@@ -28,7 +27,6 @@ from . import reports
 from . import runner
 from . import tools
 
-from .alerts import explain_alert, explain_checker_failure
 from .history import list_runs, get_run, diff_runs
 from .introspect import (
     list_variables,
@@ -47,7 +45,6 @@ from .fsbrowser import (
     walk_sources,
 )
 from .models import (
-    AdvisoryCard,
     DRCReport,
     DesignFormatInfo,
     Event,
@@ -71,7 +68,6 @@ from .tools import check_tools, install_tool, EDA_TOOLS
 
 __all__ = [
     # Sub-modules
-    "alerts",
     "events",
     "fsbrowser",
     "installer",
@@ -83,8 +79,6 @@ __all__ = [
     "runner",
     "tools",
     # Functions
-    "explain_alert",
-    "explain_checker_failure",
     "list_runs",
     "get_run",
     "diff_runs",
@@ -110,7 +104,6 @@ __all__ = [
     "install_ciel",
     "EDA_TOOLS",
     # Classes
-    "AdvisoryCard",
     "DRCReport",
     "DesignFormatInfo",
     "Event",

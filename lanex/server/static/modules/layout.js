@@ -89,6 +89,26 @@ export async function revealSource(source) {
   if (all.some((s) => s.source === source) && S.source !== source) { stopPlay(); await openSource(source); }
 }
 
+// A link to a place on the chip (nav.js go("layout", { box: "x0,y0,x1,y1" }) in
+// µm), e.g. one of Verify's DRC places: the final layout, its check markers on,
+// zoomed there, with the Checks pane open.
+export async function revealBox(box) {
+  await new Promise((r) => setTimeout(r, 0));
+  if (_loading) await _loading; else await renderLayout();
+  const b = String(box || "").split(",").map(Number);
+  if (b.length !== 4 || !b.every(Number.isFinite) || !S.src) return;
+  const final = (S.src.stages || []).find((s) => s.id === "final");
+  if (final && S.source !== final.source) { stopPlay(); await openSource(final.source, { keepView: false }); }
+  if (!S.canvas) return;
+  if (!S.markers) await loadMarkers(S.tag);
+  S.showMarkers = true;
+  document.querySelector("#lx-side [data-lx-pane='checks']")?.click();
+  const pad = Math.max(b[2] - b[0], b[3] - b[1], 2) * 0.6;
+  S.canvas.zoomToBox([b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad], 0);
+  S.pin = { x: (b[0] + b[2]) / 2, y: (b[1] + b[3]) / 2, t: performance.now() };
+  S.canvas.paintOverlay();
+}
+
 // ------------------------------------------------------------------ runs
 // The run is the app's (context.js): Runs, the run bar on any results page and
 // a finished run all change it, and this page follows.

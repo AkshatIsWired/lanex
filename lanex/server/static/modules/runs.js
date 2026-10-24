@@ -231,9 +231,10 @@ async function batchDelete() {
     await focusDesign(designDir);
     for (const tag of tags) {
       try {
-        await api.deleteRun(tag);
-        if (state.selectedRunTag === tag) state.selectedRunTag = null;
-        done++;
+        if (await deleteGuarded(tag)) {
+          if (state.selectedRunTag === tag) state.selectedRunTag = null;
+          done++;
+        }
       } catch (_e) { failed++; }
     }
   }
@@ -451,12 +452,33 @@ async function deleteRunFlow(tag) {
   });
   if (!ok) return;
   try {
-    await api.deleteRun(tag);
+    if (!(await deleteGuarded(tag))) return;
     if (state.selectedRunTag === tag) state.selectedRunTag = null;
     await renderRuns();
     toast.show("Deleted run '" + tag + "'.", "success");
   } catch (ex) {
     await alertDialog({ title: "Delete failed", body: ex.message || String(ex) });
+  }
+}
+
+// Runs resumed from another one read that run's earlier steps from its folder:
+// the server refuses to delete it while they exist, and this asks once more.
+async function deleteGuarded(tag) {
+  try {
+    await api.deleteRun(tag);
+    return true;
+  } catch (ex) {
+    const kids = ex && ex.status === 409 && ex.body && ex.body.children;
+    if (!kids || !kids.length) throw ex;
+    const ok = await confirmDialog({
+      title: "Other runs were resumed from " + tag, danger: true, confirmText: "Delete it anyway",
+      body: kids.join(", ") + (kids.length === 1 ? " was" : " were") + " resumed from '" + tag + "' and " + (kids.length === 1 ? "reads" : "read") +
+        " its earlier steps from its folder. Deleted, " + (kids.length === 1 ? "that run" : "those runs") +
+        " keep their own results and final GDS, but their earlier steps, pictures and checks go with it.",
+    });
+    if (!ok) return false;
+    await api.deleteRun(tag, true);
+    return true;
   }
 }
 

@@ -252,6 +252,7 @@ def cli_command_for(
     extra_sources: Optional[Sequence[str]] = None,
     extra_extras: Optional[Sequence[str]] = None,
     extra_config_files: Optional[Sequence[str]] = None,
+    initial_state: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Return the copy-pasteable CLI for a run, for both engines.
 
@@ -266,7 +267,10 @@ def cli_command_for(
     config rides along as an extra leading CONFIG_FILE positional (LibreLane's
     CLI takes ``CONFIG_FILES`` as ``nargs=-1`` and ``Config.load`` merges them).
     Omitting these produced a command that ran *different RTL* (or dropped
-    macros) for any design using the pickers — the exact reproduce-metadata bug."""
+    macros) for any design using the pickers — the exact reproduce-metadata bug.
+
+    *initial_state* (a ``state_out.json`` of an earlier run, relative to the
+    design dir) becomes ``-i``: a run resumed from another run's results."""
     cfg_rel = config_file
     try:
         cfg_rel = str(Path(config_file).resolve().relative_to(Path(design_dir).resolve()))
@@ -298,6 +302,8 @@ def cli_command_for(
             argv += ["-s", scl]
         if tag:
             argv += ["--run-tag", tag]
+        if initial_state:
+            argv += ["-i", initial_state]
         if frm:
             argv += ["-F", frm]
         if to:

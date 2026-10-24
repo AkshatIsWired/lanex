@@ -70,7 +70,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_runexplain": "When a run stops, Flow says why in plain words with the log's own numbers and what to change (GPL-0301 is the placement failure; GPL-0302 only a warning), and a run you stopped never reads as failed.",
     "test_flowstages": "Every page names the flow's seven stages the same way (Synthesis to Sign-off), and LibreLane's Classic steps fall into them in flow order.",
     "test_file_rename": "Renaming a file in the RTL IDE never overwrites or escapes the project, and the config keeps building it.",
-    "test_alerts": "Failed-step advisories map to the right plain-language explanation.",
+    "test_fixloop": "A fix names the first step that reads its setting and resumes the run there; config edits land in the right section and Undo restores the file byte for byte; timing and DRC diagnoses say only what LibreLane's reports support.",
     "test_watch_pin": "Run watch/pin/notes persist and read back correctly.",
     "test_dse_reverify": "DSE sweeps + targeted re-verify launch through the SAME assembly path as a normal run (Fear B).",
     "test_viewers_plugins": "Cell parsing + desktop-tool launch guards behave; plugin surface stays removed.",

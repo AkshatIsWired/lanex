@@ -50,7 +50,7 @@
 #sec-pipeline[data-fit=short] .fl-kpi-s { display: none; }
 #sec-pipeline[data-fit=short] .fl-warns { margin-top: var(--s-3); padding-top: var(--s-2); }
 #sec-pipeline[data-fit=short] .fl-ev { margin-top: var(--s-3); }
-#sec-pipeline[data-fit=short] .fl-fix { padding: 6px 10px; }
+#sec-pipeline[data-fit=short] .px-fix { padding: 6px 10px; }
 #sec-pipeline[data-fit=short] .fl-fix-note { display: none; }
 
 /* The failure and report cards put their parts side by side when the page is
@@ -61,7 +61,7 @@
   .fl-split-c { grid-column: 1 / -1; }
   .fl-split .fl-fixes-h { margin-top: 2px; }
   .fl-split .fl-kpis { margin-top: 2px; }
-  .fl-split .fl-ev, .fl-split .fl-fixes { max-width: none; }
+  .fl-split .fl-ev { max-width: none; }
   .fl-report .fl-split { grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.6fr); }
   .fl-split .fl-kpis { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); max-width: none; }
   .fl-split .fl-kpi-v { font-size: 20px; }
@@ -86,22 +86,6 @@
   letter-spacing: 0.16em; text-transform: uppercase; color: var(--met1);
 }
 body.theme-light .fl-fixes-h { color: var(--accent); }
-.fl-fixes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s-2); max-width: 980px; }
-.fl-fix {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--s-3);
-  padding: 10px 12px; background: color-mix(in srgb, var(--surface-2) 70%, transparent);
-  border: 1px solid var(--border); border-radius: var(--r-md);
-}
-.fl-fix-n {
-  width: 22px; height: 22px; display: grid; place-items: center; border-radius: 2px;
-  font: 600 12px var(--mono); color: var(--on-accent); background: var(--accent);
-}
-.fl-fix-what { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 14px; color: var(--text-strong); }
-.fl-fix-what code { font: 600 13px var(--mono); color: var(--text-strong); }
-.fl-fix-what svg { color: var(--text-muted); }
-.fl-fix-from { font: 13px var(--mono); color: var(--text-muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--fail) 60%, transparent); }
-.fl-fix-to { font: 600 13px var(--mono); color: var(--pass); }
-.fl-fix-why { margin-top: 2px; font-size: 13px; color: var(--text-muted); }
 .fl-fix-note { margin: var(--s-2) 0 0; font-size: 12.5px; color: var(--text-muted); }
 
 /* report card */

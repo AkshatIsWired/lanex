@@ -266,3 +266,234 @@ def timing_paths(run_dir: str | Path, *, kind: str = "setup", limit: int = 100) 
         "paths": real[:max(1, limit)],
         "histogram": _histogram([p["slack"] for p in real]),
     }
+
+
+# ---------------------------------------------------------------- where it failed
+# LibreLane times the design several times (Classic, 3.0.4): before placement
+# (STAPrePNR: ideal clocks, no wires, every STA corner), during place and route
+# (STAMidPNR, four times, the default corner only) and after routing
+# (STAPostPNR: every corner, with extracted parasitics). A corner a step didn't
+# time keeps the value an earlier step left in the metrics (LibreLane issue
+# #1040), so each step is read only for the corners it actually timed: the
+# banners in its max.rpt, or its per-corner folders.
+
+_STA_STEPS = ("OpenROAD.STAPrePNR", "OpenROAD.STAMidPNR", "OpenROAD.STAPostPNR")
+_AFTER = {  # the step before each STA, in plain words
+    "OpenROAD.STAPrePNR": "before placement",
+    "OpenROAD.GlobalPlacement": "after global placement",
+    "OpenROAD.RepairDesignPostGPL": "after placement",
+    "OpenROAD.DetailedPlacement": "after placement",
+    "OpenROAD.CTS": "after clock tree synthesis",
+    "OpenROAD.ResizerTimingPostCTS": "after timing repair",
+    "OpenROAD.GlobalRouting": "after global routing",
+    "OpenROAD.CheckAntennas": "after global routing",
+    "OpenROAD.RepairAntennas": "after global routing",
+    "OpenROAD.ResizerTimingPostGRT": "after global routing",
+    "OpenROAD.STAPostPNR": "after routing",
+}
+_VIO_RE = re.compile(r"^\[(setup|hold) (in|reg)-(reg|out)\]")
+
+
+def _base_id(sid: Optional[str]) -> str:
+    return re.sub(r"-\d+$", "", sid or "")
+
+
+def _corners_timed(d: Path) -> List[str]:
+    subs = sorted(p.name for p in d.iterdir() if p.is_dir() and (p / "max.rpt").is_file()) if d.is_dir() else []
+    if subs:
+        return subs
+    rpt = d / "max.rpt"
+    if not rpt.is_file():
+        return []
+    seen: List[str] = []
+    with rpt.open("r", encoding="utf-8", errors="replace") as f:
+        for i, line in enumerate(f):
+            m = _CORNER_RE.match(line)
+            if m and m.group(1) not in seen:
+                seen.append(m.group(1))
+            if i > 4000:
+                break
+    return seen
+
+
+def _violators(path: Path) -> Dict[str, Dict[str, int]]:
+    """``violator_list.rpt``: LibreLane's own split of every failing endpoint
+    into in-reg / reg-reg / reg-out / in-out, for setup and hold."""
+    out: Dict[str, Dict[str, int]] = {"setup": {}, "hold": {}}
+    if not path.is_file():
+        return out
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = _VIO_RE.match(line)
+            if m:
+                k = m.group(2) + "-" + m.group(3)
+                out[m.group(1)][k] = out[m.group(1)].get(k, 0) + 1
+    return out
+
+
+def sta_history(run_dir: str | Path) -> List[Dict[str, Any]]:
+    """Each timing analysis of the run in flow order (a resumed run's earlier
+    ones come from its parent): ``[{id, dir, run, when, signoff, corners:
+    {corner: {setup_ws, setup_tns, setup_vio, hold_ws, hold_tns, hold_vio,
+    kinds}}}]``, values from the step's own ``state_out.json`` for the corners
+    it timed, ``kinds`` from its violator lists."""
+    import json as _json
+
+    from . import history
+    out: List[Dict[str, Any]] = []
+    prev_id = None
+    for s in history.lineage_steps(run_dir):
+        sid = s["id"] or ""
+        base = _base_id(sid)
+        if base in _STA_STEPS and (s["path"] / "state_out.json").is_file():
+            try:
+                metrics = _json.loads((s["path"] / "state_out.json").read_text(encoding="utf-8")).get("metrics") or {}
+            except Exception:
+                metrics = {}
+            corners: Dict[str, Any] = {}
+            for c in _corners_timed(s["path"]):
+                def g(k: str) -> Any:
+                    return metrics.get(k + "__corner:" + c)
+                vdir = s["path"] / c if (s["path"] / c).is_dir() else s["path"]
+                corners[c] = {
+                    "setup_ws": g("timing__setup__ws"), "setup_tns": g("timing__setup__tns"),
+                    "setup_vio": g("timing__setup_vio__count"),
+                    "hold_ws": g("timing__hold__ws"), "hold_tns": g("timing__hold__tns"),
+                    "hold_vio": g("timing__hold_vio__count"),
+                    "kinds": _violators(vdir / "violator_list.rpt"),
+                }
+            if base in ("OpenROAD.STAPrePNR", "OpenROAD.STAPostPNR"):
+                when = _AFTER[base]
+            else:
+                pb = _base_id(prev_id)
+                when = _AFTER.get(pb, "after " + (pb.split(".")[-1] or "the step before"))
+            out.append({"id": sid, "dir": s["dir"], "run": s["run"], "path": str(s["path"]), "when": when,
+                        "signoff": base == "OpenROAD.STAPostPNR", "ideal_clocks": base == "OpenROAD.STAPrePNR",
+                        "corners": corners})
+        # Name an STA by the step that changed the design before it, not by
+        # the checks and bookkeeping in between.
+        if base not in _STA_STEPS and not sid.startswith(("Checker.", "Odb.")):
+            prev_id = sid
+    return out
+
+
+# ---------------------------------------------------------------- one path's budget
+_ROW_RE = re.compile(r"^\s*((?:-?\d+(?:\.\d+)?(?:e-?\d+)?\s+)*)([\^v]\s+)?(.*?)\s*$")
+
+
+def path_budget(path_text: str) -> Optional[Dict[str, Any]]:
+    """Where the time of one setup path goes, from its ``report_checks`` rows
+    (``-fields {slew cap input net fanout} -format full_clock_expanded``, as
+    LibreLane writes them). Driver pins carry five numbers (fanout, cap, slew,
+    delay, time) and their delay is the cell's; load pins carry three and
+    their delay is the wire's. Returns ``{period, launch, capture, io_in,
+    io_out, drive, clk_q, cells, wires, setup, uncertainty, crpr, levels,
+    fanout: {pin, n, delay}, start, end, arrival, required, slack}`` in ns, or
+    None when the text isn't a whole path."""
+    lines = path_text.splitlines()
+    start = next((ln for ln in lines[:6] if ln.startswith("Startpoint:")), None)
+    end = next((ln for ln in lines[:6] if ln.startswith("Endpoint:")), "")
+    if start is None:
+        return None
+    start_in = "input port" in start
+    start_name = _after("Startpoint:", start)
+    b: Dict[str, Any] = {
+        "period": None, "launch": 0.0, "capture": 0.0, "io_in": 0.0, "io_out": 0.0, "drive": 0.0,
+        "clk_q": 0.0, "cells": 0.0, "wires": 0.0, "setup": 0.0, "uncertainty": 0.0, "crpr": 0.0,
+        "levels": 0, "fanout": None, "start": "in" if start_in else "reg",
+        "end": "out" if "output port" in end else "reg", "arrival": None, "required": None, "slack": None}
+    edges: List[float] = []
+    required = False          # past "data arrival time"
+    started = start_in        # past the start register's clock pin
+    seen_driver = False
+
+    def rel(nums: List[float]) -> float:
+        return nums[-2] if len(nums) >= 2 else 0.0
+
+    for ln in lines:
+        s = ln.strip()
+        if not s or s.startswith(("Startpoint", "Endpoint", "Path ", "Fanout", "---")):
+            continue
+        m = _ROW_RE.match(ln)
+        nums = [float(x) for x in m.group(1).split()] if m and m.group(1) else []
+        desc = m.group(3) if m else s
+        if desc.startswith("data arrival time"):
+            if b["arrival"] is None and nums:   # the summary repeats it, negated
+                b["arrival"] = nums[-1]
+            required = True
+        elif desc.startswith("data required time"):
+            if b["required"] is None and nums:
+                b["required"] = nums[-1]
+        elif desc.startswith("slack"):
+            b["slack"] = nums[-1] if nums else None
+            break
+        elif desc.startswith("clock ") and "edge)" in desc:
+            if nums:
+                edges.append(nums[-1])
+        elif desc.startswith(("clock network delay", "clock source latency")):
+            b["capture" if required else "launch"] += rel(nums)
+        elif desc.startswith("input external delay"):
+            b["io_in"] += rel(nums)
+        elif desc.startswith("output external delay"):
+            b["io_out"] -= rel(nums)
+        elif desc.startswith("clock uncertainty"):
+            b["uncertainty"] -= rel(nums)
+        elif desc.startswith("clock reconvergence pessimism"):
+            b["crpr"] += rel(nums)
+        elif desc.startswith("library setup time"):
+            b["setup"] -= rel(nums)
+        elif m and m.group(2) and not desc.endswith("(net)"):
+            driver = len(nums) >= 5
+            delay = rel(nums)
+            pin = desc.split(" (")[0]
+            if required:
+                b["capture"] += delay          # the capture clock's tree
+            elif not started:
+                b["launch"] += delay           # the launch clock's tree, up to the register
+                if pin.startswith(start_name + "/"):
+                    started = True
+            elif driver:
+                if desc.endswith("(in)"):
+                    b["drive"] += delay        # the input port's driver
+                elif not seen_driver and not start_in:
+                    b["clk_q"] += delay        # the start register, clock to Q
+                else:
+                    b["cells"] += delay
+                    b["levels"] += 1
+                seen_driver = True
+                n_out = int(nums[0])
+                if b["fanout"] is None or n_out > b["fanout"]["n"]:
+                    b["fanout"] = {"pin": pin, "n": n_out, "delay": round(delay, 4)}
+            else:
+                b["wires"] += delay
+    if len(edges) >= 2:
+        b["period"] = round(edges[1] - edges[0], 6)
+    for k in ("launch", "capture", "io_in", "io_out", "drive", "clk_q", "cells", "wires", "setup", "uncertainty", "crpr"):
+        b[k] = round(b[k], 6)
+    return b if b["slack"] is not None else None
+
+
+def worst_setup_path(run_dir: str | Path, step_dir: str | Path, corner: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The worst setup path one STA step reported in *corner*, with its budget."""
+    d = Path(step_dir)
+    f = d / corner / "max.rpt" if corner and (d / corner / "max.rpt").is_file() else d / "max.rpt"
+    if not f.is_file():
+        return None
+    try:
+        with f.open("r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read(3_000_000)
+    except Exception:
+        return None
+    paths = [p for p in parse_report_checks(text) if p.get("slack") is not None and abs(p["slack"]) < _SENTINEL
+             and (not corner or p.get("corner") in (None, corner))]
+    if not paths:
+        return None
+    p = min(paths, key=lambda x: x["slack"])
+    out = {k: p.get(k) for k in ("startpoint", "endpoint", "slack")}
+    out["corner"] = p.get("corner") or corner
+    out["budget"] = path_budget(p.get("path_text") or "")
+    try:
+        out["report"] = f.relative_to(Path(run_dir)).as_posix()
+    except Exception:
+        out["report"] = None
+    return out

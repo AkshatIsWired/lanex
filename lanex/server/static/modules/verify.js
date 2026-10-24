@@ -8,7 +8,9 @@
 // global timing), DRC by rule, LVS counts, antenna and power, and the raw
 // reports. Every verdict is LibreLane's own (controller/verify.py mirrors its
 // Checker steps and the run's ERROR_ON_* switches); every number links to
-// the file it came from.
+// the file it came from. Failing checks carry the run's problems (problems.js):
+// the timing and DRC sections open with a diagnosis (verify-diag.js) and every
+// fix can be applied as a run resumed from this one (fixsheet.js).
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
@@ -23,6 +25,9 @@ import { toast } from "./toast.js";
 import * as AM from "./analytics-model.js";
 import * as V from "./verify-model.js";
 import { wireTips } from "./analytics-charts.js";
+import { problemsOf, problemForCheck, fixListHtml } from "./problems.js";
+import { timingDiagHtml, drcDiagHtml } from "./verify-diag.js";
+import "./fixsheet.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -34,6 +39,8 @@ let _diff = null;         // V.statusDiff(_rep, _base)
 let _filter = "all";      // all | problems | passed | unchecked
 let _open = new Set();    // expanded check ids
 let _token = 0;
+let _px = null;           // this run's problems (problems.js): diagnosis and fixes
+let _dxSrc = "";          // the DRC checker the diagnosis shows
 
 // ---------- formatting -----------------------------------------------------------
 
@@ -145,6 +152,15 @@ export async function revealCheck(id) {
   jumpTo("vf-checks", id);
 }
 
+// A link to the run's problems (the status bar's count): the checks, filtered.
+export async function revealProblems() {
+  if (_rendering) await _rendering;
+  _filter = "problems";
+  renderChecks();
+  wireProvBtns(document.getElementById("vf-checks"));
+  jumpTo("vf-checks");
+}
+
 function wireOnce() {
   const sec = document.getElementById("sec-verify");
   if (!sec || sec._vfWired) return;
@@ -187,6 +203,8 @@ function wireOnce() {
     if (rr) { rerun(rr.dataset.vfRerun); return; }
     const kl = t.closest("[data-vf-klayout]");
     if (kl) { openKlayout(kl); return; }
+    const dx = t.closest("[data-dx-src]");
+    if (dx) { _dxSrc = dx.dataset.dxSrc; renderDrc(); return; }
     const more = t.closest("[data-vf-more]");
     if (more) {
       const box = more.closest(".vf-more-box");
@@ -206,6 +224,13 @@ async function selectRun(tag) {
   try { rep = await api.verify(tag); } catch (_e) { rep = null; }
   if (my !== _token) return;
   _rep = rep;
+  if (_px && _px.tag !== tag) _px = null;
+  // The diagnosis arrives after the checks: the rows and sections fill in.
+  problemsOf(tag).then((px) => {
+    if (my !== _token || !px) return;
+    _px = px;
+    if (_rep) { renderChecks(); renderTiming(); renderDrc(); wireProvBtns(document.getElementById("vf-body")); }
+  });
   await loadBase();
   if (my !== _token) return;
   body.classList.remove("is-loading");
@@ -450,13 +475,19 @@ function toggleRow(id) {
 function detailHtml(c) {
   const h = V.HELP[c.id] || {};
   const problem = c.status === "fail" || c.status === "warn";
+  const px = problem ? problemForCheck(_px, c.id) : null;
+  const pxFixes = px ? (px.fixes || []) : [];
   const explain =
     "<div class='vf-explain'>" +
       (h.what ? "<p><span class='vf-k'>What it checks</span>" + esc(h.what) + "</p>" : "") +
       (h.why ? "<p><span class='vf-k'>Why it matters</span>" + esc(h.why) + "</p>" : "") +
       (c.detail ? "<p class='vf-callout is-" + esc(c.status) + "'>" + esc(c.detail) + "</p>" : "") +
+      (px && px.kind === "check" && px.id !== "check-" + c.id ? "<div class='vf-px'><p class='vf-px-t'><b>" + esc(px.title) + "</b></p>" +
+        "<p>" + esc(px.plain) + "</p>" + (sectionFor(c.id) ? "<button class='btn btn-ghost btn-xs' data-vf-jump='vf-diag-" +
+        (px.id === "drc" ? "drc" : (px.diag || {}).kind) + "'>" + icon("chevron", { size: 12 }) + " The diagnosis</button>" : "") + "</div>" : "") +
+      (pxFixes.length ? "<div class='vf-fix'><span class='vf-k'>What to change</span>" + fixListHtml(pxFixes, { tag: _tag, title: px.title }) + "</div>" : "") +
       (c.note ? "<p class='vf-callout is-warn'>" + esc(c.note) + "</p>" : "") +
-      (h.fix && h.fix.length && (problem || c.status === "skipped")
+      (h.fix && h.fix.length && (problem || c.status === "skipped") && !pxFixes.length
         ? "<div class='vf-fix'><span class='vf-k'>" + (c.status === "skipped" ? "To turn it on" : "What to try") + "</span><ol>" + h.fix.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ol></div>"
         : (h.fix && h.fix.length ? "<details class='vf-fix-later'><summary>If this ever fails</summary><ol>" + h.fix.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ol></details>" : "")) +
     "</div>";
@@ -560,8 +591,13 @@ function renderTiming() {
     ? "<p class='vf-callout is-warn'>Sign-off timing (OpenROAD.STAPostPNR) didn't run in this run. These are the last estimates an earlier timing step left behind, before routing finished; they are not a sign-off result.</p>" : "";
   el.innerHTML = head("Timing", "Timing in every corner", lede,
       btn("Timing charts in Analytics", "data-go='analytics' data-go-section='an-timing'", { ic: "chevron" })) +
-    est + facts + "<div class='an-card vf-card-flush'>" + table + "</div>" +
+    est + facts + timingDiag() + "<div class='an-card vf-card-flush'>" + table + "</div>" +
     "<p class='an-foot'>A corner is a process (tt typical, ss slow, ff fast), temperature and voltage, with wire parasitics at their min, nominal or max. Worst values are outlined; red fails the run, amber only warns.</p>";
+}
+
+function timingDiag() {
+  const list = ((_px && _px.problems) || []).filter((p) => p.id === "timing-setup" || p.id === "timing-hold");
+  return list.map((p) => timingDiagHtml(p, _tag)).join("");
 }
 
 // ---------- 4. DRC -------------------------------------------------------------------
@@ -606,6 +642,7 @@ function renderDrc() {
   el.innerHTML = head("Design rules", "DRC: does the layout follow the foundry's rules?",
       "Two independent checkers read the final GDS (Magic and KLayout) and the router reports what it couldn't fix. Each broken rule is listed with the PDK's own description and where it is (µm from the die's origin).",
       markers ? btn("Open in KLayout with markers", "data-vf-klayout='1'", { ic: "layers" }) : "") +
+    drcDiag() +
     "<div class='an-grid an-grid-3'>" +
       toolCard("Magic DRC", by.get("magic_drc"), ruleList(mg && mg.categories, { empty: "No rule broken." }), mg && mg.report) +
       toolCard("KLayout DRC", by.get("klayout_drc"), ruleList(kl && kl.categories, { empty: kl && kl.rules ? "All " + kl.rules + " rules in the deck pass." : "No rule broken." }), kl && kl.report,
@@ -613,6 +650,11 @@ function renderDrc() {
       toolCard("Router DRC", by.get("route_drc"), iterHtml + ruleList(rt && rt.categories, { empty: "Nothing left to fix." }), rt && rt.report) +
     "</div>" +
     (by.get("overlap") ? "<p class='an-foot'>Illegal overlaps found during extraction: <b>" + esc(valueText(by.get("overlap"))) + "</b>.</p>" : "");
+}
+
+function drcDiag() {
+  const p = ((_px && _px.problems) || []).find((x) => x.id === "drc");
+  return p ? drcDiagHtml(p, _tag, _dxSrc) : "";
 }
 
 // ---------- 5. LVS + XOR --------------------------------------------------------------

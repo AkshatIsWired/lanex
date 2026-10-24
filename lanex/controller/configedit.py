@@ -161,6 +161,9 @@ def _yaml_block(key: str, v: Any, comment: str = "") -> List[str]:
     if isinstance(v, (list, tuple)):
         if not v:
             return [f"{key}: []" + comment]
+        # A few numbers (DIE_AREA) read best on one line, as people write them.
+        if len(v) <= 8 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v):
+            return [f"{key}: [" + ", ".join(_yaml_scalar(x) for x in v) + "]" + comment]
         return [f"{key}:" + comment] + [f"  - {_yaml_scalar(x)}" for x in v]
     if isinstance(v, dict):
         raise ConfigEditError(f"{key}: LanEx only writes plain values and lists.")
@@ -270,72 +273,34 @@ def _edit_json(text: str, data: Dict[str, Any], sets: Dict[str, Any], removes: I
 
 # ------------------------------------------------------------------ write
 
-def _backup(path: Path, text: str) -> None:
+def _backup_dir(path: Path) -> Path:
+    from . import platform_env
+    tag = hashlib.sha1(str(path.parent.resolve()).encode()).hexdigest()[:10]
+    return platform_env.home() / "config-backups" / f"{path.parent.name}-{tag}"
+
+
+def _backup(path: Path, text: str) -> Optional[str]:
+    """Keep a copy of *text* outside the project; returns its file name."""
     try:
-        from . import platform_env
-        tag = hashlib.sha1(str(path.parent.resolve()).encode()).hexdigest()[:10]
-        bdir = platform_env.home() / "config-backups" / f"{path.parent.name}-{tag}"
+        bdir = _backup_dir(path)
         bdir.mkdir(parents=True, exist_ok=True)
-        (bdir / f"{time.strftime('%Y%m%d-%H%M%S')}-{path.name}").write_text(text, encoding="utf-8")
+        name = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000:06d}-{path.name}"
+        (bdir / name).write_bytes(text.encode("utf-8"))   # byte for byte: CRLF stays CRLF
         old = sorted(bdir.iterdir())
         for f in old[:-_BACKUPS_KEPT]:
             f.unlink(missing_ok=True)
+        return name
     except Exception:
-        pass   # a backup is a courtesy; the validation below is the real guard
+        return None   # a backup is a courtesy; the validation is the real guard
 
 
-def set_keys(design_dir: str | Path, sets: Optional[Dict[str, Any]] = None,
-             removes: Optional[Iterable[str]] = None, *, dry_run: bool = False) -> Dict[str, Any]:
-    """Set and/or remove top-level keys in the design's config file.
+def _sha(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
-    Returns ``{path, name, changed: [keys], scoped: {key: [entries]}, text}``.
-    Raises :class:`ConfigEditError` with a readable reason on any refusal;
-    the file is untouched in that case.
-    """
-    sets = dict(sets or {})
-    removes = [k for k in (removes or []) if k not in sets]
-    for k in list(sets) + removes:
-        if not isinstance(k, str) or not _KEY_RX.match(k):
-            raise ConfigEditError(f"'{k}' isn't a LibreLane variable name.")
-    info = read_config(design_dir)
-    if not info["path"]:
-        raise ConfigEditError(info["reason"])
-    if not info["editable"]:
-        raise ConfigEditError(info["reason"])
-    path = Path(info["path"])
-    raw = path.read_bytes()
-    text = raw.decode("utf-8")
-    if text.startswith("﻿"):
-        raise ConfigEditError(f"{path.name} starts with a byte-order mark; save it as plain UTF-8 first.")
-    old = _load(path, text)
 
-    expected = copy.deepcopy(old)
-    changed = []
-    for k, v in sets.items():
-        if old.get(k, object()) != v:
-            changed.append(k)
-        expected[k] = v
-    for k in removes:
-        if k in expected:
-            changed.append(k)
-            del expected[k]
-    scoped = {k: scoped_values(old, k) for k in list(sets) + removes}
-    scoped = {k: v for k, v in scoped.items() if v}
-    if not changed:
-        return {"path": str(path), "name": path.name, "changed": [], "scoped": scoped, "text": text}
-
-    new_text = _edit_json(text, old, sets, removes) if path.suffix == ".json" else _edit_yaml(text, sets, removes)
-    try:
-        got = _load(path, new_text)
-    except Exception as ex:
-        raise ConfigEditError(f"LanEx's edit of {path.name} didn't parse ({ex}); nothing was written.")
-    if got != expected:
-        raise ConfigEditError(f"LanEx couldn't change {', '.join(changed)} in {path.name} without touching "
-                              "anything else, so nothing was written. Edit the file by hand.")
-    if dry_run:
-        return {"path": str(path), "name": path.name, "changed": changed, "scoped": scoped, "text": new_text}
-
-    _backup(path, text)
+def _write(path: Path, text: str, new_text: str) -> Dict[str, Any]:
+    """Atomic write of *new_text* over *text*; returns what Undo needs."""
+    backup = _backup(path, text)
     tmp = path.with_name(f".{path.name}.lanex-tmp")
     tmp.write_bytes(new_text.encode("utf-8"))
     try:
@@ -343,7 +308,194 @@ def set_keys(design_dir: str | Path, sets: Optional[Dict[str, Any]] = None,
     except OSError:
         pass
     os.replace(tmp, path)
-    return {"path": str(path), "name": path.name, "changed": changed, "scoped": scoped, "text": new_text}
+    return {"backup": backup, "after": _sha(new_text)} if backup else {}
+
+
+def diff_lines(old: str, new: str) -> List[Dict[str, Any]]:
+    """The changed lines only, ``[{op: '-'|'+', line, text}]`` (line numbers
+    in the old file for '-', the new one for '+'): the diff the fix sheet shows."""
+    import difflib
+    a, b = old.splitlines(), new.splitlines()
+    out: List[Dict[str, Any]] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        out += [{"op": "-", "line": i + 1, "text": a[i]} for i in range(i1, i2)]
+        out += [{"op": "+", "line": j + 1, "text": b[j]} for j in range(j1, j2)]
+    return out
+
+
+def _open_editable(design_dir: str | Path) -> Tuple[Path, str, Dict[str, Any]]:
+    info = read_config(design_dir)
+    if not info["path"]:
+        raise ConfigEditError(info["reason"])
+    if not info["editable"]:
+        raise ConfigEditError(info["reason"])
+    path = Path(info["path"])
+    text = path.read_bytes().decode("utf-8")
+    if text.startswith("﻿"):
+        raise ConfigEditError(f"{path.name} starts with a byte-order mark; save it as plain UTF-8 first.")
+    return path, text, _load(path, text)
+
+
+def set_keys(design_dir: str | Path, sets: Optional[Dict[str, Any]] = None,
+             removes: Optional[Iterable[str]] = None, *, dry_run: bool = False,
+             scope: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Set and/or remove top-level keys in the design's config file.
+
+    With *scope* (``["pdk::sky130*"]``, ``["pdk::sky130*", "scl::…_hs"]``)
+    the *sets* change keys the file already sets inside that section instead:
+    a section that matches the PDK wins over the top level, so that is where
+    a change has to go to take effect.
+
+    Returns ``{path, name, changed: [keys], scoped: {key: [entries]}, text,
+    diff, undo}``. Raises :class:`ConfigEditError` with a readable reason on
+    any refusal; the file is untouched in that case.
+    """
+    sets = dict(sets or {})
+    removes = [k for k in (removes or []) if k not in sets]
+    for k in list(sets) + removes:
+        if not isinstance(k, str) or not _KEY_RX.match(k):
+            raise ConfigEditError(f"'{k}' isn't a LibreLane variable name.")
+    path, text, old = _open_editable(design_dir)
+
+    expected = copy.deepcopy(old)
+    changed = []
+    if scope:
+        if removes:
+            raise ConfigEditError("LanEx only changes values inside a pdk::/scl:: section.")
+        section = _section(expected, scope, path.name)
+        for k, v in sets.items():
+            if k not in section:
+                raise ConfigEditError(f"The {' / '.join(scope)} section of {path.name} doesn't set {k}.")
+            if section[k] != v:
+                changed.append(k)
+            section[k] = v
+    else:
+        for k, v in sets.items():
+            if old.get(k, object()) != v:
+                changed.append(k)
+            expected[k] = v
+        for k in removes:
+            if k in expected:
+                changed.append(k)
+                del expected[k]
+    scoped = {k: scoped_values(old, k) for k in list(sets) + removes}
+    scoped = {k: v for k, v in scoped.items() if v}
+    if not changed:
+        return {"path": str(path), "name": path.name, "changed": [], "scoped": scoped, "text": text,
+                "diff": [], "undo": {}}
+
+    if scope:
+        new_text = _edit_json_scoped(text, expected) if path.suffix == ".json" else _edit_yaml_scoped(text, scope, sets)
+    else:
+        new_text = _edit_json(text, old, sets, removes) if path.suffix == ".json" else _edit_yaml(text, sets, removes)
+    try:
+        got = _load(path, new_text)
+    except Exception as ex:
+        raise ConfigEditError(f"LanEx's edit of {path.name} didn't parse ({ex}); nothing was written.")
+    if got != expected:
+        raise ConfigEditError(f"LanEx couldn't change {', '.join(changed)} in {path.name} without touching "
+                              "anything else, so nothing was written. Edit the file by hand.")
+    res = {"path": str(path), "name": path.name, "changed": changed, "scoped": scoped, "text": new_text,
+           "diff": diff_lines(text, new_text), "undo": {}}
+    if not dry_run:
+        res["undo"] = _write(path, text, new_text)
+    return res
+
+
+def undo(design_dir: str | Path, backup: str, after: str) -> Dict[str, Any]:
+    """Put the config back as it was before a LanEx write: *backup* is the
+    copy that write kept, *after* the hash of what it wrote. Refuses when the
+    file has changed since (someone edited it): undoing would lose that."""
+    path, text, _ = _open_editable(design_dir)
+    if _sha(text) != after:
+        raise ConfigEditError(f"{path.name} has changed since LanEx saved it, so Undo would lose those edits. "
+                              "Change it back by hand.")
+    if not backup or "/" in backup or "\\" in backup or backup.startswith("."):
+        raise ConfigEditError("No copy of the previous file to go back to.")
+    src = _backup_dir(path) / backup
+    if not src.is_file():
+        raise ConfigEditError("LanEx no longer has the copy of the previous file (it keeps the last 10).")
+    old_text = src.read_bytes().decode("utf-8")   # no newline translation: the bytes come back
+    _load(path, old_text)   # never restore something that doesn't parse
+    _write(path, text, old_text)
+    return {"path": str(path), "name": path.name, "diff": diff_lines(text, old_text)}
+
+
+# ------------------------------------------------------------------ pdk::/scl:: sections
+
+def _section(data: Dict[str, Any], scope: List[str], name: str) -> Dict[str, Any]:
+    cur: Any = data
+    for k in scope:
+        if not isinstance(k, str) or not k.startswith(_SCOPE_PREFIXES) or not isinstance(cur, dict) \
+                or not isinstance(cur.get(k), dict):
+            raise ConfigEditError(f"{name} has no {' / '.join(scope)} section.")
+        cur = cur[k]
+    return cur
+
+
+def _edit_json_scoped(text: str, expected: Dict[str, Any]) -> str:
+    m = re.search(r"\n([ \t]+)\"", text)
+    indent: Any = (m.group(1) if m else "    ")
+    if isinstance(indent, str) and indent.strip(" ") == "":
+        indent = len(indent)
+    nl = "\r\n" if "\r\n" in text else "\n"
+    return json.dumps(expected, indent=indent, ensure_ascii=False).replace("\n", nl) + nl
+
+
+def _edit_yaml_scoped(text: str, scope: List[str], sets: Dict[str, Any]) -> str:
+    """Change single-line ``KEY: value`` entries nested under *scope*, by
+    indentation, leaving every other byte alone."""
+    nl = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines()
+    lo, hi, depth = 0, len(lines), -1
+    for k in scope:
+        found = None
+        for i in range(lo, hi):
+            ln = lines[i]
+            if not ln.strip() or ln.lstrip().startswith("#"):
+                continue
+            ind = len(ln) - len(ln.lstrip(" "))
+            if ind <= depth:
+                continue
+            m = re.match(r"""^\s*(["']?)(.+?)\1\s*:\s*(#.*)?$""", ln)
+            if m and m.group(2) == k:
+                found = (i, ind)
+                break
+        if found is None:
+            raise ConfigEditError(f"Couldn't find the {k} section in the file.")
+        i, ind = found
+        end = i + 1
+        while end < hi:
+            ln = lines[end]
+            if ln.strip() and not ln.lstrip().startswith("#") and len(ln) - len(ln.lstrip(" ")) <= ind:
+                break
+            end += 1
+        lo, hi, depth = i + 1, end, ind
+    # Only the section's own entries, not those of a section nested in it
+    # (pdk::sky130* can hold an scl:: section that sets the same key).
+    child = next((len(ln) - len(ln.lstrip(" ")) for ln in lines[lo:hi]
+                  if ln.strip() and not ln.lstrip().startswith("#")), depth + 1)
+    for key, val in sets.items():
+        hit = None
+        for i in range(lo, hi):
+            m = re.match(r"^(\s+)" + re.escape(key) + r"(\s*:\s*)(.*)$", lines[i])
+            if m and len(m.group(1)) == child:
+                if hit is not None:
+                    raise ConfigEditError(f"{key} appears twice in that section; fix the file by hand.")
+                hit = (i, m)
+        if hit is None:
+            raise ConfigEditError(f"{key} isn't a one-line value in that section; edit the file by hand.")
+        i, m = hit
+        rest = m.group(3)
+        if not rest.strip() or rest.strip()[0] in "[{|>":
+            raise ConfigEditError(f"{key} isn't a one-line value in that section; edit the file by hand.")
+        cm = re.search(r"\s+#.*$", rest) if rest.strip()[0] not in "\"'" else None
+        if isinstance(val, (list, tuple, dict)):
+            raise ConfigEditError(f"{key}: LanEx only writes plain values inside a section.")
+        lines[i] = m.group(1) + key + m.group(2) + _yaml_scalar(val) + (cm.group(0) if cm else "")
+    return nl.join(lines) + nl
 
 
 # ------------------------------------------------------------------ VERILOG_FILES

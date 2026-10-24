@@ -52,9 +52,10 @@ const FOCUS = {
     await m.revealInFlow(p);
   },
   layout: async (p) => {
-    if (!p.source) return;
+    if (!p.source && !p.box) return;
     const m = await import("./layout.js");
-    await m.revealSource(p.source);
+    if (p.box) await m.revealBox(p.box);
+    else await m.revealSource(p.source);
   },
   setup: async (p) => {
     if (!p.setting) return;
@@ -62,9 +63,10 @@ const FOCUS = {
     await m.revealSetting(p.setting);
   },
   verify: async (p) => {
-    if (!p.check) return;
+    if (!p.check && !p.filter) return;
     const m = await import("./verify.js");
-    await m.revealCheck(p.check);
+    if (p.check) await m.revealCheck(p.check);
+    else await m.revealProblems();
   },
 };
 
@@ -133,7 +135,7 @@ function show(entry, { fresh }) {
   // row): that is held in view like a section while the page fills in.
   if (fresh && (p.section || p.setting)) {
     done.then((id) => revealSection(entry.tab, p.section || id));
-  } else if (changed && !(fresh && (p.cell || p.check || p.rel || p.setting || p.step || p.stage))) {
+  } else if (changed && !(fresh && (p.cell || p.check || p.rel || p.setting || p.step || p.stage || p.box || p.filter))) {
     restoreScroll(!fresh && _entryScroll[entry.id] != null ? _entryScroll[entry.id] : (_scroll[entry.tab] || 0));
   }
 }

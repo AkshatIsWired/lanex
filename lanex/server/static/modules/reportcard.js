@@ -9,6 +9,7 @@
 import { fmt } from "./api.js";
 import { icon } from "./icons.js";
 import * as V from "./verify-model.js";
+import { fixChipHtml, problemLine } from "./problems.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -52,7 +53,8 @@ function power(w) {
 export function runSummary({ tag, design, rx, vf, rs, name = (id) => id }) {
   const v = verdictOf(vf, rx);
   const m = finalMetrics(rs);
-  const secs = ((rs && rs.steps) || []).reduce((a, s) => a + (s.runtime_s || 0), 0);
+  // A resumed run's time is its own steps', not the ones it reused.
+  const secs = ((rs && rs.steps) || []).filter((s) => !s.from).reduce((a, s) => a + (s.runtime_s || 0), 0);
   const who = (design ? design + " · " : "") + tag;
   if (!rx) return { ok: false, title: who + " finished", body: "" };
   if (rx.kind === "clean" || rx.kind === "checks-failed") {
@@ -85,15 +87,16 @@ export function reportCardHtml(c) {
   const failed = c.rx.kind === "checks-failed";
   const m = c.steps.length ? c.steps[c.steps.length - 1].metrics || {} : {};
   const b = c.baseRs ? finalMetrics(c.baseRs) : null;
-  const secs = c.steps.reduce((a, s) => a + (s.secs || 0), 0);
-  const bsecs = c.baseRs ? ((c.baseRs.steps || []).reduce((a, s) => a + (s.runtime_s || 0), 0)) : null;
+  const secs = c.steps.filter((s) => !s.from).reduce((a, s) => a + (s.secs || 0), 0);
+  const bsecs = c.baseRs ? ((c.baseRs.steps || []).filter((s) => !s.from).reduce((a, s) => a + (s.runtime_s || 0), 0)) : null;
   const kpis = [
     kpi("Setup slack", n(m, "timing__setup__ws"), b && n(b, "timing__setup__ws"), { unit: "ns", signed: true, better: 1, tip: "Worst setup slack in any corner, after routing. Positive: the design meets its clock." }),
     kpi("Hold slack", n(m, "timing__hold__ws"), b && n(b, "timing__hold__ws"), { unit: "ns", signed: true, better: 1, tip: "Worst hold slack in any corner." }),
     dieKpi(m, b),
     kpi("Power", n(m, "power__total"), b && n(b, "power__total"), { power: true, better: -1, tip: "Total power OpenROAD estimated (internal, switching and leakage)." }),
     kpi("Wire", n(m, "route__wirelength"), b && n(b, "route__wirelength"), { wire: true, better: -1, tip: "Total routed wire length." }),
-    kpi("Run time", secs || null, bsecs || null, { time: true, better: -1, tip: "The sum of every step's time." }),
+    kpi("Run time", secs || null, bsecs || null, { time: true, better: -1, tip: "The sum of every step's time" +
+      (c.steps.some((s) => s.from) ? ", without the steps it reused from the run it was resumed from." : ".") }),
   ].filter(Boolean).join("");
   const w = c.rx.warnings || { total: 0, by_code: [] };
   const acts = failed
@@ -106,7 +109,8 @@ export function reportCardHtml(c) {
   return "<div class='an-verdict fl-hero fl-report is-" + esc(v.tone) + "'><div class='an-verdict-main fl-split'>" +
     "<div class='fl-split-a'><div class='an-eyebrow'>Run " + esc(c.tag) + (c.base ? " <span class='fl-vs'>compared with " + esc(c.base) + "</span>" : "") + "</div>" +
     "<h2 class='an-title'>" + esc(failed ? "The layout is done, but " + (v.short || "checks failed") : v.title) + "</h2>" +
-    "<p class='an-lede'>" + esc(v.sub || "") + "</p>" +
+    (c.branch || "") +
+    "<p class='an-lede'>" + esc(v.sub || "") + "</p>" + (failed ? failedHtml(c) : "") +
     "<details class='fl-covers'><summary>What “clean” covers</summary><p>Clean means every check LibreLane runs on the layout passed: " +
       "design rules in Magic and KLayout, layout against netlist (LVS), the two GDS writers against each other (XOR), antenna rules, " +
       "and timing in every corner it checks. It does not cover simulating the finished netlist with its real delays (gate-level " +
@@ -115,6 +119,22 @@ export function reportCardHtml(c) {
     (w.total ? "<div class='fl-split-c'>" + warningsHtml(w) + "</div>" : "") +
     "</div><div class='an-verdict-act'>" + acts +
     "<button class='btn btn-ghost btn-sm' data-go='analytics'>" + icon("chart", { size: 13 }) + " Metrics</button></div></div>";
+}
+
+// What failed, worst first (problems.js): each problem's title, how bad it is,
+// and its setting fixes as buttons that open the fix sheet.
+function failedHtml(c) {
+  const list = ((c.px && c.px.problems) || []).filter((p) => p.severity === "fail").slice(0, 3);
+  if (!c.px) return "<div class='fl-failed is-loading'><span class='muted'>Reading what failed…</span></div>";
+  if (!list.length) return "";
+  return "<div class='fl-failed'><div class='fl-fixes-h'>What failed</div>" + list.map((p) => {
+    const fixes = (p.fixes || []).filter((f) => f.kind === "setting").slice(0, 3);
+    const check = (p.where && p.where.check) || "";
+    return "<div class='fl-prob'><div class='fl-prob-h'><span class='vf-mark is-fail'></span><b>" + esc(p.title) + "</b></div>" +
+      (problemLine(p) ? "<div class='fl-prob-n'>" + esc(problemLine(p)) + "</div>" : "") +
+      "<div class='fl-prob-fix'>" + fixes.map((f, i) => fixChipHtml(f, { tag: c.tag, title: p.title, primary: i === 0 })).join("") +
+        "<button class='fl-prob-more' data-go='verify' data-go-check='" + esc(check) + "'>Why, in Verify " + icon("chevron", { size: 11 }) + "</button></div></div>";
+  }).join("") + "</div>";
 }
 
 function kpi(label, a, b, o = {}) {

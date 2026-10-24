@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="/static/analytics.css" />
   <link rel="stylesheet" href="/static/verify.css" />
   <link rel="stylesheet" href="/static/flow.css" />
+  <link rel="stylesheet" href="/static/fix.css" />
   <link rel="stylesheet" href="/static/layout.css" />
   <link rel="stylesheet" href="/static/cells.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
@@ -110,6 +111,9 @@
             <div class="menu-sep" role="separator"></div>
             <div class="menu-lane">Run up to</div>
             <label class="menu-field"><select id="run-stop-after" aria-label="Stop the run after a stage"></select></label>
+            <div class="menu-lane">Resume from</div>
+            <label class="menu-field"><select id="run-resume-from" aria-label="Resume from a stage of the run on the results pages"></select></label>
+            <p class="menu-note" id="run-resume-note"></p>
             <div class="menu-sep" role="separator"></div>
             <div class="menu-lane">While it runs</div>
             <label class="menu-item menu-check"><input type="checkbox" id="run-pref-show"/>
@@ -968,6 +972,9 @@
       <span class="pill pill-pending" id="run-pill">idle</span>
       <span class="status-progress" id="overall-progress"></span>
     </span>
+    <button class="st-item st-problems" id="st-problems" data-go="verify" data-go-filter="problems" hidden>
+      <span class="vf-mark is-fail" aria-hidden="true"></span><span class="st-problems-t"></span>
+    </button>
     <span class="st-bar" aria-hidden="true"><span class="st-bar-fill" id="status-bar-fill"></span></span>
     <button class="st-item" id="pdk-pill" data-tip="PDK and cell library for the next run">
       <span class="d" aria-hidden="true"></span><span class="text">PDK: checking</span>

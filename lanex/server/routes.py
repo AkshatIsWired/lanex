@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..controller import (
-    alerts,
     fsbrowser,
     history,
     installer,
@@ -1080,33 +1079,6 @@ def h_diff(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
-def h_explain(handler: Any) -> None:
-    body = getattr(handler, "_body", {})
-    message = body.get("message", "")
-    if not message:
-        _respond(handler, "missing message", 400)
-        return
-    try:
-        _respond(handler, alerts.explain_alert(message))
-    except Exception as ex:
-        _log.exception("explain_alert failed")
-        _respond(handler, str(ex), 500)
-
-
-def h_explain_checker(handler: Any) -> None:
-    body = getattr(handler, "_body", {})
-    checker = body.get("checker", "")
-    metric = body.get("metric")
-    if not checker:
-        _respond(handler, "missing checker", 400)
-        return
-    try:
-        _respond(handler, alerts.explain_checker_failure(checker, metric))
-    except Exception as ex:
-        _log.exception("explain_checker failed")
-        _respond(handler, str(ex), 500)
-
-
 def _clean_overrides(overrides: Dict[str, Any]) -> Dict[str, Any]:
     """Drop override keys with an empty / null / whitespace-only value so the GUI
     never passes a bare ``KEY=`` to LibreLane.
@@ -1137,7 +1109,8 @@ def _clean_overrides(overrides: Dict[str, Any]) -> Dict[str, Any]:
     return clean
 
 
-def _assemble_overrides(design_dir: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
+                       custom_cells: bool = True) -> Dict[str, Any]:
     """Single source of truth for the user-data payload of a run.
 
     Turns a run-request body into the pieces that carry USER-SUPPLIED data into
@@ -1160,9 +1133,11 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any]) -> Dict[str, Any]
     # bare ``KEY=`` the engine can't type-parse (issue #11); real 0/False kept.
     overrides = _clean_overrides(overrides)
     # Fold in any custom standard cells configured for this design. Per-run only.
+    # (A run resumed from another arrives with that run's merged values; the
+    # caller takes the cells out first, so they are merged once, as they are now.)
     try:
         from ..controller import customcells
-        cc = customcells.build_overrides(design_dir)
+        cc = customcells.build_overrides(design_dir) if custom_cells else None
         if cc:
             overrides = customcells.merge_into(overrides, cc)
     except Exception:
@@ -1247,25 +1222,41 @@ def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None,
 
 
 def h_run_start(handler: Any) -> None:
+    body = getattr(handler, "_body", {}) or {}
+    if body.get("branch_from"):
+        # "Resume from <stage>" (Run menu): a new run from a step of another
+        # run, with nothing changed. The fix route plans and starts it.
+        b = body["branch_from"] if isinstance(body["branch_from"], dict) else {}
+        _apply_fix(handler, {"tag": b.get("tag"), "sets": {}, "start": b.get("step") or "auto",
+                             "run_mode": body.get("run_mode"), "mode": body.get("mode"), "to": body.get("to"), "new_tag": body.get("tag")})
+        return
+    data, status = _start_run(body)
+    _respond(handler, data, status)
+
+
+def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
+               branched_from: Optional[Dict[str, Any]] = None,
+               overrides_ready: bool = False) -> Tuple[Any, int]:
+    """Start a run from a run-request body: ``(reply, status)``.
+
+    *initial_state* and *branched_from* make it a run resumed from another
+    one (``-i`` with ``frm``; recorded in ``gui-run.json``). *overrides_ready*
+    says the body's overrides already hold the per-run custom cells (a
+    resumed run inherits the old run's), so they are not merged again."""
     from ..server.app import get_runner
-    body = getattr(handler, "_body", {})
     design_dir = _get_active_design_dir()
     if not design_dir:
-        _respond(handler, "no active design dir", 400)
-        return
+        return "no active design dir", 400
     ws_err = _whitespace_path_error(design_dir)
     if ws_err:
-        _respond(handler, ws_err, 400)
-        return
+        return ws_err, 400
     config_file = _resolve_config_file(design_dir)
     if config_file is None:
-        _respond(handler, "no config.{json,yaml,tcl} found in design directory", 400)
-        return
+        return "no config.{json,yaml,tcl} found in design directory", 400
     config_warning = _multi_config_warning(design_dir)
     r = get_runner()
     if r.running:
-        _respond(handler, "already running", 400)
-        return
+        return "already running", 400
     try:
         from librelane.flows import Flow
         flow_name = body.get("flow") or "Classic"
@@ -1276,8 +1267,7 @@ def h_run_start(handler: Any) -> None:
             if flows:
                 flow_factory = flows[0]
             else:
-                _respond(handler, f"Flow '{flow_name}' not found", 500)
-                return
+                return f"Flow '{flow_name}' not found", 500
         # PDK / SCL are construction-time options, not plain config variables.
         # The SPA folds the picker selection into ``overrides``; pull them back
         # out so they reach the Flow constructor as dedicated kwargs.
@@ -1286,7 +1276,7 @@ def h_run_start(handler: Any) -> None:
         # ONE shared helper (override cleaning that preserves 0/False, custom-cell
         # overrides, the hard-macro overlay). The DSE sweep path calls the exact
         # same helper, so a swept run can never silently differ from this one.
-        _asm = _assemble_overrides(design_dir, body)
+        _asm = _assemble_overrides(design_dir, body, custom_cells=not overrides_ready)
         pdk, scl = _asm["pdk"], _asm["scl"]
         overrides = _asm["overrides"]
         extra_config_files: List[str] = list(_asm["extra_config_files"] or [])
@@ -1304,18 +1294,18 @@ def h_run_start(handler: Any) -> None:
                 if not will_download:
                     miss = "; ".join(pf.get("missing") or ["PDK not ready"])
                     rem = pf.get("remediation") or ""
-                    _respond(
-                        handler,
-                        f"PDK not ready for {run_mode} mode: {miss}." + (f" {rem}" if rem else ""),
-                        400,
-                    )
-                    return
+                    return f"PDK not ready for {run_mode} mode: {miss}." + (f" {rem}" if rem else ""), 400
         ws_err = _whitespace_path_error(
             design_dir, pdk_root,
             files=list(body.get("sources") or []) + list(body.get("extras") or []))
         if ws_err:
-            _respond(handler, ws_err, 400)
-            return
+            return ws_err, 400
+        state_rel = None
+        if initial_state:
+            try:
+                state_rel = str(Path(initial_state).resolve().relative_to(Path(design_dir).resolve()))
+            except ValueError:
+                state_rel = str(initial_state)
         # Snapshot of exactly what the GUI launched, persisted into the run dir
         # as gui-run.json so the user can reproduce this run later (issue #4).
         # LibreLane writes the resolved config; this captures the GUI-only choices
@@ -1344,6 +1334,10 @@ def h_run_start(handler: Any) -> None:
             # preview and Run (TOCTOU, N7).
             "config_hash": _hash_files([str(config_file)]),
         }
+        if branched_from:
+            # Resumed from another run: its steps before ``frm`` are this run's
+            # too (history.lineage_steps), and that run must stay.
+            gui_meta["branched_from"] = branched_from
         try:
             from ..controller import manualcmd
             gui_meta["cli_command"] = manualcmd.cli_command_for(
@@ -1355,6 +1349,7 @@ def h_run_start(handler: Any) -> None:
                 extra_sources=body.get("sources") or None,
                 extra_extras=body.get("extras") or None,
                 extra_config_files=extra_config_files or None,
+                initial_state=state_rel,
             )
         except Exception:
             _log.debug("cli_command_for failed for gui-run.json", exc_info=True)
@@ -1377,6 +1372,7 @@ def h_run_start(handler: Any) -> None:
             run_mode=run_mode,
             flow_name=flow_name,
             gui_meta=gui_meta,
+            initial_state=str(Path(initial_state).resolve()) if initial_state else None,
         )
         if isinstance(result, dict):
             result = dict(result)
@@ -1386,10 +1382,11 @@ def h_run_start(handler: Any) -> None:
             # The exact config bytes this run used — the client compares it to the
             # hash it previewed in Final-settings to catch a mid-flight edit (N7).
             result["config_hash"] = gui_meta.get("config_hash")
-        _respond(handler, result)
+            result["command"] = gui_meta.get("cli_command")
+        return result, 200
     except Exception as ex:
         _log.exception("run start failed")
-        _respond(handler, str(ex), 500)
+        return str(ex), 500
 
 
 # The ONE canonical order LanEx resolves a design's config file in. Preflight and
@@ -2604,11 +2601,21 @@ def h_run_delete(handler: Any) -> None:
             return
     except Exception:
         pass
+    # Runs resumed from this one read files in its folders: say which, and
+    # delete only when asked again (``force``).
+    try:
+        from ..controller import branch
+        kids = branch.children(run_dir.parent.parent, tag)
+    except Exception:
+        kids = []
+    if kids and not body.get("force"):
+        handler._send_json({"ok": False, "error": "resumed-from", "children": kids}, 409)
+        return
     try:
         import shutil
 
         shutil.rmtree(run_dir)
-        _respond(handler, {"ok": True, "deleted": tag})
+        _respond(handler, {"ok": True, "deleted": tag, "broke": kids})
     except Exception as ex:
         _log.exception("delete_run failed")
         _respond(handler, str(ex), 500)
@@ -4022,6 +4029,186 @@ def h_project_new_file(handler: Any) -> None:
     _respond(handler, res)
 
 
+# ---------------------------------------------------------------------------
+# The fix loop: problems of a run, and a fix applied as a run resumed from it.
+# ---------------------------------------------------------------------------
+
+def h_problems(handler: Any) -> None:
+    """Every problem of one run, worst first, each with its diagnosis and
+    fixes (controller/problems.py, the one knowledge base)."""
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        from ..controller import problems
+        _respond(handler, problems.run_problems(run_dir))
+    except Exception as ex:
+        _log.exception("problems failed")
+        _respond(handler, str(ex), 500)
+
+
+def _fix_plan(body: Dict[str, Any]) -> Tuple[Any, int]:
+    from ..controller import branch, manualcmd
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        return "no active design dir", 400
+    sets = body.get("sets") or {}
+    if not isinstance(sets, dict):
+        return "sets must be an object", 400
+    try:
+        p = branch.plan(design_dir, str(body.get("tag") or ""), sets,
+                        save=str(body.get("save") or "auto"), start=str(body.get("start") or "auto"),
+                        new_tag=(str(body.get("new_tag")).strip() or None) if body.get("new_tag") else None)
+    except branch.BranchError as ex:
+        return str(ex), 400
+    # The command the new run will be, exactly as the runner will start it.
+    try:
+        config_file = _resolve_config_file(design_dir)
+        pdk_root = os.environ.get("PDK_ROOT") or None
+        run_mode = "container" if (body.get("run_mode") or "container") == "container" else "local"
+        if p["parent"]["pdk"]:
+            pdk_root = pdk_mod.check_pdk_ready(p["parent"]["pdk"], p["parent"]["scl"] or None, run_mode).get("pdk_root") or pdk_root
+        r = p["resume"] or {}
+        p["command"] = manualcmd.cli_command_for(
+            design_dir=design_dir, config_file=str(config_file), flow=p["parent"]["flow"],
+            pdk=p["parent"]["pdk"], scl=p["parent"]["scl"], pdk_root=pdk_root, run_mode=run_mode,
+            tag=p["tag"], frm=r.get("step"), overrides=p["overrides"],
+            extra_sources=p["sources"] or None, extra_extras=p["extras"] or None,
+            initial_state=r.get("state"))
+    except Exception:
+        _log.debug("fix plan command failed", exc_info=True)
+        p["command"] = None
+    return p, 200
+
+
+def h_fix_plan(handler: Any) -> None:
+    """What applying a fix would do, without doing it: the change and where
+    its old value came from, the config diff, where the new run resumes and
+    why, what else changed since the run, and the command."""
+    data, status = _fix_plan(getattr(handler, "_body", {}) or {})
+    if status == 200:
+        data.pop("_values", None)
+    _respond(handler, data, status)
+
+
+def h_fix_apply(handler: Any) -> None:
+    """Apply a fix: save it (config file or this run only), then start a run
+    resumed from the old one at the first step that reads it (or the whole
+    flow). Returns the new run's tag and the Undo token of a config change."""
+    _apply_fix(handler, getattr(handler, "_body", {}) or {})
+
+
+def _unmerge(overrides: Dict[str, Any], cc: Dict[str, Any]) -> Dict[str, Any]:
+    """The old run's settings without the custom-cell values merged into them
+    (they are merged again for the new run, from the cells as they are now)."""
+    out = dict(overrides)
+    for k, v in (cc or {}).items():
+        cur = out.get(k)
+        if cur is None:
+            continue
+        if str(cur) == str(v):
+            del out[k]
+        elif str(cur).endswith(" " + str(v)):
+            out[k] = str(cur)[: -len(str(v)) - 1]
+    return out
+
+
+def _apply_fix(handler: Any, body: Dict[str, Any]) -> None:
+    from ..controller import branch, configedit
+    from ..server.app import get_runner
+    if get_runner().running:
+        _respond(handler, "A run is in progress. Apply the change after it finishes.", 409)
+        return
+    p, status = _fix_plan(body)
+    if status != 200:
+        _respond(handler, p, status)
+        return
+    if p.get("blocked"):
+        _respond(handler, p["blocked"], 409)
+        return
+    then = body.get("then") or "run"           # run | save (save only, no run)
+    design_dir = _get_active_design_dir()
+    values = p.pop("_values", {})
+    undo = None
+    saved = [c for c in p["changes"] if c["save"] == "config"]
+    if saved:
+        if p.get("config_error"):
+            _respond(handler, p["config_error"], 400)
+            return
+        try:
+            by_scope: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+            for c in saved:
+                by_scope.setdefault(tuple(c["scope"] or ()), {})[c["var"]] = values[c["var"]]
+            res = None
+            diff: List[Dict[str, Any]] = []
+            backup = after = None
+            for scope, kv in by_scope.items():
+                res = configedit.set_keys(design_dir, kv, scope=list(scope) or None)
+                diff += res.get("diff") or []
+                u = res.get("undo") or {}
+                backup = backup or u.get("backup")      # the file before the first write
+                after = u.get("after") or after          # the file after the last one
+            undo = {"name": res["name"], "diff": diff, "backup": backup, "after": after} if res and backup else None
+        except configedit.ConfigEditError as ex:
+            _respond(handler, str(ex), 400)
+            return
+    if then == "save":
+        _respond(handler, {"ok": True, "started": False, "undo": undo, "plan": p})
+        return
+    r = p["resume"]
+    overrides = dict(p["overrides"])
+    try:
+        from ..controller import customcells
+        overrides = _unmerge(overrides, customcells.build_overrides(design_dir) or {})
+    except Exception:
+        pass
+    run_body = {
+        "flow": p["parent"]["flow"], "run_mode": body.get("run_mode") or "container",
+        "mode": body.get("mode") or "auto", "tag": p["tag"],
+        "overrides": dict(overrides, PDK=p["parent"]["pdk"], STD_CELL_LIBRARY=p["parent"]["scl"]),
+        "sources": p["sources"], "extras": p["extras"], "frm": r["step"] if r else None, "to": body.get("to") or None,
+    }
+    state = str(Path(design_dir) / r["state"]) if r and r.get("state") else None
+    data, st = _start_run(run_body, initial_state=state, branched_from=branch.branch_meta(p) if r else None)
+    if st != 200 or not (isinstance(data, dict) and data.get("ok")):
+        # The config change stays (with its Undo): say so rather than hide it.
+        msg = data if st != 200 else (data or {}).get("reason") or "the run didn't start"
+        _respond(handler, {"ok": True, "started": False, "error": str(msg), "undo": undo, "plan": p})
+        return
+    _respond(handler, {"ok": True, "started": True, "tag": p["tag"], "resume": r, "undo": undo,
+                       "changes": p["changes"], "command": data.get("command")})
+
+
+def h_config_undo(handler: Any) -> None:
+    """Put the config back as it was before a LanEx change (the fix sheet's
+    Undo). Refused when the file changed since, and until a run that just
+    started has read it (its resolved.json exists)."""
+    from ..controller import configedit
+    from ..server.app import get_runner
+    d = _design_dir_or_400(handler)
+    if d is None:
+        return
+    body = getattr(handler, "_body", {}) or {}
+    r = get_runner()
+    if r.running:
+        rd = getattr(r, "_run_dir", None)
+        if getattr(r, "_step_mode", False):
+            _respond(handler, "A step-by-step run reads the config before every step. Undo after it finishes.", 409)
+            return
+        if not rd or not (Path(rd) / "resolved.json").is_file():
+            _respond(handler, "The run that just started hasn't read the config yet. Undo in a moment.", 409)
+            return
+    try:
+        res = configedit.undo(d, str(body.get("backup") or ""), str(body.get("after") or ""))
+    except configedit.ConfigEditError as ex:
+        _respond(handler, str(ex), 409)
+        return
+    res["running"] = bool(r.running)
+    _respond(handler, res)
+
+
 ROUTES: List[Tuple[str, Any]] = [
     ("/api/templates", h_templates),
     ("/api/project/new", h_project_new),
@@ -4041,6 +4228,10 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/cell-usage", h_cell_usage),
     ("/api/run-stages", h_run_stages),
     ("/api/run-explain", h_run_explain),
+    ("/api/problems", h_problems),
+    ("/api/fix/plan", h_fix_plan),
+    ("/api/fix/apply", h_fix_apply),
+    ("/api/config/undo", h_config_undo),
     ("/api/timing-paths", h_timing_paths),
     ("/api/dse/start", h_dse_start),
     ("/api/dse/cancel", h_dse_cancel),
@@ -4135,8 +4326,6 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/preflight", h_preflight),
     ("/api/set-design-dir", h_set_design_dir),
     ("/api/diff", h_diff),
-    ("/api/explain", h_explain),
-    ("/api/explain-checker", h_explain_checker),
     ("/api/cli-command", h_cli_command),
     ("/api/manual/run", h_manual_run),
     ("/api/manual/cancel", h_manual_cancel),

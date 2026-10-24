@@ -73,6 +73,16 @@ def _safe_jsonable(value: Any) -> Any:
     return to_json(value)
 
 
+def _load_state(path: str) -> Any:
+    """A ``state_out.json`` as LibreLane's own ``-i`` reads it
+    (``flows/cli.py`` ``initial_state_cb``): every path in it must exist."""
+    import json as _json
+
+    from librelane.state import State
+    with open(path, encoding="utf8") as f:
+        return State.load(_json.load(f), validate_path=True)
+
+
 def _toolchain_provenance(run_mode: Optional[str]) -> Dict[str, Any]:
     """Identity of the toolchain that produced a run, recorded into gui-run.json.
 
@@ -463,6 +473,7 @@ class FlowRunner:
         flow_name: Optional[str] = None,
         last_run: bool = False,
         gui_meta: Optional[Dict[str, Any]] = None,
+        initial_state: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Spawn the worker. Returns ``{"ok": bool, "reason": str}``.
 
@@ -471,6 +482,10 @@ class FlowRunner:
         out to ``librelane --dockerized`` and parses its stdout. Step-by-step
         pausing is only available in local mode (there is no in-process hook
         across the container boundary).
+
+        *initial_state* (LibreLane's ``-i``) is the ``state_out.json`` of a step
+        of another run: with ``frm`` it makes a run resumed from that run's
+        results under a new tag (the steps before ``frm`` are skipped).
         """
         # Source/extra paths go into VERILOG_FILES / EXTRA_FILES, which LibreLane
         # parses as WHITESPACE-separated. Host-absolute paths (a) don't exist
@@ -521,6 +536,7 @@ class FlowRunner:
                     "extra_extras": list(extra_extras or []),
                     "extra_config_files": list(extra_config_files or []),
                     "last_run": last_run,
+                    "initial_state": initial_state,
                 },
                 daemon=True,
                 name="librelane.gui.FlowRunner.worker",
@@ -761,6 +777,7 @@ class FlowRunner:
         extra_extras: Optional[List[str]],
         extra_config_files: Optional[List[str]] = None,
         last_run: bool = False,
+        initial_state: Optional[str] = None,
     ) -> None:
         global _ACTIVE_RUNNER
         self._setup_log_bridge()
@@ -811,7 +828,7 @@ class FlowRunner:
             start_kwargs: Dict[str, Any] = {
                 "tag": tag,
                 "overwrite": overwrite,
-                "with_initial_state": None,
+                "with_initial_state": _load_state(initial_state) if initial_state else None,
             }
             # Continue a prior run's state (targeted re-verify of a single step).
             # Without this, a local ``-F step -T step`` has no input state and
@@ -896,6 +913,10 @@ class FlowRunner:
             self._step_statuses[sid] = self._PARSED_STATUS[t].value
             if t == "step_started":
                 self._current_step_id = sid
+                # The run folder exists once a step starts: write gui-run.json
+                # now, so a run resumed from another one shows its earlier
+                # steps (branched_from) while it runs, not only at the end.
+                self._persist_gui_meta()
             elif t in ("step_done", "step_skipped"):
                 if self._current_step_id == sid:
                     self._current_step_id = None
@@ -926,6 +947,7 @@ class FlowRunner:
         extra_extras: Optional[List[str]],
         extra_config_files: Optional[List[str]] = None,
         last_run: bool = False,  # container resumes via --run-tag; accepted for signature parity
+        initial_state: Optional[str] = None,
     ) -> None:
         """Shell out to ``librelane --dockerized`` and stream/parse its stdout."""
         try:
@@ -961,6 +983,7 @@ class FlowRunner:
                 extra_sources=extra_sources,
                 extra_extras=extra_extras,
                 overwrite=overwrite,
+                initial_state=initial_state,
                 entry_module="lanex.controller.librelane_entry",
             )
             # Force LibreLane to the engine the GUI determined is usable (so a
@@ -1084,6 +1107,7 @@ class FlowRunner:
         extra_extras: Optional[List[str]],
         extra_config_files: Optional[List[str]] = None,
         last_run: bool = False,
+        initial_state: Optional[str] = None,
     ) -> None:
         """Set up container step-by-step: seed the step graph, save the
         invocation args, and run the first step. Each subsequent step is launched
@@ -1123,6 +1147,7 @@ class FlowRunner:
                 "extra_sources": list(extra_sources or []),
                 "extra_extras": list(extra_extras or []),
                 "overwrite": bool(overwrite),
+                "initial_state": initial_state,
             }
             self._emit(
                 EventType.INFO,
@@ -1191,6 +1216,9 @@ class FlowRunner:
                 # Only the FIRST step may overwrite an existing tag; later steps
                 # MUST reuse the run dir (overwrite would wipe prior step state).
                 overwrite=bool(c["overwrite"]) and idx == 0,
+                # A resumed run starts from the other run's state; every later
+                # step continues from this run's own latest state_out.json.
+                initial_state=c.get("initial_state") if idx == 0 else None,
                 entry_module="lanex.controller.librelane_entry",
             )
             run_env = os.environ.copy()

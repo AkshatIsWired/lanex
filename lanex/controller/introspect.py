@@ -111,6 +111,36 @@ def _choices_of(tp: Any) -> List[str]:
     return []
 
 
+def _kind_of(tp: Any) -> str:
+    """What a value of *tp* looks like: ``bool``, ``int``, ``number``,
+    ``numbers`` (a tuple or list of numbers, e.g. DIE_AREA), ``choice``,
+    ``list``, ``path``, ``dict`` or ``text``."""
+    try:
+        origin = typing.get_origin(tp)
+        args = [a for a in typing.get_args(tp) if a is not type(None)]
+        if origin is typing.Union:
+            kinds = {_kind_of(a) for a in args}
+            return kinds.pop() if len(kinds) == 1 else "text"
+        if origin is typing.Literal or (isinstance(tp, type) and issubclass(tp, enum.Enum)):
+            return "choice"
+        if origin in (list, tuple, typing.List, typing.Tuple):
+            inner = {_kind_of(a) for a in args if a is not Ellipsis}
+            return "numbers" if inner and inner <= {"int", "number"} else "list"
+        if origin in (dict, typing.Dict):
+            return "dict"
+        if tp is bool:
+            return "bool"
+        if tp is int:
+            return "int"
+        if tp in (float, Decimal):
+            return "number"
+        if isinstance(tp, type) and tp.__name__ == "Path":
+            return "path"
+    except Exception:
+        pass
+    return "text"
+
+
 def _stringify_default(default: Any) -> Any:
     """Convert a Variable default to JSON-serialisable."""
     if default is None:
@@ -145,6 +175,7 @@ def _variable_to_info(v: Variable) -> VariableInfo:
         optional=bool(opt),
         deprecated_names=list(v.deprecated_names or []),
         choices=_choices_of(v.type),
+        kind=_kind_of(v.type),
     )
 
 
@@ -180,9 +211,68 @@ def list_variables() -> List[Dict[str, Any]]:
                 seen.setdefault(var.name, var)
         except Exception:
             continue
+    # A flow's own switches (Classic's RUN_CTS, RUN_POST_GRT_RESIZER_TIMING,
+    # RUN_LVS…) belong to no step: without these a fix that names one would
+    # look unknown.
+    for flow_cls in _flow_registry().values():
+        for var in getattr(flow_cls, "config_vars", None) or []:
+            seen.setdefault(var.name, var)
     for var in seen.values():
         out.append(to_json(_variable_to_info(var)))
     return out
+
+
+def known_var_names() -> set:
+    """Every variable name this LibreLane accepts in a config (empty without
+    LibreLane, so callers can tell "unknown" from "can't check")."""
+    try:
+        return {v["name"] for v in list_variables()}
+    except Exception:
+        return set()
+
+
+def _flow_registry() -> Dict[str, Any]:
+    if not _LIBRELANE_AVAILABLE:
+        return {}
+    factory = Flow.factory  # type: ignore[attr-defined]
+    return (getattr(factory, "_FlowFactory__registry", None)
+            or getattr(factory, "_registry", None) or {})
+
+
+@lru_cache(maxsize=None)
+def flow_steps(name: str = "Classic") -> List[Dict[str, Any]]:
+    """The steps of one flow in order: ``[{id, vars}]``, where ``vars`` is the
+    step's own ``config_vars`` (what LibreLane hands it besides the variables
+    every step gets). Repeated steps keep the flow's ids (``STAMidPNR-1``).
+    Never ``get_all_config_variables()``: that adds the flow-common variables
+    to every step, so every step would seem to read every one of them."""
+    if not _LIBRELANE_AVAILABLE:
+        return []
+    cls = Flow.factory.get(name)
+    if cls is None:
+        return []
+    return [{"id": s.id, "vars": sorted({v.name for v in (s.config_vars or [])})}
+            for s in (getattr(cls, "Steps", None) or [])]
+
+
+@lru_cache(maxsize=None)
+def flow_gating(name: str = "Classic") -> Dict[str, List[str]]:
+    """``{step id (or wildcard): [RUN_* variables that switch it off]}``."""
+    if not _LIBRELANE_AVAILABLE:
+        return {}
+    cls = Flow.factory.get(name)
+    return {k: list(v) for k, v in (getattr(cls, "gating_config_vars", None) or {}).items()} if cls else {}
+
+
+@lru_cache(maxsize=None)
+def flow_common_names() -> frozenset:
+    """Variables every step receives (``librelane.config.flow``), plus the PDK
+    and standard-cell ones: their readers can't be told from config_vars."""
+    try:
+        from librelane.config.config import flow_common_variables, pad_variables, pdk_variables, scl_variables
+        return frozenset(v.name for v in flow_common_variables + pad_variables + pdk_variables + scl_variables)
+    except Exception:
+        return frozenset()
 
 
 @lru_cache(maxsize=None)

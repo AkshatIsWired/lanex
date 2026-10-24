@@ -1358,6 +1358,47 @@ check("flow: what Flow replaced is gone, and runs no longer read From/To/Skip fi
   assert.ok(!/from "\.\/logs\.js"/.test(tools), "tool output belongs in the Logs panel, not the run's log");
 });
 
+// ---- P2: the fix loop
+const PX = await import(toUrl(resolve(MOD, "problems.js")));
+const DX = await import(toUrl(resolve(MOD, "verify-diag.js")));
+check("fix loop: every setting fix says where the new run resumes and opens the sheet", () => {
+  const f = { kind: "setting", var: "FP_CORE_UTIL", from: "45", to: "35", why: "A bigger core.", label: "Make the core bigger",
+    resume: { step: "OpenROAD.Floorplan", stage: "floorplan", n: 13, stage_start: true } };
+  const row = PX.fixRowHtml(f, { tag: "try1", title: "Placement ran out of room", n: 1, primary: true });
+  assert.match(row, /data-fix-var='FP_CORE_UTIL'/);
+  assert.match(row, /data-fix-to='35'/);
+  assert.match(row, /resumes at Floorplan</, "a stage's first step is named by the stage alone");
+  assert.equal(PX.resumeText({ stage: "synthesis", n: 6, stage_start: false }), "resumes at Synthesis, step 6");
+  assert.equal(PX.resumeText(null), "runs the whole flow");
+  const open = PX.fixRowHtml({ kind: "open", label: "Show the worst paths", go: { tab: "analytics", section: "an-timing" } }, { tag: "t" });
+  assert.match(open, /data-go='analytics'/);
+  assert.match(open, /data-go-section='an-timing'/);
+  assert.equal(PX.countText({ counts: { fail: 2, warn: 1 } }), "3 problems");
+  assert.equal(PX.countText({ counts: { fail: 0, warn: 0 } }), "");
+});
+
+check("fix loop: the worst path is described from what its numbers say", () => {
+  const b = { start: "reg", end: "out", launch: 0.65, clk_q: 0.83, cells: 0.26, wires: 0.002, io_in: 0, io_out: 0.3, drive: 0, levels: 1 };
+  const say = DX.pathVerdict(b, { out_load: 33.442 });
+  assert.match(say, /clock-to-Q delay \(0\.83 ns\), with 1 cell after it/);
+  assert.match(say, /33\.442 fF load \(OUTPUT_CAP_LOAD\)/);
+  assert.match(DX.pathVerdict({ ...b, end: "reg", clk_q: 0.1, cells: 2.1, levels: 9 }), /^Mostly logic: 9 cells in a row/);
+  assert.match(DX.pathVerdict({ ...b, end: "reg", clk_q: 0.1, cells: 0.2, wires: 1.4 }), /^Mostly wire/);
+});
+
+check("fix loop: Flow marks a resumed run's reused steps; Verify leads with the diagnosis", () => {
+  const flow = readFileSync(resolve(MOD, "flow.js"), "utf8");
+  assert.ok(/Resumed here/.test(flow) && /is-reused/.test(flow), "the steps a resumed run took from its parent are marked");
+  assert.ok(/fixListHtml\(c\.fixes/.test(flow) && !/Change in Settings/.test(flow), "the failure card's fixes are Apply, not a trip to Settings");
+  const vjs = readFileSync(resolve(MOD, "verify.js"), "utf8");
+  assert.ok(/timingDiagHtml/.test(vjs) && /drcDiagHtml/.test(vjs), "Verify's timing and DRC sections open with the diagnosis");
+  const api2 = readFileSync(resolve(MOD, "api.js"), "utf8");
+  assert.ok(!/\/api\/explain"/.test(api2), "the old explain API is gone (problems.py is the one knowledge base)");
+  const html = PX.fixChipHtml({ kind: "setting", var: "CLOCK_PERIOD", from: "1.5", to: "2.4", label: "Slow the clock", resume: null }, { tag: "t", primary: true });
+  assert.match(html, /is-primary/);
+  assert.match(html, /1\.5 → 2\.4/);
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

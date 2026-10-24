@@ -95,6 +95,8 @@ async function boot() {
     setupLearn();
     setupFullscreen();
     setupTooltips();
+    import("./modules/problems.js").then((m) => m.wireProblemCount()).catch(() => {});
+    import("./modules/fixsheet.js").catch(() => {});
     paintNavIcons();
     help.bind();
     document.getElementById("ide-popout")?.addEventListener("click", () => {

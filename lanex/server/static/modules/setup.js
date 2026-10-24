@@ -473,11 +473,25 @@ async function onRunClick({ show = false } = {}) {
     }
   } catch (_e) { /* preflight is best-effort; don't block the run on it */ }
   const payload = collectRunPayload();
+  const rsel = document.getElementById("run-resume-from");
+  if (rsel && rsel.value && rsel.dataset.tag) {
+    // Resume from a stage of the run on the results pages: the server plans it
+    // (and starts earlier if something those stages read has changed since).
+    payload.branch_from = { tag: rsel.dataset.tag, step: rsel.value };
+  }
   try {
     const res = await api.startRun(payload);
-    if (!res.ok) {
-      toast.show("Run refused: " + (res.reason || "unknown"), "error");
+    if (!res.ok || res.started === false) {
+      toast.show("Run refused: " + (res.reason || res.error || "unknown"), "error");
       return;
+    }
+    if (payload.branch_from) {
+      const r = res.resume;
+      const asked = FS.stagesOf([{ id: payload.branch_from.step }])[0];
+      toast.show("Resuming " + payload.branch_from.tag + " from " + (r ? FS.stageLabel(r.stage) : "the start") + " as " + res.tag +
+        (r && r.reasons && r.reasons.includes("earlier") ? ", earlier than " + FS.stageLabel(asked) + ": something it reads changed since" : "") + ".", "success", 9000);
+      rsel.value = "";
+      paintRunLabel();
     }
     if (res.warning) toast.show(res.warning, "warn");
     // TOCTOU (N7): if the user opened the Final-settings preview and then the
@@ -579,19 +593,68 @@ function wireRunMenu() {
       } else safeStorage.set(key, box.checked ? "1" : "0");
     });
   };
+  // Resume from a stage of the run on the results pages (LibreLane's -i and
+  // --from, as a new run): the stages it can resume from come from the server,
+  // which knows how far that run got and what changed since.
+  const res = document.getElementById("run-resume-from");
+  if (res) {
+    res.innerHTML = "<option value=''>The start (a fresh run)</option>";
+    res.addEventListener("change", () => paintRunLabel());
+    document.getElementById("run-opts-btn")?.addEventListener("click", () => fillResume());
+    // It resumes the run on the results pages: picking another run disarms it.
+    document.addEventListener("g:context", (e) => {
+      if (res.value && res.dataset.tag !== (e.detail || {}).run) { res.value = ""; paintRunLabel(); }
+    });
+  }
   pref("run-pref-show", "ll.showFlowOnRun", null, true);
   pref("run-pref-notify", "ll.notifyRuns", async (on) => (await import("./runend.js")).enableNotifications(on));
   pref("run-pref-chime", "ll.runChime");
 }
 
-// "Run" or "Run to Placement": the button says what it will do.
+let _resumeTok = 0;
+async function fillResume() {
+  const sel = document.getElementById("run-resume-from");
+  const note = document.getElementById("run-resume-note");
+  if (!sel) return;
+  const { contextRun } = await import("./context.js");
+  const tag = contextRun();
+  const keep = sel.value;
+  const tok = ++_resumeTok;
+  if (!tag) { sel.innerHTML = "<option value=''>The start (a fresh run)</option>"; if (note) note.textContent = "No run to resume from yet."; return; }
+  if (note) note.textContent = "Reading " + tag + "…";
+  let p = null;
+  try { p = await api.fixPlan({ tag, sets: {}, start: "auto", run_mode: state.runMode }); } catch (ex) { p = { error: ex.message }; }
+  if (tok !== _resumeTok) return;
+  if (!p || p.error) { if (note) note.textContent = (p && p.error) || ""; return; }
+  const opts = (p.stages || []).filter((s) => s.index > 0).map((s) => {
+    const st = FS.stage(s.stage);
+    const why = s.ok ? "" : s.index > (p.parent.stopped != null ? p.parent.stopped : p.parent.done + 1)
+      ? " (" + tag + " didn't get there)" : " (something it reads changed)";
+    return "<option value='" + fmt.escape(s.step) + "' data-stage='" + fmt.escape(s.stage) + "'" + (s.ok ? "" : " disabled") + ">" +
+      (FS.STAGES.indexOf(st) + 1) + ". " + fmt.escape(st ? st.label : s.stage) + why + "</option>";
+  });
+  sel.innerHTML = "<option value=''>The start (a fresh run)</option>" + opts.join("");
+  sel.value = [...sel.options].some((o) => o.value === keep && !o.disabled) ? keep : "";
+  sel.dataset.tag = tag;
+  const d = p.drift || {};
+  const changed = (d.settings || []).map((x) => x.var).concat((d.files || []).map((f) => f.path));
+  if (note) note.textContent = "Reuses " + tag + "'s results up to that stage." + (changed.length ? " Changed since: " + changed.slice(0, 3).join(", ") + "." : "");
+  paintRunLabel();
+}
+
+// "Run", "Run to Placement" or "Resume from Placement": the button says what
+// it will do.
 function paintRunLabel() {
   const g = document.getElementById("btn-run-global");
   if (!g || (state.status && state.status.running)) return;
   const st = FS.stage(document.getElementById("run-stop-after")?.value || "");
+  const rsel = document.getElementById("run-resume-from");
+  const ropt = rsel && rsel.value ? rsel.options[rsel.selectedIndex] : null;
+  const rst = ropt ? FS.stage(ropt.dataset.stage) : null;
   const span = g.querySelector("span");
-  if (span) span.textContent = st ? "Run to " + st.label : "Run";
-  g.classList.toggle("is-partial", !!st);
+  if (span) span.textContent = rst ? "Resume from " + rst.label + (st ? " to " + st.label : "") : st ? "Run to " + st.label : "Run";
+  g.classList.toggle("is-partial", !!(st || rst));
+  g.dataset.tip = rst ? "A new run that reuses " + rsel.dataset.tag + "'s results up to " + rst.label + " (r)" : "Run the flow on this project (r)";
 }
 
 export function paintRunning(running) {

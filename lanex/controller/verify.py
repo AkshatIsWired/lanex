@@ -151,13 +151,12 @@ class _Run:
         self.has_cfg = bool(self.cfg)
         self.metrics = history._load_metrics(run_dir)
         self.completed = history._completed(run_dir)
-        ids = history._step_ids_from_flow_log(run_dir)
+        # A resumed run stands on the steps it took from its parent: their
+        # checks (lint, synthesis…) are this run's too. ``run`` names the run
+        # whose folder holds each step.
         steps: List[Dict[str, Any]] = []
-        try:
-            entries = [e for e in run_dir.iterdir() if e.is_dir() and history._is_step_dir(e.name)]
-        except Exception:
-            entries = []
-        for e in sorted(entries, key=lambda d: int(d.name.split("-", 1)[0])):
+        for s in history.lineage_steps(run_dir):
+            e = s["path"]
             if (e / "state_out.json").is_file():
                 status = "done"
             elif (e / "state_in.json").is_file():
@@ -165,8 +164,10 @@ class _Run:
             else:
                 status = "unknown"
             steps.append({"n": int(e.name.split("-", 1)[0]), "dir": e.name,
-                          "id": ids.get(e.name), "status": status, "path": e})
+                          "id": s["id"], "status": status, "path": e,
+                          "run": s["run"] if s["run"] != run_dir.name else None})
         self.steps = steps
+        self.branch = history.branch_of(run_dir)
         # A run that stopped has no final/metrics.json, but every finished
         # step saved the metrics as of that point: use the last one, and say so.
         self.metrics_from: Optional[Dict[str, Any]] = None
@@ -241,7 +242,10 @@ def _step_ref(run: _Run, step_id: Optional[str]) -> Optional[Dict[str, Any]]:
     s = run.step(step_id)
     if s is None:
         return {"id": step_id, "dir": None, "n": None, "status": "absent"}
-    return {"id": step_id, "dir": s["dir"], "n": s["n"], "status": s["status"]}
+    ref = {"id": step_id, "dir": s["dir"], "n": s["n"], "status": s["status"]}
+    if s.get("run"):
+        ref["run"] = s["run"]      # taken from the run this one was resumed from
+    return ref
 
 
 def _gated(run: _Run, gates: Iterable[str]) -> Optional[str]:
@@ -1055,7 +1059,9 @@ def _flow_state(run: _Run) -> Dict[str, Any]:
                          if ln.strip()][:30]
     except Exception:
         pass
-    partial = bool(run.gui.get("frm") or run.gui.get("to"))
+    # A run resumed from another one starts at --from too, but it is whole:
+    # the steps before come from that run (``branched_from``).
+    partial = bool((run.gui.get("frm") and not run.branch) or run.gui.get("to"))
     if run.completed and not stopped:
         state = "complete"
     elif run.completed and stopped and len(raised_checkers) == len(stopped):
@@ -1072,6 +1078,7 @@ def _flow_state(run: _Run) -> Dict[str, Any]:
         "state": state,
         "partial": partial,
         "frm": run.gui.get("frm"), "to": run.gui.get("to"),
+        "branched_from": run.branch,
         "steps_total": len(run.steps),
         "steps_done": sum(1 for s in run.steps if s["status"] == "done"),
         "stopped_step": ({"n": first_stop["n"], "dir": first_stop["dir"], "id": first_stop["id"]}

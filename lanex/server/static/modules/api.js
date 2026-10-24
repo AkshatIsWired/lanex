@@ -117,7 +117,7 @@ export const api = {
   layoutCommands: (tag) => _fetch("/api/layout/commands?tag=" + encodeURIComponent(tag)),
   runFileUrl: (tag, path) =>
     "/api/run-file?tag=" + encodeURIComponent(tag) + "&path=" + encodeURIComponent(path),
-  deleteRun: (tag) => _fetch("/api/run-delete", { method: "POST", body: JSON.stringify({ tag }) }),
+  deleteRun: (tag, force) => _fetch("/api/run-delete", { method: "POST", body: JSON.stringify({ tag, force: !!force }) }),
   runNote: (tag) => _fetch("/api/run-note?tag=" + encodeURIComponent(tag)),
   setRunNote: (tag, note) => _fetch("/api/run-note", { method: "POST", body: JSON.stringify({ tag, note }) }),
   setRunPin: (tag, pinned) => _fetch("/api/run-pin", { method: "POST", body: JSON.stringify({ tag, pinned }) }),
@@ -135,9 +135,6 @@ export const api = {
   designDir: () => _fetch("/api/design-dir"),
   setDesignDir: (path) => _fetch("/api/set-design-dir", { method: "POST", body: JSON.stringify({ path }) }),
   diffRuns: (a, b) => _fetch("/api/diff", { method: "POST", body: JSON.stringify({ a, b }) }),
-  explain: (message) => _fetch("/api/explain", { method: "POST", body: JSON.stringify({ message }) }),
-  explainChecker: (checker, metric) =>
-    _fetch("/api/explain-checker", { method: "POST", body: JSON.stringify({ checker, metric }) }),
   startRun: (payload) => _fetch("/api/run/start", { method: "POST", body: JSON.stringify(payload) }),
   cancelRun: () => _fetch("/api/run/cancel", { method: "POST", body: "{}" }),
   resumeRun: () => _fetch("/api/run/resume", { method: "POST", body: "{}" }),
@@ -235,6 +232,12 @@ export const api = {
   runStages: (tag) => _fetch("/api/run-stages?tag=" + encodeURIComponent(tag)),
   // How a run ended and why, with fixes and its warnings by code (Flow).
   runExplain: (tag, base) => _fetch("/api/run-explain?tag=" + encodeURIComponent(tag) + (base ? "&base=" + encodeURIComponent(base) : "")),
+  // The fix loop: a run's problems; what a fix would do; apply it as a run
+  // resumed from that one; undo a config change.
+  problems: (tag) => _fetch("/api/problems?tag=" + encodeURIComponent(tag), { timeout: 60000 }),
+  fixPlan: (body) => _fetch("/api/fix/plan", { method: "POST", body: JSON.stringify(body), timeout: 60000 }),
+  fixApply: (body) => _fetch("/api/fix/apply", { method: "POST", body: JSON.stringify(body), timeout: 60000 }),
+  configUndo: (undo) => _fetch("/api/config/undo", { method: "POST", body: JSON.stringify(undo) }),
   timingPaths: (tag, kind, limit) =>
     _fetch("/api/timing-paths?kind=" + encodeURIComponent(kind || "setup") +
       (tag ? "&tag=" + encodeURIComponent(tag) : "") +

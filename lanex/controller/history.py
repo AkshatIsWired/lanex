@@ -1727,6 +1727,52 @@ def _step_ids_from_flow_log(run_dir: Path) -> Dict[str, str]:
     return out
 
 
+def branch_of(run_dir: str | Path) -> Optional[Dict[str, Any]]:
+    """The run this one was resumed from (``gui-run.json`` ``branched_from``):
+    ``{tag, step, state, dir}``, ``dir`` the parent's folder when it still
+    exists. None for a run that started from the beginning."""
+    run = Path(run_dir)
+    doc = _read_json(run / "gui-run.json")
+    b = doc.get("branched_from") if isinstance(doc, dict) else None
+    if not isinstance(b, dict) or not b.get("tag") or not b.get("step"):
+        return None
+    out = {k: b.get(k) for k in ("tag", "step", "state", "stage", "changes")}
+    parent = run.parent / str(b["tag"])
+    out["dir"] = str(parent) if parent.is_dir() and parent.resolve() != run.resolve() else None
+    return out
+
+
+def _step_entries(run: Path) -> List[Path]:
+    try:
+        return sorted((e for e in run.iterdir() if e.is_dir() and _is_step_dir(e.name)),
+                      key=lambda e: int(e.name.split("-", 1)[0]))
+    except Exception:
+        return []
+
+
+def lineage_steps(run_dir: str | Path, _depth: int = 0) -> List[Dict[str, Any]]:
+    """Every step folder a run's results stand on, in flow order:
+    ``[{dir, id, path, run}]``. A resumed run starts with the steps it took
+    from the run it was resumed from (``run`` names that run), then its own.
+    LibreLane's ``-i`` state points into those folders, so they are part of
+    this run's results even though they live in another run."""
+    run = Path(run_dir).resolve()
+    ids = _step_ids_from_flow_log(run)
+    own = [{"dir": e.name, "id": ids.get(e.name), "path": e, "run": run.name} for e in _step_entries(run)]
+    b = branch_of(run)
+    if not b or not b.get("dir") or _depth > 8:
+        return own
+    # Folder names are the step id in lower case with dashes ("OpenROAD.STAMidPNR-1"
+    # -> "NN-openroad-stamidpnr-1"): enough when flow.log is missing.
+    slug = str(b["step"]).lower().replace(".", "-")
+    head: List[Dict[str, Any]] = []
+    for s in lineage_steps(b["dir"], _depth + 1):
+        if s["id"] == b["step"] or (not s["id"] and s["dir"].split("-", 1)[-1] == slug):
+            break
+        head.append(s)
+    return head + own
+
+
 def run_stages(run_dir: str | Path) -> Dict[str, Any]:
     """Per-step view of one run, for the Analytics "through the flow" charts.
 
@@ -1739,17 +1785,12 @@ def run_stages(run_dir: str | Path) -> Dict[str, Any]:
     and never finished). Nothing is computed beyond unit conversion.
     """
     run = Path(run_dir).resolve()
-    try:
-        entries = sorted(
-            (e for e in run.iterdir() if e.is_dir() and _is_step_dir(e.name)),
-            key=lambda e: int(e.name.split("-", 1)[0]),
-        )
-    except Exception:
-        entries = []
-    ids = _step_ids_from_flow_log(run)
+    # A resumed run lists the steps it took from its parent first, marked
+    # with ``from`` (the run whose folder holds them).
     prev: Dict[str, Any] = {}
     steps: List[Dict[str, Any]] = []
-    for e in entries:
+    for s in lineage_steps(run):
+        e = s["path"]
         out_doc = _read_json(e / "state_out.json")
         if isinstance(out_doc, dict):
             status = "done"
@@ -1770,19 +1811,23 @@ def run_stages(run_dir: str | Path) -> Dict[str, Any]:
                 if m is not None:
                     peak = m if peak is None else max(peak, m)
         rt = e / "runtime.txt"
-        steps.append({
+        row = {
             "n": int(e.name.split("-", 1)[0]),
             "dir": e.name,
-            "id": ids.get(e.name),
+            "id": s["id"],
             "status": status,
             "runtime_s": _parse_runtime_txt(rt) if rt.is_file() else None,
             "peak_rss_mib": peak,
             "changed": changed,
-        })
+        }
+        if s["run"] != run.name:
+            row["from"] = s["run"]
+        steps.append(row)
     cfg = _read_config(run)
     meta = cfg.get("meta") if isinstance(cfg.get("meta"), dict) else {}
     return {
         "tag": run.name,
+        "branched_from": branch_of(run),
         "completed": _completed(run),
         "design_name": cfg.get("DESIGN_NAME"),
         "pdk": cfg.get("PDK"),
