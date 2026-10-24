@@ -409,9 +409,21 @@ begin
   Result := ExpandConstant('{sys}\wsl.exe');
 end;
 
+// The folder New project uses (lanex/controller/platform_env.py
+// projects_dir): LanEx-Projects in the Windows profile, or the Linux home
+// when the profile path has a space (LibreLane splits file lists on spaces).
 function DistroProjectPath(Param: String): String;
+var
+  Home: String;
 begin
-  Result := '\\wsl.localhost\' + DistroNameValue + '\home\{#AppUser}';
+  Home := ExpandConstant('{%USERPROFILE}');
+  if (Home <> '') and (Pos(' ', Home) = 0) and (Pos(#9, Home) = 0) then
+  begin
+    Result := Home + '\LanEx-Projects';
+    ForceDirectories(Result);
+  end
+  else
+    Result := '\\wsl.localhost\' + DistroNameValue + '\home\{#AppUser}';
 end;
 
 function PSQuote(const S: String): String;
