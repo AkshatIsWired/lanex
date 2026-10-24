@@ -152,9 +152,15 @@ apt_sources() {
         note "no package snapshot is pinned in this build; using the live Ubuntu archive."
         return 0
     fi
+    # The backup lives outside sources.list.d: apt warns about every file
+    # there that does not end in .list or .sources, on every apt command.
+    mkdir -p /var/lib/lanex
+    if [ -f "${APT_SOURCES}.lanex-original" ]; then
+        mv -f "${APT_SOURCES}.lanex-original" /var/lib/lanex/ubuntu.sources.original
+    fi
     if [ -f "$APT_SOURCES" ] && ! grep -q '^# Managed by LanEx Setup' "$APT_SOURCES" \
-       && [ ! -f "${APT_SOURCES}.lanex-original" ]; then
-        cp -p "$APT_SOURCES" "${APT_SOURCES}.lanex-original" \
+       && [ ! -f /var/lib/lanex/ubuntu.sources.original ]; then
+        cp -p "$APT_SOURCES" /var/lib/lanex/ubuntu.sources.original \
             || die "could not back up the original package sources."
     fi
     [ -f /etc/apt/sources.list ] && grep -q '^deb ' /etc/apt/sources.list \
