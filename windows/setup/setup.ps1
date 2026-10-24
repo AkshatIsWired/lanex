@@ -108,6 +108,7 @@ function Get-Sha256([string]$Path) {
 if ($ExpectedSelfSha256) {
     if ($ExpectedSelfSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
             (Get-Sha256 $PSCommandPath) -ne $ExpectedSelfSha256.ToLowerInvariant()) {
+        if ($OutputPath) { [IO.File]::WriteAllText($OutputPath + '.done', 'failed: worker integrity') }
         throw 'Elevated setup worker integrity check failed before any feature operation.'
     }
 }
@@ -817,7 +818,13 @@ function Enable-WindowsFeatures {
     # exists ("not installed"). Installing it here keeps it to one UAC prompt.
     # A failure is not fatal: after the restart Setup installs it again.
     if ($null -eq $FeatureFixturePath -or -not $FeatureFixturePath) {
+        # Setup starts this elevated helper with ShellExec, which does not turn
+        # off WOW64 redirection: it runs as 32-bit PowerShell, where System32
+        # is SysWOW64 and has no wsl.exe. sysnative reaches the real one.
         $wslExe = Join-Path $env:SystemRoot 'System32\wsl.exe'
+        if (-not (Test-Path -LiteralPath $wslExe -PathType Leaf)) {
+            $wslExe = Join-Path $env:SystemRoot 'sysnative\wsl.exe'
+        }
         if ($failed.Count -eq 0 -and (Test-Path -LiteralPath $wslExe -PathType Leaf)) {
             $env:WSL_UTF8 = '1'
             $text = (& $wslExe --install --no-distribution 2>&1 | Out-String) -replace "`0", ''
@@ -1418,7 +1425,17 @@ $result = switch ($Action) {
     'BindAppliance' { Bind-Appliance }
     'SetComponent' { Set-ComponentState }
     'Preflight' { Invoke-Preflight }
-    'EnableFeatures' { Enable-WindowsFeatures }
+    'EnableFeatures' {
+        # Setup waits for <OutputPath>.done instead of the process (it keeps
+        # the wizard responsive), so the marker is written whatever happens.
+        try {
+            Enable-WindowsFeatures
+            if ($OutputPath) { [IO.File]::WriteAllText($OutputPath + '.done', 'ok') }
+        } catch {
+            if ($OutputPath) { [IO.File]::WriteAllText($OutputPath + '.done', 'failed: ' + $_.Exception.Message) }
+            throw
+        }
+    }
     'StageInstaller' { Stage-ResumeInstaller }
     'RegisterResume' { Register-OwnerResume }
     'ClearResume' { Clear-OwnerResume }

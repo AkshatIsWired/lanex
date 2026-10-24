@@ -296,6 +296,8 @@ function KillTimer(hWnd, nIDEvent: LongWord): Boolean;
   external 'KillTimer@user32.dll stdcall';
 function GetTickCount: LongWord;
   external 'GetTickCount@kernel32.dll stdcall';
+function SetForegroundWindow(hWnd: HWND): BOOL;
+  external 'SetForegroundWindow@user32.dll stdcall';
 
 var
   // Set in InitializeSetup, read in PrepareToInstall.
@@ -318,6 +320,7 @@ var
   FirmwareNoticeValue: Boolean;
   LowMemoryValue: Boolean;
   MemoryGBValue: String;
+  WslVersionValue: String;
   ConfigurePage: TWizardPage;
   ProfileRadioRecommended, ProfileRadioComplete, ProfileRadioCustom, ProfileRadioMinimal: TRadioButton;
   ProfileDescLabel, SharedHelperLabel, ChangeChoicesLabel: TLabel;
@@ -689,6 +692,12 @@ begin
   Line := Trim(StripNulls(S));
   if Error then Line := 'Output reader error: ' + Line;
   if Line = '' then Exit;
+  if (Length(Line) > 3) and (Line[1] = '[') and (Line[Length(Line)] = ']') and (Pos('%', Line) > 0) then
+  begin
+    ProgressActivity := 'Creating the private LanEx environment... '
+      + Trim(Copy(Line, Pos('%', Line) - 5, 6));
+    Exit;
+  end;
   LogLine(Line);
 
   Line := StripAnsi(Line);
@@ -1071,6 +1080,7 @@ begin
     + '$p.decision.code; $p.bootIdentity; '
     + '(($p.computer.manufacturer + '' '' + $p.computer.model) -replace ''[\r\n\t]'','' '').Trim(); '
     + '$p.decision.firmwareNotice; $p.decision.lowMemory; $p.decision.memoryGB; '
+    + '(''v'' + $p.wsl.version); '
     + '($p | ConvertTo-Json -Depth 20 -Compress)';
   Result := PowerShellCapture(Snippet, Output);
   if not Result then
@@ -1084,6 +1094,8 @@ begin
   FirmwareNoticeValue := CompareText(TakeLine(Output), 'true') = 0;
   LowMemoryValue := CompareText(TakeLine(Output), 'true') = 0;
   MemoryGBValue := TakeLine(Output);
+  // 'v' + version, so an empty version still occupies its line.
+  WslVersionValue := Copy(TakeLine(Output), 2, 64);
   JsonLine := TakeLine(Output);
   LogLine('preflight: ' + JsonLine);
   Result := (PreflightDecision <> '') and (BootIdentityValue <> '');
@@ -1528,7 +1540,7 @@ begin
     ProfileDescLabel.Caption :=
       'Recommended Profile Overview:'#13#10#13#10 +
       '• Container Engine: Docker CE'#13#10 +
-      '• Flow & Visualization: Matched LibreLane container image, GDS3D'#13#10 +
+      '• Flow && Visualization: Matched LibreLane container image, GDS3D'#13#10 +
       '• Native EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave'#13#10 +
       '• Technology: SkyWater 130 nm (sky130A) starter libraries'#13#10 +
       '• Turnkey flow: Tools, viewers and SKY130A. Ready to design.'#13#10 +
@@ -1543,7 +1555,7 @@ begin
     ProfileDescLabel.Caption :=
       'Complete Profile Overview:'#13#10#13#10 +
       '• Container Engine: Docker CE'#13#10 +
-      '• Flow & Visualization: Matched LibreLane container image, GDS3D'#13#10 +
+      '• Flow && Visualization: Matched LibreLane container image, GDS3D'#13#10 +
       '• Native EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave'#13#10 +
       '• Technology: SKY130A, SKY130B, gf180mcuD, and ihp-sg13g2 with all published libraries'#13#10 +
       '• Complete flow: All supported tools and PDKs. Largest download.';
@@ -1888,6 +1900,8 @@ begin
 
   // Fast profile restoration without spawning PowerShell:
   SavedProfile := '';
+  // A first install starts on Recommended; a saved choice below overrides it.
+  ProfileRadioRecommended.Checked := True;
   if FileExists(StateFile) then
   begin
     if LoadStringFromFile(StateFile, RawState) then
@@ -2092,7 +2106,8 @@ begin
     LogLine('preflight failed: ' + Failure);
     if not WizardSilent then MsgBox('LanEx could not inspect this PC''s Windows and WSL prerequisites.'
       + #13#10#13#10 + Failure + #13#10#13#10
-      + 'No Windows feature, WSL distribution, or user data was changed.',
+      + 'No Windows feature, WSL distribution, or user data was changed.'
+      + #13#10#13#10 + 'Log: ' + LogFile,
       mbError, MB_OK);
     Result := False;
     Exit;
@@ -2102,14 +2117,14 @@ begin
   begin
     if not WizardSilent then MsgBox('This LanEx installer contains an amd64 Linux appliance and requires '
       + 'an x64 Windows PC. ARM64 and other native architectures are not '
-      + 'supported by this build.', mbError, MB_OK);
+      + 'supported by this build.' + #13#10#13#10 + 'Log: ' + LogFile, mbError, MB_OK);
     Result := False;
     Exit;
   end;
   if PreflightDecision = 'unsupported-windows' then
   begin
     if not WizardSilent then MsgBox('LanEx needs Windows build 19044 or newer so its WSLg desktop tools '
-      + 'can open correctly. Windows 11 x64 is recommended.', mbError, MB_OK);
+      + 'can open correctly. Windows 11 x64 is recommended.' + #13#10#13#10 + 'Log: ' + LogFile, mbError, MB_OK);
     Result := False;
     Exit;
   end;
@@ -2151,7 +2166,7 @@ begin
     if not WizardSilent then MsgBox('Windows did not allow Setup to determine the required WSL feature '
       + 'states. On a managed PC, ask an administrator to enable Windows '
       + 'Subsystem for Linux and Virtual Machine Platform, then run Setup again.'
-      + #13#10#13#10 + 'No feature or distribution was changed.', mbError, MB_OK);
+      + #13#10#13#10 + 'No feature or distribution was changed.' + #13#10#13#10 + 'Log: ' + LogFile, mbError, MB_OK);
     Result := False;
     Exit;
   end;
@@ -2429,6 +2444,7 @@ var
   Code: Integer;
   Worker, OutputFile, Params: String;
   Raw: AnsiString;
+  Started, LastNote: LongWord;
 begin
   SetStatus('Turning on the Windows features LanEx needs...');
   Worker := ExpandConstant('{tmp}\setup.ps1');
@@ -2444,15 +2460,44 @@ begin
     + Worker + '" -Action EnableFeatures -ExpectedSelfSha256 {#SetupWorkerSha256}'
     + ' -OutputPath "' + OutputFile + '"';
   LogLine('$ elevated feature helper: Windows Subsystem for Linux + Virtual Machine Platform');
-  Result := ShellExec('runas',
-    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '',
-    SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
-  if FileExists(OutputFile) and LoadStringFromFile(OutputFile, Raw) then
-    LogLine('feature helper result: ' + Trim(UTF8Decode(Raw)))
-  else
+  DeleteFile(OutputFile + '.done');
+  // ewNoWait: ShellExec still returns only after the UAC answer (False when it
+  // is declined), but the wizard keeps drawing while Windows turns the
+  // features on and installs WSL, which takes minutes. The helper writes
+  // <output>.done ("ok" or "failed") when it has finished.
+  if not ShellExec('runas',
+      ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '',
+      SW_HIDE, ewNoWait, Code) then
+  begin
+    LogLine('feature helper not started (UAC declined or blocked): ' + SysErrorMessage(Code));
     Result := False;
+    Exit;
+  end;
+  AppendLiveLine('Windows is turning on WSL and installing it. This takes a few minutes.');
+  Started := GetTickCount;
+  LastNote := Started;
+  WorkerRunning := True;
+  try
+    while not FileExists(OutputFile + '.done') do
+    begin
+      ProcessSystemMessages;
+      if GetTickCount - LastNote > 30000 then
+      begin
+        LastNote := GetTickCount;
+        AppendLiveLine('  still working (' + ElapsedText + ')...');
+      end;
+      RefreshProgressCaption;
+      if GetTickCount - Started > 45 * 60 * 1000 then Break;
+      Sleep(200);
+    end;
+  finally
+    WorkerRunning := False;
+  end;
+  Result := LoadStringFromFile(OutputFile + '.done', Raw) and (Pos('ok', String(Raw)) = 1);
+  if FileExists(OutputFile) and LoadStringFromFile(OutputFile, Raw) then
+    LogLine('feature helper result: ' + Trim(UTF8Decode(Raw)));
   if not Result then
-    LogLine('feature helper failed or UAC was cancelled; exit=' + IntToStr(Code));
+    LogLine('feature helper failed or did not finish within 45 minutes');
 end;
 
 // ScheduleResume arranges for Setup to continue by itself after the restart.
@@ -2842,7 +2887,8 @@ begin
     else Answer := MsgBox('Setting up the LanEx environment did not finish.'
       + #13#10#13#10 + 'The failing component and recovery detail are shown below. '
       + 'Retry rechecks completed work and preserves verified downloads.' + #13#10#13#10
-      + 'Last lines of the log:' + #13#10 + LogTail(12) + ProxyFailureHint,
+      + 'Last lines of the log:' + #13#10 + LogTail(12) + ProxyFailureHint
+      + #13#10#13#10 + 'Install log: ' + LogFile,
       mbError, MB_RETRYCANCEL);
   until Answer <> IDRETRY;
   Result := 'The LanEx environment could not be prepared.' + #13#10#13#10
@@ -2920,7 +2966,8 @@ begin
     if WizardSilent then Answer := IDCANCEL
     else Answer := MsgBox('The selected LanEx components did not all become ready.'
       + #13#10#13#10 + 'Retrying preserves completed tools, image layers, PDKs, and projects.'
-      + #13#10#13#10 + 'Last lines of the log:' + #13#10 + LogTail(16) + ProxyFailureHint,
+      + #13#10#13#10 + 'Last lines of the log:' + #13#10 + LogTail(16) + ProxyFailureHint
+      + #13#10#13#10 + 'Install log: ' + LogFile,
       mbError, MB_RETRYCANCEL);
   until Answer <> IDRETRY;
   Result := 'LanEx base setup is intact, but selected-component readiness failed.'
@@ -2991,7 +3038,25 @@ begin
     LogLine('could not checkpoint selected components: ' + Output);
 end;
 
+function PrepareToInstallCore(var NeedsRestart: Boolean): String; forward;
+
+// The progress panel covers the Preparing page. When preparation ends with a
+// message (a failure, or "Windows needs to restart" with its Restart now /
+// later choice), the panel must step aside: on the first VM run it hid the
+// restart question, and Next restarted Windows without warning.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := PrepareToInstallCore(NeedsRestart);
+  // Every message that stops Setup says where the full log is.
+  if (Result <> '') and (Pos(LogFile, Result) = 0) then
+    Result := Result + #13#10#13#10 + 'Install log: ' + LogFile;
+  if Result <> '' then
+    LogLine('setup stopped: ' + Result);
+  if (Result <> '') and (ProgressContainer <> nil) then
+    ProgressContainer.Visible := False;
+end;
+
+function PrepareToInstallCore(var NeedsRestart: Boolean): String;
 var
   Code, Answer: Integer;
   Output, Worker, IdentityFailure, NetProfile, NeedRootfsArg: String;
@@ -3136,7 +3201,7 @@ begin
         + 'WSL runtime without /ALLOWWSLUPDATE=1.';
       Exit;
     end;
-    if (not WizardSilent) and (Trim(ListedDistros) <> '') and (MsgBox('LanEx needs a newer WSL runtime for systemd and desktop tools.'
+    if (not WizardSilent) and (WslVersionValue <> '') and (Trim(ListedDistros) <> '') and (MsgBox('LanEx needs a newer WSL runtime for systemd and desktop tools.'
       + #13#10#13#10 + 'Updating WSL is machine-wide and can briefly affect '
       + 'other WSL work. Save active WSL work before continuing. Setup will '
       + 'not shut down or convert any distribution.' + #13#10#13#10
@@ -3150,7 +3215,7 @@ begin
     // 24H2+ after the feature restart) answers `wsl --update` with "not
     // installed"; only `wsl --install --no-distribution` installs it. Windows
     // asks for administrator permission itself.
-    if not (Exec(WslExe, '--version', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0)) then
+    if WslVersionValue = '' then
     begin
       SetPhase(1, 6, 'Installing Windows Subsystem for Linux (Windows asks for permission)...');
       if not (RunLogged(WslExe, '--install --no-distribution', Code) and (Code = 0)) then
@@ -3460,6 +3525,11 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
+  if IsContinuationRun and (WizardForm <> nil) then
+  begin
+    WizardForm.BringToFront;
+    SetForegroundWindow(WizardForm.Handle);
+  end;
   if ProgressContainer <> nil then
   begin
     ProgressContainer.Visible := (CurPageID = wpPreparing) or (CurPageID = wpInstalling);
@@ -3476,6 +3546,15 @@ begin
     ConfigurePage.Surface.Repaint;
     WizardForm.NextButton.Caption := '&Install';
     UpdateEstimates;
+  end
+  else if CurPageID = wpReady then
+  begin
+    // Only reached when every other page is skipped: the run Windows
+    // reopens after the restart.
+    WizardForm.NextButton.Caption := '&Install';
+    if IsContinuationRun then
+      WizardForm.ReadyLabel.Caption := 'Windows has restarted. Click Install to carry on '
+        + 'setting up LanEx; your choices are saved.';
   end
   else if CurPageID = wpLicense then
   begin

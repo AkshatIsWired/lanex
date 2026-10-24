@@ -181,7 +181,7 @@ probe_endpoint() {
         --max-time 15 --retry 2 --retry-delay 2 "$url" 2>"$out")"
     rc=$?
     case "$code" in
-        2??|3??|401|405) ;;
+        2??|3??|401|403|404|405) ;;
         *)
             if [ "$rc" -eq 0 ]; then
                 # Fallback to GET with a bounded 10KB byte range if HEAD returned an error code
@@ -200,7 +200,7 @@ probe_endpoint() {
                 family_code="$(curl "$family" -sS -I -L -o /dev/null -w '%{http_code}' \
                     --connect-timeout 8 --max-time 15 "$url" 2>/dev/null)"
                 family_rc=$?
-                case "$family_code" in 2??|3??|401|405) ;; *) family_rc=1 ;; esac
+                case "$family_code" in 2??|3??|401|403|404|405) ;; *) family_rc=1 ;; esac
                 if [ "$family_rc" -eq 0 ]; then
                     CURL_FAMILY="$family"
                     if [ "$family" = "-4" ]; then
@@ -220,7 +220,7 @@ probe_endpoint() {
     fi
     rm -f "$out"
     case "$code" in
-        2??|3??|401|405) note "${label} reachable (HTTP ${code})." ;;
+        2??|3??|401|403|404|405) note "${label} reachable (HTTP ${code})." ;;
         407) network_failure 22 "$label" "The configured proxy requires authentication; a Windows PAC file is not a shell proxy URL." ;;
         429) network_failure 22 "$label" "The service is rate limiting requests; wait for its retry window." ;;
         *) network_failure 22 "$label" "The service returned HTTP ${code}." ;;
