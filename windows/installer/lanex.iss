@@ -997,8 +997,11 @@ begin
   First := GetArrayLength(Lines) - Count;
   if First < 0 then
     First := 0;
+  // The machine-readable lines (the preflight JSON, progress events) say
+  // nothing to a person reading an error; the log file keeps them.
   for I := First to GetArrayLength(Lines) - 1 do
-    Result := Result + StripNulls(Lines[I]) + #13#10;
+    if (Pos('preflight: {', Lines[I]) <> 1) and (Pos('@@LANEX:', Lines[I]) <> 1) then
+      Result := Result + StripNulls(Lines[I]) + #13#10;
 end;
 
 // WindowsToWslPath converts C:\dir\file to /mnt/c/dir/file — how the appliance

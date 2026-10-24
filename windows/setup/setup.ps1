@@ -751,6 +751,15 @@ function Get-LivePreflightFacts {
     }
 }
 
+function Test-StoreWsl($Facts) {
+    <# WSL 2.0 and later (the app from the Store or `wsl --install`) runs
+       WSL 2 without the old "Windows Subsystem for Linux" optional feature:
+       on Windows 11 26H2, `wsl --install` turns on only Virtual Machine
+       Platform, and WSL works. Asking for the old feature there cost an
+       administrator prompt and a restart for nothing. #>
+    try { return ([version][string]$Facts.wsl.version -ge [version]'2.0') } catch { return $false }
+}
+
 function Get-PreflightDecision($Facts) {
     $code = 'ready'
     $blocked = $false
@@ -793,7 +802,7 @@ function Get-PreflightDecision($Facts) {
             [string]$Facts.features.virtualMachinePlatform -match 'pending' -or
             ($Facts.pendingReboot -eq $true -and $Facts.wsl.statusUsable -ne $true)) {
         $code = 'restart-required'; $needsRestart = $true
-    } elseif ([string]$Facts.features.wsl -ne 'enabled' -or
+    } elseif (([string]$Facts.features.wsl -ne 'enabled' -and -not (Test-StoreWsl $Facts)) -or
             [string]$Facts.features.virtualMachinePlatform -ne 'enabled') {
         $code = 'features-required'; $needsElevation = $true
         $firmwareNotice = ([string]$Facts.firmwareVirtualization -eq 'unknown')

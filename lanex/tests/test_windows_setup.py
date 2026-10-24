@@ -890,6 +890,18 @@ def test_vm_whose_kernel_reports_no_hypervisor_is_nested_off(tmp_path: Path) -> 
     assert result["decision"]["code"] == "vm-nested-virtualization-off"
 
 
+def test_store_wsl_without_the_old_feature_needs_no_administrator(tmp_path: Path) -> None:
+    # Windows 11 26H2 after `wsl --install`: Virtual Machine Platform on, the
+    # old optional feature off, WSL 3.0.3 working.
+    facts = _base_preflight(
+        features={"wsl": "disabled", "virtualMachinePlatform": "enabled"},
+        wsl={"present": True, "statusUsable": True, "version": "3.0.3.0",
+             "systemdCapable": True, "kernelUsable": True, "kernelError": ""})
+    assert _preflight(tmp_path, facts)["decision"]["code"] == "ready"
+    facts["wsl"]["version"] = ""
+    assert _preflight(tmp_path, facts)["decision"]["code"] == "features-required"
+
+
 def test_first_look_without_kernel_start_does_not_block(tmp_path: Path) -> None:
     result = _preflight(tmp_path, _base_preflight(
         wsl={"present": True, "statusUsable": True, "version": "3.0.1.0",
