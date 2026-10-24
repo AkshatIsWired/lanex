@@ -16,6 +16,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Pinned inputs that are not files in the repository. The rootfs is tried at
 # each URL in order (our mirror first); only its SHA-256 decides. The apt
 # snapshot fixes every Ubuntu package version for every install.
+# As in CI: -H windowsgui makes LanEx.exe a GUI program. Without it every
+# launch opened a terminal window on Windows 11 (seen on the clean VMs).
+GO_BUILD_FLAGS = ("-buildvcs=false", "-trimpath", "-ldflags=-H windowsgui -s -w")
+def pe_subsystem(path: Path) -> int:
+    """The PE optional header's Subsystem: 2 is GUI, 3 is console."""
+    data = path.read_bytes()
+    pe = int.from_bytes(data[0x3C:0x40], "little")
+    return int.from_bytes(data[pe + 24 + 68:pe + 24 + 70], "little")
+
+
 MIRROR_BASE = "https://github.com/AkshatIsWired/lanex/releases/download/deps-v1"
 ROOTFS_FILE = "ubuntu-24.04.4-wsl-amd64.wsl"
 ROOTFS_URL = f"https://releases.ubuntu.com/24.04.4/{ROOTFS_FILE}"
@@ -99,11 +109,12 @@ def main() -> int:
                 go_bin = str(candidate)
                 break
     if go_bin:
-        run_cmd([go_bin, "build", "-buildvcs=false", "-o", "LanEx.exe", "."], cwd=launcher_dir)
+        run_cmd([go_bin, "build", *GO_BUILD_FLAGS, "-o", "LanEx.exe", "."], cwd=launcher_dir)
     else:
         # No Windows Go: cross-compile in the first WSL distro that has one.
         wsl_dir = str(launcher_dir).replace("\\", "/").replace("C:", "/mnt/c")
-        wsl_go_cmd = f"cd '{wsl_dir}' && GOOS=windows GOARCH=amd64 go build -buildvcs=false -o LanEx.exe ."
+        flags = " ".join(f"'{f}'" for f in GO_BUILD_FLAGS)
+        wsl_go_cmd = f"cd '{wsl_dir}' && GOOS=windows GOARCH=amd64 go build {flags} -o LanEx.exe ."
         go_distro = ""
         for candidate in (os.environ.get("LANEX_GO_DISTRO", ""), "Ubuntu-24.04", "Ubuntu"):
             if not candidate:
@@ -118,6 +129,8 @@ def main() -> int:
         run_cmd(["wsl.exe", "-d", go_distro, "--", "bash", "-lc", wsl_go_cmd])
     if not launcher_exe.exists():
         raise SystemExit("LanEx.exe failed to build")
+    if pe_subsystem(launcher_exe) != 2:
+        raise SystemExit("LanEx.exe is not a GUI program (-H windowsgui missing)")
     print(f"[*] Built LanEx.exe: {sha256_file(launcher_exe)}")
 
     # 4. Generate build-manifest.json

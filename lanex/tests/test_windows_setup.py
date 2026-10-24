@@ -925,6 +925,11 @@ def test_first_look_without_kernel_start_does_not_block(tmp_path: Path) -> None:
     assert "RunPreflight(True, Failure)" in body and "-KernelProbeSeconds 0" in body
 
 
+def test_release_build_makes_the_launcher_a_gui_program() -> None:
+    build = (REPO / "scripts" / "build_windows_release.py").read_text(encoding="utf-8")
+    assert "-H windowsgui" in build and "pe_subsystem(launcher_exe) != 2" in build
+
+
 def test_preflight_bounds_every_wsl_call() -> None:
     body = SETUP.read_text(encoding="utf-8")
     facts = body[body.index("function Get-LivePreflightFacts"):body.index("function Get-PreflightDecision")]
