@@ -3149,6 +3149,15 @@ begin
   finally
     SetThreadExecutionState($80000000);
   end;
+  // A stop the user asked for gets one plain message; which step it
+  // interrupted, and how, stays in the log.
+  if CancelRequested and (Result <> '') and not NeedsRestart then
+  begin
+    LogLine('cancelled: ' + Result);
+    Result := 'LanEx Setup stopped, as you asked.' + #13#10#13#10
+      + 'Everything downloaded and checked so far is kept. Run LanEx Setup again to '
+      + 'carry on from where it stopped.';
+  end;
   // Every message that stops Setup says where the full log is.
   if (Result <> '') and (not NeedsRestart) and (Pos(LogFile, Result) = 0) then
     Result := Result + #13#10#13#10 + 'Install log: ' + LogFile;
