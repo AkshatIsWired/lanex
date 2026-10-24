@@ -346,6 +346,30 @@ _INSTALL_TIMEOUT_S = 3600
 _DOWNLOAD_STALL_S = 600.0
 
 
+def _disk_written_bytes() -> Optional[int]:
+    """Total bytes written to block devices (Linux /proc/diskstats), or None.
+
+    After an image's layers have arrived, docker spends minutes unpacking them
+    with no network traffic and no output; disk writes are the only sign of
+    life, and without them the stall guard killed a healthy unpack.
+    """
+    try:
+        with open("/proc/diskstats", "r", encoding="ascii", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    total = 0
+    for line in lines:
+        fields = line.split()
+        # whole disks only (sda, vda, sdb...; not partitions or loop/ram)
+        if len(fields) > 9 and fields[2][:2] in ("sd", "vd") and not fields[2][-1].isdigit():
+            try:
+                total += int(fields[9]) * 512
+            except ValueError:
+                pass
+    return total
+
+
 def _net_rx_bytes() -> Optional[int]:
     """Total bytes received on every non-loopback interface (Linux), or None.
 
@@ -1298,6 +1322,8 @@ def _run_argv(argv: List[str], *, label: str, key: str,
         # (time, rx) samples for a ~30 s moving download rate.
         rx_samples: List[Tuple[float, int]] = []
         last_rx_activity = [start_tick, rx_start or 0]
+        wr_samples: List[Tuple[float, int]] = []
+        last_wr = [_disk_written_bytes() or 0]
 
         def _heartbeat() -> None:
             while not stop_heartbeat.wait(5.0):
@@ -1321,10 +1347,28 @@ def _run_argv(argv: List[str], *, label: str, key: str,
                     # 256 KB of traffic counts as "the download is alive".
                     if rx_now - last_rx_activity[1] > 256 * 1024:
                         last_rx_activity[:] = [now, rx_now]
+                wr_now = _disk_written_bytes()
+                wr_rate = 0.0
+                if wr_now is not None:
+                    wr_samples.append((now, wr_now))
+                    while wr_samples and now - wr_samples[0][0] > 30.0:
+                        wr_samples.pop(0)
+                    if len(wr_samples) >= 2 and wr_samples[-1][0] > wr_samples[0][0]:
+                        wr_rate = (wr_samples[-1][1] - wr_samples[0][1]) / (
+                            wr_samples[-1][0] - wr_samples[0][0])
+                    # 16 MB written counts as alive too (unpacking, extracting).
+                    if wr_now - last_wr[0] > 16 * 1024 * 1024:
+                        last_wr[0] = wr_now
+                        last_rx_activity[0] = now
+                unpacking = rate < 64 * 1024 and wr_rate > 1024 * 1024
                 if expect_bytes and received is not None:
                     percent = min(99, int(received * 100 / max(1, expect_bytes)))
-                    msg = (f"{_human_bytes(received)} of ~{_human_bytes(expect_bytes)} downloaded"
-                           f" ({_human_bytes(rate)}/s), {time_str} elapsed")
+                    if unpacking:
+                        msg = (f"{_human_bytes(received)} downloaded; unpacking "
+                               f"({_human_bytes(wr_rate)}/s written), {time_str} elapsed")
+                    else:
+                        msg = (f"{_human_bytes(received)} of ~{_human_bytes(expect_bytes)} downloaded"
+                               f" ({_human_bytes(rate)}/s), {time_str} elapsed")
                     _emit("installer_progress", {"key": key, "label": label,
                                                  "bytes": received, "expect": expect_bytes,
                                                  "percent": percent, "message": msg})
@@ -1344,7 +1388,7 @@ def _run_argv(argv: List[str], *, label: str, key: str,
                     if quiet_for >= stall_s and proc.poll() is None:
                         stalled["hit"] = True
                         _emit("installer_line", {"key": key, "label": label, "line": (
-                            f"No download activity for {int(quiet_for // 60)} minutes; the "
+                            f"No download or disk activity for {int(quiet_for // 60)} minutes; the "
                             "connection looks stuck. Restarting this step (data already "
                             "downloaded is kept).")})
                         _kill_proc_tree(proc, grace=5.0)

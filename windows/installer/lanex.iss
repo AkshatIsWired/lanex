@@ -298,6 +298,8 @@ function GetTickCount: LongWord;
   external 'GetTickCount@kernel32.dll stdcall';
 function SetForegroundWindow(hWnd: HWND): BOOL;
   external 'SetForegroundWindow@user32.dll stdcall';
+function SetThreadExecutionState(esFlags: DWORD): DWORD;
+  external 'SetThreadExecutionState@kernel32.dll stdcall';
 
 var
   // Set in InitializeSetup, read in PrepareToInstall.
@@ -3051,7 +3053,14 @@ function PrepareToInstallCore(var NeedsRestart: Boolean): String; forward;
 // restart question, and Next restarted Windows without warning.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  Result := PrepareToInstallCore(NeedsRestart);
+  // ES_CONTINUOUS or ES_SYSTEM_REQUIRED: Windows must not go to sleep in
+  // the middle of an hour of downloads (the display may still turn off).
+  SetThreadExecutionState($80000001);
+  try
+    Result := PrepareToInstallCore(NeedsRestart);
+  finally
+    SetThreadExecutionState($80000000);
+  end;
   // Every message that stops Setup says where the full log is.
   if (Result <> '') and (Pos(LogFile, Result) = 0) then
     Result := Result + #13#10#13#10 + 'Install log: ' + LogFile;
