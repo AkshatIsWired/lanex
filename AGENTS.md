@@ -1,23 +1,28 @@
-# Windows installer release work
+# Windows installer work
 
-These instructions apply when the task concerns the LanEx Windows installer or its release. They do not expand an unrelated task into installer work.
+These notes apply when a task concerns the LanEx Windows installer or its release. They do not turn an unrelated task into installer work.
 
-## Canonical workspace
+## Where and how
 
-- Work from `C:\Users\itsva\lanex` on `windows-installer-support`, origin `https://github.com/AkshatIsWired/lanex.git`.
-- Start with `installer-workspace/START-HERE.md`, then `installer-workspace/handoff/IMPLEMENTATION-HANDOFF.md`. The adjacent audit contains the evidence and source locations from both sweeps.
-- Keep implementation in this checkout. Use `installer-workspace/work/` for scratch/build staging, `installer-workspace/evidence/` for observed results, and `installer-workspace/outputs/` for deliverables. Standard compiler outputs may remain at their repository-defined paths; collect deliverables in the canonical outputs directory.
-- Do not create another dated Codex output tree, cloned checkout, or alternate handoff unless the user explicitly requests it. Update the existing starting point and handoff in place.
-- Baseline `installer-workspace/baseline/test.3/` is the known-broken audited candidate. Preserve it for comparison. Never present it as the fixed release.
+- Work in `C:\Users\itsva\lanex`. The main line is `ui-redesign`; the Ship line phase works on `ship-line`, cut from it.
+- Start from `installer-workspace/START-HERE.md`. Its newest section says what changed, the current artifact and its hash, and what is still open.
+- Build with `python scripts/build_windows_release.py`. It builds the launcher, the wheel and the Inno Setup EXE and copies the deliverables to `installer-workspace/outputs/`.
+- Scratch and build staging go in `installer-workspace/work/`, observed results (logs, screenshots) in `installer-workspace/evidence/<check>-<date>/`, deliverables in `installer-workspace/outputs/`.
+- Installer sources: `windows/installer/lanex.iss` (wizard), `windows/setup/` (setup.ps1, the pinned manifest, constraints and lock files), `windows/provision/` (what runs inside the distro), `windows/launcher/` (LanEx.exe).
 
-## Scope and completion
+## What the installer must do
 
-Repair the existing Inno/PowerShell/WSL implementation. Preserve the useful ownership, payload-integrity, selected-component readiness and data-preservation work. Correct broken contracts; do not disable checks to make the wizard finish.
+- Wizard: Welcome -> License -> one Configure page -> Installing -> Finished. Nothing else asks the user a question.
+- Every download is pinned and hash-verified. A partial or corrupt file is retried, never used. Never turn a check off to make the wizard finish.
+- Restart and resume work: the WSL feature enable, the reboot it needs, a dropped network, a closed window, a PC that slept.
+- Every failure says what went wrong in plain words, the next step, and the install log's path.
 
-The requested flow is Welcome -> License -> one Configure page -> Installing -> Finished. The intended output is one easy-to-install EXE and a usable app, including prerequisite/restart recovery.
+## Data preservation
 
-Use the concrete handoff rather than restarting historical M0-M8 milestones. Make targeted changes and use existing checks plus a few focused regressions. Prove the actual rebuilt EXE through fresh installation/restart, launch and a small supplied flow, recovery, and representative profile/lifecycle behavior. Compilation, mock tests, or the Finish page alone are not release proof. Record unperformed checks honestly.
+- Upgrade, repair and uninstall keep the user's projects, run results and caches. Uninstall says what it kept and how to remove it.
+- Never touch, unregister or delete a WSL distro LanEx did not create, and never delete a distro or its VHDX to get past a repair failure.
+- Test on VMs, never on the development PC's own Windows. That PC's `lanex` distro holds the editable dev install; leave it alone.
 
-Preserve existing projects, caches and unrelated WSL environments. Never delete a distro/VHDX or erase ownership state to bypass a repair failure. Do not publish a release, push, merge, or remove user data without applicable user authorization.
+## Needs the user's OK
 
-Keep progress notes short in START-HERE.md: changes made, actual artifact path/hash, observed results, and remaining blockers. Do not produce another audit instead of implementing known fixes when implementation is requested.
+Pushing, merging, publishing a release, uploading mirror files, enabling a GitHub workflow, and deleting user data or WSL distros. Commit locally; do not push.
