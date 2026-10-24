@@ -30,6 +30,7 @@ const S = { el: null, tok: 0, timer: 0, plan: null, err: "", busy: false };
 
 export function openFixSheet({ tag, variable, to = "", title = "", why = "" }) {
   build();
+  toast.clear();
   Object.assign(S, { tag, variable, value: String(to ?? ""), title, why, save: "auto", then: "resume",
     plan: null, err: "", busy: false, showCmd: false });
   S.el.hidden = false;

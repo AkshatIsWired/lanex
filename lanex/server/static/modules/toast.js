@@ -74,4 +74,11 @@ export const toast = {
     arm();
     return dismiss;
   },
+
+  // Remove every toast at once. A sheet opened from a failure clears them:
+  // on a 768-pixel-high screen the sticky failure toast sat on the sheet's
+  // own action button.
+  clear() {
+    if (this.container) this.container.replaceChildren();
+  },
 };
