@@ -109,6 +109,69 @@ network_failure() {
    LanEx does not replace WSL DNS or disable TLS verification."
 }
 
+# ------------------------------------------------------- 0. package sources --
+# Every apt package comes from one dated snapshot of the Ubuntu archive
+# (snapshot.ubuntu.com, kept for at least two years), so an install next year
+# gets the same versions as the one we tested. The ID is in the build
+# manifest. If the snapshot service cannot be reached, apt falls back to the
+# live archive and the log says so: the install still works, with whatever
+# versions are current.
+APT_SNAPSHOT=""
+APT_SOURCES=/etc/apt/sources.list.d/ubuntu.sources
+read_apt_snapshot() {
+    local manifest="${LANEX_BUILD_MANIFEST:-}"
+    [ -f "$manifest" ] || return 0
+    APT_SNAPSHOT="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1], encoding="utf-8")).get("apt") or {}).get("snapshot", ""))' "$manifest" 2>/dev/null)"
+    printf '%s' "$APT_SNAPSHOT" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$' || APT_SNAPSHOT=""
+}
+
+write_ubuntu_sources() {
+    local base="$1" tmp
+    tmp="$(mktemp)" || return 1
+    cat > "$tmp" <<EOF
+# Managed by LanEx Setup: ${base}
+Types: deb
+URIs: ${base}
+Suites: noble noble-updates noble-backports
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: ${base}
+Suites: noble-security
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+EOF
+    chmod 0644 "$tmp" && mv -f "$tmp" "$APT_SOURCES"
+}
+
+apt_sources() {
+    say "Package sources"
+    read_apt_snapshot
+    if [ -z "$APT_SNAPSHOT" ]; then
+        note "no package snapshot is pinned in this build; using the live Ubuntu archive."
+        return 0
+    fi
+    if [ -f "$APT_SOURCES" ] && ! grep -q '^# Managed by LanEx Setup' "$APT_SOURCES" \
+       && [ ! -f "${APT_SOURCES}.lanex-original" ]; then
+        cp -p "$APT_SOURCES" "${APT_SOURCES}.lanex-original" \
+            || die "could not back up the original package sources."
+    fi
+    [ -f /etc/apt/sources.list ] && grep -q '^deb ' /etc/apt/sources.list \
+        && sed -i 's/^deb /# LanEx: replaced by ubuntu.sources -- deb /' /etc/apt/sources.list
+    write_ubuntu_sources "https://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT}/" \
+        || die "could not write the package sources."
+    if $APT update; then
+        note "packages come from the Ubuntu archive snapshot ${APT_SNAPSHOT}."
+        return 0
+    fi
+    warn "the Ubuntu snapshot service (snapshot.ubuntu.com) did not answer; using the live archive."
+    warn "package versions may differ from the tested set ${APT_SNAPSHOT}."
+    write_ubuntu_sources "http://archive.ubuntu.com/ubuntu/" \
+        || die "could not write the package sources."
+    APT_SNAPSHOT=""
+}
+
 probe_endpoint() {
     local label="$1" url="$2" out rc code detail family family_code family_rc
     out="$(mktemp)" || die "could not create a temporary network diagnostic."
@@ -217,14 +280,16 @@ dns_guard() {
     if [ "${LANEX_PROVISION_DNS:-0}" = "1" ]; then
         warn "LANEX_PROVISION_DNS is deprecated; preserving the current resolver instead of installing public DNS."
     fi
-    probe_endpoint "Ubuntu archive" "https://archive.ubuntu.com/ubuntu/dists/noble/InRelease"
-    if [ "$SELECTED_ENGINE" = "docker" ]; then
-        probe_endpoint "Docker repository" "https://download.docker.com/linux/ubuntu/dists/noble/InRelease"
+    if [ -n "$APT_SNAPSHOT" ]; then
+        probe_endpoint "Ubuntu package snapshot" "https://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT}/dists/noble/InRelease"
+    else
+        probe_endpoint "Ubuntu archive" "http://archive.ubuntu.com/ubuntu/dists/noble/InRelease"
     fi
     probe_endpoint "Python package index" "https://pypi.org/simple/"
+    probe_endpoint "Python package files" "https://files.pythonhosted.org/"
     if [ "$SELECTED_ENGINE" != "none" ]; then
         probe_endpoint "GHCR registry" "https://ghcr.io/v2/"
-        probe_endpoint "PDK release redirects" "https://github.com/fossi-foundation/ciel/releases/latest"
+        probe_endpoint "PDK downloads (GitHub)" "https://github.com/fossi-foundation/ciel-releases/releases"
     fi
 }
 
@@ -397,20 +462,14 @@ docker_ce() {
     if command -v docker >/dev/null 2>&1; then
         note "already installed ($(docker --version 2>/dev/null || echo 'version unknown'))."
     else
-        # The official convenience script — same one the Tools tab uses, so
-        # there is exactly one Docker install path in the project. We are root
-        # here, so no `sudo sh` (installer.py:617 needs the sudo; we don't).
-        local docker_script
-        docker_script="$(mktemp)" || die "could not create a temporary Docker installer file."
-        curl ${CURL_FAMILY:+$CURL_FAMILY} -fsSL --connect-timeout 15 --max-time 120 --retry 3 \
-            https://get.docker.com -o "$docker_script" \
-            && sh "$docker_script"
-        local docker_rc=$?
-        rm -f "$docker_script"
-        [ "$docker_rc" -eq 0 ] \
+        # Ubuntu's docker.io from the same package snapshot as everything
+        # else, so every install gets the Docker version we tested. (The old
+        # get.docker.com script installed whatever Docker CE was newest.)
+        $APT install -y docker.io \
             || die "could not install Docker inside the LanEx environment.
    This is almost always a network problem. Click Retry.
    (LanEx can also install it later from its own Tools tab.)"
+        systemctl enable docker.service containerd.service >/dev/null 2>&1 || true
     fi
     # Without this, every `docker` call from LanEx needs `sg docker` wrapping —
     # tools.py:619-669 handles that, but the group membership makes it moot.
@@ -552,11 +611,18 @@ install_lanex() {
         chmod 0644 "$source"
     fi
     if [ -n "${LANEX_PIP_CONSTRAINT:-}" ]; then
-        [ -f "$LANEX_PIP_CONSTRAINT" ] || die "the bundled dependency lock is missing."
+        [ -f "$LANEX_PIP_CONSTRAINT" ] || die "the bundled dependency constraints are missing."
         constraint="$payload_dir/constraints.txt"
         cp "$LANEX_PIP_CONSTRAINT" "$constraint" \
-            || die "could not stage the dependency lock."
+            || die "could not stage the dependency constraints."
         chmod 0644 "$constraint"
+    fi
+    local lock=""
+    if [ -n "${LANEX_PIP_LOCK:-}" ]; then
+        [ -f "$LANEX_PIP_LOCK" ] || die "the bundled dependency lock is missing. Run the same Setup again."
+        lock="$payload_dir/requirements.lock"
+        cp "$LANEX_PIP_LOCK" "$lock" || die "could not stage the dependency lock."
+        chmod 0644 "$lock"
     fi
 
     chmod -R a+rX "$payload_dir"
@@ -568,7 +634,7 @@ install_lanex() {
         LOGNAME="$APP_USER" PATH="/usr/local/bin:/usr/bin:/bin" \
         LANEX_ASSUME_YES=1 LANEX_SKIP_PULL=1 LANEX_SKIP_GDS3D="$SKIP_GDS3D" \
         LANEX_REPO="$REPO" LANEX_REF="$REF" LANEX_FROM="$source" \
-        LANEX_PIP_CONSTRAINT="$constraint" bash "$installer" \
+        LANEX_PIP_CONSTRAINT="$constraint" LANEX_PIP_LOCK="$lock" bash "$installer" \
         || { [ "$UPDATE_MODE" = "1" ] && rollback_update; die "the LanEx installer did not finish.
    The log above ends with its own error message.
    Click Retry — this step is safe to repeat."; }
@@ -728,6 +794,8 @@ main() {
     select_engine
     check_cancel
     write_identity_marker
+    check_cancel
+    apt_sources
     check_cancel
     dns_guard
     check_cancel

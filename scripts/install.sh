@@ -29,8 +29,11 @@ export TERM=dumb
 #                     (default: main)
 #   LANEX_REPO=<owner/name>  GitHub repository for LANEX_REF (default:
 #                     AkshatIsWired/lanex; useful for fork candidates)
-#   LANEX_PIP_CONSTRAINT=<path>  optional pip constraints file. The Windows
-#                     appliance uses this to lock the image-compatible toolchain.
+#   LANEX_PIP_CONSTRAINT=<path>  optional pip constraints file (versions only).
+#   LANEX_PIP_LOCK=<path>  hash-locked requirements file (the Windows appliance).
+#                     Every dependency is installed with pip --require-hashes
+#                     into a plain venv at pipx's usual path; there is no
+#                     unpinned fallback when this is set.
 #   LANEX_SKIP_PULL=1 skip the optional container-image pre-pull
 #   LANEX_SKIP_GDS3D=1  skip the optional GDS3D 3D-viewer build/install
 #   LANEX_NO_PIPX=1   skip pipx entirely (escape hatch for a broken pipx);
@@ -346,9 +349,35 @@ install_with_venv() {
     LAUNCHER="$venv/bin/lanex"
 }
 
+install_with_lock() {
+    # Same location pipx would use, so the appliance's paths stay the same, but
+    # no pipx: pipx upgrades its own shared pip from PyPI and cannot install a
+    # local wheel in hash-checking mode. The venv's pip is the one python3-venv
+    # ships, which comes from the pinned package snapshot.
+    say "Installing LanEx and its locked dependencies (hash-checked)"
+    local venv="$HOME/.local/share/pipx/venvs/lanex" src
+    src="$(resolve_source)"
+    [ -f "$src" ] || die "LANEX_PIP_LOCK needs a local LanEx wheel in LANEX_FROM, got: $src"
+    rm -rf "$venv"
+    "$PY" -m venv "$venv" || die "python3 -m venv failed for $venv."
+    "$venv/bin/pip" install --disable-pip-version-check --require-hashes --no-deps \
+        --only-binary=:all: -r "$LANEX_PIP_LOCK" \
+        || die "A locked Python dependency could not be downloaded or did not match its pinned SHA-256.
+   The pip output above names the package. Check the connection and run Setup again."
+    "$venv/bin/pip" install --disable-pip-version-check --no-deps --no-index "$src" \
+        || die "The bundled LanEx wheel could not be installed: $src"
+    "$venv/bin/pip" check --disable-pip-version-check \
+        || die "The locked Python dependencies are inconsistent (pip check failed)."
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$venv/bin/lanex" "$HOME/.local/bin/lanex"
+    LAUNCHER="$HOME/.local/bin/lanex"
+}
+
 attempt_install() {
     local rc=0
-    if [ "${LANEX_NO_PIPX:-0}" != "1" ] && install_with_pipx; then
+    if [ -n "${LANEX_PIP_LOCK:-}" ]; then
+        install_with_lock
+    elif [ "${LANEX_NO_PIPX:-0}" != "1" ] && install_with_pipx; then
         rc=0
     else
         install_with_venv || return 1
