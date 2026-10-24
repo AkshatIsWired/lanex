@@ -1617,7 +1617,7 @@ begin
   begin
     ProfileDescLabel.Caption :=
       'Recommended Profile Overview:'#13#10#13#10 +
-      '• Container Engine: Docker CE'#13#10 +
+      '• Container engine: Docker'#13#10 +
       '• Flow && Visualization: Matched LibreLane container image, GDS3D'#13#10 +
       '• Native EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave'#13#10 +
       '• Technology: SkyWater 130 nm (sky130A) starter libraries'#13#10 +
@@ -1632,7 +1632,7 @@ begin
   begin
     ProfileDescLabel.Caption :=
       'Complete Profile Overview:'#13#10#13#10 +
-      '• Container Engine: Docker CE'#13#10 +
+      '• Container engine: Docker'#13#10 +
       '• Flow && Visualization: Matched LibreLane container image, GDS3D'#13#10 +
       '• Native EDA Tools: Verilator, Icarus Verilog, Graphviz, GTKWave'#13#10 +
       '• Technology: SKY130A, SKY130B, gf180mcuD, and ihp-sg13g2 with all published libraries'#13#10 +
@@ -1936,7 +1936,7 @@ begin
   CustomCheckListBox.OnClickCheck := @OnCustomCheck;
 
   CustomCheckListBox.AddGroup('Container Engine', '', 0, nil);
-  IdxDocker := CustomCheckListBox.AddRadioButton('Docker CE (recommended)', '', 0, True, True, nil);
+  IdxDocker := CustomCheckListBox.AddRadioButton('Docker (recommended)', '', 0, True, True, nil);
   IdxPodman := CustomCheckListBox.AddRadioButton('Podman', '', 0, False, True, nil);
 
   CustomCheckListBox.AddGroup('Tools — Flow & Visualization', '', 0, nil);
@@ -3636,8 +3636,11 @@ begin
       CalculateEstimatesFast;
       if not CheckSelectionSpace(Failure) then
       begin
-        MsgBox(Failure + #13#10#13#10 +
-          'Completed verified downloads are reused. Free space, then click Install again.',
+        LogLine('not enough disk space: ' + Failure);
+        MsgBox(Failure + #13#10#13#10
+          + 'Free space (Settings > System > Storage, or empty the Recycle Bin), or choose '
+          + 'Minimal or Custom for a smaller setup, then click Install again. Downloads '
+          + 'already verified are reused.' + #13#10#13#10 + 'Install log: ' + LogFile,
           mbError, MB_OK);
         Result := False;
         Exit;
@@ -3659,7 +3662,9 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
-  if IsContinuationRun and (WizardForm <> nil) then
+  // After a restart, and on the first page of any run: an upgrade started
+  // while the LanEx window was open showed its Welcome page behind it.
+  if (IsContinuationRun or (CurPageID = wpWelcome)) and (WizardForm <> nil) then
   begin
     WizardForm.BringToFront;
     SetForegroundWindow(WizardForm.Handle);
