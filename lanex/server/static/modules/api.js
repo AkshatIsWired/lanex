@@ -233,6 +233,8 @@ export const api = {
     body: JSON.stringify({ tags, run_dirs: runDirs || [] }) }),
   cellUsage: (tag) => _fetch("/api/cell-usage?tag=" + encodeURIComponent(tag)),
   runStages: (tag) => _fetch("/api/run-stages?tag=" + encodeURIComponent(tag)),
+  // How a run ended and why, with fixes and its warnings by code (Flow).
+  runExplain: (tag, base) => _fetch("/api/run-explain?tag=" + encodeURIComponent(tag) + (base ? "&base=" + encodeURIComponent(base) : "")),
   timingPaths: (tag, kind, limit) =>
     _fetch("/api/timing-paths?kind=" + encodeURIComponent(kind || "setup") +
       (tag ? "&tag=" + encodeURIComponent(tag) : "") +

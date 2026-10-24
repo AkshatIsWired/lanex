@@ -569,6 +569,31 @@ class FlowRunner:
             except queue.Empty:
                 pass
         bus.emit(kind.value, {**body, "seq": seq, "ts": evt["ts"], "tag": tag})
+        if kind == EventType.FLOW_DONE:
+            self._persist_outcome(body)
+
+    def _persist_outcome(self, done: Dict[str, Any]) -> None:
+        """Note how the run ended in ``gui-run.json`` (``outcome``), so a run
+        the user stopped reads as stopped later, not as failed: the run folder
+        alone can't tell a cancel from a crash. Best effort, like the rest."""
+        if not self._run_dir:
+            return
+        try:
+            import json as _json
+
+            from . import platform_env
+            path = Path(self._run_dir) / "gui-run.json"
+            if not path.parent.is_dir():
+                return
+            meta = _json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+            if not isinstance(meta, dict):
+                return
+            result = "cancelled" if done.get("cancelled") else ("error" if done.get("error") else "ok")
+            meta["outcome"] = {"result": result, "error": done.get("error") or None,
+                               "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            platform_env.atomic_write_text(path, _json.dumps(_safe_jsonable(meta), indent=2) + "\n")
+        except Exception:  # pragma: no cover - fs/permission dependent
+            _log.debug("could not note the run outcome", exc_info=True)
 
     def _next_seq(self) -> int:
         from .events import next_seq

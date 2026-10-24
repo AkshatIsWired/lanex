@@ -2939,6 +2939,24 @@ def h_cell_usage(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_run_explain(handler: Any) -> None:
+    """How a run ended, why, what to change, and its warnings by code (Flow).
+    ``base`` names the run its warnings are compared with ("new" codes)."""
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    base = _query_param(handler.path, "base")
+    base_dir = _resolve_run_dir(base) if base else None
+    try:
+        from ..controller import runexplain
+        _respond(handler, runexplain.explain_run(run_dir, base_dir))
+    except Exception as ex:
+        _log.exception("run_explain failed")
+        _respond(handler, str(ex), 500)
+
+
 def h_run_stages(handler: Any) -> None:
     """Per-step metrics, runtime and peak memory for a run (Analytics)."""
     tag = _query_param(handler.path, "tag")
@@ -4022,6 +4040,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/compare", h_compare),
     ("/api/cell-usage", h_cell_usage),
     ("/api/run-stages", h_run_stages),
+    ("/api/run-explain", h_run_explain),
     ("/api/timing-paths", h_timing_paths),
     ("/api/dse/start", h_dse_start),
     ("/api/dse/cancel", h_dse_cancel),
