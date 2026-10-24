@@ -627,15 +627,32 @@ function layoutHtml(c, lay, det) {
   // One label per pin: the same text sits on several layers (li1, met1, pin
   // purposes) and the cell's own name is stamped in the corner.
   const seen = [];
-  const near = Math.max(w, h) * 0.3;
-  const labels = (lay.labels || []).filter((l) => {
+  const near = Math.max(w, h) * 0.4;
+  const wanted = (lay.labels || []).filter((l) => {
     // pin names only: drop the cell-name stamp and annotations ("Metric 1.00")
     if (/\s/.test(l.text) || l.text.length > 16 || (l.text.length > 4 && c.cell.includes(l.text))) return false;
     if (seen.some((s) => s.text === l.text && Math.hypot(s.x - l.x, s.y - l.y) < near)) return false;
     seen.push(l);
     return true;
-  }).map((l) =>
-    "<text class='cl-lbl' x='" + l.x + "' y='" + (-l.y) + "' font-size='" + fs.toFixed(3) + "'>" + esc(l.text) + "</text>").join("");
+  });
+  // Different pins can sit on the same spot (VPWR/VPB on the top rail, VGND/VNB
+  // on the bottom one): slide each label sideways until it clears the ones
+  // already placed, so the names never print on top of each other.
+  const halfW = (t) => t.length * fs * 0.34 + fs * 0.15;
+  const placed = [];
+  const labels = wanted.slice().sort((a, b) => (b.y - a.y) || (a.x - b.x)).map((l) => {
+    const hw = halfW(l.text);
+    const lo = Math.min(x0 + hw, (x0 + x1) / 2), hi = Math.max(x1 - hw, (x0 + x1) / 2);
+    const clash = (x) => placed.some((p) => Math.abs(p.x - x) < p.hw + hw && Math.abs(p.y - l.y) < fs * 1.15);
+    let x = Math.min(hi, Math.max(lo, l.x));
+    for (let k = 1; clash(x) && k <= 80; k++) {
+      const step = fs * 0.4 * Math.ceil(k / 2) * (k % 2 ? 1 : -1);
+      const t = Math.min(hi, Math.max(lo, l.x + step));
+      if (!clash(t)) { x = t; break; }
+    }
+    placed.push({ x, y: l.y, hw });
+    return "<text class='cl-lbl' x='" + x.toFixed(3) + "' y='" + (-l.y) + "' font-size='" + fs.toFixed(3) + "'>" + esc(l.text) + "</text>";
+  }).join("");
   const svg = "<div class='cl-lay'><svg viewBox='" + (x0 - pad) + " " + (-(y1 + pad)) + " " + (w + 2 * pad) + " " + (h + 2 * pad) + "' preserveAspectRatio='xMidYMid meet' role='img' aria-label='Layout of " + esc(c.cell) + "'>" +
     "<g transform='scale(1,-1)'>" + groups + "</g><g class='cl-lbls'>" + labels + "</g></svg></div>";
   const legend = "<div class='cl-legend'>" + lay.layers.map((L) =>
