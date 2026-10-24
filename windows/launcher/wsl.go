@@ -12,12 +12,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf16"
 
 	"golang.org/x/sys/windows/registry"
@@ -31,32 +34,47 @@ const wslExe = "wsl.exe"
 
 // ---------------------------------------------------------------- distro list --
 
-// distroPresent reports whether the LanEx appliance distro is registered.
-func distroPresent() bool {
-	out, err := wslOutput("-l", "-q")
+// wslListTimeout bounds `wsl -l -q`. The first wsl.exe call after a Windows
+// start can take several seconds while the WSL service starts; a minute means
+// WSL itself is stuck, and the user must hear that rather than see nothing.
+const wslListTimeout = 60 * time.Second
+
+// errWslUnresponsive: wsl.exe did not answer, as opposed to "not registered".
+var errWslUnresponsive = errors.New("wsl.exe did not answer")
+
+// distroPresent reports whether the LanEx appliance distro is registered. An
+// error means WSL itself failed or hung, which is a different problem (and a
+// different message) from an appliance that is gone.
+func distroPresent() (bool, error) {
+	out, err := wslOutput(wslListTimeout, "-l", "-q")
 	if err != nil {
-		// wsl.exe missing or erroring out means there is no appliance to talk to,
-		// which is the same situation for the user either way.
 		logf("wsl -l -q failed: %v", err)
-		return false
+		return false, err
 	}
 	for _, name := range decodeDistroList(out) {
 		if strings.EqualFold(name, distroName) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-// wslOutput runs wsl.exe with *args* and returns its raw (undecoded) stdout.
-func wslOutput(args ...string) ([]byte, error) {
-	cmd := hiddenCmd(wslExe, args...)
+// wslOutput runs wsl.exe with *args* and returns its raw (undecoded) stdout,
+// killing it after *timeout*.
+func wslOutput(timeout time.Duration, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, wslExe, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow}
 	// WSL_UTF8 makes modern wsl.exe emit UTF-8 instead of UTF-16LE. Older builds
 	// ignore it, which is why decodeConsole still sniffs the encoding.
 	cmd.Env = append(os.Environ(), "WSL_UTF8=1")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return stdout.Bytes(), fmt.Errorf("%w within %s", errWslUnresponsive, timeout)
+	}
 	return stdout.Bytes(), err
 }
 
@@ -180,7 +198,7 @@ func startServerArgs() []string {
 // Scoped to our own distro by name: the user's other distros are never touched,
 // which is the promise the whole installer is built on (never `wsl --shutdown`).
 func terminateDistro() {
-	if err := hiddenCmd(wslExe, "--terminate", distroName).Run(); err != nil {
+	if _, err := wslOutput(wslListTimeout, "--terminate", distroName); err != nil {
 		logf("wsl --terminate %s: %v", distroName, err)
 	}
 }

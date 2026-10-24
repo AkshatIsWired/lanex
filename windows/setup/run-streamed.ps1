@@ -52,6 +52,7 @@ function Flush-Chunk {
 
 $code = 1
 $aliveCount = 0
+$proc = $null
 try {
     $command = [IO.File]::ReadAllLines((Join-Path $ChunkDir 'command.txt'), $utf8)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -92,7 +93,9 @@ try {
         }
         if (($now - $lastAlive) -ge 2000) {
             $aliveCount++
-            Write-Atomic $aliveFile ([string]$aliveCount) $utf8
+            # The wizard reads alive.txt every 40 ms; a replace that collides
+            # with a read must cost one heartbeat, never the step.
+            try { Write-Atomic $aliveFile ([string]$aliveCount) $utf8 } catch {}
             $lastAlive = $now
         }
         if (Test-Path -LiteralPath $killFile) {
@@ -112,7 +115,14 @@ try {
 } catch {
     $script:buffer.Add('Setup could not run this step: ' + $_.Exception.Message)
     $code = 1
+    # Never report a failure while the command is still running: a Retry would
+    # start a second copy of it beside the first.
+    if ($null -ne $proc -and -not $proc.HasExited) {
+        & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /PID $proc.Id /T /F *> $null
+    }
 }
 try { Flush-Chunk } catch {}
-Write-Atomic $doneFile ([string]$code) $utf8
+for ($i = 0; $i -lt 50; $i++) {
+    try { Write-Atomic $doneFile ([string]$code) $utf8; break } catch { Start-Sleep -Milliseconds 100 }
+}
 exit 0

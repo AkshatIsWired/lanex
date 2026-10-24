@@ -72,7 +72,7 @@ const (
 	// without this the shell would start with nowhere to draw.
 	createNewConsole = 0x00000010
 
-	releasesURL = "https://github.com/AkshatIsWired/lanex/releases/latest"
+	releasesURL = "https://github.com/AkshatIsWired/lanex/releases"
 )
 
 func main() {
@@ -95,13 +95,23 @@ func main() {
 		return
 	}
 
-	if !distroPresent() {
+	present, err := distroPresent()
+	if err != nil {
+		// loadApplianceConfig already found the registration in the registry, so
+		// this is WSL itself failing (service stuck, an update half-applied).
+		showError(fmt.Sprintf("Windows Subsystem for Linux is not responding, so LanEx cannot "+
+			"start.\n\n%v\n\nRestart Windows, then open LanEx again. If it keeps happening, "+
+			"run Repair LanEx from the Start menu; it keeps your projects and PDKs."+
+			"\n\nDetails are in:\n%s", err, logPath()))
+		os.Exit(1)
+	}
+	if !present {
 		// Only reachable if the appliance was removed behind Setup's back
-		// (`wsl --unregister lanex`, or a wiped %LOCALAPPDATA%). Reinstalling is
-		// genuinely the fix: the distro is where LanEx itself lives.
-		if askYesNo("LanEx's environment is missing.\n\n" +
-			"Please reinstall LanEx to restore it — your Windows settings are untouched.\n\n" +
-			"Open the download page now?") {
+		// (`wsl --unregister lanex`). Reinstalling is genuinely the fix: the
+		// distro is where LanEx itself lives.
+		if askYesNo("LanEx's environment is missing: Windows no longer lists it.\n\n" +
+			"Install LanEx again to restore it. Projects in your LanEx-Projects folder are " +
+			"untouched.\n\nDetails are in:\n" + logPath() + "\n\nOpen the download page now?") {
 			openURL(releasesURL)
 		}
 		os.Exit(1)
@@ -110,8 +120,9 @@ func main() {
 	server, err := startServer()
 	if err != nil {
 		showError(fmt.Sprintf("LanEx could not start its environment.\n\n%v\n\n"+
-			"Try again. If it keeps failing, run the saved LanEx Setup shortcut and choose Repair. "+
-			"Repair leaves your projects and other WSL environments untouched.", err))
+			"Try again. If it keeps failing, run Repair LanEx from the Start menu. "+
+			"Repair leaves your projects and other WSL environments untouched."+
+			"\n\nDetails are in:\n%s", err, logPath()))
 		os.Exit(1)
 	}
 	runTray(server)
