@@ -509,6 +509,62 @@ function Get-FeatureState([string]$Name) {
     } catch { return 'unknown' }
 }
 
+function Invoke-WslBounded([string]$WslExe, [string[]]$Arguments, [int]$TimeoutSeconds) {
+    <# Runs wsl.exe with a time limit. Right after sign-in WSL can hang while
+       Windows finishes registering it; an unbounded call would leave Setup
+       invisible with no way out. Returns exitCode (-1 on timeout), output and
+       timedOut. #>
+    $result = [pscustomobject]@{ exitCode = -1; output = ''; timedOut = $false }
+    $proc = $null
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $WslExe
+        $psi.Arguments = (($Arguments | ForEach-Object {
+            if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+        }) -join ' ')
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+        $psi.EnvironmentVariables['WSL_UTF8'] = '1'
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $stdout = $proc.StandardOutput.ReadToEndAsync()
+        $stderr = $proc.StandardError.ReadToEndAsync()
+        if ($proc.WaitForExit($TimeoutSeconds * 1000)) {
+            $proc.WaitForExit()
+            $result.exitCode = $proc.ExitCode
+            $result.output = (($stdout.Result + $stderr.Result) -replace "`0", '').Trim()
+        } else {
+            $result.timedOut = $true
+            & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /T /F /PID $proc.Id *> $null
+        }
+    } catch {
+        $result.output = $_.Exception.Message
+    }
+    return $result
+}
+
+function Invoke-WslKernelProbe([string]$WslExe, [string[]]$Arguments) {
+    <# A kernel-starting wsl.exe call, retried once after wsl --shutdown when it
+       hangs. error is 'timeout' or WSL's own message when it still fails. #>
+    $run = Invoke-WslBounded $WslExe $Arguments 60
+    if ($run.timedOut) {
+        Invoke-WslBounded $WslExe @('--shutdown') 30 | Out-Null
+        Start-Sleep -Seconds 5
+        $run = Invoke-WslBounded $WslExe $Arguments 60
+    }
+    $errorText = ''
+    if ($run.timedOut) {
+        $errorText = 'timeout'
+    } elseif ($run.exitCode -ne 0) {
+        $errorText = [string]$run.output
+        if ($errorText.Length -gt 400) { $errorText = $errorText.Substring(0, 400) }
+    }
+    return [pscustomobject]@{ exitCode = $run.exitCode; error = $errorText }
+}
+
 function Get-LivePreflightFacts {
     $nativeArchitecture = ''
     try {
@@ -563,30 +619,32 @@ function Get-LivePreflightFacts {
     $wslPresent = Test-Path -LiteralPath $wslExe -PathType Leaf
     $wslVersion = ''
     $statusUsable = $false
+    $kernelError = ''
     if ($wslPresent) {
-        try {
-            $versionText = (& $wslExe --version 2>&1 | Out-String)
-            if ($LASTEXITCODE -eq 0 -and $versionText -match '(?im)^WSL version:\s*([0-9]+(?:\.[0-9]+){1,3})') {
-                $wslVersion = $Matches[1]
-            }
-        } catch {}
+        $versionRun = Invoke-WslBounded $wslExe @('--version') 20
+        if ($versionRun.exitCode -eq 0 -and $versionRun.output -match '(?im)^WSL version:\s*([0-9]+(?:\.[0-9]+){1,3})') {
+            $wslVersion = $Matches[1]
+        }
         if (-not $wslVersion) {
             try {
                 $package = Get-AppxPackage -Name MicrosoftCorporationII.WindowsSubsystemForLinux -ErrorAction Stop
                 if ($null -ne $package) { $wslVersion = [string]$package.Version }
             } catch {}
         }
-        try { & $wslExe --status *> $null; $statusUsable = ($LASTEXITCODE -eq 0) } catch {}
+        $statusUsable = ((Invoke-WslBounded $wslExe @('--status') 30).exitCode -eq 0)
     }
     $systemdCapable = $false
     try { $systemdCapable = ([version]$wslVersion -ge [version]'0.67.6') } catch {}
     $kernelUsable = $false
     if ($wslPresent -and $statusUsable -and $systemdCapable) {
         try {
-            $distroList = @(& $wslExe --list --quiet 2>&1 | ForEach-Object { ($_ -replace "`0", "").Trim() } | Where-Object { $_ -ne "" })
+            $listRun = Invoke-WslBounded $wslExe @('--list', '--quiet') 30
+            $distroList = @($listRun.output -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+            if ($listRun.exitCode -ne 0) { $distroList = @() }
             if ($distroList.Count -gt 0) {
-                & $wslExe --system --exec /bin/true *> $null
-                $kernelUsable = ($LASTEXITCODE -eq 0)
+                $kernelRun = Invoke-WslKernelProbe $wslExe @('--system', '--exec', '/bin/true')
+                $kernelUsable = ($kernelRun.exitCode -eq 0)
+                if (-not $kernelUsable) { $kernelError = $kernelRun.error }
             } else {
                 # On a fresh installation with no Linux distributions registered yet, wsl.exe --system
                 # refuses to boot the utility VM with "WSL has no installed distributions" (exit code -1).
@@ -607,19 +665,20 @@ function Get-LivePreflightFacts {
                         & $tarExe -czf $probeTar -C $probeContent . *> $null
                     }
                     if (Test-Path -LiteralPath $probeTar -PathType Leaf) {
-                        & $wslExe --import $probeName $probeRootfs $probeTar --version 2 *> $null
-                        if ($LASTEXITCODE -eq 0) {
-                            & $wslExe --system --exec /bin/true *> $null
-                            $kernelUsable = ($LASTEXITCODE -eq 0)
+                        $kernelRun = Invoke-WslKernelProbe $wslExe @('--import', $probeName, $probeRootfs, $probeTar, '--version', '2')
+                        if ($kernelRun.exitCode -eq 0) {
+                            $kernelRun = Invoke-WslKernelProbe $wslExe @('--system', '--exec', '/bin/true')
                         }
+                        $kernelUsable = ($kernelRun.exitCode -eq 0)
+                        if (-not $kernelUsable) { $kernelError = $kernelRun.error }
                     } else {
-                        $out = (& $wslExe --system --exec /bin/true 2>&1 | Out-String)
-                        if ($out -match 'no installed distributions') {
+                        $kernelRun = Invoke-WslBounded $wslExe @('--system', '--exec', '/bin/true') 90
+                        if ($kernelRun.output -match 'no installed distributions') {
                             $kernelUsable = $true
                         }
                     }
                 } finally {
-                    & $wslExe --unregister $probeName *> $null
+                    Invoke-WslBounded $wslExe @('--unregister', $probeName) 60 | Out-Null
                     Remove-Item -Recurse -Force $probeBase -ErrorAction SilentlyContinue
                 }
             }
@@ -684,6 +743,7 @@ function Get-LivePreflightFacts {
             version = $wslVersion
             systemdCapable = $systemdCapable
             kernelUsable = $kernelUsable
+            kernelError = $kernelError
         }
     }
 }
@@ -710,11 +770,14 @@ function Get-PreflightDecision($Facts) {
     } elseif ($null -ne $Facts.memoryBytes -and [int64]$Facts.memoryBytes -gt 0 -and
             [int64]$Facts.memoryBytes -lt [int64]$MinMemoryBytes) {
         $code = 'not-enough-memory'; $blocked = $true
-    } elseif ($Facts.virtualMachine -eq $true -and
-            [string]$Facts.firmwareVirtualizationRaw -eq 'disabled' -and
-            $Facts.wsl.kernelUsable -ne $true) {
+    } elseif ($Facts.virtualMachine -eq $true -and $Facts.wsl.kernelUsable -ne $true -and (
+            ([string]$Facts.firmwareVirtualizationRaw -eq 'disabled' -and
+             [string]$Facts.features.virtualMachinePlatform -ne 'enabled') -or
+            [string]$Facts.wsl.kernelError -match '80370102|HCS_E_HYPERV_NOT_INSTALLED')) {
         # Windows itself runs in a VM whose host does not expose
         # virtualization: WSL 2 cannot start, and a restart will not help.
+        # The processor flag only means this before Virtual Machine Platform
+        # runs Windows' own hypervisor, which hides the flag either way.
         $code = 'vm-nested-virtualization-off'; $blocked = $true
     } elseif ($Facts.hypervisorPresent -ne $true -and
             [string]$Facts.firmwareVirtualization -eq 'disabled' -and
@@ -733,6 +796,8 @@ function Get-PreflightDecision($Facts) {
         $firmwareNotice = ([string]$Facts.firmwareVirtualization -eq 'unknown')
     } elseif ($Facts.wsl.statusUsable -ne $true -or $Facts.wsl.systemdCapable -ne $true) {
         $code = 'wsl-update-required'
+    } elseif ($Facts.wsl.kernelUsable -ne $true -and [string]$Facts.wsl.kernelError -eq 'timeout') {
+        $code = 'wsl-not-responding'; $blocked = $true
     } elseif ($Facts.wsl.kernelUsable -ne $true) {
         # HypervisorPresent and firmware capability flags describe host
         # configuration, not whether WSL2 can actually launch its utility VM.

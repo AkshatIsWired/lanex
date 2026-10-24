@@ -220,6 +220,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; the version and the reason.
 ; Shown by Windows' uninstaller right after LanEx's own keep-or-remove question,
 ; so it must not say "completely remove ... all of its components".
+PrepareToInstallNeedsRestart=Windows needs to restart once to finish. LanEx Setup opens again by itself after you sign in and carries on.%n%nSave your work, then restart now?
 ConfirmUninstall=Remove the LanEx app now? What happens to your projects, tools and PDKs follows the choice you just made.
 WindowsVersionNotSupported=LanEx needs Windows 10 version 21H2 (build 19044) or newer for WSLg desktop tools. Windows 11 x64 is recommended.
 ; The wizard's own words, in the language of the person we are installing for.
@@ -2178,7 +2179,7 @@ begin
       + #13#10#13#10 + 'Install LanEx on the PC itself, or turn on nested virtualization for this VM '
       + '(Hyper-V: Set-VMProcessor -ExposeVirtualizationExtensions $true while the VM is off; '
       + 'VMware: "Virtualize Intel VT-x/EPT or AMD-V/RVI"; VirtualBox: "Enable Nested VT-x/AMD-V").'
-      + #13#10#13#10 + 'Nothing was changed. Log: ' + LogFile, mbError, MB_OK);
+      + #13#10#13#10 + 'LanEx was not installed. Log: ' + LogFile, mbError, MB_OK);
     Result := False;
     Exit;
   end;
@@ -3119,6 +3120,9 @@ begin
   PrepareResultShown := Result <> '';
   if (Result <> '') and (ProgressContainer <> nil) then
     ProgressContainer.Visible := False;
+  // A restart is a normal step, not an error: no red cross for it.
+  if NeedsRestart and (WizardForm <> nil) then
+    WizardForm.PreparingErrorBitmapImage.Visible := False;
 end;
 
 function PrepareToInstallCore(var NeedsRestart: Boolean): String;
@@ -3199,6 +3203,20 @@ begin
     Exit;
   end;
 
+  if PreflightDecision = 'wsl-not-responding' then
+  begin
+    Result := 'Windows Subsystem for Linux did not respond. Setup asked it twice to start '
+      + 'and waited a minute each time. This can happen right after Windows starts or updates.'
+      + #13#10#13#10 + 'Restart Windows, then ';
+    if IsContinuationRun then
+      Result := Result + 'open "Continue LanEx Setup" from the Start menu.'
+    else
+      Result := Result + 'run LanEx Setup again.';
+    Result := Result + ' If it happens again, open PowerShell, run  wsl --update  and restart.'
+      + #13#10#13#10 + 'Nothing was downloaded or imported, and other WSL distributions were not changed.';
+    RecordSetupOutcome('failed', Result);
+    Exit;
+  end;
   if PreflightDecision = 'wsl-kernel-unavailable' then
   begin
     Result := 'WSL is installed, but its Linux kernel could not start, so LanEx cannot '
@@ -3241,7 +3259,7 @@ begin
     WslPending := True;
     NeedsRestart := True;
     Result := 'Windows needs to restart to complete WSL setup.' + #13#10#13#10
-      + 'Setup registered an automatic continuation. If Windows blocks it, use Continue LanEx Setup from the Start menu.' + #13#10#13#10
+      + 'If Setup does not open by itself after you sign in, open "Continue LanEx Setup" from the Start menu.' + #13#10#13#10
       + 'Your component and PDK choices are saved.';
     Exit;
   end;
@@ -3258,7 +3276,7 @@ begin
     WslPending := True;
     NeedsRestart := True;
     Result := 'Windows needs to restart to complete WSL setup.' + #13#10#13#10
-      + 'Setup registered an automatic continuation. If Windows blocks it, use Continue LanEx Setup from the Start menu.' + #13#10#13#10
+      + 'If Setup does not open by itself after you sign in, open "Continue LanEx Setup" from the Start menu.' + #13#10#13#10
       + 'Your component and PDK choices are saved.';
     Exit;
   end;
@@ -3347,7 +3365,7 @@ begin
       WslPending := True;
       NeedsRestart := True;
       Result := 'Windows needs to restart to complete WSL setup.' + #13#10#13#10
-        + 'Setup registered an automatic continuation. If Windows blocks it, use Continue LanEx Setup from the Start menu.' + #13#10#13#10
+        + 'If Setup does not open by itself after you sign in, open "Continue LanEx Setup" from the Start menu.' + #13#10#13#10
         + 'Your component and PDK choices are saved.';
       Exit;
     end;

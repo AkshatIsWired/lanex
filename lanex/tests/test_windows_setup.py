@@ -870,6 +870,34 @@ def test_vm_with_nested_virtualization_proceeds(tmp_path: Path) -> None:
     assert result["decision"]["code"] == "features-required"
 
 
+def test_vm_after_feature_restart_is_not_called_nested_off(tmp_path: Path) -> None:
+    # Once Virtual Machine Platform runs Windows' own hypervisor the processor
+    # flag reads off even with nested virtualization on (seen on Windows 10).
+    result = _preflight(tmp_path, _base_preflight(
+        virtualMachine=True, firmwareVirtualizationRaw="disabled",
+        wsl={"present": True, "statusUsable": True, "version": "3.0.1.0",
+             "systemdCapable": True, "kernelUsable": False, "kernelError": "timeout"}))
+    assert result["decision"]["code"] == "wsl-not-responding"
+    assert result["decision"]["blocked"] is True
+
+
+def test_vm_whose_kernel_reports_no_hypervisor_is_nested_off(tmp_path: Path) -> None:
+    result = _preflight(tmp_path, _base_preflight(
+        virtualMachine=True, firmwareVirtualizationRaw="disabled",
+        wsl={"present": True, "statusUsable": True, "version": "3.0.1.0",
+             "systemdCapable": True, "kernelUsable": False,
+             "kernelError": "Error code: Wsl/Service/CreateInstance/CreateVm/HCS/HCS_E_HYPERV_NOT_INSTALLED"}))
+    assert result["decision"]["code"] == "vm-nested-virtualization-off"
+
+
+def test_preflight_bounds_every_wsl_call() -> None:
+    body = SETUP.read_text(encoding="utf-8")
+    facts = body[body.index("function Get-LivePreflightFacts"):body.index("function Get-PreflightDecision")]
+    assert "& $wslExe" not in facts
+    assert "Invoke-WslKernelProbe $wslExe @('--import'" in facts
+    assert "'wsl-not-responding'" in INNO.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("build,ubr,code", [
     (19045, 2006, "windows-update-required"),   # 22H2 as released, inbox WSL only
     (19045, 2311, "ready"),                      # KB5020030: Store WSL works
