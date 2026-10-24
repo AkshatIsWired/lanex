@@ -1079,7 +1079,7 @@ begin
     + ' -Action Preflight | ConvertFrom-Json); '
     + '$p.decision.code; $p.bootIdentity; '
     + '(($p.computer.manufacturer + '' '' + $p.computer.model) -replace ''[\r\n\t]'','' '').Trim(); '
-    + '$p.decision.firmwareNotice; $p.decision.lowMemory; $p.decision.memoryGB; '
+    + '$p.decision.firmwareNotice; $p.memory.low; $p.memory.gb; '
     + '(''v'' + $p.wsl.version); '
     + '($p | ConvertTo-Json -Depth 20 -Compress)';
   Result := PowerShellCapture(Snippet, Output);

@@ -724,9 +724,6 @@ function Get-PreflightDecision($Facts) {
         needsElevation = $needsElevation
         needsRestart = $needsRestart
         firmwareNotice = $firmwareNotice
-        lowMemory = ($null -ne $Facts.memoryBytes -and [int64]$Facts.memoryBytes -gt 0 -and
-            [int64]$Facts.memoryBytes -lt [int64]$RecommendedMemoryBytes)
-        memoryGB = if ($null -ne $Facts.memoryBytes) { [math]::Round([int64]$Facts.memoryBytes / 1GB, 1) } else { 0 }
     }
 }
 
@@ -782,6 +779,11 @@ function Invoke-Preflight {
         bootIdentity = [string]$facts.bootIdentity
         wsl = $facts.wsl
         decision = Get-PreflightDecision $facts
+        memory = [pscustomobject][ordered]@{
+            low = ($null -ne $facts.memoryBytes -and [int64]$facts.memoryBytes -gt 0 -and
+                [int64]$facts.memoryBytes -lt [int64]$RecommendedMemoryBytes)
+            gb = if ($null -ne $facts.memoryBytes) { [math]::Round([int64]$facts.memoryBytes / 1GB, 1) } else { 0 }
+        }
     }
 }
 

@@ -572,13 +572,14 @@ def test_inno_m5_wizard_progress_cancel_and_silent_contract() -> None:
     assert "did not start the fallback download" in body
     assert "WizardSilent then Answer := IDCANCEL" in body
     assert "ALLOWWSLUPDATE" in body and "SELECTIONS" in body
-    assert "SaveStringToFile(StagedChoices, InputJson, False)" in body
-    assert "SaveStringToFile(StagedChoices, ChoicesJsonValue, False)" in body
+    # UTF-8, so a user folder with a non-ASCII letter survives the round trip.
+    assert "SaveStringsToUTF8FileWithoutBOM(StagedChoices, [InputJson], False)" in body
+    assert "SaveStringsToUTF8FileWithoutBOM(StagedChoices, [ChoicesJsonValue], False)" in body
     assert "+ ' -ChoicesJson ' + PSQuote(ChoicesJsonValue)" not in body
     assert "Copy-Item -LiteralPath" in body
     assert "could not preserve the verified companion appliance for restart" in body
     assert "-Action StageInstaller" in body
-    assert "RecordSetupOutcome('ready'" in body
+    assert "RecordReadyWithRetry" in body and "-Outcome ready" in body
     assert "wsl-kernel-unavailable" in body
     assert "RecordSetupOutcome('failed', Result);" in body
 
@@ -635,6 +636,10 @@ def test_manifest_generator_hashes_exact_checkout_payloads(tmp_path: Path) -> No
     selftest.write_bytes(b"selftest")
     constraints = tmp_path / "constraints.txt"
     constraints.write_bytes(b"librelane==3.0.4\n")
+    lock = tmp_path / "requirements.lock"
+    lock.write_bytes(b"librelane==3.0.4 --hash=sha256:00\n")
+    assets = tmp_path / "pdk-assets.json"
+    assets.write_text('{"schema":1,"families":{}}')
     catalog = tmp_path / "catalog.json"
     catalog.write_text('{"pdk_catalog":{"sky130A":{"libraries":["sky130_fd_sc_hd"]}}}')
     pins = tmp_path / "pins.json"
@@ -649,6 +654,8 @@ def test_manifest_generator_hashes_exact_checkout_payloads(tmp_path: Path) -> No
         "-InstallScriptPath", install, "-ProvisionScriptPath", provision,
         "-SelftestPath", selftest,
         "-ConstraintsPath", constraints, "-CatalogPath", catalog,
+        "-LockPath", lock, "-PdkAssetsPath", assets, "-AptSnapshot", "20261023T000000Z",
+        "-RootfsUrls", "https://mirror.invalid/rootfs|https://example.invalid/rootfs",
         "-PdkPinsPath", pins, "-RootfsUrl", "https://example.invalid/rootfs",
         "-RootfsSha256", "d" * 64, "-RootfsSizeBytes", "123",
         "-BakedRootfsSha256", "1" * 64, "-BakedRootfsSizeBytes", "456",
@@ -661,6 +668,10 @@ def test_manifest_generator_hashes_exact_checkout_payloads(tmp_path: Path) -> No
     assert manifest["bakedRootfs"]["packageInventory"]["packages"]["python3"] == "3.12.3"
     assert manifest["bakedRootfs"]["packageInventorySha256"] == hashlib.sha256(inventory.read_bytes()).hexdigest()
     assert json.loads(output.read_text())["image"]["digest"] == "sha256:" + "e" * 64
+    assert manifest["payload"]["lockSha256"] == hashlib.sha256(lock.read_bytes()).hexdigest()
+    assert manifest["apt"]["snapshot"] == "20261023T000000Z"
+    assert manifest["rootfs"]["urls"] == ["https://mirror.invalid/rootfs", "https://example.invalid/rootfs"]
+    assert manifest["pdkAssets"] == {"schema": 1, "families": {}}
 
 
 def test_provision_executes_complete_bundled_installer_not_curl_pipeline() -> None:
@@ -817,7 +828,7 @@ def test_m6_update_rollback_and_uninstall_are_narrowly_scoped() -> None:
     assert "Remove-Item -LiteralPath ([IO.Path]::GetFullPath($OwnedDataRoot)) -Recurse" not in worker
     assert "legacy-generic-profile" not in worker
     assert "InitializeUninstall" in inno and "MB_DEFBUTTON1" in inno
-    assert "The export did not complete, so uninstall stopped" in inno
+    assert "The backup did not complete, so uninstall stopped" in inno
     assert "CompleteUpdateCheckpoint(True)" in inno
 
 
