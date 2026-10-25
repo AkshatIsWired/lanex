@@ -368,11 +368,15 @@ def resolved_settings(run_dir: Path, design_dir: Optional[Path]) -> Dict[str, An
             "line": lm[0] if lm else None,
         }
         c = cfg_vars.get(key)
+        # LibreLane takes PDK / STD_CELL_LIBRARY from the config file when it
+        # sets them at the top level, before -p/-s: the picker only decides
+        # when the config is silent.
+        cfg_top = bool(c) and not c["scoped"]
         if gui_overrides is not None and key in gui_overrides:
             row["source"] = "override"
-        elif key == "PDK" and gui_pdk:
+        elif key == "PDK" and gui_pdk and not cfg_top:
             row["source"] = "picker"
-        elif key == "STD_CELL_LIBRARY" and gui_scl:
+        elif key == "STD_CELL_LIBRARY" and gui_scl and not cfg_top:
             row["source"] = "picker"
         elif c:
             row["source"] = "config"

@@ -967,6 +967,17 @@ def h_preflight(handler: Any) -> None:
             )
         else:
             blockers.append(f"PDK not ready: {miss}.")
+    # The config's own PDK wins in LibreLane (see _start_run): a picker that
+    # disagrees blocks the run, and the checklist offers the one-click fix.
+    if design_ok and config_file and (pdk or scl):
+        try:
+            from ..controller import configedit
+            mm = configedit.pdk_mismatch(design_dir, pdk, scl)
+        except Exception:
+            mm = None
+        if mm:
+            pdk_block["mismatch"] = mm
+            blockers.append(mm["message"])
 
     # 3) Engine: in container mode the only host requirement is Docker/Podman
     #    (every EDA tool ships in the version-matched image). In local mode we
@@ -1280,6 +1291,16 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
         pdk, scl = _asm["pdk"], _asm["scl"]
         overrides = _asm["overrides"]
         extra_config_files: List[str] = list(_asm["extra_config_files"] or [])
+
+        # LibreLane builds for the PDK/library the config file names, whatever
+        # -p/-s say (and resolves that PDK's defaults and pdk:: sections before
+        # any -c override), so a picker that disagrees would quietly build for
+        # the other PDK, or stop with "PDK not found". Refuse and say which two
+        # values disagree; the reply carries the keys that make them agree.
+        from ..controller import configedit
+        mismatch = configedit.pdk_mismatch(design_dir, pdk, scl) if (pdk or scl) else None
+        if mismatch:
+            return {"ok": False, "started": False, "reason": mismatch["message"], "pdk_mismatch": mismatch}, 200
 
         # Resolve the pdk_root that actually holds the files this mode needs, and
         # refuse a run that we already know will fail (PDK genuinely absent and
@@ -3166,6 +3187,15 @@ def h_dse_start(handler: Any) -> None:
         _respond(handler, str(ex), 400)
         return
     base_overrides = dict(body.get("base_overrides") or {})
+    # Every point builds for the PDK the config names (see _start_run): a
+    # sweep whose picker disagrees would sweep another chip, or none.
+    from ..controller import configedit
+    _pk = base_overrides.get("PDK") or body.get("pdk") or None
+    _sc = base_overrides.get("STD_CELL_LIBRARY") or body.get("scl") or None
+    mismatch = configedit.pdk_mismatch(design_dir, _pk, _sc) if (_pk or _sc) else None
+    if mismatch:
+        _respond(handler, mismatch["message"], 409)
+        return
     run_mode = "container" if body.get("run_mode") == "container" else "local"
     flow_name = body.get("flow_name") or "Classic"
     base_tag = body.get("base_tag") or Path(design_dir).name
