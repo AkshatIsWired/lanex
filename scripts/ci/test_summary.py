@@ -56,6 +56,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_install_foolproof": "The one-click install path stays foolproof across the platform edge cases it has hit.",
     "test_pdk": "PDK detection/enable is correct so the flow runs against the PDK the user picked (Fear B).",
     "test_pdk_resolve": "The resolved PDK_ROOT points at the files the selected run mode actually needs.",
+    "test_pdk_config_agree": "A run never builds for another PDK than the one picked: a picker that disagrees with the config's PDK/library is refused with both named, and the starters carry per-PDK tuning so they reach a GDS on gf180 and IHP too.",
     "test_compat": "Drift canary — parsers stay aligned with the installed librelane; upstream changes fail loud, not silent.",
     "test_ci_helpers": "The CI comparators themselves are correct, incl. G8 (a viewer only ever gets a valid, non-empty GDS).",
     "test_editor_lint_sim": "IDE lint/sim jobs behave; watchdogs free a stuck job instead of hanging 'running'.",
