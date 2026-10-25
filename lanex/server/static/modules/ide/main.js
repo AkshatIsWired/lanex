@@ -772,6 +772,7 @@ async function openFile(abs, rel) {
         const f = state.files.find((x) => x.relpath === rel);
         t = { abs: f ? f.abspath : abs, rel, text: r.text, saved: r.text };
         state.tabs.push(t);
+        await restoreDraft(t);
       }
     } catch (ex) {
       note("Could not open: " + (ex.message || ex), true);
@@ -813,6 +814,7 @@ async function closeTab(abs, { force = false } = {}) {
     if (!ok) return;
   }
   state.tabs.splice(i, 1);
+  dropDraft(t.abs);
   window.ideEditor.forget(t.rel);
   if (state.active === abs) {
     state.active = null;
@@ -869,6 +871,62 @@ function onEditorChange(text) {
   t.text = text;
   const el = document.querySelector("#ide-tabs .ide-tab.is-on");
   if (el) el.classList.toggle("is-dirty", t.text !== t.saved);
+  keepDraftSoon(t);
+}
+
+// ------------------------------------------------------------------ drafts
+// Unsaved edits are also kept in the browser's storage as you type, so they
+// survive what the page itself cannot: LanEx's server going away (a laptop
+// that slept, a crash) followed by a reload or a fresh window. Opening the
+// file again offers them back. Cleared on save or on a deliberate discard.
+
+const DRAFT_PREFIX = "ll.draft:";
+const DRAFT_MAX = 2 * 1024 * 1024;
+const _draftTimers = new Map();
+
+function textHash(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return s.length + ":" + (h >>> 0).toString(16);
+}
+
+function keepDraftSoon(t) {
+  clearTimeout(_draftTimers.get(t.abs));
+  _draftTimers.set(t.abs, setTimeout(() => { _draftTimers.delete(t.abs); keepDraft(t); }, 700));
+}
+
+function keepDraft(t) {
+  try {
+    if (t.text === t.saved) { localStorage.removeItem(DRAFT_PREFIX + t.abs); return; }
+    if (t.text.length > DRAFT_MAX) return;
+    localStorage.setItem(DRAFT_PREFIX + t.abs, JSON.stringify({ text: t.text, base: textHash(t.saved), at: Date.now() }));
+  } catch (_e) { /* storage full or blocked: the beforeunload prompt still guards */ }
+}
+
+function dropDraft(abs) {
+  clearTimeout(_draftTimers.get(abs));
+  _draftTimers.delete(abs);
+  try { localStorage.removeItem(DRAFT_PREFIX + abs); } catch (_e) { /* nothing kept */ }
+}
+
+// A freshly opened tab: bring back edits that never reached the disk.
+async function restoreDraft(t) {
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(DRAFT_PREFIX + t.abs) || "null"); } catch (_e) { d = null; }
+  if (!d || typeof d.text !== "string" || d.text === t.saved) { if (d) dropDraft(t.abs); return; }
+  const when = new Date(d.at || Date.now()).toLocaleString();
+  if (d.base === textHash(t.saved)) {
+    // The file is exactly as it was when the edits were made: nothing to lose.
+    t.text = d.text;
+    note("Brought back unsaved edits to " + t.rel + " from " + when + ". Save to keep them.");
+    return;
+  }
+  const { confirmDialog } = await import("../dialog.js");
+  const ok = await confirmDialog({ title: "Bring back unsaved edits?", confirmText: "Bring them back",
+    body: t.rel + " has edits from " + when + " that were never saved, but the file has changed since. " +
+      "Bring the edits back (they replace what is on disk once you save), or keep the file as it is now?" });
+  if (ok) t.text = d.text;
+  else dropDraft(t.abs);
 }
 
 function showCursor({ line, col, selected, cursors }) {
@@ -935,6 +993,7 @@ async function saveFile({ quiet = false } = {}) {
     if (!r.ok) throw new Error(r.error || "write refused");
     t.text = text;
     t.saved = text;
+    dropDraft(t.abs);
     renderTabs();
     dropSimDiags([t.rel]);
     note("Saved " + t.rel);
@@ -962,7 +1021,7 @@ async function saveAll() {
   for (const t of state.tabs.filter((x) => x.text !== x.saved)) {
     try {
       const r = await api.fileWrite(t.rel, t.text);
-      if (r.ok) t.saved = t.text;
+      if (r.ok) { t.saved = t.text; dropDraft(t.abs); }
     } catch (_e) { /* the simulation reports what's wrong */ }
   }
   renderTabs();
