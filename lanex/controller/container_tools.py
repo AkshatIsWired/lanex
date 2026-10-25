@@ -203,8 +203,11 @@ def _x11_flags(engine: str = "docker") -> List[str]:
     # Escape hatch (same as the native launch path): LIBRELANE_GUI_WSL_HW_GL=1 /
     # LANEX_HW_GL=1 skips the forcing for setups that DO have in-container GL
     # (e.g. a user who runs the engine with GPU passthrough themselves).
+    # QT_XCB_GL_INTEGRATION=none as on the native path (platform_env.wsl_gl_env):
+    # Qt then skips its GLX probe instead of mapping a window it can't present.
     if not platform_env.hw_gl_requested():
-        flags += ["-e", "LIBGL_ALWAYS_SOFTWARE=1", "-e", "GALLIUM_DRIVER=llvmpipe"]
+        flags += ["-e", "LIBGL_ALWAYS_SOFTWARE=1", "-e", "GALLIUM_DRIVER=llvmpipe",
+                  "-e", "QT_XCB_GL_INTEGRATION=none"]
     # Only an X11 display is ever forwarded into the container, so say so:
     # a Qt/GTK build that defaults to Wayland would otherwise probe for a
     # compositor that is not there (on WSL, the [WARN: COPY MODE] class).
