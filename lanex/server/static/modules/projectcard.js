@@ -100,6 +100,8 @@ export async function paintDesignRow() {
   const per = $("pd-period");
   per.value = vals.CLOCK_PERIOD != null ? vals.CLOCK_PERIOD : "";
   $("pd-mhz").textContent = mhz(per.value);
+  // Each value's line in the config file, one click away.
+  import("./provenance.js").then((m) => m.paintConfigSrc(box, (k) => vals[k] !== undefined && vals[k] !== null && vals[k] !== "")).catch(() => {});
 
   $("pd-top").disabled = !editable;
   $("pd-clock").disabled = !editable || multi;

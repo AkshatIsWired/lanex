@@ -23,6 +23,30 @@ export function provBtnHtml(params, title) {
     "'><svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='11' cy='11' r='7'/><path d='M21 21l-4.3-4.3'/></svg></button>";
 }
 
+// 1-based number of the first line of *text* holding *needle* (the last one
+// with *last*), or null: the same rule as the server's report lookup, for a
+// report the page already has (provenance.report_provenance).
+export function needleLine(text, needle, last = false) {
+  if (!needle) return null;
+  const lines = String(text || "").split(/\r?\n/);
+  if (last) { for (let i = lines.length - 1; i >= 0; i--) if (lines[i].includes(needle)) return i + 1; }
+  else { const i = lines.findIndex((l) => l.includes(needle)); if (i >= 0) return i + 1; }
+  return null;
+}
+
+// Fill the `.pd-src[data-src-key]` slots under `root` with the source button
+// of that key's line in the project's config file, for the keys `isSet`
+// says the config sets (a value at its default has no line to show).
+export function paintConfigSrc(root, isSet) {
+  if (!root) return;
+  root.querySelectorAll(".pd-src[data-src-key]").forEach((slot) => {
+    const key = slot.dataset.srcKey;
+    slot.innerHTML = isSet(key) ? provBtnHtml({ kind: "input", key },
+      "Show the line of the project's config file that sets " + key) : "";
+  });
+  wireProvBtns(root);
+}
+
 // Text for a "your config" field chip from one /api/provenance?kind=input-map
 // entry. Pure (node-testable): the form's tier between "LibreLane default" and
 // an override. A scoped (pdk::/scl::) entry is labelled with its scope and

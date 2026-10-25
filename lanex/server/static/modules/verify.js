@@ -18,7 +18,7 @@ import * as ctx from "./context.js";
 import { mountRunBar } from "./runbar.js";
 import { wireScrollSpy } from "./jumpnav.js";
 import { icon } from "./icons.js";
-import { provBtnHtml, wireProvBtns } from "./provenance.js";
+import { provBtnHtml, wireProvBtns, needleLine } from "./provenance.js";
 import { renderFileText, fileActionsHtml, wireFileActions } from "./fileview.js";
 import { renderTimingPaths } from "./timing.js";
 import { toast } from "./toast.js";
@@ -95,12 +95,40 @@ function valueText(c) {
   return n(c.value) + (c.unit ? " " + c.unit : "");
 }
 
+// The source button of one metric: its line in final/metrics.json, or, for a
+// run that stopped, in the state_out.json of the last step that finished
+// (where verify.py read it from, metrics_from).
+function mprov(key, title) {
+  if (!key || !_tag) return "";
+  const step = _rep && _rep.metrics_from ? _rep.metrics_from.dir : "";
+  const file = step ? step + "/state_out.json" : "metrics.json";
+  return provBtnHtml(step ? { kind: "metric", key, tag: _tag, step } : { kind: "metric", key, tag: _tag },
+    title || "Show '" + key + "' in this run's " + file);
+}
+
+// The source button of a setting: its line in the run's resolved.json, the
+// value LibreLane used.
+function vprov(name) {
+  if (!name || !_tag || (_rep && _rep.has_config === false)) return "";
+  return provBtnHtml({ kind: "var", key: name, tag: _tag }, "Show " + name + " in this run's resolved.json");
+}
+
+// The source button of a line in a report the run wrote (*last*: the last
+// line holding the text, where a tool prints its final count).
+function rprov(rel, needle, title, last = false) {
+  if (!rel || !_tag) return "";
+  return provBtnHtml({ kind: "report", tag: _tag, path: rel, needle: needle || "", last: last ? "1" : "" }, title || "Show this line in " + rel);
+}
+
 function provFor(c, key) {
   key = key || c.metric;
   // Only for a value LibreLane actually recorded.
   if (!key || !_tag || !(c.values && Object.keys(c.values).length)) return "";
-  return provBtnHtml({ kind: "metric", key, tag: _tag }, "Show '" + key + "' in this run's metrics.json");
+  return mprov(key);
 }
+
+// A value already on screen as LibreLane recorded it (not "—").
+const shown = (v) => v !== null && v !== undefined && v !== "—";
 
 function head(eyebrow, title, lede, actions = "") {
   return "<header class='an-head'><div><div class='an-eyebrow'>" + esc(eyebrow) + "</div>" +
@@ -199,7 +227,7 @@ function wireOnce() {
     const f = t.closest("[data-vf-filter]");
     if (f) { _filter = f.dataset.vfFilter; renderChecks(); wireProvBtns(document.getElementById("vf-checks")); return; }
     const view = t.closest("[data-vf-view]");
-    if (view) { viewReport(view.dataset.vfView, view.dataset.vfTitle); return; }
+    if (view) { viewReport(view.dataset.vfView, view.dataset.vfTitle, view.dataset.vfNeedle, view.dataset.vfLast === "1"); return; }
     const log = t.closest("[data-vf-log]");
     if (log) { showLog(log.dataset.vfLog); return; }
     const rr = t.closest("[data-vf-rerun]");
@@ -365,10 +393,12 @@ function pillar(p) {
   if (p.id === "timing") {
     const s = by.get("setup"), h = by.get("hold");
     const corners = (d.timing && d.timing.source === "signoff" && d.timing.corners) || [];
-    hero = s && s.status !== "not_run" && V.isNum(s.worst) ? "<span class='vf-hero-v'>" + esc(ns(s.worst)) + "</span><span class='an-u'>ns setup slack</span>" : "<span class='vf-hero-v'>—</span>";
+    const sw = s && s.status !== "not_run" && V.isNum(s.worst), hw = h && h.status !== "not_run" && V.isNum(h.worst);
+    hero = sw ? "<span class='vf-hero-v'>" + esc(ns(s.worst)) + "</span><span class='an-u'>ns setup slack</span>" + mprov("timing__setup__ws") : "<span class='vf-hero-v'>—</span>";
     rows = [
-      ["Worst hold slack", h && h.status !== "not_run" && V.isNum(h.worst) ? ns(h.worst) + " ns" : "—", h],
-      ["Setup / hold violations", (s && s.value != null ? n(s.value) : "—") + " / " + (h && h.value != null ? n(h.value) : "—"), null],
+      ["Worst hold slack", hw ? ns(h.worst) + " ns" : "—", h, hw ? mprov("timing__hold__ws") : ""],
+      ["Setup / hold violations", (s && s.value != null ? n(s.value) : "—") + " / " + (h && h.value != null ? n(h.value) : "—"), null,
+        (s && s.value != null ? provFor(s) : "") + (h && h.value != null ? provFor(h) : "")],
       ["Corners analysed", corners.length ? String(corners.length) : "—", null],
     ];
   } else if (p.id === "drc") {
@@ -380,25 +410,32 @@ function pillar(p) {
     const lv = by.get("lvs"), x = by.get("xor"), dp = by.get("disc_pin");
     const res = d.lvs && d.lvs.result;
     const ok = lv && lv.status === "pass";
-    hero = "<span class='vf-hero-v vf-hero-word'>" + esc(lv && lv.status !== "not_run" && lv.status !== "skipped" ? (ok ? "Match" : "Mismatch") : "—") + "</span>";
-    rows = [["Netgen", res || (lv && V.isNum(lv.value) ? n(lv.value) + " errors" : "—"), lv],
+    const ran = lv && lv.status !== "not_run" && lv.status !== "skipped";
+    hero = "<span class='vf-hero-v vf-hero-word'>" + esc(ran ? (ok ? "Match" : "Mismatch") : "—") + "</span>";
+    rows = [["Netgen", res || (lv && V.isNum(lv.value) ? n(lv.value) + " errors" : "—"), lv,
+      res ? rprov(d.lvs.report, "Final result:", "Show Netgen's \"Final result\" line in its report", true) : null],
       ["XOR differences", x ? valueText(x) : "—", x], ["Disconnected pins", dp ? valueText(dp) : "—", dp]];
   } else {
     const an = by.get("antenna"), pd = by.get("pdn");
     const ir = (d.ir && d.ir.nets) || [];
-    const worstPct = ir.filter((r) => V.isNum(r.pct)).reduce((m, r) => Math.max(m, r.pct), -1);
-    hero = an && an.value != null ? "<span class='vf-hero-v'>" + esc(n(an.value)) + "</span><span class='an-u'>antenna nets</span>" : "<span class='vf-hero-v'>—</span>";
-    rows = [["Antenna pins", an && an.breakdown && an.breakdown[1] ? n(an.breakdown[1].value) : "—", null],
+    const worstIr = ir.filter((r) => V.isNum(r.pct)).reduce((m, r) => (!m || r.pct > m.pct ? r : m), null);
+    const pins = an && an.breakdown && an.breakdown[1];
+    hero = an && an.value != null ? "<span class='vf-hero-v'>" + esc(n(an.value)) + "</span><span class='an-u'>antenna nets</span>" + provFor(an) : "<span class='vf-hero-v'>—</span>";
+    rows = [["Antenna pins", pins ? n(pins.value) : "—", null, pins ? mprov(pins.metric) : ""],
       ["Power-grid issues", pd ? valueText(pd) : "—", pd],
-      ["Worst IR drop", worstPct >= 0 ? worstPct + " % of supply" : "—", null]];
+      ["Worst IR drop", worstIr ? worstIr.pct + " % of supply" : "—", null,
+        worstIr ? mprov("design_powergrid__drop__worst__net:" + worstIr.net, "Show the worst drop on " + worstIr.net + " in this run's metrics.json") : ""]];
   }
   const stLabel = { pass: "Clean", partial: "Clean so far", fail: "Failing", warn: "Warnings", not_run: "Not checked", skipped: "Turned off" }[st] || "";
-  return "<button class='vf-pillar is-" + esc(st) + "' data-vf-jump='" + p.jump + "'>" +
-    "<span class='vf-pillar-top'><span class='an-kpi-t'>" + esc(p.title) + "</span><span class='vf-pillar-st'>" + mark(st) + esc(stLabel) + "</span></span>" +
+  // A card that jumps to its section; its title is the keyboard target, so
+  // the source buttons inside can be real buttons too.
+  return "<div class='vf-pillar is-" + esc(st) + "' data-vf-jump='" + p.jump + "'>" +
+    "<span class='vf-pillar-top'><button class='vf-pillar-go' data-vf-jump='" + p.jump + "'><span class='an-kpi-t'>" + esc(p.title) + "</span></button><span class='vf-pillar-st'>" + mark(st) + esc(stLabel) + "</span></span>" +
     "<span class='vf-pillar-hero'>" + hero + "</span>" +
-    "<span class='vf-pillar-rows'>" + rows.map(([l, val, c]) =>
-      "<span class='vf-pr" + (c && (c.status === "fail" || c.status === "warn") ? " is-" + c.status : "") + "'><span>" + esc(l) + "</span><b>" + esc(val) + "</b></span>").join("") + "</span>" +
-    "</button>";
+    "<span class='vf-pillar-rows'>" + rows.map(([l, val, c, src]) =>
+      "<span class='vf-pr" + (c && (c.status === "fail" || c.status === "warn") ? " is-" + c.status : "") + "'><span>" + esc(l) + "</span><b>" + esc(val) + "</b>" +
+      (src != null ? src : c && shown(val) ? provFor(c) : "") + "</span>").join("") + "</span>" +
+    "</div>";
 }
 
 // ---------- 2. checks ----------------------------------------------------------------
@@ -445,14 +482,16 @@ function rowHtml(c) {
   if (ch && !real(c.status)) { /* nothing to compare against */ }
   else if (ch && ch.from.status !== c.status && real(ch.from.status)) was = "<span class='vf-was' data-an-tip='" + esc("In " + _baseTag + ": " + (V.STATUS[ch.from.status] || {}).label + ", " + valueText(ch.from)) + "' tabindex='0'>was " + esc((V.STATUS[ch.from.status] || {}).label.toLowerCase()) + "</span>";
   else if (ch && String(ch.from.value) !== String(c.value) && ch.from.value != null) was = "<span class='vf-was' data-an-tip='" + esc("Value in " + _baseTag) + "' tabindex='0'>was " + esc(valueText(ch.from)) + "</span>";
+  // The whole line opens the row; its name is the keyboard target, so the
+  // value's source button can sit right next to the value.
   return "<div class='vf-row is-" + esc(c.status) + (open ? " is-open" : "") + "' id='vf-row-" + esc(c.id) + "'>" +
-    "<button class='vf-row-main' data-vf-toggle='" + esc(c.id) + "' aria-expanded='" + open + "'>" +
+    "<div class='vf-row-main' data-vf-toggle='" + esc(c.id) + "'>" +
       mark(c.status) +
-      "<span class='vf-row-name'><b>" + esc(c.name) + "</b><small>" + esc(V.SHORT[c.id] || "") + "</small></span>" +
-      "<span class='vf-row-val'><span>" + esc(valueText(c)) + "</span>" + (c.limit && c.status !== "skipped" ? "<small>" + esc(limitText(c.limit)) + "</small>" : "") + was + "</span>" +
+      "<button class='vf-row-name' aria-expanded='" + open + "'><b>" + esc(c.name) + "</b><small>" + esc(V.SHORT[c.id] || "") + "</small></button>" +
+      "<span class='vf-row-val'><span>" + esc(valueText(c)) + provFor(c) + "</span>" + (c.limit && c.status !== "skipped" ? "<small>" + esc(limitText(c.limit)) + "</small>" : "") + was + "</span>" +
       "<span class='vf-row-st'>" + statusPill(c) + "</span>" +
       "<span class='vf-chev' aria-hidden='true'>" + icon("chevron", { size: 14 }) + "</span>" +
-    "</button>" +
+    "</div>" +
     (open ? "<div class='vf-detail'>" + detailHtml(c) + "</div>" : "") +
     "</div>";
 }
@@ -471,8 +510,10 @@ function toggleRow(id) {
   const tmp = document.createElement("div");
   tmp.innerHTML = rowHtml(c);
   const fresh = tmp.firstElementChild;
+  const focused = row.contains(document.activeElement);
   row.replaceWith(fresh);
   wireProvBtns(fresh);
+  if (focused) fresh.querySelector(".vf-row-name")?.focus();
 }
 
 function detailHtml(c) {
@@ -499,8 +540,10 @@ function detailHtml(c) {
   const outcome = { passed: "passed", warned: "warned", raised: "raised an error", skipped: "skipped (no limit set)" };
   const dl = [
     ["Value", "<b>" + esc(valueText(c)) + "</b>" + provFor(c)],
-    c.limit ? ["Limit", esc(c.limit)] : null,
-    ["Decides", "<span class='has-tip' tabindex='0' data-an-tip='" + esc(gate.tip) + "'>" + esc(gate.label) + "</span>" + (c.gate_note ? "<small>" + esc(c.gate_note) + "</small>" : "")],
+    // A limit from a setting links to it; "0" is the checker's own rule.
+    c.limit ? ["Limit", esc(c.limit) + vprov(c.limit_var)] : null,
+    ["Decides", "<span class='has-tip' tabindex='0' data-an-tip='" + esc(gate.tip) + "'>" + esc(gate.label) + "</span>" +
+      (c.gate_note ? "<small>" + esc(c.gate_note) + vprov(c.error_var || c.corner_var) + "</small>" : "")],
     ck ? ["Checked by", ck.dir ? esc(stepLabel(ck)) + (ck.outcome ? " · <b>" + esc(outcome[ck.outcome] || ck.outcome) + "</b>" : "") : esc(ck.id) + " · <span class='muted'>did not run</span>"] : null,
     tl ? ["Measured by", tl.dir ? esc(stepLabel(tl)) : esc(tl.id) + " · <span class='muted'>did not run</span>"] : null,
   ].filter(Boolean);
@@ -508,12 +551,15 @@ function detailHtml(c) {
   if (c.breakdown && c.breakdown.length) {
     table += "<table class='vf-mini'><tbody>" + c.breakdown.map((b) =>
       "<tr" + (V.isNum(b.value) && b.value > 0 && c.id !== "antenna" && !/iteration|diodes|all, incl/.test(b.label) ? " class='is-bad'" : "") + "><th scope='row'>" + esc(b.label) + "</th><td>" + esc(n(b.value)) +
-      provBtnHtml({ kind: "metric", key: b.metric, tag: _tag }, "Show '" + b.metric + "' in metrics.json") + "</td></tr>").join("") + "</tbody></table>";
+      mprov(b.metric) + "</td></tr>").join("") + "</tbody></table>";
   }
   if (c.corners && c.corners.length) {
+    // "Fails the run?" is the corner matched against the checker's corner
+    // rule (Decides above), so its source is that setting.
     table += "<table class='vf-mini'><thead><tr><th>Corner</th><th>Count</th><th>Fails the run?</th></tr></thead><tbody>" +
       [...c.corners].sort((a, b) => V.cornerSortKey(a.corner) - V.cornerSortKey(b.corner)).map((r) =>
-        "<tr" + (V.isNum(r.value) && r.value > 0 ? " class='is-" + (r.gating ? "bad" : "warnrow") + "'" : "") + "><th scope='row'><span data-an-tip='" + esc(AM.cornerLabel(r.corner)) + "' tabindex='0'>" + esc(r.corner) + "</span></th><td>" + esc(n(r.value)) + "</td><td>" + (r.gating ? "yes" : "<span class='muted'>warns</span>") + "</td></tr>").join("") +
+        "<tr" + (V.isNum(r.value) && r.value > 0 ? " class='is-" + (r.gating ? "bad" : "warnrow") + "'" : "") + "><th scope='row'><span data-an-tip='" + esc(AM.cornerLabel(r.corner)) + "' tabindex='0'>" + esc(r.corner) + "</span></th><td>" + esc(n(r.value)) +
+        (r.value != null && c.metric ? mprov(c.metric + "__corner:" + r.corner) : "") + "</td><td>" + (r.gating ? "yes" : "<span class='muted'>warns</span>") + "</td></tr>").join("") +
       "</tbody></table>";
   }
   const acts = [
@@ -547,9 +593,14 @@ function renderTiming() {
     r.wildcards.length === 1 && r.wildcards[0] === "*" ? "every corner" : "corners matching " + r.wildcards.join(", ");
   const clk = V.isNum(t.clock_period) ? t.clock_period : Number(t.clock_period);
   const lede = rows.length
-    ? "OpenSTA timed the routed layout in " + rows.length + " corners" + (Number.isFinite(clk) ? " against a " + clk + " ns clock (" + +(1000 / clk).toFixed(2) + " MHz)" : "") +
-      ". LibreLane fails the run on setup violations in " + esc(rule(sr)) + " (" + esc(sr.var || "TIMING_VIOLATION_CORNERS") + ") and on hold violations in " + esc(rule(hr)) + "; slew and capacitance only warn."
+    ? "OpenSTA timed the routed layout in " + rows.length + " corners" + (Number.isFinite(clk) ? " against a " + clk + " ns clock (" + +(1000 / clk).toFixed(2) + " MHz)" + vprov("CLOCK_PERIOD") : "") +
+      ". LibreLane fails the run on setup violations in " + esc(rule(sr)) + " (" + esc(sr.var || "TIMING_VIOLATION_CORNERS") + vprov(sr.var) + ") and on hold violations in " + esc(rule(hr)) +
+      (hr.var ? " (" + esc(hr.var) + vprov(hr.var) + ")" : "") + "; slew and capacitance only warn."
     : "";
+  // The metric each column was read from (verify.py _timing_table).
+  const COL = { setup_ws: "timing__setup__ws", setup_tns: "timing__setup__tns", setup_vio: "timing__setup_vio__count",
+    hold_ws: "timing__hold__ws", hold_tns: "timing__hold__tns", hold_vio: "timing__hold_vio__count",
+    slew: "design__max_slew_violation__count", cap: "design__max_cap_violation__count", fanout: "design__max_fanout_violation__count" };
   if (!rows.length) {
     const s = by.get("setup");
     el.innerHTML = head("Timing", "Timing in every corner", "") +
@@ -567,7 +618,8 @@ function renderTiming() {
     const txt = slack ? ns(v) : n(v);
     const tip = (slack ? k.startsWith("setup") ? "Setup" : "Hold" : k) + " · " + r.corner + "\n" + txt + (slack ? " ns" : "") +
       (gate === false && bad ? "\nThis corner only warns" : "") + (isW ? "\nWorst of all corners" : "");
-    return "<td class='" + cls + "' data-an-tip='" + esc(tip) + "'>" + esc(txt) + "</td>";
+    return "<td class='" + cls + "' data-an-tip='" + esc(tip) + "'>" + esc(txt) +
+      (COL[k] ? mprov(COL[k] + "__corner:" + r.corner) : "") + "</td>";
   };
   const gateDot = (on, what) => on === undefined ? "" : "<span class='vf-gdot" + (on ? " is-on" : "") + "' data-an-tip='" + esc(on ? what + " violations here fail the run" : what + " violations here only warn") + "' tabindex='0'>" + (on ? "●" : "○") + "</span>";
   const body = rows.map((r) => {
@@ -605,10 +657,13 @@ function timingDiag() {
 
 // ---------- 4. DRC -------------------------------------------------------------------
 
-function ruleList(cats, { empty, total } = {}) {
+// *rel*: the report the rules were read from; each count links to the
+// first line naming its rule (*needle* maps a category to that text).
+function ruleList(cats, { empty, total, rel = "", needle = (c) => c.name } = {}) {
   if (!cats || !cats.length) return "<p class='vf-clean'>" + mark("pass") + esc(empty || "No rule broken.") + "</p>";
   const items = cats.map((c, i) =>
-    "<li class='vf-rule" + (i >= 6 ? " vf-extra" : "") + "'><div class='vf-rule-h'><code>" + esc(c.name) + (c.layer ? " · " + esc(c.layer) : "") + "</code><b>" + esc(n(c.count)) + "</b></div>" +
+    "<li class='vf-rule" + (i >= 6 ? " vf-extra" : "") + "'><div class='vf-rule-h'><code>" + esc(c.name) + (c.layer ? " · " + esc(c.layer) : "") + "</code><b>" + esc(n(c.count)) +
+      (rel ? rprov(rel, needle(c), "Show where " + rel.split("/").pop() + " lists " + needle(c)) : "") + "</b></div>" +
     (c.description && c.description !== c.name ? "<p>" + esc(c.description) + "</p>" : "") +
     (c.samples && c.samples.length ? "<small class='vf-loc'>at " + c.samples.slice(0, 3).map((b) => "(" + b[0].toFixed(2) + ", " + b[1].toFixed(2) + ")").join(", ") + " µm" + (c.count > 3 ? " …" : "") + "</small>" : "") +
     "</li>").join("");
@@ -647,10 +702,10 @@ function renderDrc() {
       markers ? btn("Open in KLayout with markers", "data-vf-klayout='1'", { ic: "layers" }) : "") +
     drcDiag() +
     "<div class='an-grid an-grid-3'>" +
-      toolCard("Magic DRC", by.get("magic_drc"), ruleList(mg && mg.categories, { empty: "No rule broken." }), mg && mg.report) +
-      toolCard("KLayout DRC", by.get("klayout_drc"), ruleList(kl && kl.categories, { empty: kl && kl.rules ? "All " + kl.rules + " rules in the deck pass." : "No rule broken." }), kl && kl.report,
+      toolCard("Magic DRC", by.get("magic_drc"), ruleList(mg && mg.categories, { empty: "No rule broken.", rel: mg && mg.report, needle: (c) => c.description || c.name }), mg && mg.report) +
+      toolCard("KLayout DRC", by.get("klayout_drc"), ruleList(kl && kl.categories, { empty: kl && kl.rules ? "All " + kl.rules + " rules in the deck pass." : "No rule broken.", rel: kl && kl.report, needle: (c) => "\"" + c.name + "\"" }), kl && kl.report,
         { sub: kl && kl.rules ? kl.rules + " rules in the deck" : "" }) +
-      toolCard("Router DRC", by.get("route_drc"), iterHtml + ruleList(rt && rt.categories, { empty: "Nothing left to fix." }), rt && rt.report) +
+      toolCard("Router DRC", by.get("route_drc"), iterHtml + ruleList(rt && rt.categories, { empty: "Nothing left to fix.", rel: rt && rt.report, needle: (c) => "violation type: " + c.name }), rt && rt.report) +
     "</div>" +
     (by.get("overlap") ? "<p class='an-foot'>Illegal overlaps found during extraction: <b>" + esc(valueText(by.get("overlap"))) + "</b>.</p>" : "");
 }
@@ -669,15 +724,19 @@ function renderLvs() {
   const lv = d.lvs, c = by.get("lvs"), x = d.xor, xc = by.get("xor");
   let lvsBody = "";
   if (lv && lv.layout && lv.netlist) {
-    const row = (label, k, tip) => {
+    // Netgen prints the top circuit's counts last, side by side; that line is
+    // the source of both columns. Pins are counted from its JSON's pin list.
+    const row = (label, k, tip, needle) => {
       const a = lv.layout[k], b = lv.netlist[k];
       const same = a === b;
-      return "<tr" + (same ? "" : " class='is-bad'") + "><th scope='row'><span class='has-tip' tabindex='0' data-an-tip='" + esc(tip) + "'>" + esc(label) + "</span></th><td>" + esc(n(a)) + "</td><td>" + esc(n(b)) + "</td><td>" + (same ? mark("pass") : mark("fail")) + "</td></tr>";
+      const src = needle ? rprov(lv.report, needle, "Show Netgen's \"" + needle + "\" line for the top circuit", true)
+        : rprov(lv.json, "", "Open Netgen's comparison (JSON)");
+      return "<tr" + (same ? "" : " class='is-bad'") + "><th scope='row'><span class='has-tip' tabindex='0' data-an-tip='" + esc(tip) + "'>" + esc(label) + "</span></th><td>" + esc(n(a)) + "</td><td>" + esc(n(b)) + "</td><td>" + (same ? mark("pass") : mark("fail")) + src + "</td></tr>";
     };
     lvsBody = "<table class='an-ttable vf-lvs-t'><thead><tr><th></th><th>Layout <small>(extracted)</small></th><th>Netlist <small>(from synthesis)</small></th><th></th></tr></thead><tbody>" +
-      row("Devices", "devices", "Cell instances, including fill, tap and decap cells.") +
-      row("Nets", "nets", "Distinct electrical nodes.") +
-      row("Pins", "pins", "Top-level ports, power included.") +
+      row("Devices", "devices", "Cell instances, including fill, tap and decap cells.", "Number of devices:") +
+      row("Nets", "nets", "Distinct electrical nodes.", "Number of nets:") +
+      row("Pins", "pins", "Top-level ports, power included.", "") +
       "</tbody></table>";
     if (lv.device_diffs && lv.device_diffs.length) {
       lvsBody += "<p class='vf-k'>Device counts that differ</p><table class='vf-mini'><thead><tr><th>Layout</th><th></th><th>Netlist</th><th></th></tr></thead><tbody>" +
@@ -689,20 +748,22 @@ function renderLvs() {
     }
   }
   if (c && c.breakdown && c.breakdown.length) {
-    lvsBody += "<table class='vf-mini'><tbody>" + c.breakdown.map((b) => "<tr" + (V.isNum(b.value) && b.value > 0 ? " class='is-bad'" : "") + "><th scope='row'>" + esc(b.label) + "</th><td>" + esc(n(b.value)) + provBtnHtml({ kind: "metric", key: b.metric, tag: _tag }, "Show in metrics.json") + "</td></tr>").join("") + "</tbody></table>";
+    lvsBody += "<table class='vf-mini'><tbody>" + c.breakdown.map((b) => "<tr" + (V.isNum(b.value) && b.value > 0 ? " class='is-bad'" : "") + "><th scope='row'>" + esc(b.label) + "</th><td>" + esc(n(b.value)) + mprov(b.metric) + "</td></tr>").join("") + "</tbody></table>";
   }
   const result = lv && lv.result
-    ? "<p class='vf-lvs-result is-" + (c && c.status === "pass" ? "pass" : "fail") + "'>" + mark(c && c.status === "pass" ? "pass" : "fail") + "Netgen: <b>" + esc(lv.result) + "</b></p>" : "";
+    ? "<p class='vf-lvs-result is-" + (c && c.status === "pass" ? "pass" : "fail") + "'>" + mark(c && c.status === "pass" ? "pass" : "fail") + "Netgen: <b>" + esc(lv.result) + "</b>" +
+      rprov(lv.report, "Final result:", "Show Netgen's \"Final result\" line in its report", true) + "</p>" : "";
   const lvsCard = "<div class='an-card vf-tool is-" + esc(c ? c.status : "not_run") + "'>" +
     "<div class='vf-tool-h'><div><span class='an-kpi-t'>LVS · Netgen</span><small>Layout vs. schematic</small></div><span class='vf-pillar-st'>" + mark(c ? c.status : "not_run") + esc(c ? (V.STATUS[c.status] || {}).label : "") + "</span></div>" +
     (c && (c.status === "not_run" || c.status === "skipped") ? "<p class='vf-callout is-" + esc(c.status) + "'>" + esc(c.detail || "") + "</p>" : result + lvsBody) +
     (c && c.status === "fail" ? "<p class='vf-callout is-warn'>Work through it in this order: pins, then nets, then devices. A short between two nets shows up as one fewer net in the layout, and fixing it often clears the device errors too.</p>" : "") +
-    (lv && lv.report ? "<div class='vf-acts'>" + btn("View Netgen report", "data-vf-view='" + esc(lv.report) + "' data-vf-title='Netgen LVS report'", { ic: "eye" }) + "</div>" : "") +
+    (lv && lv.report ? "<div class='vf-acts'>" + btn("View Netgen report", "data-vf-view='" + esc(lv.report) + "' data-vf-title='Netgen LVS report'" +
+      (lv.result ? " data-vf-needle='Final result:' data-vf-last='1'" : ""), { ic: "eye" }) + "</div>" : "") +
     "</div>";
   const xorBody = x
     ? "<p class='vf-big'><span class='vf-hero-v'>" + esc(xc ? valueText(xc) : n(x.total)) + "</span><span class='an-u'>differences</span>" + (xc ? provFor(xc) : "") + "</p>" +
       "<p class='an-lede vf-small'>" + esc(V.isNum(x.layers) ? x.layers + " GDS layers compared between Magic's and KLayout's stream-out." : "Magic's and KLayout's stream-outs compared layer by layer.") + "</p>" +
-      ruleList((x.categories || []).map((cat) => ({ ...cat, name: "layer " + cat.name })), { empty: "Every layer is identical." })
+      ruleList((x.categories || []).map((cat) => ({ ...cat, name: "layer " + cat.name })), { empty: "Every layer is identical.", rel: x.report, needle: (c) => c.name.replace(/^layer /, "") })
     : "";
   const xorCard = "<div class='an-card vf-tool is-" + esc(xc ? xc.status : "not_run") + "'>" +
     "<div class='vf-tool-h'><div><span class='an-kpi-t'>Mask XOR · KLayout</span><small>Magic GDS vs. KLayout GDS</small></div><span class='vf-pillar-st'>" + mark(xc ? xc.status : "not_run") + esc(xc ? (V.STATUS[xc.status] || {}).label : "") + "</span></div>" +
@@ -724,11 +785,11 @@ function renderRel() {
   const ant = d.antenna;
   let antBody = "";
   if (an && an.breakdown && an.breakdown.length) {
-    antBody = "<dl class='vf-dl vf-dl-compact'>" + an.breakdown.map((b) => "<div><dt>" + esc(b.label) + "</dt><dd><b>" + esc(n(b.value)) + "</b>" + provBtnHtml({ kind: "metric", key: b.metric, tag: _tag }, "Show in metrics.json") + "</dd></div>").join("") + "</dl>";
+    antBody = "<dl class='vf-dl vf-dl-compact'>" + an.breakdown.map((b) => "<div><dt>" + esc(b.label) + "</dt><dd><b>" + esc(n(b.value)) + "</b>" + mprov(b.metric) + "</dd></div>").join("") + "</dl>";
   }
   if (ant && ant.rows && ant.rows.length) {
     antBody += "<div class='vf-tscroll'><table class='vf-mini'><thead><tr><th>Net</th><th>Pin</th><th>Layer</th><th><span class='has-tip' tabindex='0' data-an-tip='Partial antenna ratio over the required ratio. Over 1 is a violation.'>Ratio</span></th></tr></thead><tbody>" +
-      ant.rows.map((r) => "<tr class='is-bad'><td><code>" + esc(r.net) + "</code></td><td><code>" + esc(r.pin) + "</code></td><td>" + esc(r.layer) + "</td><td>" + esc(r.partial) + " / " + esc(r.required) + "</td></tr>").join("") +
+      ant.rows.map((r) => "<tr class='is-bad'><td><code>" + esc(r.net) + "</code></td><td><code>" + esc(r.pin) + "</code></td><td>" + esc(r.layer) + "</td><td>" + esc(r.partial) + " / " + esc(r.required) + rprov(ant.report, r.net + " ", "Show this net in the antenna summary") + "</td></tr>").join("") +
       "</tbody></table></div>" + (ant.more ? "<p class='an-foot'>" + ant.more + " more in the report.</p>" : "");
   } else if (an && an.status === "pass") {
     antBody += "<p class='vf-clean'>" + mark("pass") + "No net or pin over the antenna ratio after repair.</p>";
@@ -743,11 +804,11 @@ function renderRel() {
   const irRows = ir.map((r) => {
     const pct = V.isNum(r.pct) ? r.pct : null;
     const mv = (x) => V.isNum(x) ? (x * 1000).toFixed(x * 1000 >= 10 ? 1 : 3) + " mV" : "—";
-    return "<tr><th scope='row'>" + esc(r.net) + "</th><td>" + mv(r.worst_drop) + "</td><td>" + mv(r.avg_drop) + "</td>" +
+    return "<tr><th scope='row'>" + esc(r.net) + rprov(d.ir && d.ir.report, ": " + r.net, "Show " + r.net + " in the IR-drop report") + "</th><td>" + mv(r.worst_drop) + "</td><td>" + mv(r.avg_drop) + "</td>" +
       "<td><span class='vf-bar'><i style='width:" + Math.min(100, (pct || 0) * 10) + "%'></i></span>" + (pct !== null ? esc(pct + " %") : "—") + "</td></tr>";
   }).join("");
   const pdnBody = (pd && pd.breakdown && pd.breakdown.length
-      ? "<dl class='vf-dl vf-dl-compact'>" + pd.breakdown.map((b) => "<div><dt>Unconnected, " + esc(b.label) + "</dt><dd><b>" + esc(n(b.value)) + "</b>" + provBtnHtml({ kind: "metric", key: b.metric, tag: _tag }, "Show in metrics.json") + "</dd></div>").join("") + "</dl>"
+      ? "<dl class='vf-dl vf-dl-compact'>" + pd.breakdown.map((b) => "<div><dt>Unconnected, " + esc(b.label) + "</dt><dd><b>" + esc(n(b.value)) + "</b>" + mprov(b.metric) + "</dd></div>").join("") + "</dl>"
       : (pd && pd.status === "pass" ? "<p class='vf-clean'>" + mark("pass") + "Every cell reaches the power grid.</p>" : "")) +
     (irRows ? "<p class='vf-k'>IR drop" + (ir[0] && ir[0].corner ? " · " + esc(ir[0].corner) : "") + "</p><table class='vf-mini vf-ir'><thead><tr><th>Net</th><th>Worst</th><th>Average</th><th><span class='has-tip' tabindex='0' data-an-tip='Worst drop as a share of the supply voltage. The bar is full at 10 %.'>Of supply</span></th></tr></thead><tbody>" + irRows + "</tbody></table>" +
       "<p class='an-foot'>LibreLane reports IR drop but doesn't judge it; a few percent of the supply is a common budget.</p>" : "");
@@ -785,8 +846,11 @@ async function renderReports() {
   add(d.antenna && d.antenna.report, "Antenna summary", "Antenna");
   add(d.ir && d.ir.report, "IR-drop report", "Power");
   for (const c of _rep.checks || []) for (const r of c.reports || []) add(r.rel, c.name + ": " + r.label, (V.GROUPS[c.group] || {}).title || "");
+  // Netgen's report opens at its verdict, as the LVS card's View does.
+  const lvsAt = d.lvs && d.lvs.result ? d.lvs.report : "";
   const row = (rel, name, sub) => "<div class='vf-rep'><div class='vf-rep-n'><code title='" + esc(rel) + "'>" + esc(name) + "</code><small>" + esc(sub) + "</small></div>" +
-    "<span class='vf-rep-a'>" + btn("View", "data-vf-view='" + esc(rel) + "' data-vf-title='" + esc(name) + "'", { ic: "eye" }) + fileActionsHtml(tag, rel) + "</span></div>";
+    "<span class='vf-rep-a'>" + btn("View", "data-vf-view='" + esc(rel) + "' data-vf-title='" + esc(name) + "'" +
+      (rel === lvsAt ? " data-vf-needle='Final result:' data-vf-last='1'" : ""), { ic: "eye" }) + fileActionsHtml(tag, rel) + "</span></div>";
   const keyHtml = key.length ? "<div class='vf-rep-g vf-rep-key'><span class='an-check-gname'>Sign-off evidence</span>" +
     key.map((k) => row(k.rel, k.label, k.rel)).join("") + "</div>" : "";
   el.innerHTML = "<div class='vf-reports'>" + keyHtml + "<div class='vf-rep-g'><span class='an-check-gname'>Tool logs</span><p class='muted'>Looking…</p></div></div>";
@@ -808,7 +872,9 @@ async function renderReports() {
 
 // ---------- actions -------------------------------------------------------------------------
 
-async function viewReport(rel, title) {
+// *needle*: the report opens at the line holding that text, highlighted (the
+// last such line with *last*: Netgen's verdict on the top circuit).
+async function viewReport(rel, title, needle = "", last = false) {
   if (!rel) return;
   const { customDialog } = await import("./dialog.js");
   const tag = _tag;
@@ -823,7 +889,7 @@ async function viewReport(rel, title) {
         let text = await resp.text();
         const cap = 2 * 1024 * 1024;
         if (text.length > cap) text = text.slice(0, cap) + "\n\n… (first 2 MB shown; download the file for the rest)";
-        renderFileText(host, text, { tag, path: rel, title: rel });
+        renderFileText(host, text, { tag, path: rel, title: rel, line: needle ? needleLine(text, needle, last) : null });
       } catch (ex) {
         host.innerHTML = "<p class='pill pill-fail'>Could not load: " + esc(ex.message || ex) + "</p>";
       }

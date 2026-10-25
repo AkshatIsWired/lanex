@@ -61,10 +61,20 @@ function vh(key, v, { cls = "" } = {}) {
     (s.unit ? "<span class='an-u'>" + esc(s.unit) + "</span>" : "");
 }
 
-function provBtn(key, tag) {
-  if (!key || !(tag || _tag) || _partial) return "";
-  return provBtnHtml({ kind: "metric", key, tag: tag || _tag },
-    "Show '" + key + "' in this run's metrics.json (the raw LibreLane value)");
+// The source of a metric on screen: its line in final/metrics.json, or for a
+// run that stopped, in the state_out.json of the step it was read from (the
+// last finished one, or *step* for a per-stage value).
+function provBtn(key, tag, step) {
+  if (!key || !(tag || _tag)) return "";
+  step = step || (_partial && !tag ? _partial.dir : "");
+  return provBtnHtml(step ? { kind: "metric", key, tag: tag || _tag, step } : { kind: "metric", key, tag: tag || _tag },
+    "Show '" + key + "' in " + (step ? step + "/state_out.json" : "this run's metrics.json") + " (the raw LibreLane value)");
+}
+
+// The source of a setting: its line in the run's resolved.json.
+function varBtn(name) {
+  if (!name || !_tag) return "";
+  return provBtnHtml({ kind: "var", key: name, tag: _tag }, "Show " + name + " in this run's resolved.json (the value LibreLane used)");
 }
 
 // Change vs the baseline for one metric. Unit-aware: slack in ns, ratios in
@@ -409,10 +419,11 @@ function kpiTiming() {
   const ws = g(k);
   const tone = M.isNum(ws) ? (ws >= 0 ? "pass" : "fail") : "";
   const rows =
-    (has("timing__hold__ws") ? kpiRow("Hold slack", vh("timing__hold__ws", undefined, { cls: M.isNum(g("timing__hold__ws")) && g("timing__hold__ws") < 0 ? "is-neg" : "" }) + " " + deltaHtml("timing__hold__ws", { short: true }),
+    (has("timing__hold__ws") ? kpiRow("Hold slack", vh("timing__hold__ws", undefined, { cls: M.isNum(g("timing__hold__ws")) && g("timing__hold__ws") < 0 ? "is-neg" : "" }) + " " + deltaHtml("timing__hold__ws", { short: true }) + provBtn("timing__hold__ws"),
       "Worst hold slack across corners. Below zero means a signal changes too soon after the clock edge.") : "") +
-    (clock ? kpiRow("Clock period", clock, "CLOCK_PERIOD from this run's resolved config.") : "") +
-    (has("timing__setup_vio__count") ? kpiRow("Setup / hold violations", esc(M.num(g("timing__setup_vio__count"))) + " / " + esc(M.num(g("timing__hold_vio__count"))), "Violating paths across all corners.") : "");
+    (clock ? kpiRow("Clock period", clock + varBtn("CLOCK_PERIOD"), "CLOCK_PERIOD from this run's resolved config.") : "") +
+    (has("timing__setup_vio__count") ? kpiRow("Setup / hold violations", esc(M.num(g("timing__setup_vio__count"))) + provBtn("timing__setup_vio__count") + " / " +
+      esc(M.num(g("timing__hold_vio__count"))) + provBtn("timing__hold_vio__count"), "Violating paths across all corners.") : "");
   return kpi({
     title: "Timing (setup slack)", heroKey: k, tone,
     tip: "Worst setup slack across every corner: the spare time on the slowest path. Positive means the design meets the clock.",
@@ -429,10 +440,10 @@ function kpiArea() {
     ? "<span class='an-meter' role='img' aria-label='Utilization " + esc(M.show("design__instance__utilization", util).text) + "%'><i style='width:" + Math.min(100, util * 100).toFixed(1) + "%'></i></span>"
     : "";
   const rows =
-    (die ? kpiRow("Die size", esc(trimNum(die[2] - die[0])) + " × " + esc(trimNum(die[3] - die[1])) + "<span class='an-u'>µm</span>", "Width × height of the whole chip (design__die__bbox).") : "") +
-    (M.isNum(util) ? kpiRow("Utilization", meter + vh("design__instance__utilization") + " " + deltaHtml("design__instance__utilization", { short: true }),
+    (die ? kpiRow("Die size", esc(trimNum(die[2] - die[0])) + " × " + esc(trimNum(die[3] - die[1])) + "<span class='an-u'>µm</span>" + provBtn("design__die__bbox"), "Width × height of the whole chip (design__die__bbox).") : "") +
+    (M.isNum(util) ? kpiRow("Utilization", meter + vh("design__instance__utilization") + " " + deltaHtml("design__instance__utilization", { short: true }) + provBtn("design__instance__utilization"),
       "Share of the core area covered by standard cells (fill cells not counted).") : "") +
-    (has("design__instance__area__stdcell") ? kpiRow("Std-cell area", vh("design__instance__area__stdcell") + " " + deltaHtml("design__instance__area__stdcell", { short: true }),
+    (has("design__instance__area__stdcell") ? kpiRow("Std-cell area", vh("design__instance__area__stdcell") + " " + deltaHtml("design__instance__area__stdcell", { short: true }) + provBtn("design__instance__area__stdcell"),
       "Area of the cells that make up your logic (plus taps), without fill cells.") : "");
   const heroKey = has("design__die__area") ? "design__die__area" : "design__instance__area";
   return kpi({
@@ -452,7 +463,7 @@ function kpiPower() {
     .filter(([key]) => M.isNum(g(key)));
   const stack = parts.length ? C.stackBar(parts.map(([key, label, cls]) => {
     const s = M.show(key, g(key));
-    return { label, value: g(key), cls, text: s.text + " " + s.unit };
+    return { label, value: g(key), cls, text: s.text + " " + s.unit, src: provBtn(key) };
   })) : "";
   return kpi({
     title: "Power", heroKey: k,
@@ -470,9 +481,9 @@ function kpiRouting() {
   }
   const drc = g("route__drc_errors");
   const rows =
-    (has("route__vias") ? kpiRow("Vias", vh("route__vias") + " " + deltaHtml("route__vias", { short: true }), "Connections between metal layers.") : "") +
-    (has("route__drc_errors") ? kpiRow("Router DRC errors", "<span class='an-v " + (drc ? "is-neg" : "") + "'>" + esc(M.num(drc)) + "</span>", "Rule errors left after detailed routing. Should be 0.") : "") +
-    (has("route__wirelength__max") ? kpiRow("Longest net", vh("route__wirelength__max"), "The single longest routed net.") : "");
+    (has("route__vias") ? kpiRow("Vias", vh("route__vias") + " " + deltaHtml("route__vias", { short: true }) + provBtn("route__vias"), "Connections between metal layers.") : "") +
+    (has("route__drc_errors") ? kpiRow("Router DRC errors", "<span class='an-v " + (drc ? "is-neg" : "") + "'>" + esc(M.num(drc)) + "</span>" + provBtn("route__drc_errors"), "Rule errors left after detailed routing. Should be 0.") : "") +
+    (has("route__wirelength__max") ? kpiRow("Longest net", vh("route__wirelength__max") + provBtn("route__wirelength__max"), "The single longest routed net.") : "");
   return kpi({
     title: "Wirelength", heroKey: k,
     tip: "Total length of routed signal wire after detailed routing.",
@@ -530,7 +541,7 @@ function renderTiming() {
       const s = M.show(base, x.value);
       return {
         label: M.cornerShort(x.corner), sub: x.corner, value: M.isNum(x.value) ? x.value : NaN,
-        text: s.text, worst: worst && x.corner === worst.corner,
+        text: esc(s.text) + provBtn(base + "__corner:" + x.corner), worst: worst && x.corner === worst.corner,
         tip: title.replace(/ by corner$/, "") + ": " + s.text + " " + s.unit + "\n" + M.cornerLabel(x.corner) + (worst && x.corner === worst.corner ? " (worst corner)" : "") + "\n" + base + "__corner:" + x.corner,
       };
     }), { cls }) + "</div>";
@@ -543,15 +554,17 @@ function renderTiming() {
   const elec = [["design__max_slew_violation__count", "Max slew"], ["design__max_cap_violation__count", "Max capacitance"], ["design__max_fanout_violation__count", "Max fanout"]];
   const elecLines = elec.filter(([k]) => has(k)).map(([k, label]) => {
     const total = g(k);
-    if (!total) return "<li><span class='an-ok'>" + esc(label) + ": 0</span>" + (ncorners ? " in all " + ncorners + " corners" : "") + "</li>";
-    const bad = M.byCorner(_v, k).filter((x) => x.value > 0).map((x) => x.corner + " (" + x.value + ")");
-    return "<li><span class='an-bad'>" + esc(label) + ": " + esc(M.num(total)) + "</span> — " + esc(bad.join(", ")) + "</li>";
+    if (!total) return "<li><span class='an-ok'>" + esc(label) + ": 0</span>" + provBtn(k) + (ncorners ? " in all " + ncorners + " corners" : "") + "</li>";
+    const bad = M.byCorner(_v, k).filter((x) => x.value > 0);
+    return "<li><span class='an-bad'>" + esc(label) + ": " + esc(M.num(total)) + "</span>" + provBtn(k) + " — " +
+      bad.map((x) => esc(x.corner + " (" + x.value + ")") + provBtn(k + "__corner:" + x.corner)).join(", ") + "</li>";
   });
   const skew = ["clock__skew__worst_setup", "clock__skew__worst_hold"].filter(has);
   const other = [
     ...elecLines,
-    skew.length ? "<li><span tabindex='0' class='has-tip' data-an-tip='The worst difference in clock arrival time between two related flip-flops.'>Worst clock skew</span>: setup " + vh("clock__skew__worst_setup") + ", hold " + vh("clock__skew__worst_hold") + "</li>" : "",
-    has("timing__unannotated_net__count") ? "<li><span tabindex='0' class='has-tip' data-an-tip='Nets the timer had no extracted parasitics for. Non-zero makes the timing less exact.'>Nets without parasitics</span>: " + esc(M.num(g("timing__unannotated_net__count"))) + "</li>" : "",
+    skew.length ? "<li><span tabindex='0' class='has-tip' data-an-tip='The worst difference in clock arrival time between two related flip-flops.'>Worst clock skew</span>: setup " + vh("clock__skew__worst_setup") + provBtn("clock__skew__worst_setup") +
+      ", hold " + vh("clock__skew__worst_hold") + provBtn("clock__skew__worst_hold") + "</li>" : "",
+    has("timing__unannotated_net__count") ? "<li><span tabindex='0' class='has-tip' data-an-tip='Nets the timer had no extracted parasitics for. Non-zero makes the timing less exact.'>Nets without parasitics</span>: " + esc(M.num(g("timing__unannotated_net__count"))) + provBtn("timing__unannotated_net__count") + "</li>" : "",
   ].filter(Boolean).join("");
 
   const flow = timingThroughFlow();
@@ -620,7 +633,7 @@ function renderArea() {
       return {
         label: c.cls.replace(/_/g, " "), value: c.area, tone: phys ? "muted" : "s1",
         sub: phys ? "physical only" : "",
-        text: esc(M.num(c.area)) + "<span class='an-u'>µm²</span>" + (pct !== null ? " <span class='muted'>" + C.pctText(pct) + "</span>" : ""),
+        text: esc(M.num(c.area)) + "<span class='an-u'>µm²</span>" + (pct !== null ? " <span class='muted'>" + C.pctText(pct) + "</span>" : "") + provBtn(c.key),
         tip: c.cls + "\n" + M.num(c.area) + " µm²" + (M.isNum(c.count) ? " in " + M.num(c.count) + " cells" : "") + (pct !== null ? "\n" + C.pctText(pct) + " of all instance area" : "") + "\n" + c.key,
       };
     })) + "<p class='an-foot'>Grey rows are physical-only cells (fill, taps): they complete the rows and wells and carry no logic.</p></div>" : "";
@@ -740,7 +753,7 @@ function renderRouting() {
   if (iters.length) {
     const cols = iters.map(({ i, k }) => {
       const wk = "route__wirelength__iter:" + i;
-      return { label: String(i), value: g(k), text: M.num(g(k)), tip: "Iteration " + i + "\n" + M.num(g(k)) + " DRC errors" + (has(wk) ? "\n" + M.num(g(wk)) + " µm of wire" : "") };
+      return { label: String(i), value: g(k), text: M.num(g(k)), src: provBtn(k), tip: "Iteration " + i + "\n" + M.num(g(k)) + " DRC errors" + (has(wk) ? "\n" + M.num(g(wk)) + " µm of wire" : "") };
     });
     const last = cols[cols.length - 1];
     conv = "<div class='an-card'><div class='an-card-h'>Detailed-router convergence <span class='muted'>DRC errors after each pass</span></div>" +
@@ -794,7 +807,7 @@ function renderFlow() {
       const s = M.show(h.k, h.v);
       const neg = (/slack/.test(label) && M.isNum(h.v) && h.v < 0) || (/DRC/.test(label) && h.v > 0);
       return "<td" + (neg ? " class='is-bad'" : "") + " tabindex='0' data-an-tip='" + esc(label + " · " + st + "\n" + s.text + " " + s.unit + "\nset by step " + h.s.n + " " + M.stepName(h.s) + "\n" + h.k) + "'>" +
-        "<span class='an-v'>" + esc(s.text) + "</span>" + (s.unit ? "<span class='an-u'>" + esc(s.unit) + "</span>" : "") + "</td>";
+        "<span class='an-v'>" + esc(s.text) + "</span>" + (s.unit ? "<span class='an-u'>" + esc(s.unit) + "</span>" : "") + provBtn(h.k, h.s.run || "", h.s.dir) + "</td>";
     });
     if (cells.every((c) => c.includes("an-same"))) return "";
     return "<tr><th scope='row'>" + (tip ? "<span class='has-tip' tabindex='0' data-an-tip='" + esc(tip) + "'>" + esc(label) + "</span>" : esc(label)) + "</th>" + cells.join("") + "</tr>";
@@ -826,7 +839,7 @@ function renderFlow() {
   const codes = Object.keys(_v).filter((k) => /^flow__warnings__count:/.test(k)).map((k) => ({ code: k.split(":")[1], n: g(k), k })).filter((x) => M.isNum(x.n)).sort((a, b) => b.n - a.n);
   const lintW = g("design__lint_warning__count");
   const warn = (codes.length || M.isNum(lintW)) ? "<div class='an-card'><div class='an-card-h'>Warnings <span class='muted'>by tool message code</span></div>" +
-    (codes.length ? C.barList(codes.map((c) => ({ label: c.code, mono: true, value: c.n, tone: "s3", text: esc(M.num(c.n)), tip: c.code + ": " + c.n + " times\n" + c.k }))) : "<p class='muted'>No tool warnings were counted.</p>") +
+    (codes.length ? C.barList(codes.map((c) => ({ label: c.code, mono: true, value: c.n, tone: "s3", text: esc(M.num(c.n)) + provBtn(c.k), tip: c.code + ": " + c.n + " times\n" + c.k }))) : "<p class='muted'>No tool warnings were counted.</p>") +
     "<dl class='an-facts'>" + fact("Lint warnings (Verilator)", "design__lint_warning__count") + fact("Timing constructs in RTL", "design__lint_timing_construct__count") + fact("Flow errors", "flow__errors__count") + "</dl>" +
     "<p class='an-foot'>Codes like DRT-0349 are OpenROAD message IDs; search the step logs (Runs) for the full text.</p></div>" : "";
 
@@ -900,7 +913,7 @@ function renderAll() {
         "<button class='seg-btn" + (_allFilter === id ? " is-active" : "") + "' data-an-filter='" + id + "'" + (id === "changed" && !_b ? " disabled title='Pick a run under Compare with first'" : "") + ">" + l + "</button>").join("") +
     "</div><span class='muted' id='an-all-count'></span></div>" +
     "<div id='an-all-rows'></div>" +
-    "<p class='an-foot'>" + total + " values from this run's metrics.json. The magnifier opens the raw file at that line. Directions (higher or lower is better) come from LibreLane's metric registry.</p>";
+    "<p class='an-foot'>" + total + " values from " + (_partial ? esc(_partial.dir) + "/state_out.json (the last step that finished)" : "this run's metrics.json") + ". The magnifier opens the raw file at that line. Directions (higher or lower is better) come from LibreLane's metric registry.</p>";
   renderAllRows();
 }
 

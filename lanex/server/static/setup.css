@@ -494,6 +494,15 @@ body.theme-light .ms-group > .lane-label { color: var(--accent); }
 }
 body.theme-light .ms-field.is-set .ms-top label::after { color: var(--accent); }
 .ms-top { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ms-keyrow { display: flex; align-items: center; gap: 2px; min-width: 0; }
+/* provenance buttons: quiet until hovered (as in Analytics and Verify) */
+#sec-setup .prov-btn {
+  height: 18px; width: 18px; min-width: 0; padding: 0; margin-left: 4px; justify-content: center;
+  border-color: transparent; background: transparent; color: var(--text-disabled); vertical-align: middle;
+  text-transform: none; letter-spacing: 0;
+}
+#sec-setup .prov-btn:hover { color: var(--met1); border-color: var(--border); background: var(--surface-2); box-shadow: none; }
+.pd-src:empty { display: none; }
 .ms-top label { font-size: 14px; font-weight: 600; color: var(--text-strong); }
 .ms-key { font-size: 11px; color: var(--text-muted); background: none; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ms-ctl { display: grid; grid-template-columns: minmax(0, 1fr) 24px 30px; align-items: center; gap: 6px; }

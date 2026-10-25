@@ -13,6 +13,7 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { pdkFacts } from "./pdkinfo.js";
+import { provBtnHtml, wireProvBtns } from "./provenance.js";
 
 const SYNTH = [
   ["AREA 0", "AREA 0 · small, fast to build"],
@@ -156,7 +157,9 @@ function fieldHtml(it) {
   const notes = notesFor(it);
   return "<div class='ms-field" + (set ? " is-set" : "") + "' data-key='" + it.key + "'>" +
     "<div class='ms-top'><label for='" + id + "'>" + fmt.escape(it.label) + "</label>" +
-    "<code class='ms-key' title='The LibreLane variable " + it.key + "'>" + it.key + "</code></div>" +
+    "<span class='ms-keyrow'><code class='ms-key' title='The LibreLane variable " + it.key + "'>" + it.key + "</code>" +
+    // The config's line for a value it sets; a default has no line to show.
+    (set ? provBtnHtml({ kind: "input", key: it.key }, "Show the line of " + ((_cfg && _cfg.name) || "the config") + " that sets " + it.key) : "") + "</span></div>" +
     // control | unit | reset: every field keeps all three slots, so the
     // controls in a group line up and are the same width.
     "<div class='ms-ctl'>" + control(it, id, val) + "<em class='ms-unit'>" + fmt.escape(it.unit || "") + "</em>" +
@@ -192,6 +195,7 @@ function render() {
       (g.note ? "<p class='ms-gnote'>" + fmt.escape(g.note) + "</p>" : "") +
       "</section>").join("") + "</div>";
   body.querySelectorAll("input, select").forEach((el) => { el.disabled = !editable; });
+  wireProvBtns(body);
   paintSummary();
 }
 

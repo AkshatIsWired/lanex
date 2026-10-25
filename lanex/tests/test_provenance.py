@@ -532,3 +532,55 @@ def test_frontend_final_settings_extras_wiring() -> None:
     assert "openResolvedSettings" in an
     html = (static / "index.html").read_text()
     assert "btn-analytics-settings" in html
+
+
+# ---------------------------------------------------------------------------
+# A run that stopped, a per-stage value, and a tool's last summary line.
+# ---------------------------------------------------------------------------
+
+def _step_run(tmp_path: Path) -> Path:
+    run = tmp_path / "runs" / "r1"
+    step = run / "12-openroad-floorplan"
+    step.mkdir(parents=True)
+    (step / "state_out.json").write_text(json.dumps({
+        "metrics": {"design__die__area": 22500, "design__instance__count": 68}}, indent=4))
+    (run / "13-openroad-tapendcapinsertion").mkdir()
+    return run
+
+
+def test_metric_in_a_step_state_out(tmp_path: Path) -> None:
+    run = _step_run(tmp_path)
+    res = provenance.metric_provenance(run, "design__die__area", "12-openroad-floorplan")
+    assert res["ok"] and res["rel"] == "12-openroad-floorplan/state_out.json"
+    lines = (run / res["rel"]).read_text().splitlines()
+    assert '"design__die__area": 22500' in lines[res["line"] - 1]
+    assert "12-openroad-floorplan" in res["writer"]
+    # Honest absences: not recorded yet, a step that didn't finish, no escape.
+    assert provenance.metric_provenance(run, "power__total", "12-openroad-floorplan")["ok"] is False
+    r = provenance.metric_provenance(run, "design__die__area", "13-openroad-tapendcapinsertion")
+    assert r["ok"] is False and "didn't finish" in r["reason"]
+    for bad in ("..", "../r2", "x/y", ".hidden"):
+        assert provenance.metric_provenance(run, "design__die__area", bad)["ok"] is False
+
+
+def test_route_metric_with_step(monkeypatch, tmp_path: Path) -> None:
+    _step_run(tmp_path)
+    out = _call_route(monkeypatch, tmp_path,
+                      "kind=metric&key=design__instance__count&tag=r1&step=12-openroad-floorplan")
+    p = out["payload"]
+    assert p["ok"] and p["abs"].endswith("12-openroad-floorplan/state_out.json")
+
+
+def test_report_needle_last_occurrence(monkeypatch, tmp_path: Path) -> None:
+    rep = tmp_path / "runs" / "r1" / "70-netgen-lvs" / "reports"
+    rep.mkdir(parents=True)
+    (rep / "lvs.netgen.rpt").write_text(
+        "Subcircuit a\nNumber of devices: 4\nFinal result: Circuits match.\n"
+        "Top\nNumber of devices: 72\nFinal result: Circuits match uniquely.\n")
+    rel = "70-netgen-lvs/reports/lvs.netgen.rpt"
+    first = provenance.report_provenance(tmp_path / "runs" / "r1", rel, "Final result:")
+    last = provenance.report_provenance(tmp_path / "runs" / "r1", rel, "Final result:", last=True)
+    assert first["line"] == 3 and last["line"] == 6 and "uniquely" in last["text"]
+    out = _call_route(monkeypatch, tmp_path,
+                      "kind=report&tag=r1&path=" + rel + "&needle=Number%20of%20devices%3A&last=1")
+    assert out["payload"]["line"] == 5

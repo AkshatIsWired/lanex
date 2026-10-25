@@ -698,6 +698,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--met1); }
 .wiz-field.span-2 { grid-column: 1 / -1; }
 .wiz-field > span:first-child { font-size: 14px; font-weight: 500; color: var(--ink-strong); }
 .wiz-help { font-size: 13px; color: var(--ink-2); line-height: 1.4; }
+.wiz-help.wiz-warn { color: var(--warn); }
 .wiz-loc { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .wiz-loc code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 8px 10px; background: var(--wafer-2); border: 1px solid var(--seal); font-size: 12.5px; }
 .wiz-unit { position: relative; display: block; }

@@ -103,12 +103,19 @@ export async function renderPreflight() {
     : pdkWillDownload
       ? fmt.escape(p.note)
       : p.pdk ? "not installed" : "none selected";
-  html += row(
-    pdkState,
-    "PDK + standard cells",
-    pdkDetail,
-    p.ready || pdkWillDownload ? "" : "<button class='btn btn-sm pf-act' data-act='tools'>Install PDK</button>",
-  );
+  // The config names another PDK or library than the picker: LibreLane would
+  // build for the config's, so the run is blocked until they agree.
+  const mm = p.mismatch;
+  html += mm
+    ? row("bad", "PDK + standard cells", fmt.escape(mm.message),
+      (mm.editable ? "<button class='btn btn-sm pf-act' data-act='pdk-save'>Save to " + fmt.escape(mm.name || "config") + "</button>" : "") +
+      (mm.config.pdk ? "<button class='btn btn-sm btn-ghost pf-act' data-act='pdk-follow'>Use " + fmt.escape(mm.config.pdk) + "</button>" : ""))
+    : row(
+      pdkState,
+      "PDK + standard cells",
+      pdkDetail,
+      p.ready || pdkWillDownload ? "" : "<button class='btn btn-sm pf-act' data-act='tools'>Install PDK</button>",
+    );
   // Engine row — container mode needs only Docker/Podman; local mode needs the
   // six native EDA tools.
   if (t.mode === "container") {
@@ -158,6 +165,8 @@ export async function renderPreflight() {
         go("ide", { rel: b.dataset.rel });
       } else if (act === "new-file") {
         go("ide", { newFile: "module_v" });
+      } else if (act === "pdk-save" || act === "pdk-follow") {
+        import("./setup.js").then((m) => m.resolvePdkMismatch(p.mismatch, act === "pdk-save" ? "save" : "follow"));
       }
     });
   });

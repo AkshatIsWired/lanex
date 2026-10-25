@@ -100,6 +100,74 @@ def read_config(design_dir: str | Path) -> Dict[str, Any]:
             "data": data, "reason": None}
 
 
+_TCL_ENV_RX = re.compile(r"^\s*set\s+::env\((PDK|STD_CELL_LIBRARY)\)\s+[\"{]?([^\s\"}]+)")
+
+
+def config_pdk(design_dir: str | Path) -> Dict[str, Any]:
+    """The PDK and standard-cell library the config file itself names, at the
+    top level: ``{pdk, scl, name, editable}`` (``None`` where it names none).
+
+    These are the values LibreLane builds for: it reads the config's ``PDK``
+    and ``STD_CELL_LIBRARY`` before the ``-p``/``-s`` options and uses them
+    when present (librelane/config/config.py, ``__load_dict``)."""
+    info = read_config(design_dir)
+    out: Dict[str, Any] = {"pdk": None, "scl": None, "name": info["name"], "editable": info["editable"]}
+    data = info["data"]
+    if info["format"] == "tcl" and info["path"]:
+        try:
+            for line in Path(info["path"]).read_text(encoding="utf-8", errors="replace").splitlines():
+                m = _TCL_ENV_RX.match(line)
+                if m and "$" not in m.group(2):
+                    data = dict(data, **{m.group(1): m.group(2)})
+        except OSError:
+            pass
+    for key, slot in (("PDK", "pdk"), ("STD_CELL_LIBRARY", "scl")):
+        v = data.get(key)
+        if isinstance(v, str) and v.strip():
+            out[slot] = v.strip()
+    return out
+
+
+def pdk_mismatch(design_dir: str | Path, pdk: Optional[str], scl: Optional[str]) -> Optional[Dict[str, Any]]:
+    """``None`` when a run asked for *pdk*/*scl* builds exactly that, else
+    what the config says instead, a sentence saying so, and the keys that
+    would make the config agree (``fix``).
+
+    LibreLane 3.0.4 lets the config's ``PDK``/``STD_CELL_LIBRARY`` win over
+    ``-p``/``-s`` without a word, and resolves the PDK's defaults and the
+    config's ``pdk::`` sections for that PDK before any ``-c`` override is
+    applied, so a picker that disagrees with the config would quietly build
+    for the config's PDK (or fail to find it)."""
+    from .pdk_catalog import SYNTHESIS_SCLS
+    cfg = config_pdk(design_dir)
+    cpdk, cscl = cfg["pdk"], cfg["scl"]
+    bad = []
+    if cpdk and pdk and cpdk != pdk:
+        bad.append("PDK")
+    if cscl and scl and cscl != scl:
+        bad.append("STD_CELL_LIBRARY")
+    elif cscl and not scl and pdk and pdk in SYNTHESIS_SCLS and cscl not in SYNTHESIS_SCLS[pdk]:
+        bad.append("STD_CELL_LIBRARY")
+    if not bad:
+        return None
+    name = cfg["name"] or "the config"
+    said = " and ".join(v for v in (cpdk if "PDK" in bad else None, cscl if "STD_CELL_LIBRARY" in bad else None) if v)
+    asked = " and ".join(v for v in (pdk if "PDK" in bad else None,
+                                     (scl or "its usual library") if "STD_CELL_LIBRARY" in bad else None) if v)
+    fix: Dict[str, Any] = {}
+    if pdk:
+        fix["PDK"] = pdk
+    if scl:
+        fix["STD_CELL_LIBRARY"] = scl
+    msg = (f"{name} is set up for {said}, but this run asked for {asked}. "
+           f"LibreLane builds for what {name} says, so the two have to agree. "
+           + (f"Save {asked} to {name}, or switch the PDK picker back to {cpdk or cscl}."
+              if cfg["editable"] else
+              f"Change {name} by hand, or switch the PDK picker back to {cpdk or cscl}."))
+    return {"keys": bad, "config": {"pdk": cpdk, "scl": cscl}, "requested": {"pdk": pdk, "scl": scl},
+            "name": cfg["name"], "editable": cfg["editable"], "fix": fix, "message": msg}
+
+
 # ------------------------------------------------------------------ scoped values
 
 def scoped_values(data: Dict[str, Any], key: str) -> List[Dict[str, Any]]:

@@ -9,5 +9,14 @@
     "src/mult.v"
   ],
   "testbench": "verify/mult_tb.v",
-  "order": 5
+  "order": 5,
+  "pdk": {
+    "gf180mcu*": {
+      "clock_period": 40.0,
+      "config": {
+        "FP_CORE_UTIL": 38,
+        "PL_TARGET_DENSITY_PCT": 50
+      }
+    }
+  }
 }

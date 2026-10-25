@@ -217,6 +217,9 @@ export async function adoptDesignDir(designDir, opts = {}) {
   // opens a run from the Runs window (which re-syncs it). Syncing here makes
   // every tab show the runs immediately, no manual Open needed.
   try { await api.setDesignDir(designDir); } catch (_e) { /* best-effort */ }
+  // The PDK the project's config names is the one LibreLane builds for: the
+  // picker shows it, rather than whatever was used last.
+  await syncPdkFromConfig();
   paintDesignPill("loading…");
   const summaryEl = document.getElementById("design-summary");
   if (summaryEl) summaryEl.innerHTML = await summariseDir(designDir);
@@ -336,7 +339,142 @@ export function paintOnboardChecklist() {
   first?.classList.toggle("btn-ghost", !!state.designDir);
 }
 
-async function onPdkSelected() {
+// ---------- the project's PDK ---------------------------------------------------
+//
+// LibreLane builds for the PDK and library the config file names, whatever
+// -p/-s say (librelane/config/config.py reads the config's PDK first). So the
+// picker follows the config when a project opens, a change to it is saved to
+// the config, and a run whose picker and config disagree is refused by the
+// server with both values named (configedit.pdk_mismatch).
+
+let _cfgPdk = null;   // {dir, pdk, scl, name, editable}: what the config names
+
+// The usual general-purpose library of each PDK family (pdk_catalog.py).
+export const USUAL_SCL = ["sky130_fd_sc_hd", "gf180mcu_fd_sc_mcu7t5v0", "sg13g2_stdcell"];
+
+function hasOpt(sel, v) { return !!v && Array.from(sel.options).some((o) => o.value === v); }
+
+function addOpt(sel, v, label) {
+  const o = document.createElement("option");
+  o.value = v;
+  o.textContent = label;
+  sel.appendChild(o);
+}
+
+async function readConfigPdk() {
+  _cfgPdk = null;
+  if (!state.designDir) { paintPdkSrc(); return null; }
+  try {
+    const info = await api.designInfo({ keys: ["PDK", "STD_CELL_LIBRARY"] });
+    const s = (info && info.settings) || {};
+    const str = (v) => (typeof v === "string" ? v.trim() : "");
+    _cfgPdk = {
+      dir: state.designDir, pdk: str(s.PDK), scl: str(s.STD_CELL_LIBRARY),
+      name: (info.config && info.config.name) || "the config", editable: !!(info.config && info.config.editable),
+    };
+  } catch (_e) { /* no config yet: nothing to follow */ }
+  paintPdkSrc();
+  return _cfgPdk;
+}
+
+// The PDK and library pickers' source buttons: the config's line for each.
+function paintPdkSrc() {
+  const c = cfgFor();
+  import("./provenance.js").then((m) => m.paintConfigSrc(document.getElementById("setup-pdk"),
+    (k) => !!(c && (k === "PDK" ? c.pdk : c.scl)))).catch(() => {});
+}
+
+const cfgFor = () => (_cfgPdk && _cfgPdk.dir === state.designDir ? _cfgPdk : null);
+
+// Point the picker at the PDK the open project's config names. A PDK that
+// isn't installed is still shown (and said), so the picker never pretends.
+export async function syncPdkFromConfig() {
+  const c = await readConfigPdk();
+  const sel = document.getElementById("pdk-select");
+  if (!c || !c.pdk || !sel) return;
+  const installed = (state.pdks || []).some((p) => p.name === c.pdk);
+  if (!hasOpt(sel, c.pdk)) addOpt(sel, c.pdk, c.pdk + " (not installed)");
+  sel.value = c.pdk;
+  await onPdkSelected();
+  if (!installed) {
+    toast.show("This project is set up for " + c.pdk + ", which isn't installed. Install it in Tools, or pick an installed PDK here " +
+      "and LanEx saves it to " + c.name + ".", "warn", 10000, { label: "Open Tools", run: () => import("./nav.js").then((m) => m.go("tools")) });
+  }
+}
+
+// Save the picker's PDK and library to the config, when the config names
+// one (a config that names neither builds for whatever the picker sends).
+async function saveTargetToConfig() {
+  const c = cfgFor();
+  if (!c || (!c.pdk && !c.scl)) return;
+  const set = {};
+  if (state.selectedPdk && state.selectedPdk !== c.pdk) set.PDK = state.selectedPdk;
+  if (state.selectedScl && state.selectedScl !== c.scl) set.STD_CELL_LIBRARY = state.selectedScl;
+  if (!Object.keys(set).length) return;
+  if (!c.editable) {
+    toast.show(c.name + " names " + (c.pdk || c.scl) + " and LanEx can't edit it. Change it there too: a run stops until the two agree.", "warn", 9000);
+    return;
+  }
+  try {
+    const r = await api.configSet(set, [], { pdk: state.selectedPdk || null, scl: state.selectedScl || null });
+    if (state.varsValues) { delete state.varsValues.PDK; delete state.varsValues.STD_CELL_LIBRARY; }
+    _cfgPdk = Object.assign({}, c, { pdk: set.PDK || c.pdk, scl: set.STD_CELL_LIBRARY || c.scl });
+    paintPdkSrc();
+    if (r.changed && r.changed.length) {
+      const what = [set.PDK, set.STD_CELL_LIBRARY].filter(Boolean).join(" / ");
+      const undo = r.undo && r.undo.backup ? { label: "Undo", run: () => undoTarget(r.undo, r.name) } : null;
+      toast.show("Saved " + what + " to " + r.name + ".", "success", 6000, undo);
+    }
+    document.dispatchEvent(new CustomEvent("g:config_changed"));
+  } catch (ex) {
+    toast.show("Couldn't save the PDK to " + c.name + ": " + (ex.message || ex) + ". A run stops until the two agree.", "error", 9000);
+  }
+}
+
+async function undoTarget(u, name) {
+  try {
+    await api.configUndo({ backup: u.backup, after: u.after });
+    toast.show(name + " is back as it was.", "success", 4000);
+    document.dispatchEvent(new CustomEvent("g:config_changed"));
+  } catch (ex) {
+    toast.show("Undo: " + (ex.message || ex), "warn", 8000);
+  }
+  await syncPdkFromConfig();
+}
+
+// The one-click fixes for a run (or the checklist) refused because the
+// picker and the config disagree: save the picker's choice to the config,
+// or set the picker to what the config says.
+export async function resolvePdkMismatch(mm, how) {
+  if (!mm) return false;
+  if (how === "save") {
+    try {
+      const r = await api.configSet(mm.fix || {}, [], { pdk: state.selectedPdk || null, scl: state.selectedScl || null });
+      const what = [mm.fix.PDK, mm.fix.STD_CELL_LIBRARY].filter(Boolean).join(" / ");
+      const undo = r.undo && r.undo.backup ? { label: "Undo", run: () => undoTarget(r.undo, r.name) } : null;
+      toast.show("Saved " + what + " to " + r.name + ".", "success", 6000, undo);
+      await readConfigPdk();
+      document.dispatchEvent(new CustomEvent("g:config_changed"));
+      return true;
+    } catch (ex) {
+      toast.show("Couldn't save to " + (mm.name || "the config") + ": " + (ex.message || ex), "error", 9000);
+      return false;
+    }
+  }
+  await syncPdkFromConfig();
+  const ss = document.getElementById("scl-select");
+  if (mm.config.scl && ss) {
+    if (!hasOpt(ss, mm.config.scl)) addOpt(ss, mm.config.scl, mm.config.scl + " (not installed)");
+    ss.value = mm.config.scl;
+    state.selectedScl = mm.config.scl;
+    refreshPdkReadiness();
+  }
+  toast.show("The PDK picker now follows " + (mm.name || "the config") + ".", "success", 4000);
+  return true;
+}
+
+async function onPdkSelected(e) {
+  const user = !!(e && e.type === "change");
   const sel = document.getElementById("pdk-select");
   state.selectedPdk = sel.value;
   if (!sel.value) return;
@@ -344,6 +482,7 @@ async function onPdkSelected() {
   try {
     const scls = await api.scls(sel.value);
     const sclSel = document.getElementById("scl-select");
+    const keep = state.selectedScl;
     sclSel.innerHTML = "";
     for (const s of scls) {
       const opt = document.createElement("option");
@@ -351,15 +490,23 @@ async function onPdkSelected() {
       opt.textContent = s.variants[0]?.[0] || "(unknown)";
       sclSel.appendChild(opt);
     }
-    // The last-used library if this PDK offers it; otherwise the family's usual
-    // general-purpose one (sky130_fd_sc_hd, the 7-track gf180 cells).
+    // The config's library when it names one for this PDK; then the one in
+    // use if this PDK offers it too (sky130A and sky130B share libraries), the
+    // last-used one, and the family's usual general-purpose one
+    // (sky130_fd_sc_hd, the 7-track gf180 cells).
+    const offered = (v) => hasOpt(sclSel, v);
+    const c = cfgFor();
+    const cfgScl = c && c.scl && (c.pdk === sel.value || offered(c.scl)) ? c.scl : "";
+    if (cfgScl && !offered(cfgScl)) addOpt(sclSel, cfgScl, cfgScl + " (not installed)");
     const wantScl = safeStorage.get("ll.recentScl", "");
-    const offered = (v) => Array.from(sclSel.options).some((o) => o.value === v);
-    const usual = ["sky130_fd_sc_hd", "gf180mcu_fd_sc_mcu7t5v0", "sg13g2_stdcell"].find(offered);
-    if (offered(wantScl)) sclSel.value = wantScl;
+    const usual = USUAL_SCL.find(offered);
+    if (cfgScl) sclSel.value = cfgScl;
+    else if (offered(keep)) sclSel.value = keep;
+    else if (offered(wantScl)) sclSel.value = wantScl;
     else if (usual) sclSel.value = usual;
     state.selectedScl = sclSel.value || "";
     paintPdkAbout(sel.value);
+    if (user) await saveTargetToConfig();
     import("./projectcard.js").then((m) => m.paintDesignRow()).catch(() => {});
     refreshPdkReadiness();
   } catch (ex) {
@@ -378,10 +525,11 @@ function paintPdkAbout(pdk) {
   if (fig && html) fig.innerHTML = html;
 }
 
-async function onSclSelected() {
+async function onSclSelected(e) {
   const sel = document.getElementById("scl-select");
   state.selectedScl = sel.value;
   if (sel.value) safeStorage.set("ll.recentScl", sel.value);
+  if (e && e.type === "change") await saveTargetToConfig();
   refreshPdkReadiness();
 }
 
@@ -419,14 +567,16 @@ export async function populatePdkPicker() {
       o.textContent = p.name + (p.ready ? "" : " (no libs)");
       sel.appendChild(o);
     }
-    // Restore the project PDK or previously-used PDK if it's still installed.
-    // Respect the project's explicit PDK before recent UI preferences.
-    const projectPdk = state.projectConfig?.PDK || state.config?.PDK || "";
-    const has = (v) => !!v && Array.from(sel.options).some((o) => o.value === v);
+    // The PDK the open project's config names (shown even when it isn't
+    // installed), then the last one used if it's ready, then a ready sky130A,
+    // then the first ready PDK: an empty leftover folder is never the default.
+    const projectPdk = (cfgFor() || {}).pdk || "";
+    if (projectPdk && !hasOpt(sel, projectPdk)) addOpt(sel, projectPdk, projectPdk + " (not installed)");
+    const has = (v) => hasOpt(sel, v);
+    const ready = (v) => pdks.some((p) => p.name === v && p.ready);
     const recent = safeStorage.get("ll.recentPdk", "");
-    // The project's own PDK, then the last one used, then sky130A for beginners.
-    const wantPdk = has(projectPdk) ? projectPdk : has(recent) ? recent
-      : has("sky130A") ? "sky130A" : (pdks[0] && pdks[0].name) || "";
+    const firstReady = ["sky130A", "gf180mcuD", "ihp-sg13g2"].find(ready) || (pdks.find((p) => p.ready) || pdks[0] || {}).name || "";
+    const wantPdk = has(projectPdk) ? projectPdk : ready(recent) ? recent : firstReady;
     if (wantPdk && Array.from(sel.options).some((o) => o.value === wantPdk)) {
       sel.value = wantPdk;
       await onPdkSelected();   // repopulates SCLs + restores the SCL + readiness
@@ -450,7 +600,7 @@ export function paintRunButton() {
   b.disabled = !state.designDir;
 }
 
-async function onRunClick({ show = false } = {}) {
+async function onRunClick({ show = false, fixed = false } = {}) {
   if (!state.designDir) {
     toast.show("Pick a design folder first.", "warn");
     return;
@@ -458,6 +608,8 @@ async function onRunClick({ show = false } = {}) {
   // Preflight: catch missing tools / PDK before a long run fails half-way.
   try {
     const pf = await renderPreflight();
+    const mm = pf && pf.pdk && pf.pdk.mismatch;
+    if (mm && !fixed) { await offerPdkFix(mm, show); return; }
     if (pf && !pf.ready) {
       const { confirmDialog } = await import("./dialog.js");
       const go = await confirmDialog({
@@ -482,6 +634,7 @@ async function onRunClick({ show = false } = {}) {
   try {
     const res = await api.startRun(payload);
     if (!res.ok || res.started === false) {
+      if (res.pdk_mismatch && !fixed) { await offerPdkFix(res.pdk_mismatch, show); return; }
       toast.show("Run refused: " + (res.reason || res.error || "unknown"), "error");
       return;
     }
@@ -519,6 +672,19 @@ async function onRunClick({ show = false } = {}) {
   } catch (ex) {
     toast.show("Run failed: " + ex.message, "error");
   }
+}
+
+// The run was refused because the PDK picker and the config disagree: say
+// both values and offer the two ways to make them agree, then run.
+async function offerPdkFix(mm, show) {
+  const { choiceDialog } = await import("./dialog.js");
+  const choices = [];
+  // Short labels: the body already names both values.
+  if (mm.editable) choices.push({ label: "Save to " + (mm.name || "the config") + " and run", value: "save" });
+  if (mm.config.pdk) choices.push({ label: "Run on " + mm.config.pdk, value: "follow" });
+  const how = await choiceDialog({ title: "The PDK picker and " + (mm.name || "the config") + " disagree", body: mm.message, choices });
+  if (!how) return;
+  if (await resolvePdkMismatch(mm, how)) onRunClick({ show, fixed: true });
 }
 
 export function collectRunPayload() {
