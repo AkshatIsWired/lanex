@@ -115,13 +115,44 @@ function joinPath(dir, name) {
   return dir.replace(/[\\/]+$/, "") + "/" + name;
 }
 
-function sclOptions(pdkName) {
+function sclNames(pdkName) {
   const pdk = (state.pdks || []).find((p) => p.name === pdkName);
-  const variants = (pdk && pdk.variants) || [];
-  return variants.map((v) => {
-    const name = Array.isArray(v) ? v[0] : v;
-    return "<option value='" + fmt.escape(name) + "'>" + fmt.escape(name) + "</option>";
-  }).join("");
+  return ((pdk && pdk.variants) || []).map((v) => (Array.isArray(v) ? v[0] : v));
+}
+
+function sclOptions(pdkName) {
+  return sclNames(pdkName).map((name) =>
+    "<option value='" + fmt.escape(name) + "'>" + fmt.escape(name) + "</option>").join("");
+}
+
+// The usual general-purpose library of each PDK family, the same list the
+// Setup picker uses; otherwise the first one installed.
+const USUAL_SCL = ["sky130_fd_sc_hd", "gf180mcu_fd_sc_mcu7t5v0", "sg13g2_stdcell"];
+
+export function defaultScl(names) {
+  return USUAL_SCL.find((s) => names.includes(s)) || names[0] || "";
+}
+
+// The usual variant of each family, in the order a beginner is pointed to.
+export const USUAL_PDK = ["sky130A", "gf180mcuD", "ihp-sg13g2"];
+
+// The PDK a new project starts on: the open project's when it's ready, then
+// the first ready usual one, then the first ready one. A PDK folder without its
+// libraries (a leftover or a partial download) is never the default.
+export function defaultPdk(pdks, current) {
+  const ready = (pdks || []).filter((p) => p.ready !== false).map((p) => p.name);
+  if (current && ready.includes(current)) return current;
+  return USUAL_PDK.find((p) => ready.includes(p)) || ready[0] || ((pdks || [])[0] || {}).name || "";
+}
+
+// A template's clock for a PDK: its per-family clock ({"gf180mcu*": 20})
+// when one matches, else its default. Globs as LibreLane's pdk:: keys.
+export function clockFor(tpl, pdk) {
+  for (const [pat, ns] of Object.entries(tpl.pdk_clock || {})) {
+    const rx = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+    if (pdk && rx.test(pdk)) return ns;
+  }
+  return tpl.clock_period != null ? tpl.clock_period : 10;
 }
 
 function mhz(ns) {
@@ -133,8 +164,9 @@ function mhz(ns) {
 
 function renderStep2(body, tpl) {
   const pdkOpts = (state.pdks || []).map((p) =>
-    "<option value='" + fmt.escape(p.name) + "'>" + fmt.escape(p.name) + "</option>").join("");
-  const clk = tpl.clock_period != null ? tpl.clock_period : 10;
+    "<option value='" + fmt.escape(p.name) + "'>" + fmt.escape(p.name) + (p.ready === false ? " (not installed)" : "") + "</option>").join("");
+  const startPdk = defaultPdk(state.pdks, state.designDir ? state.selectedPdk : "");
+  const clk = clockFor(tpl, startPdk);
   body.innerHTML = steps(2) +
     "<div class='wiz-form'>" +
     "<label class='wiz-field span-2'><span>Project name</span>" +
@@ -152,8 +184,8 @@ function renderStep2(body, tpl) {
     "<label class='wiz-field'><span>Clock period</span>" +
     "<span class='wiz-unit' data-unit='ns'><input id='wiz-clk' type='number' min='0.1' step='0.1' value='" + fmt.escape(clk) + "' /></span>" +
     "<span class='wiz-help' id='wiz-clk-help'></span></label>" +
-    "<label class='wiz-field'><span>PDK</span><select id='wiz-pdk'>" + pdkOpts + "</select>" +
-    "<span class='wiz-help'>The foundry process to build for. sky130A is the usual first choice.</span></label>" +
+    "<label class='wiz-field'><span>PDK</span><select id='wiz-pdk'>" + (pdkOpts || "<option value=''>No PDK installed</option>") + "</select>" +
+    "<span class='wiz-help' id='wiz-pdk-help'></span></label>" +
     "<label class='wiz-field'><span>Standard-cell library</span><select id='wiz-scl'></select>" +
     "<span class='wiz-help'>The ready-made logic gates the flow builds your design from.</span></label>" +
     (tpl.kind === "blank"
@@ -170,14 +202,24 @@ function renderStep2(body, tpl) {
 
   const $ = (id) => body.querySelector("#" + id);
   const pdkSel = $("wiz-pdk");
-  // Keep the PDK of the open project; otherwise start beginners on sky130A.
-  const names = (state.pdks || []).map((p) => p.name);
-  pdkSel.value = (state.designDir && state.selectedPdk) || (names.includes("sky130A") ? "sky130A" : state.selectedPdk || names[0] || "");
+  pdkSel.value = startPdk;
+  // The clock follows the PDK (gf180's cells are slower) until it's typed in.
+  let clkTyped = false;
   const paintScl = () => {
-    $("wiz-scl").innerHTML = sclOptions(pdkSel.value) || "<option value=''>PDK default</option>";
-    if (state.selectedScl && pdkSel.value === state.selectedPdk) $("wiz-scl").value = state.selectedScl;
+    const names = sclNames(pdkSel.value);
+    $("wiz-scl").innerHTML = sclOptions(pdkSel.value) || "<option value=''>None installed</option>";
+    $("wiz-scl").value = state.selectedScl && pdkSel.value === state.selectedPdk && names.includes(state.selectedScl)
+      ? state.selectedScl : defaultScl(names);
+    const p = (state.pdks || []).find((x) => x.name === pdkSel.value);
+    const help = $("wiz-pdk-help");
+    help.classList.toggle("wiz-warn", !p || p.ready === false);
+    help.textContent = !p
+      ? "No PDK is installed yet. Install one in Tools first; a run needs it."
+      : p.ready === false
+        ? p.name + " isn't installed: its folder has no standard-cell libraries. Install it in Tools, or pick another PDK."
+        : "The foundry process to build for. sky130A is the usual first choice.";
+    if (!clkTyped && $("wiz-clk")) { $("wiz-clk").value = clockFor(tpl, pdkSel.value); paintClk(); }
   };
-  paintScl();
   pdkSel.addEventListener("change", paintScl);
 
   const paintWhere = () => {
@@ -209,8 +251,9 @@ function renderStep2(body, tpl) {
   }
   paintWhere();
   paintClk();
+  paintScl();
   $("wiz-name").addEventListener("input", () => { $("wiz-err").textContent = ""; paintWhere(); });
-  $("wiz-clk")?.addEventListener("input", paintClk);
+  $("wiz-clk")?.addEventListener("input", () => { clkTyped = true; paintClk(); });
   $("wiz-change").addEventListener("click", async () => {
     const { pickFolder } = await import("./fs.js");
     const dir = await pickFolder({ title: "Where should the project folder go?", use: "Put it here", seed: projectsDir() });

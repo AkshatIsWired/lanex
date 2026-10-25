@@ -1399,6 +1399,71 @@ check("fix loop: Flow marks a resumed run's reused steps; Verify leads with the 
   assert.match(html, /1\.5 → 2\.4/);
 });
 
+// ------------------------------------------------ the PDK the project builds for
+// Field report: gf180 picked, "sky130A not found": a leftover empty sky130A
+// folder was the wizard's default and config.json kept it.
+const WZ = await import(toUrl(resolve(MOD, "wizard.js")));
+check("wizard: the default PDK is a ready one, never an empty leftover folder", () => {
+  const pdks = [{ name: "gf180mcuA", ready: true }, { name: "gf180mcuD", ready: true }, { name: "ihp-sg13g2", ready: true }, { name: "sky130A", ready: false }];
+  assert.equal(WZ.defaultPdk(pdks, ""), "gf180mcuD");
+  assert.equal(WZ.defaultPdk(pdks, "ihp-sg13g2"), "ihp-sg13g2", "the open project's PDK when it's ready");
+  assert.equal(WZ.defaultPdk(pdks, "sky130A"), "gf180mcuD", "not the open project's when it isn't");
+  assert.equal(WZ.defaultPdk([{ name: "gf180mcuD", ready: true }, { name: "sky130A", ready: true }], ""), "sky130A");
+  assert.equal(WZ.defaultPdk([], ""), "");
+});
+check("wizard: the usual library per PDK, not the first alphabetically", () => {
+  assert.equal(WZ.defaultScl(["sky130_fd_sc_hdll", "sky130_fd_sc_hd", "sky130_fd_sc_hs"]), "sky130_fd_sc_hd");
+  assert.equal(WZ.defaultScl(["gf180mcu_as_sc_mcu7t3v3", "gf180mcu_fd_sc_mcu7t5v0", "gf180mcu_fd_sc_mcu9t5v0"]), "gf180mcu_fd_sc_mcu7t5v0");
+  assert.equal(WZ.defaultScl(["sg13g2_stdcell"]), "sg13g2_stdcell");
+  assert.equal(WZ.defaultScl(["x_lib"]), "x_lib");
+});
+check("wizard: the clock follows the template's per-PDK clock", () => {
+  const tpl = { clock_period: 10, pdk_clock: { "gf180mcu*": 20 } };
+  assert.equal(WZ.clockFor(tpl, "gf180mcuD"), 20);
+  assert.equal(WZ.clockFor(tpl, "sky130A"), 10);
+  assert.equal(WZ.clockFor(tpl, "ihp-sg13g2"), 10);
+  assert.equal(WZ.clockFor({}, "gf180mcuD"), 10);
+});
+check("setup: the picker follows and saves the config's PDK; a mismatch offers both fixes", () => {
+  const setup = readFileSync(resolve(MOD, "setup.js"), "utf8");
+  assert.ok(!/state\.projectConfig/.test(setup), "the dead projectConfig lookup is gone");
+  assert.match(setup, /await syncPdkFromConfig\(\)/, "opening a project reads its PDK");
+  assert.match(setup, /if \(user\) await saveTargetToConfig\(\)/, "a picker change saves it");
+  assert.match(setup, /res\.pdk_mismatch/, "a refused run offers the fix");
+  const pf = readFileSync(resolve(MOD, "preflight.js"), "utf8");
+  assert.match(pf, /data-act='pdk-save'/);
+});
+
+// ------------------------------------------------ provenance everywhere
+check("provenance: a report line by needle, first or last (Netgen's verdict)", () => {
+  const t = "Number of devices: 3\nFinal result: no\nsub\nFinal result: Circuits match uniquely.\n";
+  assert.equal(prov.needleLine(t, "Final result:"), 2);
+  assert.equal(prov.needleLine(t, "Final result:", true), 4);
+  assert.equal(prov.needleLine(t, "nope"), null);
+  assert.equal(prov.needleLine(t, ""), null);
+});
+check("provenance: every value on Verify, Analytics and Setup has its source button", () => {
+  const v = readFileSync(resolve(MOD, "verify.js"), "utf8");
+  // the row's value carries its button; rows and pillars are no longer one big
+  // <button> (a source button can't sit inside a button)
+  assert.match(v, /esc\(valueText\(c\)\) \+ provFor\(c\)/);
+  assert.ok(!/<button class='vf-row-main'/.test(v) && !/<button class='vf-pillar /.test(v));
+  assert.match(v, /vprov\(c\.error_var \|\| c\.corner_var\)/, "Decides links to its ERROR_ON_ / corner setting");
+  assert.match(v, /mprov\(COL\[k\] \+ "__corner:" \+ r\.corner\)/, "every per-corner timing cell");
+  assert.match(v, /data-vf-needle='Final result:' data-vf-last='1'/, "the Netgen report opens at its verdict");
+  assert.match(v, /kind: "metric", key, tag: _tag, step/, "a stopped run's values point at the step's state_out.json");
+  const a = readFileSync(resolve(MOD, "analytics.js"), "utf8");
+  assert.ok(!/\|\| _partial\) return ""/.test(a), "Analytics no longer drops every button on a stopped run");
+  assert.match(a, /provBtn\(h\.k, h\.s\.run \|\| "", h\.s\.dir\)/, "the per-stage table cites the step that wrote each value");
+  assert.match(a, /varBtn\("CLOCK_PERIOD"\)/);
+  const ms = readFileSync(resolve(MOD, "mostused.js"), "utf8");
+  assert.match(ms, /provBtnHtml\(\{ kind: "input", key: it\.key \}/);
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  for (const k of ["DESIGN_NAME", "CLOCK_PORT", "CLOCK_PERIOD", "PDK", "STD_CELL_LIBRARY"]) {
+    assert.match(html, new RegExp("data-src-key=\"" + k + "\""), k + " has a source slot on Setup");
+  }
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 
