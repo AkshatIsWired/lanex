@@ -16,6 +16,21 @@
 .lx-split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .lx-split-pick { border-top-left-radius: 0; border-bottom-left-radius: 0; padding: 0 8px; margin-left: 1px; }
 #sec-layout .an-runbar .btn-sm { height: 40px; }
+/* The run bar's 3D view: as prominent as "Open in …", tinted with the
+   toolbar 3D toggle's met1-to-pink gradient so it reads as a view mode. */
+.lx-3d-main {
+  font-weight: 600; color: var(--text-strong);
+  border-color: color-mix(in srgb, var(--met1) 80%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--met1) 30%, var(--surface-2)), color-mix(in srgb, #e879c9 24%, var(--surface-2)));
+}
+.lx-3d-main:hover {
+  border-color: var(--met1);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--met1) 40%, var(--surface-2)), color-mix(in srgb, #e879c9 32%, var(--surface-2)));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--met1) 35%, transparent), 0 6px 18px -6px var(--accent-glow);
+}
+.lx-3d-main[aria-pressed="true"], .lx-3d-main[aria-pressed="true"]:hover {
+  color: #fff; border-color: #2a6fd0; background: linear-gradient(135deg, #2a6fd0, #a8438f);
+}
 
 /* menus (open-in, save, command) */
 .lx-menu {

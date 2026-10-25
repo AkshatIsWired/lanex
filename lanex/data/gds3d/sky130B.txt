@@ -1,0 +1,259 @@
+# Copyright 2026 LanEx Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# LanEx GDS3D process file: SkyWater SKY130, variant sky130B.
+#
+# Where the numbers come from (open_pdks 54435919, as installed by LanEx/ciel):
+# sky130B/libs.tech/magic/sky130B.tech, extract section ("units microns";
+# "height <layer> <bottom> <thickness>"); GDS numbers and colours from
+# libs.tech/klayout/tech/sky130B.lyp. licon1 (66/44) is drawn as the diffusion
+# contact (diff top up to li1). MiM capacitor and marker layers are left out.
+#
+# Format: GDS3D process file (gds3d -p <this file>). Height and Thickness are
+# in nanometres from the top of the substrate. LanEx's in-app 3D view reads
+# the same file. Layers not listed here are not drawn in 3D.
+
+LayerStart: dnwell
+Layer: 64
+Datatype: 18
+Height: -100
+Thickness: 100
+Red: 0.78
+Green: 1.00
+Blue: 0.78
+Filter: 0.0
+Metal: 0
+Show: 1
+LayerEnd
+
+LayerStart: nwell
+Layer: 64
+Datatype: 20
+Height: 0
+Thickness: 206.2
+Red: 0.00
+Green: 0.80
+Blue: 0.40
+Filter: 0.0
+Metal: 0
+Show: 1
+LayerEnd
+
+LayerStart: diff
+Layer: 65
+Datatype: 20
+Height: 206.2
+Thickness: 120
+Red: 0.00
+Green: 1.00
+Blue: 0.00
+Filter: 0.0
+Metal: 0
+Show: 1
+LayerEnd
+
+LayerStart: tap
+Layer: 65
+Datatype: 44
+Height: 206.2
+Thickness: 120
+Red: 0.85
+Green: 0.80
+Blue: 0.00
+Filter: 0.0
+Metal: 0
+Show: 1
+LayerEnd
+
+LayerStart: poly
+Layer: 66
+Datatype: 20
+Height: 326.2
+Thickness: 180
+Red: 1.00
+Green: 0.00
+Blue: 0.00
+Filter: 0.0
+Metal: 0
+Show: 1
+LayerEnd
+
+LayerStart: licon1
+Layer: 66
+Datatype: 44
+Height: 326.2
+Thickness: 610
+Red: 1.00
+Green: 1.00
+Blue: 0.80
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: li1
+Layer: 67
+Datatype: 20
+Height: 936.1
+Thickness: 100
+Red: 1.00
+Green: 0.90
+Blue: 0.75
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: mcon
+Layer: 67
+Datatype: 44
+Height: 1036.1
+Thickness: 340
+Red: 0.80
+Green: 0.80
+Blue: 0.85
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: met1
+Layer: 68
+Datatype: 20
+Height: 1376.1
+Thickness: 360
+Red: 0.00
+Green: 0.00
+Blue: 1.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: via
+Layer: 68
+Datatype: 44
+Height: 1736.1
+Thickness: 565
+Red: 0.37
+Green: 0.00
+Blue: 0.90
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: met2
+Layer: 69
+Datatype: 20
+Height: 2301.1
+Thickness: 360
+Red: 1.00
+Green: 0.00
+Blue: 1.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: via2
+Layer: 69
+Datatype: 44
+Height: 2661.1
+Thickness: 420
+Red: 1.00
+Green: 0.50
+Blue: 0.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: met3
+Layer: 70
+Datatype: 20
+Height: 3081.1
+Thickness: 845
+Red: 0.00
+Green: 1.00
+Blue: 1.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: via3
+Layer: 70
+Datatype: 44
+Height: 3926.1
+Thickness: 390
+Red: 0.15
+Green: 0.55
+Blue: 0.42
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: met4
+Layer: 71
+Datatype: 20
+Height: 4316.1
+Thickness: 845
+Red: 0.37
+Green: 0.00
+Blue: 0.90
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: via4
+Layer: 71
+Datatype: 44
+Height: 5161.1
+Thickness: 505
+Red: 1.00
+Green: 1.00
+Blue: 0.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: met5
+Layer: 72
+Datatype: 20
+Height: 5666.1
+Thickness: 1260
+Red: 0.85
+Green: 0.80
+Blue: 0.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: rdl
+Layer: 74
+Datatype: 20
+Height: 7556.1
+Thickness: 3000
+Red: 0.90
+Green: 0.12
+Blue: 0.05
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd

@@ -84,6 +84,9 @@ lanex = [
   # Project templates (nested src/ and verify/ included).
   "controller/templates/**/*",
   "controller/templates/*/*", "controller/templates/*/*/*",
+  # GDS3D process files per PDK variant (desktop.BUNDLED_GDS3D_DIR): the
+  # in-app 3D view and the GDS3D launch both read them.
+  "data/**/*", "data/gds3d/*.txt",
 ]
 
 [tool.black]

@@ -1033,6 +1033,7 @@ function toggle3d(on) {
   $("lx-3dctl").hidden = !want;
   document.querySelector("[data-lx='3d']")?.setAttribute("aria-pressed", want ? "true" : "false");
   document.querySelector("[data-lx='2d']")?.setAttribute("aria-pressed", want ? "false" : "true");
+  $("lx-3d-main")?.setAttribute("aria-pressed", want ? "true" : "false");
   hideInspector();
   if (want) {
     S.three.show(true);
@@ -1086,10 +1087,14 @@ function paint3dBadge() {
   const h = S._3dhead;
   if (!el || !h) return;
   const w = h.extent[2] - h.extent[0], hh = h.extent[3] - h.extent[1];
+  // "gds3d:<file>" (a GDS3D process file, LanEx's own or GDS3D's), "d25:<file>"
+  // (the PDK's KLayout 2.5D stack) or "generic".
+  const real = h.stack && h.stack !== "generic";
   el.innerHTML = "<b>3D · " + (h.clipped ? "this view" : "whole chip") + "</b><span>" + fmtUm(w) + " × " + fmtUm(hh) +
-    " · " + (h.stack.startsWith("gds3d:") ? "real stack heights" : "generic heights") + "</span>";
-  el.title = h.stack.startsWith("gds3d:") ? "Layer heights from GDS3D's process file " + h.stack.slice(6) :
-    "No GDS3D process file for this PDK is installed, so layers are evenly spaced in stacking order.";
+    " · " + (real ? "real stack heights" : "generic heights") + "</span>";
+  el.title = real ? "Layer heights from " + (h.stack.startsWith("d25:") ? "the PDK's 2.5D stack " : "the process file ") +
+    h.stack.slice(h.stack.indexOf(":") + 1) :
+    "No layer-stack file for this PDK was found, so layers are evenly spaced in stacking order.";
 }
 
 // ------------------------------------------------------------------ toolbar
@@ -1342,6 +1347,11 @@ function wireOnce() {
   mini.addEventListener("pointerdown", (e) => { dragging = true; mini.setPointerCapture(e.pointerId); miniJump(e); });
   mini.addEventListener("pointermove", (e) => { if (dragging) miniJump(e); });
   mini.addEventListener("pointerup", () => { dragging = false; });
+  // The run bar's 3D view: the same switch as the toolbar's 2D/3D.
+  $("lx-3d-main").addEventListener("click", () => {
+    if (!S.info) { toast.show("There's no layout on screen yet to show in 3D.", "info"); return; }
+    toggle3d();
+  });
   // desktop viewers
   $("lx-desk").addEventListener("click", (e) => { const b = e.target.closest("[data-desk]"); if (b) openTool(b.dataset.desk); });
   $("lx-open-main").addEventListener("click", () => openTool(pref("tool", "klayout")));

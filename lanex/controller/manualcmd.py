@@ -145,6 +145,16 @@ class ManualJob:
             argv = v["argv"]
             base = v["base"]
             run_env = os.environ.copy()
+            # Viewers started from the console (klayout, magic, openroad -gui)
+            # get the same WSL display env as the Layout tab's launches:
+            # software GL and the X11 transport, so a stale WSLg vGPU or its
+            # Wayland path can't leave a blank "[WARN: COPY MODE]" window. A
+            # no-op off WSL; harmless for the console's non-GUI commands.
+            try:
+                from . import platform_env
+                run_env = platform_env.wsl_gui_env(run_env)
+            except Exception:
+                pass
             # Container engine activation (sg-wrap / env) so `docker …` works the
             # same way the flow runner makes it work.
             if base in ("docker", "podman"):

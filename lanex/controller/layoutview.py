@@ -305,11 +305,18 @@ _GROUPS = [
     ("misc", "Boundaries and markers"),
 ]
 
-_RX_METAL = re.compile(r"^(met\d|metal\d|m\d|topmetal\d?|tm\d|rdl)$", re.I)
+# Layer base names across the PDKs LanEx supports: sky130 (met1, via, li1,
+# licon1, mcon, diff, poly), gf180mcu (Metal1..Metal5, MetalTop, Via1..Via5,
+# Contact, Poly2, COMP, Nplus/Pplus) and ihp-sg13g2 (Metal1..Metal5,
+# TopMetal1/2, TopVia1/2, Cont, GatPoly, Activ, nSD/pSD).
+_RX_METAL = re.compile(r"^(met\d|metal\d|m\d|topmetal\d?|metaltop|tm\d|rdl)$", re.I)
 _RX_VIA = re.compile(r"^(via\d*|v\d|topvia\d?|tv\d|pad)$", re.I)
 _RX_LOCAL = re.compile(r"^(li1?|licon\d?|mcon|cont|contact|co)$", re.I)
-_RX_DEVICE = re.compile(r"^(diff|tap|poly|gatpoly|activ|comp|active|od|npc|hvi|hvntm)$", re.I)
-_RX_WELL = re.compile(r"(well|implant|^nsdm$|^psdm$|^nsd$|^psd$|^hvtp$|^hvtr$|^lvtn$|^nimp$|^pimp$|^dnwell$|^nwell$|^pwell$|^dualgate$|^thkox$|^sab$)", re.I)
+_RX_DEVICE = re.compile(r"^(diff|tap|poly|poly2|gatpoly|activ|comp|active|od|npc|hvi|hvntm)$", re.I)
+_RX_WELL = re.compile(r"(well|implant|^nsdm$|^psdm$|^nsd$|^psd$|^nplus$|^pplus$|^hvtp$|^hvtr$|^lvtn$|^nimp$|^pimp$|^dnwell$|^nwell$|^pwell$|^dualgate$|^thkox$|^sab$)", re.I)
+# Purposes that mark a region rather than draw silicon (gf180's metal slots and
+# routing blockages), listed with the boundaries and markers.
+_MARKER_PURPOSES = ("slot", "blk")
 
 # One plain-English line per common layer, shown in the layer list's tooltip.
 _LAYER_WORDS = {
@@ -332,7 +339,20 @@ _LAYER_WORDS = {
     "areaid": "area ID: a marker layer that tells rule decks what a region is",
     "prboundary": "placement boundary: the outline each cell or block reserves",
     "boundary": "design boundary",
+    "contact": "contact: a plug from diffusion or poly up to metal 1",
+    "topmetal": "thick top metal: carries power and long wires",
+    "nplus": "n+ implant: marks n-type source/drain regions",
+    "pplus": "p+ implant: marks p-type source/drain regions",
 }
+# Other PDKs' names for the same layers.
+_WORD_ALIAS = {"poly2": "poly", "gatpoly": "poly", "comp": "diff", "activ": "diff", "active": "diff",
+               "cont": "contact", "metaltop": "topmetal", "lvpwell": "pwell",
+               "nsd": "nplus", "psd": "pplus"}
+
+_RX_LD = re.compile(r"(\d+)/(\d+)")
+# gf180mcu marks the purpose with a suffix ("Metal1_Label") where sky130 uses
+# ".label"; a .lyp that names a layer only in its source carries it there.
+_RX_SUFFIX_PURPOSE = re.compile(r"^(.+?)_(label|dummy|slot|blk|res|text|pin)$", re.I)
 
 
 def _split_name(name: str) -> Tuple[str, str, str]:
@@ -346,10 +366,42 @@ def _split_name(name: str) -> Tuple[str, str, str]:
     return base.strip(), purpose.strip(), src
 
 
+def _layer_ident(name: str, source: str) -> Tuple[str, str, str, str]:
+    """(base, purpose, ``"l/d"``, label) of one layer-properties entry.
+
+    sky130's .lyp names layers ``met1.drawing - 68/20`` (source ``68/20@1``);
+    ihp-sg13g2's ``Activ.drawing`` (source ``1/0``); gf180mcu's leaves the name
+    empty and puts it in the source (``Metal1_Label 34/10@1``). ``"l/d"`` is
+    what the 3D stack is keyed by, so it must never keep the name text; the
+    label is what the layer list shows, in the PDK's own spelling."""
+    base, purpose, src = _split_name(name or "")
+    if not base:
+        spec = (source or "").split("@", 1)[0].strip()
+        m = _RX_LD.search(spec)
+        if m:
+            src = src or m.group(0)
+            spec = (spec[:m.start()] + spec[m.end():]).strip()
+        base, _, purpose = spec.partition(".")
+        base, purpose = base.strip(), purpose.strip()
+        if not base:
+            base = src
+    if not src:
+        m = _RX_LD.search(source or "")
+        src = m.group(0) if m else ""
+    label = (base + ("." + purpose if purpose else "")) or src
+    if not purpose:
+        m = _RX_SUFFIX_PURPOSE.match(base)
+        if m:
+            base, purpose = m.group(1), m.group(2).lower()
+    return base, purpose, src, label
+
+
 def _group_of(base: str, purpose: str) -> str:
     p = purpose.lower()
     if p in ("pin", "label", "text", "net", "port"):
         return "pin"
+    if p in _MARKER_PURPOSES:
+        return "misc"
     b = base.lower()
     if _RX_LOCAL.match(b):
         return "local"
@@ -369,39 +421,64 @@ def _layer_words(base: str) -> str:
     m = re.match(r"^(met|metal)(\d)$", b)
     if m:
         return _LAYER_WORDS[m.group(1)].format(n=m.group(2))
-    m = re.match(r"^via(\d*)$", b)
-    if m:
+    if re.match(r"^(?:top)?via(\d*)$", b):
         return _LAYER_WORDS["via"]
+    if re.match(r"^topmetal\d?$", b):
+        return _LAYER_WORDS["topmetal"]
+    b = _WORD_ALIAS.get(b, b)
     for k, v in _LAYER_WORDS.items():
         if b == k or (k in ("licon", "li") and b.startswith(k)):
             return v
     return ""
 
 
+_RX_Z_METAL = re.compile(r"^(?:met|metal|m)(\d)$")
+_RX_Z_VIA = re.compile(r"^(?:via|v)(\d*)$")
+_RX_Z_TOPMETAL = re.compile(r"^(?:topmetal|tm)(\d?)$")
+_RX_Z_TOPVIA = re.compile(r"^(?:topvia|tv)(\d?)$")
+
+
 def _z_rank(base: str, purpose: str) -> float:
-    """Rough stacking order, top first, so a click reports the top shape first."""
+    """Rough stacking order, top first, so a click reports the top shape first.
+
+    Metal n sits at 10 + 2n with via n just above it (via1 between metal1 and
+    metal2); IHP's TopVia1 < TopMetal1 < TopVia2 < TopMetal2 above the thin
+    metals; contacts (licon, Cont, Contact) under li/metal1, poly above
+    diffusion, wells at the bottom."""
     b = base.lower()
-    m = re.match(r"^(?:met|metal|m)(\d)$", b)
+    m = _RX_Z_METAL.match(b)
+    mv = _RX_Z_VIA.match(b)
+    mt = _RX_Z_TOPMETAL.match(b)
+    mtv = _RX_Z_TOPVIA.match(b)
     if m:
         z = 10 + 2 * int(m.group(1))
-    elif re.match(r"^(?:topmetal|tm)(\d?)$", b):
+    elif mv:
+        z = 11 + 2 * int(mv.group(1) or 1)
+    elif mt:
+        z = 28 + 2 * int(mt.group(1) or 1)      # TopMetal1 30, TopMetal2 32
+    elif mtv:
+        z = 27 + 2 * int(mtv.group(1) or 1)     # TopVia1 29, TopVia2 31
+    elif b == "metaltop":
         z = 30
-    elif re.match(r"^via(\d*)$", b):
-        n = re.match(r"^via(\d*)$", b).group(1)
-        z = 11 + 2 * int(n or 1)
-    elif b in ("mcon",):
+    elif b == "rdl":
+        z = 34
+    elif b == "pad":
+        z = 36
+    elif b == "mcon":
         z = 9
+    elif b.startswith("licon") or b in ("cont", "contact", "co"):
+        z = 7
     elif b.startswith("li"):
-        z = 8 if not b.startswith("licon") else 7
-    elif b in ("poly", "gatpoly"):
+        z = 8
+    elif b in ("poly", "poly2", "gatpoly"):
         z = 5
-    elif b in ("diff", "tap", "activ", "comp"):
+    elif b in ("diff", "tap", "activ", "active", "comp", "od"):
         z = 4
     elif _RX_WELL.search(b):
         z = 1
     else:
         z = 0
-    if purpose.lower() in ("pin", "label"):
+    if purpose.lower() in ("pin", "label", "text"):
         z += 0.5
     return z
 
@@ -488,16 +565,10 @@ class _Session:
                 except Exception:
                     empty = True
             if not empty:
-                base, purpose, src = _split_name(lp.name or "")
-                if not base:
-                    base = lp.source.split("@")[0]
-                    src = src or base
-                if not src:
-                    m = re.match(r"^(\d+/\d+)", lp.source or "")
-                    src = m.group(1) if m else ""
+                base, purpose, src, label = _layer_ident(lp.name or "", lp.source or "")
                 out.append({
                     "id": pos, "name": base, "purpose": purpose, "src": src,
-                    "label": (base + ("." + purpose if purpose else "")) or src,
+                    "label": label,
                     "fill": _hex(lp.fill_color), "frame": _hex(lp.frame_color),
                     "dither": int(lp.dither_pattern), "visible": bool(lp.visible),
                     "group": _group_of(base, purpose), "z": _z_rank(base, purpose),
@@ -891,13 +962,15 @@ def viewer_commands(run_dir: Path, tag: str) -> Dict[str, str]:
 # --------------------------------------------------------------------------- 3D
 # The in-app 3D view: each layer's merged shapes as flat triangles (the top
 # face) plus their outline edges (the browser extrudes the walls), stacked at
-# the heights of the PDK's GDS3D process file when one is installed, else at an
-# even, honest-looking generic spacing (said so in the reply).
+# real heights: the PDK's GDS3D process file (LanEx bundles one per supported
+# PDK, desktop.gds3d_process_file), else the PDK's own KLayout 2.5D stack
+# (libs.tech/klayout/tech/d25/*.lyd25), else an even, honest-looking generic
+# spacing (said so in the reply).
 _MAX_3D_PRIMS = 2_600_000
 
 
 def _gds3d_stack(pdk: Optional[str]) -> Tuple[Dict[str, Dict[str, Any]], Optional[str]]:
-    """``"l/d" -> {name, z0, z1 (µm), color}`` from the PDK's GDS3D techfile."""
+    """``"l/d" -> {name, z0, z1 (µm), color}`` from the PDK's GDS3D process file."""
     try:
         from .desktop import gds3d_process_file
         path = gds3d_process_file(pdk)
@@ -905,6 +978,10 @@ def _gds3d_stack(pdk: Optional[str]) -> Tuple[Dict[str, Dict[str, Any]], Optiona
         path = None
     if not path:
         return {}, None
+    return _parse_gds3d(path)
+
+
+def _parse_gds3d(path: str) -> Tuple[Dict[str, Dict[str, Any]], Optional[str]]:
     out: Dict[str, Dict[str, Any]] = {}
     cur: Dict[str, str] = {}
     try:
@@ -931,6 +1008,49 @@ def _gds3d_stack(pdk: Optional[str]) -> Tuple[Dict[str, Dict[str, Any]], Optiona
     except Exception:
         return {}, None
     return out, path
+
+
+_RX_D25_INPUT = re.compile(r"^\s*(\w+)\s*=\s*input\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*$", re.M)
+_RX_D25_Z = re.compile(r"^\s*z\(\s*(?:input\(\s*(\d+)\s*,\s*(\d+)\s*\)|(\w+))\s*,(.*)\)\s*$", re.M)
+
+
+def _d25_stack(cfg: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Optional[str]]:
+    """``"l/d" -> {name, z0, z1, color}`` from the PDK's KLayout 2.5D stack.
+
+    A ``.lyd25`` script declares ``Metal1 = input(8, 0)`` and then
+    ``z(Metal1, zstart: 1.04, height: 0.42, color: 0x39bfff)`` in µm. Only
+    layers drawn straight from one GDS layer are used; derived ones (boolean
+    expressions such as resistor regions) have no single ``l/d`` to key by."""
+    d = _pdk_tech_dir(cfg)
+    files = sorted((d / "d25").glob("*.lyd25")) if d is not None and (d / "d25").is_dir() else []
+    for f in files:
+        try:
+            raw = f.read_text(encoding="utf-8", errors="replace")
+            try:
+                text = ET.fromstring(raw).findtext("text") or raw
+            except ET.ParseError:
+                text = raw
+            inputs = {m.group(1): m.group(2) + "/" + m.group(3) for m in _RX_D25_INPUT.finditer(text)}
+            out: Dict[str, Dict[str, Any]] = {}
+            for m in _RX_D25_Z.finditer(text):
+                key = (m.group(1) + "/" + m.group(2)) if m.group(1) else inputs.get(m.group(3) or "")
+                if not key or key in out:
+                    continue
+                args = m.group(4)
+                z0 = re.search(r"zstart\s*:\s*(" + _NUM + r")", args)
+                h = re.search(r"height\s*:\s*(" + _NUM + r")", args)
+                if not (z0 and h) or float(h.group(1)) <= 0:
+                    continue
+                nm = re.search(r'name\s*:\s*"([^"]*)"', args)
+                col = re.search(r"color\s*:\s*0x([0-9a-fA-F]{6})", args)
+                out[key] = {"name": nm.group(1) if nm else (m.group(3) or key),
+                            "z0": float(z0.group(1)), "z1": float(z0.group(1)) + float(h.group(1)),
+                            "color": "#" + (col.group(1).lower() if col else "8ea6c4"), "metal": True}
+            if out:
+                return out, str(f)
+        except Exception:
+            continue
+    return {}, None
 
 
 def _generic_stack(layers: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
@@ -962,6 +1082,10 @@ def mesh(sid: str, box: Optional[List[float]], visible: Optional[List[int]]) -> 
             run_dir = run_dir.parent
         cfg = _resolved(run_dir)
         stack, techfile = _gds3d_stack(cfg.get("PDK"))
+        kind = "gds3d"
+        if not stack:
+            stack, techfile = _d25_stack(cfg)
+            kind = "d25"
         generic = _generic_stack(s._layers) if not stack else {}
         vis = set(visible) if visible is not None else None
         dbu = s.dbu
@@ -1007,7 +1131,7 @@ def mesh(sid: str, box: Optional[List[float]], visible: Optional[List[int]]) -> 
                                "tris": nt, "edges": ne, "triOff": t0, "edgeOff": e0})
         head = {"origin": [ox, oy], "extent": [extent.left, extent.bottom, extent.right, extent.top],
                 "clipped": clip is not None, "layers": layers_out, "triFloats": len(tri), "edgeFloats": len(edg),
-                "stack": ("gds3d:" + Path(techfile).name) if techfile else "generic",
+                "stack": (kind + ":" + Path(techfile).name) if techfile else "generic",
                 "top": s.top.name}
     hb = json.dumps(head).encode("utf-8")
     hb += b" " * ((4 - (len(hb) % 4)) % 4)

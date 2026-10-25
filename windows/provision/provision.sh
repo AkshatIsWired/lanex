@@ -453,6 +453,14 @@ if [ -n "${WSL_DISTRO_NAME:-}" ] && [ -z "${LANEX_WAYLAND:-}" ] && [ -n "${DISPL
     unset WAYLAND_DISPLAY
     export GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb
 fi
+# Mesa software GL, as LanEx's own viewer launches use: after the PC sleeps,
+# WSLg's vGPU can drop to copy mode and a hardware-GL window maps blank.
+# Set LANEX_HW_GL=1 before starting a shell to keep the GPU.
+if [ -n "${WSL_DISTRO_NAME:-}" ] && [ -z "${LANEX_HW_GL:-}${LIBRELANE_GUI_WSL_HW_GL:-}" ]; then
+    export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+    export GALLIUM_DRIVER="${GALLIUM_DRIVER:-llvmpipe}"
+    export QT_XCB_GL_INTEGRATION="${QT_XCB_GL_INTEGRATION:-none}"
+fi
 EOS
     chmod 0644 /etc/profile.d/lanex-wslg.sh
     note "Mesa GL drivers, X11 fonts and the X11-only display profile are in place."

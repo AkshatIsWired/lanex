@@ -75,9 +75,20 @@ def available_tools() -> List[Dict[str, Any]]:
     return out
 
 
+# LanEx's own process files, written from each PDK's data (see their headers):
+# GDS3D's upstream set has no gf180mcu file at all and puts sg13g2's Activ on
+# the wrong layer, so these are searched before the ones a GDS3D install brings.
+BUNDLED_GDS3D_DIR = Path(__file__).resolve().parent.parent / "data" / "gds3d"
+
+# A variant with no file of its own (and no family-level file) uses the
+# variant LanEx targets for that family.
+_GDS3D_DEFAULT_VARIANT = {"sky130": "sky130A", "gf180mcu": "gf180mcuD", "ihp-sg13g2": "ihp-sg13g2"}
+
+
 def _gds3d_techfile_dirs() -> List[Path]:
-    """Directories that may hold GDS3D process/tech files (the ``-p`` argument)."""
-    dirs: List[Path] = []
+    """Directories that may hold GDS3D process/tech files (the ``-p`` argument),
+    LanEx's bundled set first."""
+    dirs: List[Path] = [BUNDLED_GDS3D_DIR]
     from . import platform_env
     home = platform_env.home()
     dirs.append(home / "tools" / "GDS3D" / "techfiles")
@@ -99,29 +110,40 @@ def gds3d_process_file(pdk: Optional[str]) -> Optional[str]:
     """Locate a GDS3D process/tech file matching *pdk*.
 
     GDS3D **requires** a process file (``-p``) describing the layer stack — a bare
-    ``gds3d -i x.gds`` opens nothing. GDS3D ships example tech files (sky130.txt,
-    sg13g2.txt, …) in its ``techfiles/`` dir; map the PDK to one. Returns None when
-    none is found so the caller can give honest guidance instead of a dud launch."""
+    ``gds3d -i x.gds`` opens nothing. LanEx bundles one per supported PDK variant
+    (``lanex/data/gds3d``); GDS3D's own ``techfiles/`` dir and anything the user
+    dropped there are searched after it. Most specific match first, each across
+    every directory in that order: the exact PDK name, then the family name,
+    then the variant LanEx targets for that family, then any file whose name
+    holds the family token (shortest stem wins, so sky130.txt beats
+    sky130_s10.txt). So GDS3D's family-level upstream files (sky130.txt,
+    sg13g2.txt) never replace LanEx's per-variant ones. Returns None when the
+    PDK has no file anywhere, so the caller can give honest guidance instead
+    of a dud launch."""
     if not pdk:
         return None
     p = pdk.lower()
+    try:
+        from . import installer
+        family = installer._pdk_family(pdk).lower()
+    except Exception:
+        family = p
     if p.startswith("sky130"):
-        tokens = ["sky130"]
+        token = "sky130"
     elif p.startswith("gf180"):
-        tokens = ["gf180"]
+        token = "gf180"
     elif "sg13g2" in p:
-        tokens = ["sg13g2"]
+        token = "sg13g2"
     else:
-        tokens = [p]
-    for d in _gds3d_techfile_dirs():
-        files = sorted(d.glob("*.txt"))
-        for tok in tokens:
-            cands = [f for f in files if tok in f.stem.lower()]
-            # shortest stem wins → sky130.txt over sky130_s10.txt
-            cands.sort(key=lambda f: len(f.stem))
-            if cands:
-                return str(cands[0])
-    return None
+        token = p
+    files = [f for d in _gds3d_techfile_dirs() for f in sorted(d.glob("*.txt"))]
+    for want in dict.fromkeys((p, family, _GDS3D_DEFAULT_VARIANT.get(family, p).lower())):
+        hit = next((f for f in files if f.stem.lower() == want), None)
+        if hit is not None:
+            return str(hit)
+    cands = [f for f in files if token in f.stem.lower()]
+    cands.sort(key=lambda f: len(f.stem))   # stable: bundled dir first on ties
+    return str(cands[0]) if cands else None
 
 
 def find_klayout_lyp(libs_tech: Path, pdk: str) -> Optional[Path]:
@@ -434,9 +456,9 @@ def open_in_tool(tool: str, file_path: str | Path, *,
         if not proc:
             return {"ok": False, "need": "gds3d-techfile",
                     "error": "GDS3D needs a process/tech file (the layer stack) to render"
-                             + (f" {pdk}" if pdk else "") + ", and none was found. GDS3D ships "
-                             "example tech files in its techfiles/ folder — install GDS3D from "
-                             "Tools (it builds those in), or drop a matching <pdk>.txt into "
+                             + (f" {pdk}" if pdk else "") + ", and none was found. LanEx "
+                             "brings its own for sky130, gf180mcu and ihp-sg13g2; for another "
+                             "PDK, drop a matching <pdk>.txt into "
                              "~/.lanex/tools/GDS3D/techfiles/, then retry."}
         tech["gds3d_process"] = proc
         # GDS3D segfaults the instant its window opens if the legacy X11
