@@ -158,6 +158,9 @@ def test_error_on_switch_off_turns_failure_into_warning(tmp_path: Path):
     rep = verify.verify_report(_cfg_run(tmp_path, m, {"ERROR_ON_MAGIC_DRC": False}))
     c = _check(rep, "magic_drc")
     assert c["status"] == "warn" and "ERROR_ON_MAGIC_DRC = false" in c["gate_note"]
+    # The page links "Decides" to that switch's line in resolved.json.
+    assert c["error_var"] == "ERROR_ON_MAGIC_DRC"
+    assert _check(rep, "setup")["corner_var"]
 
 
 def test_only_critical_disconnected_pins_count(tmp_path: Path):

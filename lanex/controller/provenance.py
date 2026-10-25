@@ -65,10 +65,27 @@ def _find_json_key(lines: list[str], key: str) -> Optional[Tuple[int, str]]:
     return best
 
 
-def metric_provenance(run_dir: Path, key: str) -> Dict[str, Any]:
-    """Locate metric *key* in the run's LibreLane-written metrics.json."""
+def metric_provenance(run_dir: Path, key: str, step: Optional[str] = None) -> Dict[str, Any]:
+    """Locate metric *key* in the run's LibreLane-written metrics.json.
+
+    With *step* (a step directory of the run, e.g. ``12-openroad-floorplan``)
+    the value is the one that step left in its ``state_out.json``: what a run
+    that stopped shows, and what a per-stage table cell was read from."""
     if not key or "/" in key or "\\" in key:
         return {"ok": False, "reason": "invalid metric key"}
+    if step:
+        if "/" in step or "\\" in step or step.startswith(".") or not (Path(run_dir) / step).is_dir():
+            return {"ok": False, "reason": "unknown step directory for this run"}
+        rel = f"{step}/state_out.json"
+        lines = _read_lines(Path(run_dir) / rel)
+        if lines is None:
+            return {"ok": False, "reason": f"{step} has no state_out.json: the step didn't finish."}
+        hit = _find_json_key(lines, key)
+        if hit is None:
+            return {"ok": False, "rel": rel, "reason": f"'{key}' is not in {rel}: the flow had not "
+                    "recorded this metric by the end of that step."}
+        return {"ok": True, "rel": rel, "line": hit[0], "text": hit[1],
+                "writer": "LibreLane (metrics after step " + step + ")"}
     for rel in _METRIC_FILES:
         path = Path(run_dir) / rel
         if not path.is_file():
@@ -160,8 +177,10 @@ def base_config_provenance(design_dir: Path, var: str) -> Dict[str, Any]:
     return {"ok": False, "reason": "no config file found in the design dir"}
 
 
-def report_provenance(run_dir: Path, rel: str, needle: str) -> Dict[str, Any]:
-    """Locate literal *needle*'s first occurrence in a run-relative report.
+def report_provenance(run_dir: Path, rel: str, needle: str, last: bool = False) -> Dict[str, Any]:
+    """Locate literal *needle*'s first occurrence in a run-relative report
+    (*last*: its last one, for a tool that prints a summary per subcircuit and
+    the one that counts at the end, like Netgen's "Final result").
 
     The caller (route) has already traversal-validated *rel* against the run
     dir; this only reads and searches. An empty *needle* opens the file with
@@ -176,10 +195,11 @@ def report_provenance(run_dir: Path, rel: str, needle: str) -> Dict[str, Any]:
     lines = _read_lines(path)
     if lines is None:
         return {"ok": False, "reason": f"could not read {rel}"}
-    for i, line in enumerate(lines, start=1):
-        if needle in line:
-            return {"ok": True, "rel": rel, "line": i,
-                    "text": line.rstrip("\n"), "writer": "tool report"}
+    order = range(len(lines) - 1, -1, -1) if last else range(len(lines))
+    for i in order:
+        if needle in lines[i]:
+            return {"ok": True, "rel": rel, "line": i + 1,
+                    "text": lines[i].rstrip("\n"), "writer": "tool report"}
     return {"ok": False, "rel": rel, "reason":
             f"'{needle}' not found in {rel}"}
 

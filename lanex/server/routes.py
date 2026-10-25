@@ -545,6 +545,8 @@ def h_provenance(handler: Any) -> None:
     """Where did a displayed value come from? (GET, read-only.)
 
     ``?kind=metric&key=<metric>&tag=<run>``   -> final/metrics.json line
+                                                 (``&step=<dir>``: that step's
+                                                 state_out.json instead)
     ``?kind=var&key=<VAR>&tag=<run>``         -> resolved.json line (what the
                                                  flow ACTUALLY used)
     ``?kind=input&key=<VAR>``                 -> the design's own config line
@@ -598,7 +600,7 @@ def h_provenance(handler: Any) -> None:
                                "reason": "unknown run tag for the active design"})
             return
         if kind == "metric":
-            res = provenance.metric_provenance(run_dir, key)
+            res = provenance.metric_provenance(run_dir, key, _query_param(handler.path, "step") or None)
         elif kind == "var":
             res = provenance.config_provenance(run_dir, key)
         elif kind == "resolved-map":
@@ -614,7 +616,8 @@ def h_provenance(handler: Any) -> None:
             if not rel or not target.is_relative_to(run_dir):
                 _respond(handler, "invalid path", 400)
                 return
-            res = provenance.report_provenance(run_dir, rel, needle)
+            res = provenance.report_provenance(run_dir, rel, needle,
+                                               last=_query_param(handler.path, "last") == "1")
         else:
             _respond(handler, "unknown kind", 400)
             return

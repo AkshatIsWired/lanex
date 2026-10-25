@@ -303,6 +303,9 @@ def _metric_checker(run: _Run, rec: Dict[str, Any], *, metric: str, error_var: O
     rec["rerun"] = tool if rerun else None
     error_on = True if always_error else bool(run.conf(error_var)) if error_var else True
     rec["limit"] = "0" if threshold == 0 else f"≤ {threshold:g}"
+    # The resolved.json variable that decides error vs. warning, so the page
+    # can open that line (provenance kind "var").
+    rec["error_var"] = error_var
     if error_var:
         rec["gate_note"] = f"{error_var} = {'true' if error_on else 'false'}"
     elif always_error:
@@ -555,6 +558,7 @@ def _checks(run: _Run) -> List[Dict[str, Any]]:
                               checker="Checker.WireLength", tool="Odb.ReportWireLength", threshold=thr)
         rec["unit"] = "µm"
         rec["limit"] = f"≤ {thr:g} µm"
+        rec["limit_var"] = "WIRE_LENGTH_THRESHOLD"
         rec["rerun"] = None
     out.append(rec)
     # Antenna: no checker step; LibreLane's manufacturability report marks
