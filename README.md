@@ -26,7 +26,7 @@ A cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane/librela
 
 <br>
 
-<img src="docs/screenshots/pipeline.png" alt="LanEx pipeline view" width="88%">
+<img src="docs/screenshots/pipeline.png" alt="LanEx Flow view" width="88%">
 
 </div>
 
