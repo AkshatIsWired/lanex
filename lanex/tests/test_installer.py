@@ -31,7 +31,10 @@ def test_image_ref_default_pins_to_installed_version() -> None:
     assert ref.startswith("ghcr.io/librelane/librelane:")
     # With librelane installed the tag is its version, never the loose "latest".
     from lanex.controller import compat
-    assert ref.endswith(":" + compat.get_version())
+    assert ref.split("@", 1)[0].endswith(":" + compat.get_version())
+    if compat.get_version() == "3.0.4":
+        # The tested release is pinned by its multi-arch index digest too.
+        assert ref.endswith("@sha256:eab07a50fa9ae481f631d904bd9fbaa99752c587fdbddb7c8cf2ac04208eecd9")
 
 
 def test_image_ref_honours_override(monkeypatch) -> None:

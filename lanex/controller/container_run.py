@@ -133,7 +133,17 @@ def image_ref() -> str:
         ver = getattr(librelane, "__version__", "") or "latest"
     except Exception:  # pragma: no cover - librelane missing
         ver = "latest"
-    return f"ghcr.io/librelane/librelane:{ver}"
+    ref = f"ghcr.io/librelane/librelane:{ver}"
+    # Installs without runtime.json / image.lock (pip, install.sh) still get the
+    # exact image the release was tested with, not whatever the tag points at.
+    return _canonical_image_ref(ref, _KNOWN_IMAGE_DIGESTS.get(ver, ""))
+
+
+# Multi-arch index digests (amd64 + arm64) of the images LanEx releases are
+# tested against; same value as windows/setup/build-manifest.json "image".
+_KNOWN_IMAGE_DIGESTS = {
+    "3.0.4": "sha256:eab07a50fa9ae481f631d904bd9fbaa99752c587fdbddb7c8cf2ac04208eecd9",
+}
 
 
 def pull_argv(engine: str) -> List[str]:
