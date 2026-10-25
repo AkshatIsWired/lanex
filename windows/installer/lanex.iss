@@ -3134,6 +3134,7 @@ begin
 end;
 
 function PrepareToInstallCore(var NeedsRestart: Boolean): String; forward;
+procedure StopLanExLauncher; forward;
 
 // The progress panel covers the Preparing page. When preparation ends with a
 // message (a failure, or "Windows needs to restart" with its Restart now /
@@ -3573,6 +3574,10 @@ begin
   //    as the appliance user and exits nonzero until every saved selection is
   //    operational; image/PDK caches and completed work survive Retry.
   SetPhase(5, 6, 'Restarting only the private LanEx environment...');
+  // A LanEx that is open would see its server stop here and start it again
+  // (the launcher restarts a server that dies), racing the finalizer and
+  // leaving an old server on LanEx's port. Close it first; Finish reopens it.
+  StopLanExLauncher;
   if not (RunLogged(WslExe, '--terminate ' + DistroNameValue, Code) and (Code = 0)) then
   begin
     Result := 'Windows could not restart the owner-bound LanEx environment.'
