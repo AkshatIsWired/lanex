@@ -13,5 +13,13 @@
   "config": {
     "FP_SIZING": "absolute",
     "DIE_AREA": [0, 0, 150, 150]
+  },
+  "pdk": {
+    "gf180mcu*": {
+      "clock_period": 20.0,
+      "config": {
+        "DIE_AREA": [0, 0, 300, 300]
+      }
+    }
   }
 }

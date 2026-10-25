@@ -97,6 +97,10 @@ def list_templates() -> List[Dict[str, Any]]:
                 "top": doc.get("top") or doc["name"],
                 "clock_port": doc.get("clock_port") or "clk",
                 "clock_period": doc.get("clock_period"),
+                # The clock each PDK family starts on ({glob: ns}), where the
+                # template's default is too fast for that process.
+                "pdk_clock": {g: v["clock_period"] for g, v in _pdk_tuning(doc).items()
+                              if v.get("clock_period") is not None},
                 "has_testbench": bool(tb),
                 "kind": doc.get("kind") or "example",
                 "fixed_config": bool(doc.get("copy_from")),
@@ -106,6 +110,43 @@ def list_templates() -> List[Dict[str, Any]]:
     # The blank project leads; examples follow in their curated order.
     out.sort(key=lambda d: (d["kind"] != "blank", d["order"], d["name"]))
     return out
+
+
+def _pdk_tuning(manifest: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """The manifest's per-PDK tuning: ``{"gf180mcu*": {"clock_period": ns,
+    "config": {...}}}``. The examples are written for sky130; gf180's cells
+    are several times slower and bigger, so some need a longer clock and a
+    looser placement there (the values LibreLane's own SPM example uses)."""
+    raw = manifest.get("pdk")
+    out: Dict[str, Dict[str, Any]] = {}
+    if isinstance(raw, dict):
+        for pat, v in raw.items():
+            if isinstance(pat, str) and pat and isinstance(v, dict):
+                out[pat] = v
+    return out
+
+
+def _apply_pdk_tuning(cfg: Dict[str, Any], manifest: Dict[str, Any], pdk: str,
+                      clock_explicit: bool) -> None:
+    """Fold the tuning for the chosen PDK into the top level, and write the
+    others as ``pdk::<glob>`` sections, which LibreLane applies to a run for a
+    matching PDK, so the project still reaches a GDS after the PDK picker
+    changes. A section carries only what that PDK needs beyond the top level:
+    a longer clock than the top-level one, and its settings."""
+    import fnmatch
+    for pat, tune in _pdk_tuning(manifest).items():
+        extra = {k: v for k, v in (tune.get("config") or {}).items() if isinstance(k, str)}
+        cp = tune.get("clock_period")
+        if pdk and fnmatch.fnmatchcase(pdk, pat):
+            if cp is not None and not clock_explicit:
+                cfg["CLOCK_PERIOD"] = float(cp)
+            cfg.update(extra)
+            continue
+        section = dict(extra)
+        if cp is not None and float(cp) > float(cfg.get("CLOCK_PERIOD") or 0):
+            section["CLOCK_PERIOD"] = float(cp)
+        if section:
+            cfg["pdk::" + pat] = section
 
 
 def _rename_starter(dest: Path, old: str, new: str, written: List[str]) -> None:
@@ -237,6 +278,7 @@ def create_project(
     if sv:
         _to_sv(dest, top, written)
     clock_port = manifest.get("clock_port") or "clk"
+    explicit_clock = clock_period is not None
     if clock_period is None:
         clock_period = manifest.get("clock_period")
     cfg = _render_config(top=top, pdk=pdk, scl=scl, clock_port=clock_port, clock_period=clock_period,
@@ -247,6 +289,7 @@ def create_project(
     extra = manifest.get("config")
     if isinstance(extra, dict):
         cfg.update({k: v for k, v in extra.items() if isinstance(k, str) and k not in cfg})
+    _apply_pdk_tuning(cfg, manifest, pdk, clock_explicit=explicit_clock)
     (dest / "config.json").write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
     written.append("config.json")
 

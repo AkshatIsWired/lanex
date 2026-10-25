@@ -9,5 +9,14 @@
     "src/fifo.v"
   ],
   "testbench": "verify/fifo_tb.v",
-  "order": 4
+  "order": 4,
+  "pdk": {
+    "gf180mcu*": {
+      "clock_period": 30.0,
+      "config": {
+        "FP_CORE_UTIL": 38,
+        "PL_TARGET_DENSITY_PCT": 50
+      }
+    }
+  }
 }
