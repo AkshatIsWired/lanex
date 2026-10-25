@@ -292,11 +292,12 @@
                   <div class="proj-name" id="proj-name"></div>
                   <div class="proj-path" id="proj-path"></div>
                   <div class="proj-design" id="proj-design">
-                    <label class="pd-field"><span>Top module</span><select id="pd-top"></select></label>
-                    <label class="pd-field"><span>Clock port</span><select id="pd-clock"></select></label>
-                    <label class="pd-field"><span>Clock period</span>
+                    <!-- .pd-src: the source button of the value (projectcard.js), outside the label -->
+                    <div class="pd-field"><span><label for="pd-top">Top module</label><span class="pd-src" data-src-key="DESIGN_NAME"></span></span><select id="pd-top"></select></div>
+                    <div class="pd-field"><span><label for="pd-clock">Clock port</label><span class="pd-src" data-src-key="CLOCK_PORT"></span></span><select id="pd-clock"></select></div>
+                    <div class="pd-field"><span><label for="pd-period">Clock period</label><span class="pd-src" data-src-key="CLOCK_PERIOD"></span></span>
                       <span class="pd-period"><input id="pd-period" type="number" min="0.1" step="0.1" inputmode="decimal"/><em>ns</em></span>
-                      <small id="pd-mhz"></small></label>
+                      <small id="pd-mhz"></small></div>
                   </div>
                   <p class="pd-status" id="pd-status" role="status"></p>
                   <p class="proj-lastrun" id="proj-lastrun"></p>
@@ -366,8 +367,8 @@
             </h2>
             <p class="hint">The silicon recipe your design is built against.</p>
             <div class="pdk-row">
-              <label class="field"><span>Process (PDK)</span><select id="pdk-select"></select></label>
-              <label class="field"><span>Standard-cell library</span><select id="scl-select"></select></label>
+              <div class="field"><span><label for="pdk-select">Process (PDK)</label><span class="pd-src" data-src-key="PDK"></span></span><select id="pdk-select"></select></div>
+              <div class="field"><span><label for="scl-select">Standard-cell library</label><span class="pd-src" data-src-key="STD_CELL_LIBRARY"></span></span><select id="scl-select"></select></div>
               <p class="pdk-about" id="pdk-about"></p>
             </div>
           </div>

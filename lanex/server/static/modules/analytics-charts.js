@@ -195,7 +195,8 @@ export function barList(rows, { max } = {}) {
 
 // ---------- stacked bar ------------------------------------------------------------------
 
-// segs: [{label, value, cls, text}] -> one bar + a legend with values.
+// segs: [{label, value, cls, text, src}] -> one bar + a legend with values
+// (src: optional HTML after a value, e.g. its source button).
 export function stackBar(segs, { legend = true } = {}) {
   const total = segs.reduce((s, x) => s + Math.max(0, x.value || 0), 0) || 1;
   const bar = "<div class='an-stack' role='img' aria-label='" + esc(segs.map((s) => s.label + " " + s.text).join(", ")) + "'>" +
@@ -207,7 +208,7 @@ export function stackBar(segs, { legend = true } = {}) {
   if (!legend) return bar;
   return bar + "<div class='an-legend'>" + segs.map((s) =>
     "<span class='an-leg'><i class='an-key " + s.cls + "'></i>" + esc(s.label) +
-    " <b>" + s.text + "</b> <span class='muted'>" + pctText((Math.max(0, s.value) / total) * 100) + "</span></span>").join("") + "</div>";
+    " <b>" + s.text + "</b> <span class='muted'>" + pctText((Math.max(0, s.value) / total) * 100) + "</span>" + (s.src || "") + "</span>").join("") + "</div>";
 }
 
 export function pctText(p) {
@@ -277,13 +278,14 @@ export function bbox(v) {
 
 // ---------- columns (e.g. DRC per router iteration) ---------------------------------------
 
-// cols: [{label, value, text, tip}] — single series, labels under, values on caps.
+// cols: [{label, value, text, tip, src}] — single series, labels under, values on
+// caps (src: optional HTML after the value, e.g. its source button).
 export function columns(cols, { cls = "s1" } = {}) {
   const m = Math.max(1e-9, ...cols.map((c) => c.value || 0));
   return "<div class='an-cols'>" + cols.map((c) => {
     const pct = ((c.value || 0) / m) * 100;
     return "<div class='an-col' tabindex='0' data-an-tip='" + esc(c.tip || "") + "'>" +
-      "<span class='an-col-val'>" + esc(c.text) + "</span>" +
+      "<span class='an-col-val'>" + esc(c.text) + (c.src || "") + "</span>" +
       "<span class='an-col-track'><span class='an-col-bar " + (c.value ? cls : "zero") + "' style='height:" + (c.value ? Math.max(pct, 2).toFixed(2) : 0) + "%'></span></span>" +
       "<span class='an-col-label'>" + esc(c.label) + "</span></div>";
   }).join("") + "</div>";

@@ -210,6 +210,12 @@ body.theme-light .an-v.is-neg { color: var(--fail); }
   border-color: transparent; background: transparent; color: var(--text-disabled); vertical-align: middle;
 }
 #sec-analytics .prov-btn:hover { color: var(--met1); border-color: var(--border); background: var(--surface-2); box-shadow: none; }
+#sec-analytics .an-col-val .prov-btn, #sec-analytics .an-div-val .prov-btn, #sec-analytics .an-leg .prov-btn { height: 16px; width: 16px; margin-left: 2px; }
+/* the per-stage table has a source button in every cell: shown on the row
+   under the pointer (or when one has focus), so the numbers stay readable */
+#sec-analytics .an-qor .prov-btn { height: 16px; width: 16px; margin-left: 2px; }
+#sec-analytics .an-qor tbody tr:not(:hover):not(:focus-within) .prov-btn { visibility: hidden; }
+@media (hover: none) { #sec-analytics .an-qor tbody tr .prov-btn { visibility: visible; } }
 
 /* ---------- facts (label/value lists) ---------- */
 .an-facts { margin: 0; display: grid; grid-template-columns: 1fr; gap: 0; }
