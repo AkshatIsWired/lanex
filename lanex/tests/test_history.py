@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -245,3 +246,59 @@ def test_render_dot_rejects_non_dot(tmp_path: Path):
     step.mkdir(parents=True)
     (step / "x.txt").write_text("nope")
     assert history.render_dot(step, "x.txt")["ok"] is False
+
+
+def test_list_runs_cache_follows_a_live_run(tmp_path):
+    # Summaries are cached per run; a step finishing, a new step, final metrics
+    # and a pin must all show up in the next listing.
+    from lanex.controller import history
+    run = _make_run(tmp_path, with_metrics=False)
+    step = run / "3-OpenROAD.Placement"
+    step.mkdir()
+    (step / "state_in.json").write_text("{}", encoding="utf-8")
+    first = history.list_runs(tmp_path)[0]
+    assert first["steps_done"] == 1 and first["steps_failed"] == 2
+
+    time.sleep(0.05)  # file times are coarse (a few ms); real steps take seconds
+    (step / "state_out.json").write_text("{}", encoding="utf-8")
+    assert history.list_runs(tmp_path)[0]["steps_done"] == 2
+
+    time.sleep(0.05)
+    (run / "4-OpenROAD.CTS").mkdir()
+    assert history.list_runs(tmp_path)[0]["step_count"] == 4
+
+    time.sleep(0.05)
+    (run / "final").mkdir()
+    (run / "final" / "metrics.json").write_text(json.dumps({"timing__setup__ws": 0.5}), encoding="utf-8")
+    assert history.list_runs(tmp_path)[0]["key_metrics"]["timing__setup__ws"] == 0.5
+
+    time.sleep(0.05)
+    (run / history._PIN_MARKER).write_text("", encoding="utf-8")
+    assert history.list_runs(tmp_path)[0]["pinned"] is True
+
+
+def test_list_runs_skips_a_run_removed_mid_listing(tmp_path, monkeypatch):
+    from lanex.controller import history
+    _make_run(tmp_path, tag="a")
+    gone = _make_run(tmp_path, tag="b")
+    real_stat = Path.stat
+
+    def flaky(self, *a, **k):
+        if self == gone:
+            raise FileNotFoundError(self)
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(Path, "stat", flaky)
+    assert [r["tag"] for r in history.list_runs(tmp_path)] == ["a"]
+
+
+def test_run_summaries_survive_a_restart(tmp_path, monkeypatch):
+    from lanex.controller import history
+    _make_run(tmp_path)
+    first = history.list_runs(tmp_path)
+    assert history._cache_file().is_file()
+    # A new server process: empty memory, the file on disk, and no summarising.
+    monkeypatch.setattr(history, "_SUMMARY_CACHE", {})
+    monkeypatch.setattr(history, "_cache_loaded", False)
+    monkeypatch.setattr(history, "_summarise", lambda run: (_ for _ in ()).throw(AssertionError("re-summarised")))
+    assert history.list_runs(tmp_path) == first

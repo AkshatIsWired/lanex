@@ -125,6 +125,9 @@ export async function renderAnalyticsFull() {
   _trendCache.clear();   // a run may have finished since the tab was last shown
   await loadMeta();
   const runs = await ctx.loadRuns();
+  // The list could not be loaded at all (LanEx busy or asleep): leave the page
+  // as it is; context.js retries and the page repaints when runs arrive.
+  if (!runs.length && ctx.runsLoadFailed()) return;
   if (!runs.length || !ctx.contextRun()) {
     body.classList.add("is-empty");
     document.getElementById("an-empty").hidden = false;

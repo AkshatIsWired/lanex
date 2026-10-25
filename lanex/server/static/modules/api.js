@@ -76,7 +76,9 @@ export const api = {
   startEngine: (engine) =>
     _fetch("/api/container/start-engine", { method: "POST", body: JSON.stringify({ engine }) }),
   runStatus: () => _fetch("/api/run/status"),
-  runs:  (designDir) => _fetch("/api/runs" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : "")),
+  // The first listing of a big project on /mnt/c summarises every run once
+  // (later ones come from the server's cache): give it time.
+  runs:  (designDir) => _fetch("/api/runs" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : ""), { timeout: 120000 }),
   knownDesigns: () => _fetch("/api/known-designs"),
   run:   (tag) => _fetch("/api/runs/" + encodeURIComponent(tag)),
   runStepLog: (step, tag) =>

@@ -114,6 +114,9 @@ export async function revealBox(box) {
 // a finished run all change it, and this page follows.
 async function loadRuns() {
   const runs = await ctx.loadRuns();
+  // The list could not be loaded at all (LanEx busy or asleep): leave the page
+  // as it is; context.js retries and the page repaints when runs arrive.
+  if (!runs.length && ctx.runsLoadFailed()) return;
   const tag = ctx.contextRun();
   const empty = !runs.length || !tag;
   $("lx-empty").hidden = !empty;

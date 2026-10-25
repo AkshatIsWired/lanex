@@ -35,7 +35,8 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
   const paint = () => {
     const lt = live && live();
     if (lt) paintLive(host.querySelector("[data-rb='run']"), lt);
-    else paintPick(host.querySelector("[data-rb='run']"), ctx.contextRow(), { empty: "No runs yet" });
+    else paintPick(host.querySelector("[data-rb='run']"), ctx.contextRow(),
+      { empty: ctx.runsLoadFailed() ? "Couldn't load runs. Retrying…" : "No runs yet" });
     const b = host.querySelector("[data-rb='base']");
     if (b) {
       const tag = ctx.contextBaseline();
@@ -179,6 +180,7 @@ export function mountRunBar(host, { baseline = false, live = null } = {}) {
   });
 
   ctx.onContext(() => { paint(); if (!pop.hidden) fill(); });
+  document.addEventListener("g:runs_state", () => paint());
   const api = { paint, close };
   host._rb = api;
   paint();

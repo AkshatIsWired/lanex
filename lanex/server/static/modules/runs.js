@@ -59,15 +59,15 @@ function wireScope() {
   // The run the results pages show is marked here; it follows a pick anywhere.
   onContext(() => paintViewing());
   const fi = document.getElementById("runs-filter");
-  if (fi) fi.addEventListener("input", () => { _filterText = fi.value.toLowerCase(); renderRuns(); });
+  if (fi) fi.addEventListener("input", () => { _filterText = fi.value.toLowerCase(); renderRuns({ cached: true }); });
   const sf = document.getElementById("runs-status-filter");
-  if (sf) sf.addEventListener("change", () => { _filterStatus = sf.value; renderRuns(); });
+  if (sf) sf.addEventListener("change", () => { _filterStatus = sf.value; renderRuns({ cached: true }); });
   const pf = document.getElementById("runs-pin-filter");
   if (pf) pf.addEventListener("click", () => {
     _filterPinned = !_filterPinned;
     pf.classList.toggle("runs-scope-active", _filterPinned);
     pf.setAttribute("aria-pressed", _filterPinned ? "true" : "false");
-    renderRuns();
+    renderRuns({ cached: true });
   });
   const bd = document.getElementById("runs-batch-delete");
   if (bd) bd.addEventListener("click", () => batchDelete());
@@ -96,15 +96,47 @@ function matchesFilter(run) {
 // the run bar — see context.js.
 const gatherRuns = gatherRunsScoped;
 
-export async function renderRuns() {
+// The last list shown, so typing in the filter needs no server round trip and
+// a failed refresh can keep it on screen.
+let _shown = { key: "", runs: [] };
+let _renderSeq = 0;
+
+export async function renderRuns({ cached = false } = {}) {
   const root = document.getElementById("runs-list");
   if (!root) return;
   wireScope();
   const scope = getScope();
   document.querySelectorAll(".runs-scope[data-scope]").forEach((b) =>
     b.classList.toggle("runs-scope-active", b.dataset.scope === scope));
-  let runs = [];
-  try { runs = await gatherRuns(scope); } catch (_e) { runs = []; }
+  const key = scope + "\0" + normDir(state.designDir);
+  const my = ++_renderSeq;
+  let runs;
+  if (cached && _shown.key === key) {
+    runs = _shown.runs;
+  } else {
+    try {
+      runs = await gatherRuns(scope, { strict: true });
+    } catch (_e) {
+      if (my !== _renderSeq) return;
+      // The list could not be refreshed (LanEx busy or asleep): keep the runs
+      // already on screen and say so, rather than "No runs yet".
+      if (_shown.key === key && root.children.length) { runsNote("Couldn't refresh the list. Trying again…"); setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000); return; }
+      runs = null;
+    }
+  }
+  // A newer render started while this one waited: it owns the list.
+  if (my !== _renderSeq) return;
+  if (runs === null) {
+    root.innerHTML = "";
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.innerHTML = "<span class='ico'>⏱</span><h3>Couldn't load your runs</h3><p>LanEx didn't answer in time. Trying again…</p>";
+    root.appendChild(li);
+    setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000);
+    return;
+  }
+  runsNote("");
+  _shown = { key, runs };
   // Keep state.runs scoped to the active design (other views rely on api.run()
   // which is active-dir-scoped); the "all" list is display-only here.
   if (scope !== "all") state.runs = runs;
@@ -187,6 +219,22 @@ export async function renderRuns() {
   }
   syncBatchButton();
   paintViewing();
+}
+
+// A one-line status above the list (empty text hides it).
+function runsNote(text) {
+  const root = document.getElementById("runs-list");
+  if (!root) return;
+  let el = document.getElementById("runs-note");
+  if (!text) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement("p");
+    el.id = "runs-note";
+    el.className = "muted";
+    el.setAttribute("role", "status");
+    root.parentNode.insertBefore(el, root);
+  }
+  el.textContent = text;
 }
 
 function paintViewing() {

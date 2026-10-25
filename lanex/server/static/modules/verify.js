@@ -134,6 +134,9 @@ async function render() {
   if (!body) return;
   wireOnce();
   const runs = await ctx.loadRuns();
+  // The list could not be loaded at all (LanEx busy or asleep): leave the page
+  // as it is; context.js retries and the page repaints when runs arrive.
+  if (!runs.length && ctx.runsLoadFailed()) return;
   const empty = document.getElementById("vf-empty");
   if (!runs.length || !ctx.contextRun()) {
     body.classList.add("is-empty");

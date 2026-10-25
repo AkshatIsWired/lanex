@@ -55,7 +55,8 @@ function emit(why) {
 // ---------------------------------------------------------------- memory
 function memory() { return safeStorage.getJSON(MEM_KEY, {}) || {}; }
 function remember() {
-  if (!C.design) return;
+  // A list that came back empty must not erase the run the user picked.
+  if (!C.design || !C.run) return;
   const m = memory();
   m[normDir(C.design)] = { run: C.run, baseline: C.baseline, picked: C.picked };
   // Keep the 30 most recent projects.
@@ -99,13 +100,53 @@ function settleBaseline() {
 }
 
 // ---------------------------------------------------------------- loading
+// A run list that fails to load (the server slow on /mnt/c, asleep, being
+// restarted) is NOT an empty list: the last good one stays on every page and
+// a retry is scheduled. Treating the failure as "no runs" is what made runs
+// vanish from Runs, Layout and Analytics and come back a while later.
 let _loading = null;
-export async function loadRuns() {
-  // Pages that open together share one fetch.
-  if (_loading) return _loading;
-  _loading = (async () => {
-    let runs = [];
-    try { runs = await gatherRunsScoped(); } catch (_e) { runs = []; }
+let _loadingKey = "";
+let _gen = 0;
+let _loadedKey = "";
+let _loadedAt = 0;
+let _failed = false;
+let _retry = null;
+const FRESH_FOR_MS = 1500;
+
+function loadKey() { return getRunScope() + "\0" + normDir(state.designDir); }
+
+// True while the newest attempt to list runs failed (pages say "couldn't
+// refresh" instead of "no runs yet").
+export function runsLoadFailed() { return _failed; }
+
+export async function loadRuns({ fresh = false } = {}) {
+  const key = loadKey();
+  // Pages that open together, and tab switches in quick succession, share one
+  // listing instead of each asking the server for the same thing.
+  if (_loading && _loadingKey === key) return _loading;
+  if (!fresh && !_failed && key === _loadedKey && Date.now() - _loadedAt < FRESH_FOR_MS) return C.runs;
+  const gen = ++_gen;
+  const p = (async () => {
+    let runs;
+    try {
+      runs = await gatherRunsScoped(undefined, { strict: true });
+    } catch (_e) {
+      if (gen !== _gen) return C.runs;
+      _failed = true;
+      scheduleRetry();
+      // Not a "g:context" change (pages reload on those, which would retry
+      // in a tight loop): run bars listen for this to say "couldn't refresh".
+      document.dispatchEvent(new CustomEvent("g:runs_state", { detail: { failed: true } }));
+      // Same project and scope: keep what is on screen. Another project: we
+      // know nothing about it yet, so nothing is shown rather than its runs.
+      return _loadedKey === key ? C.runs : [];
+    }
+    // A slower answer for a project the user has since left is dropped.
+    if (gen !== _gen || key !== loadKey()) return runs;
+    if (_failed) document.dispatchEvent(new CustomEvent("g:runs_state", { detail: { failed: false } }));
+    _failed = false;
+    _loadedKey = key;
+    _loadedAt = Date.now();
     if (getRunScope() === "design") state.runs = runs;
     C.runs = runs;
     const before = C.run + "\0" + C.design + "\0" + C.baseline;
@@ -116,7 +157,26 @@ export async function loadRuns() {
     emit(before !== C.run + "\0" + C.design + "\0" + C.baseline ? "settled" : "loaded");
     return runs;
   })();
-  try { return await _loading; } finally { _loading = null; }
+  _loading = p;
+  _loadingKey = key;
+  try { return await p; } finally { if (_loading === p) { _loading = null; _loadingKey = ""; } }
+}
+
+// LanEx came back after being unreachable (api.js): list again.
+if (typeof document !== "undefined") {
+  document.addEventListener("g:server_back", () => {
+    if (_loadedKey || _failed) loadRuns({ fresh: true }).then(() => { if (!_failed) emit("runs"); });
+  });
+}
+
+// After a failed listing, try again by itself; pages repaint on "runs".
+function scheduleRetry() {
+  if (_retry) return;
+  _retry = setTimeout(async () => {
+    _retry = null;
+    await loadRuns({ fresh: true });
+    if (!_failed) emit("runs");
+  }, 4000);
 }
 
 // ---------------------------------------------------------------- changes
@@ -178,10 +238,10 @@ export async function noteRunFinished(tag) {
 // runs before it lists the one that just finished, so ask again for a few
 // seconds rather than follow the run before it.
 export async function waitForRun(tag) {
-  await loadRuns();
+  await loadRuns({ fresh: true });
   for (let i = 0; tag && i < 8 && !contextRow(tag, state.designDir); i++) {
     await new Promise((r) => setTimeout(r, 700));
-    await loadRuns();
+    await loadRuns({ fresh: true });
   }
   return !tag || !!contextRow(tag, state.designDir);
 }
@@ -212,7 +272,9 @@ export function designLabel(dir) {
 // Runs for `scope` (default: the preference). "all" merges the recent designs
 // (ll.recentDesigns), the ones the server remembers and the active one, de-duped
 // by run_dir, each row tagged with `_design`. Newest first.
-export async function gatherRunsScoped(scope) {
+// `strict`: a failed listing throws (callers keep their last good list)
+// instead of quietly coming back empty.
+export async function gatherRunsScoped(scope, { strict = false } = {}) {
   scope = scope || getRunScope();
   const byRunDir = new Map();
   const add = (runs, dir) => {
@@ -224,7 +286,7 @@ export async function gatherRunsScoped(scope) {
     }
   };
   if (scope !== "all") {
-    try { add(await api.runs(state.designDir || undefined), state.designDir); } catch (_e) {}
+    try { add(await runsOnce(state.designDir || undefined), state.designDir); } catch (e) { if (strict) throw e; }
     return Array.from(byRunDir.values());
   }
   let dirs = [];
@@ -236,11 +298,28 @@ export async function gatherRunsScoped(scope) {
     const nd = normDir(dir);
     if (seen.has(nd)) continue;
     seen.add(nd);
-    try { add(await api.runs(dir), dir); } catch (_e) { /* a removed folder */ }
+    try {
+      add(await runsOnce(dir), dir);
+    } catch (e) {
+      // A removed folder answers 404 quickly; a slow or failing server keeps
+      // that design's runs from the last good list.
+      if (e && e.status === 404) continue;
+      add(C.runs.filter((r) => normDir(r._design) === nd), dir);
+    }
   }
   const all = Array.from(byRunDir.values());
   all.sort((a, b) => String(b.started_at || "").localeCompare(String(a.started_at || "")));
   return all;
+}
+
+// One retry: a request that timed out behind a busy moment usually answers
+// the second time, now that the server keeps run summaries.
+async function runsOnce(dir) {
+  try { return await api.runs(dir); } catch (e) {
+    if (e && e.status >= 400 && e.status < 500) throw e;
+    await new Promise((r) => setTimeout(r, 1200));
+    return api.runs(dir);
+  }
 }
 
 // Run-scoped endpoints resolve against the server's active design: switch it

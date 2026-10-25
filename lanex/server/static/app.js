@@ -4,7 +4,7 @@ import { api, sse, fmt } from "./modules/api.js";
 import { state, safeStorage } from "./modules/state.js";
 import { setupTabs } from "./modules/tabs.js";
 import { setupNav, startAt, go } from "./modules/nav.js";
-import { noteRunStarted, noteRunFinished } from "./modules/context.js";
+import { noteRunStarted, noteRunFinished, loadRuns as loadContextRuns } from "./modules/context.js";
 import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkPill, paintOnboardChecklist } from "./modules/setup.js";
 import { setupTheme, toggleTheme } from "./modules/theme.js";
 import { setupHotkeys } from "./modules/hotkeys.js";
@@ -180,7 +180,10 @@ async function boot() {
     // view (Preview, Verify, Analytics, Layout viewers, step output) works
     // without first clicking "Open" on the Runs tab.
     try {
-      state.runs = await api.runs(state.designDir);
+      // Through the shared run context: one listing that every page reuses,
+      // instead of a second one of its own.
+      // (It keeps state.runs to this design's runs itself.)
+      await loadContextRuns();
       if (!state.selectedRunTag && state.runs && state.runs.length) {
         state.selectedRunTag = state.runs[0].tag;
       }
@@ -410,7 +413,8 @@ function handle(ev) {
 // The newest run's metrics, for the watch list (watch.js).
 async function refreshMetrics() {
   try {
-    state.runs = await api.runs();
+    // The open project's runs, not whichever design the server last saw.
+    state.runs = await api.runs(state.designDir || undefined);
     const target = state.runs[0] && state.runs[0].tag;
     if (!target) return;
     const view = await api.run(target);
