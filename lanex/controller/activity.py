@@ -24,7 +24,7 @@ from __future__ import annotations
 import subprocess
 import threading
 import time
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 _viewers: List[Tuple[str, subprocess.Popen]] = []
 _viewers_lock = threading.Lock()
@@ -45,6 +45,56 @@ def seconds_since_page_request() -> float:
     from a close.
     """
     return max(0.0, time.monotonic() - _last_page_request)
+
+
+# Pages that said hello recently, by the id each page picks for itself. An
+# event stream is not enough to prove a window is open: a sleeping laptop, a
+# Wi-Fi drop or Edge freezing a hidden window ends the stream while the window
+# (and the user's unsaved work in it) is still there. The heartbeat survives
+# those, and the page's own goodbye on close is what lets the launcher quit
+# quickly when the user really did close it.
+_pages: Dict[str, float] = {}
+_pages_lock = threading.Lock()
+_last_bye: Optional[float] = None
+# A hidden page's timers can be throttled to one run a minute, so a heartbeat
+# every 20 s may arrive only every ~60 s.
+PAGE_ALIVE_FOR = 150.0
+
+
+def note_hello(page_id: str) -> None:
+    """A page is alive (sent on load and then on a timer)."""
+    if not page_id:
+        return
+    with _pages_lock:
+        _pages[page_id[:64]] = time.monotonic()
+        if len(_pages) > 64:  # never grows without bound
+            oldest = min(_pages, key=_pages.get)
+            _pages.pop(oldest, None)
+
+
+def note_bye(page_id: str) -> None:
+    """A page is going away on purpose (closed, reloaded or navigated)."""
+    global _last_bye
+    with _pages_lock:
+        _pages.pop(page_id[:64], None)
+        _last_bye = time.monotonic()
+
+
+def live_pages() -> int:
+    """Pages whose last hello is recent enough to count as open."""
+    now = time.monotonic()
+    with _pages_lock:
+        for pid in [k for k, t in _pages.items() if now - t > PAGE_ALIVE_FOR]:
+            _pages.pop(pid, None)
+        return len(_pages)
+
+
+def seconds_since_bye() -> Optional[float]:
+    """How long since a page last said goodbye (None if none ever did)."""
+    with _pages_lock:
+        if _last_bye is None:
+            return None
+        return max(0.0, time.monotonic() - _last_bye)
 
 
 def track_viewer(proc: subprocess.Popen, label: str) -> None:

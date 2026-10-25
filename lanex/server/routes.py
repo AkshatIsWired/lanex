@@ -170,11 +170,32 @@ def h_presence(handler: Any) -> None:
     """
     from ..controller import activity
     from .sse import active_handlers
+    bye = activity.seconds_since_bye()
     _respond(handler, {
-        "windows": len(active_handlers()),
+        # A page counts while its stream is open OR its heartbeat is fresh: a
+        # stream that died in sleep is not a closed window.
+        "windows": max(len(active_handlers()), activity.live_pages()),
         "idleSeconds": round(activity.seconds_since_page_request(), 1),
+        # Lets the launcher tell "the user closed the window" (quit soon) from
+        # "the window went quiet" (wait much longer).
+        "byeSeconds": None if bye is None else round(bye, 1),
         "busy": activity.busy(),
     })
+
+
+def h_page_hello(handler: Any) -> None:
+    """Heartbeat from an open LanEx page (``GET /api/hello?id=…``)."""
+    from ..controller import activity
+    activity.note_hello(_query_param(handler.path, "id"))
+    _respond(handler, {"seen": True})
+
+
+def h_page_bye(handler: Any) -> None:
+    """A page closing on purpose (``POST /api/bye``, sent from ``pagehide``)."""
+    from ..controller import activity
+    body = getattr(handler, "_body", {}) or {}
+    activity.note_bye(str(body.get("id") or _query_param(handler.path, "id")))
+    _respond(handler, {"bye": True})
 
 
 def h_about(handler: Any) -> None:
@@ -4267,6 +4288,8 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/custom-macros", h_custom_macros),
     ("/api/health", h_health),
     ("/api/presence", h_presence),
+    ("/api/hello", h_page_hello),
+    ("/api/bye", h_page_bye),
     ("/api/about", h_about),
     ("/api/steps", h_steps),
     ("/api/variables", h_variables),

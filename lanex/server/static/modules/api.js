@@ -319,23 +319,107 @@ let _handlers = [];
 export const sse = {
   open() {
     if (_es) return;
-    try {
-      _es = new EventSource("/api/events");
-    } catch (e) {
-      console.warn("EventSource unavailable", e);
-      return;
-    }
+    _startPresence();
+    _connect();
   },
   on(fn) {
-    if (_handlers.length === 0) _wire(_es);
     _handlers.push(fn);
   },
 };
+
+// (Re)create the stream. EventSource retries a dropped connection by itself,
+// but once it gives up (the server answered with an error while it was coming
+// back, or the laptop slept through every retry) it stays CLOSED for good and
+// the window would never hear from LanEx again. So a CLOSED stream is rebuilt
+// here, with a growing pause, and at once when the PC wakes up.
+let _retryMs = 2000;
+let _retryTimer = null;
+function _connect() {
+  if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+  if (_es && _es.readyState !== 2) return;   // 2 = CLOSED
+  try {
+    _es = new EventSource("/api/events");
+  } catch (e) {
+    console.warn("EventSource unavailable", e);
+    return;
+  }
+  _wire(_es);
+}
+function _scheduleReconnect() {
+  if (_retryTimer) return;
+  _retryTimer = setTimeout(() => { _retryTimer = null; _connect(); }, _retryMs);
+  _retryMs = Math.min(_retryMs * 2, 30000);
+}
+
+// ----------------------------- presence -------------------------------------
+// The Windows launcher quits LanEx when its last window is gone. A stream that
+// dropped is not proof of that (sleep, Wi-Fi, a frozen background window), so
+// the page also says hello on a timer and goodbye when it really closes.
+
+const _pageId = (typeof crypto !== "undefined" && crypto.randomUUID)
+  ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+let _presenceOn = false;
+function _hello() {
+  fetch("/api/hello?id=" + encodeURIComponent(_pageId), { cache: "no-store" })
+    .then(() => _serverBack()).catch(() => {});
+}
+function _startPresence() {
+  if (_presenceOn) return;
+  _presenceOn = true;
+  _hello();
+  setInterval(_hello, 20000);
+  const wake = () => { _hello(); if (!_es || _es.readyState === 2) { _retryMs = 2000; _connect(); } };
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) wake(); });
+  document.addEventListener("resume", wake);      // Page Lifecycle: unfrozen
+  window.addEventListener("online", wake);
+  window.addEventListener("pageshow", (e) => { if (e.persisted) wake(); });
+  window.addEventListener("pagehide", () => {
+    // keepalive lets the request outlive the page; fetch (not sendBeacon) so it
+    // can carry the header every POST needs.
+    try {
+      fetch("/api/bye", {
+        method: "POST", keepalive: true,
+        headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
+        body: JSON.stringify({ id: _pageId }),
+      }).catch(() => {});
+    } catch (_e) { /* the page is going anyway */ }
+  });
+}
+
+// While the stream is down, ask /api/health every few seconds: the chip says
+// whether LanEx is coming back, and the first good answer rebuilds the stream
+// instead of waiting out EventSource's own back-off.
+let _healthTimer = null;
+let _downSince = 0;
+function _watchHealth() {
+  if (_healthTimer) return;
+  _downSince = _downSince || Date.now();
+  _healthTimer = setInterval(() => {
+    if (Date.now() - _downSince > 8000) _connIndicator(false, "long");
+    _fetch("/api/health", { timeout: 2500 }).then(() => _serverBack()).catch(() => {});
+  }, 3000);
+}
+function _serverBack() {
+  if (!_healthTimer) return;
+  clearInterval(_healthTimer);
+  _healthTimer = null;
+  const long = Date.now() - _downSince > 8000;
+  _downSince = 0;
+  _retryMs = 2000;
+  if (!_es || _es.readyState === 2) _connect();
+  // Lists that failed to load while LanEx was away can load again now.
+  if (long) {
+    _broadcast({ type: "server_back" });
+    document.dispatchEvent(new CustomEvent("g:server_back"));
+  }
+}
 
 function _wire(es) {
   if (!es) return;
   es.addEventListener("hello", (e) => {
     _connIndicator(true);
+    _serverBack();
+    _retryMs = 2000;
     try { _broadcast({ type: "hello", data: JSON.parse(e.data) }); } catch (_) {}
   });
   es.addEventListener("ping", () => {
@@ -356,8 +440,15 @@ function _wire(es) {
   // A dropped stream (server died, laptop slept) must be VISIBLE: EventSource
   // retries silently forever, and until it reconnects the UI would just go
   // quietly stale. Show a small fixed chip while disconnected.
-  es.onerror = () => { _connIndicator(false); _wasDisconnected = true; };
+  es.onerror = () => {
+    if (es !== _es) return;
+    _connIndicator(false);
+    _wasDisconnected = true;
+    _watchHealth();
+    if (es.readyState === 2) _scheduleReconnect();
+  };
   es.onopen = () => {
+    if (es !== _es) return;
     _connIndicator(true);
     // Belt-and-suspenders to the server ``gap`` event: on ANY reconnect that
     // followed a real drop, re-pull the run status so the pipeline can never
@@ -385,17 +476,20 @@ function _resyncRunStatus(reason) {
 
 // Fixed "reconnecting" chip — created lazily, removed the moment the stream is
 // healthy again. Pure DOM, no dependency on other modules (api.js is a leaf).
-function _connIndicator(ok) {
+function _connIndicator(ok, how) {
   let el = document.getElementById("sse-conn-chip");
   if (ok) {
     if (el) el.remove();
     return;
   }
-  if (el) return;
+  const text = how === "long"
+    ? "LanEx is not answering yet. Keep this window open: your unsaved edits stay here, and it reconnects by itself."
+    : "Connection to the LanEx server lost. Reconnecting…";
+  if (el) { if (el.textContent !== text) el.textContent = text; return; }
   el = document.createElement("div");
   el.id = "sse-conn-chip";
   el.setAttribute("role", "status");
-  el.textContent = "Connection to the LanEx server lost. Reconnecting…";
+  el.textContent = text;
   el.style.cssText =
     "position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9999;" +
     "background:var(--danger,#b23b3b);color:#fff;padding:6px 14px;border-radius:999px;" +

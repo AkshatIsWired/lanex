@@ -178,6 +178,17 @@ func startServer() (*exec.Cmd, error) {
 	return cmd, nil
 }
 
+// startKeepalive gives the distro a client again when the server inside is
+// still running but the wsl.exe that started it has gone: without one, WSL
+// stops an idle distro, server and all.
+func startKeepalive() (*exec.Cmd, error) {
+	cmd := hiddenCmd(wslExe, "-d", distroName, "-u", appUser, "--", "sleep", "infinity")
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
 func startServerArgs() []string {
 	return []string{"-d", distroName, "-u", appUser, "--", "env",
 		"-u", "WAYLAND_DISPLAY",

@@ -231,19 +231,33 @@ func openURL(raw string) {
 
 // logPath is where the appliance's own stdout/stderr lands: the first thing to
 // ask a user for when LanEx will not start, and the path our failure dialogs
-// name. One file, truncated per launch — a launcher that silently grows a log
-// forever is its own bug report.
+// name. Appended to, not truncated per launch: after "LanEx died while the
+// laptop slept" the user's next move is to open LanEx again, and a truncated
+// log would have lost the only record of why. Rotated at logMaxBytes into
+// launcher.log.1 so it never grows without bound.
 func logPath() string {
 	dir := filepath.Join(os.Getenv("LOCALAPPDATA"), installDir, "logs")
 	return filepath.Join(dir, "launcher.log")
 }
+
+const logMaxBytes = 4 << 20
 
 func openLogFile() (*os.File, error) {
 	p := logPath()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return nil, err
 	}
-	return os.Create(p)
+	if st, err := os.Stat(p); err == nil && st.Size() > logMaxBytes {
+		_ = os.Remove(p + ".1")
+		_ = os.Rename(p, p+".1")
+	}
+	// O_APPEND: the server writes through this handle while logf appends its
+	// own lines; without it each would overwrite the other.
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err == nil {
+		fmt.Fprintf(f, "\n[launcher %s] ---- LanEx starting ----\n", time.Now().Format(time.RFC3339))
+	}
+	return f, err
 }
 
 // logf appends a launcher-side note to the same file. Best-effort: losing a log

@@ -1415,4 +1415,27 @@
       setTimeout(function () { window.location.href = href; }, 330);
     });
   });
+
+  /* ------------------------------------------------------------------ */
+  /*  Presence: this page has no event stream, so the Windows launcher    */
+  /*  would think the window had closed. Same hello/bye as api.js.        */
+  /* ------------------------------------------------------------------ */
+  try {
+    var pid = (w.crypto && w.crypto.randomUUID) ? w.crypto.randomUUID()
+      : String(Date.now()) + Math.random().toString(16).slice(2);
+    var hello = function () {
+      fetch('/api/hello?id=' + encodeURIComponent(pid), { cache: 'no-store' }).catch(function () {});
+    };
+    hello();
+    setInterval(hello, 20000);
+    w.addEventListener('pagehide', function () {
+      try {
+        fetch('/api/bye', {
+          method: 'POST', keepalive: true,
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify({ id: pid })
+        }).catch(function () {});
+      } catch (e) {}
+    });
+  } catch (e) {}
 })();

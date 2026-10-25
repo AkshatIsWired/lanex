@@ -134,3 +134,31 @@ def test_page_requests_reset_idle_but_launcher_probes_do_not(server):
     # The launcher polls presence and health; those must not look like a page.
     urllib.request.urlopen(f"http://127.0.0.1:{server}/api/health", timeout=2).read()
     assert _presence(server)["idleSeconds"] >= 1.0
+
+
+def _bye(port: int, page_id: str) -> None:
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/bye", method="POST",
+        data=json.dumps({"id": page_id}).encode(),
+        headers={"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"})
+    urllib.request.urlopen(req, timeout=2).read()
+
+
+def test_heartbeat_counts_a_window_without_a_stream(server):
+    # A laptop that slept drops the event stream, but the window is still
+    # open: its heartbeat keeps it counted, so the launcher does not quit.
+    base = _presence(server)["windows"]
+    urllib.request.urlopen(f"http://127.0.0.1:{server}/api/hello?id=sleepy", timeout=2).read()
+    assert _presence(server)["windows"] >= max(base, 1)
+    _bye(server, "sleepy")
+    p = _presence(server)
+    assert p["windows"] == base
+    assert p["byeSeconds"] is not None and p["byeSeconds"] < 2
+
+
+def test_stale_heartbeat_stops_counting(monkeypatch):
+    from lanex.controller import activity
+    activity.note_hello("old-page")
+    assert activity.live_pages() >= 1
+    monkeypatch.setattr(activity, "PAGE_ALIVE_FOR", -1.0)
+    assert activity.live_pages() == 0
