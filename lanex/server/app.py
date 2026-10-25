@@ -458,6 +458,14 @@ def find_free_port(preferred: int = 8765, *, host: str = "127.0.0.1", retries: i
     for delta in range(0, retries + 2):
         port = preferred + delta
         with socket.socket(_addr_family(host), socket.SOCK_STREAM) as s:
+            # The same option the server itself binds with (HTTPServer's
+            # allow_reuse_address). Without it, connections of a server that
+            # just died (TIME_WAIT) made its port look taken, so a restarted
+            # LanEx came back one port up, where its open window could not
+            # reconnect. On POSIX this never allows a port someone listens on;
+            # on Windows SO_REUSEADDR would, so it is left off there.
+            if os.name != "nt":
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 s.bind((host, port))
             except OSError as ex:
