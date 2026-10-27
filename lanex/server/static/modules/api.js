@@ -31,7 +31,7 @@ async function _fetch(path, init) {
   } catch (e) {
     if (timer) clearTimeout(timer);
     if (e && e.name === "AbortError") {
-      const err = new Error("request timed out — is the server still running?");
+      const err = new Error("Request timed out. Please check if the server is still running.");
       err.status = 0;
       throw err;
     }
@@ -76,7 +76,9 @@ export const api = {
   startEngine: (engine) =>
     _fetch("/api/container/start-engine", { method: "POST", body: JSON.stringify({ engine }) }),
   runStatus: () => _fetch("/api/run/status"),
-  runs:  (designDir) => _fetch("/api/runs" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : "")),
+  // The first listing of a big project on /mnt/c summarises every run once
+  // (later ones come from the server's cache): give it time.
+  runs:  (designDir) => _fetch("/api/runs" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : ""), { timeout: 120000 }),
   knownDesigns: () => _fetch("/api/known-designs"),
   run:   (tag) => _fetch("/api/runs/" + encodeURIComponent(tag)),
   runStepLog: (step, tag) =>
@@ -91,6 +93,8 @@ export const api = {
   renderDot: (tag, path, force) =>
     _fetch("/api/render-dot?tag=" + encodeURIComponent(tag) + "&path=" + encodeURIComponent(path) +
       (force ? "&force=1" : "")),
+  revealDesign: (designDir) =>
+    _fetch("/api/reveal", { method: "POST", body: JSON.stringify({ design_dir: designDir }) }),
   revealFile: (tag, path) =>
     _fetch("/api/reveal", { method: "POST", body: JSON.stringify({ tag, path }) }),
   desktopTools: () => _fetch("/api/desktop-tools"),
@@ -100,12 +104,22 @@ export const api = {
   openInTool: (tool, tag, path, useTech, location) =>
     _fetch("/api/open-in-tool", { method: "POST", body: JSON.stringify({
       tool, tag, path, use_tech: useTech !== false, location: location || "host" }) }),
-  openInContainerTool: (tool, tag) =>
+  openInContainerTool: (tool, tag, path) =>
     _fetch("/api/open-in-tool", { method: "POST", body: JSON.stringify({
-      tool, tag, location: "container" }) }),
+      tool, tag, path, location: "container" }) }),
+  // Layout tab: KLayout draws the run in-process (controller/layoutview.py).
+  layoutSources: (tag) => _fetch("/api/layout/sources?tag=" + encodeURIComponent(tag)),
+  layoutOpen: (tag, source) =>
+    _fetch("/api/layout/open?tag=" + encodeURIComponent(tag) + "&source=" + encodeURIComponent(source || "final"), { timeout: 120000 }),
+  layoutProbe: (sid, x, y, r) =>
+    _fetch("/api/layout/probe?sid=" + encodeURIComponent(sid) + "&x=" + x + "&y=" + y + "&r=" + r),
+  layoutInstances: (sid, cell) =>
+    _fetch("/api/layout/instances?sid=" + encodeURIComponent(sid) + "&cell=" + encodeURIComponent(cell)),
+  layoutMarkers: (tag) => _fetch("/api/layout/markers?tag=" + encodeURIComponent(tag)),
+  layoutCommands: (tag) => _fetch("/api/layout/commands?tag=" + encodeURIComponent(tag)),
   runFileUrl: (tag, path) =>
     "/api/run-file?tag=" + encodeURIComponent(tag) + "&path=" + encodeURIComponent(path),
-  deleteRun: (tag) => _fetch("/api/run-delete", { method: "POST", body: JSON.stringify({ tag }) }),
+  deleteRun: (tag, force) => _fetch("/api/run-delete", { method: "POST", body: JSON.stringify({ tag, force: !!force }) }),
   runNote: (tag) => _fetch("/api/run-note?tag=" + encodeURIComponent(tag)),
   setRunNote: (tag, note) => _fetch("/api/run-note", { method: "POST", body: JSON.stringify({ tag, note }) }),
   setRunPin: (tag, pinned) => _fetch("/api/run-pin", { method: "POST", body: JSON.stringify({ tag, pinned }) }),
@@ -123,9 +137,6 @@ export const api = {
   designDir: () => _fetch("/api/design-dir"),
   setDesignDir: (path) => _fetch("/api/set-design-dir", { method: "POST", body: JSON.stringify({ path }) }),
   diffRuns: (a, b) => _fetch("/api/diff", { method: "POST", body: JSON.stringify({ a, b }) }),
-  explain: (message) => _fetch("/api/explain", { method: "POST", body: JSON.stringify({ message }) }),
-  explainChecker: (checker, metric) =>
-    _fetch("/api/explain-checker", { method: "POST", body: JSON.stringify({ checker, metric }) }),
   startRun: (payload) => _fetch("/api/run/start", { method: "POST", body: JSON.stringify(payload) }),
   cancelRun: () => _fetch("/api/run/cancel", { method: "POST", body: "{}" }),
   resumeRun: () => _fetch("/api/run/resume", { method: "POST", body: "{}" }),
@@ -194,6 +205,22 @@ export const api = {
 
   // ---------- Phase 0: project wizard + export
   templates: () => _fetch("/api/templates"),
+  projectDefaults: () => _fetch("/api/project/defaults"),
+  projectFiles: (path) => _fetch("/api/project/files" + (path ? "?path=" + encodeURIComponent(path) : "")),
+  designInfo: (payload) =>
+    _fetch("/api/project/design-info", { method: "POST", body: JSON.stringify(payload || {}) }),
+  newProjectFile: (payload) =>
+    _fetch("/api/project/new-file", { method: "POST", body: JSON.stringify(payload) }),
+  configSet: (set, remove, extra) =>
+    _fetch("/api/config/set", { method: "POST", body: JSON.stringify(Object.assign({ set: set || {}, remove: remove || [] }, extra || {})) }),
+  configSources: (files) =>
+    _fetch("/api/config/sources", { method: "POST", body: JSON.stringify({ files }) }),
+  projectForget: (designDir) =>
+    _fetch("/api/project/forget", { method: "POST", body: JSON.stringify({ design_dir: designDir }) }),
+  projectDelete: (designDir, confirmName) =>
+    _fetch("/api/project/delete", { method: "POST", body: JSON.stringify({ design_dir: designDir, confirm_name: confirmName }) }),
+  nativePick: ({ mode, title, start }) =>
+    _fetch("/api/fs/native-pick", { method: "POST", timeout: 0, body: JSON.stringify({ mode, title, start }) }),
   projectNew: (payload) =>
     _fetch("/api/project/new", { method: "POST", body: JSON.stringify(payload) }),
   runExportUrl: (tag, fmt) =>
@@ -204,6 +231,15 @@ export const api = {
   compare: (tags, runDirs) => _fetch("/api/compare", { method: "POST",
     body: JSON.stringify({ tags, run_dirs: runDirs || [] }) }),
   cellUsage: (tag) => _fetch("/api/cell-usage?tag=" + encodeURIComponent(tag)),
+  runStages: (tag) => _fetch("/api/run-stages?tag=" + encodeURIComponent(tag)),
+  // How a run ended and why, with fixes and its warnings by code (Flow).
+  runExplain: (tag, base) => _fetch("/api/run-explain?tag=" + encodeURIComponent(tag) + (base ? "&base=" + encodeURIComponent(base) : "")),
+  // The fix loop: a run's problems; what a fix would do; apply it as a run
+  // resumed from that one; undo a config change.
+  problems: (tag) => _fetch("/api/problems?tag=" + encodeURIComponent(tag), { timeout: 60000 }),
+  fixPlan: (body) => _fetch("/api/fix/plan", { method: "POST", body: JSON.stringify(body), timeout: 60000 }),
+  fixApply: (body) => _fetch("/api/fix/apply", { method: "POST", body: JSON.stringify(body), timeout: 60000 }),
+  configUndo: (undo) => _fetch("/api/config/undo", { method: "POST", body: JSON.stringify(undo) }),
   timingPaths: (tag, kind, limit) =>
     _fetch("/api/timing-paths?kind=" + encodeURIComponent(kind || "setup") +
       (tag ? "&tag=" + encodeURIComponent(tag) : "") +
@@ -222,6 +258,8 @@ export const api = {
     _fetch("/api/file/write", { method: "POST", body: JSON.stringify({ rel_path, content }) }),
   fileDelete: (rel_path) =>
     _fetch("/api/file/delete", { method: "POST", body: JSON.stringify({ rel_path }) }),
+  fileRename: (rel_path, new_rel) =>
+    _fetch("/api/file/rename", { method: "POST", body: JSON.stringify({ rel_path, new_rel }) }),
   lintStart: (payload) =>
     _fetch("/api/lint", { method: "POST", body: JSON.stringify(payload || {}) }),
   simTestbenches: (designDir) =>
@@ -229,14 +267,32 @@ export const api = {
   simStart: (payload) => _fetch("/api/sim/start", { method: "POST", body: JSON.stringify(payload) }),
   simCancel: () => _fetch("/api/sim/cancel", { method: "POST", body: "{}" }),
   waveformUrl: (path) => "/api/waveform?path=" + encodeURIComponent(path),
-  openWave: (path) =>
-    _fetch("/api/ide/open-wave", { method: "POST", body: JSON.stringify({ path }) }),
+  openWave: (path, signals) =>
+    _fetch("/api/ide/open-wave", { method: "POST", body: JSON.stringify({ path, signals: signals || [] }) }),
 
   // ---------- Phase 4: viewers + cells
   // (2D/3D layout = the flow's KLayout PNG + "Open in desktop tool"; the old
   //  in-browser klayout-render endpoints were removed — see desktop.py.)
   cells: (pdk, scl) =>
     _fetch("/api/cells?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "")),
+  // ---------- Cells tab: library as the flow sees it, and hard macros
+  cellLibrary: (pdk, scl, designDir) =>
+    _fetch("/api/celllib?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") +
+      (designDir ? "&design_dir=" + encodeURIComponent(designDir) : ""), { timeout: 90000 }),
+  cellDetail: (pdk, scl, cell) =>
+    _fetch("/api/celllib/cell?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || "")),
+  cellLayout: (pdk, scl, cell) =>
+    _fetch("/api/celllib/layout?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || "")),
+  macroCatalog: (pdk, scl) =>
+    _fetch("/api/macros/catalog?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "")),
+  macroProjects: (designDir) =>
+    _fetch("/api/macros/projects" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : "")),
+  macroAdd: (payload) =>
+    _fetch("/api/macros/add", { method: "POST", body: JSON.stringify(payload), timeout: 120000 }),
+  macroInspect: (designDir, pdk) =>
+    _fetch("/api/macros/inspect?design_dir=" + encodeURIComponent(designDir || "") + "&pdk=" + encodeURIComponent(pdk || "")),
+  macroSettings: (designDir, settings) =>
+    _fetch("/api/macros/settings", { method: "POST", body: JSON.stringify({ design_dir: designDir, settings }) }),
   // ---------- custom cells (advanced cell swap-out, per run)
   customCells: (designDir) =>
     _fetch("/api/custom-cells" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : "")),
@@ -265,23 +321,107 @@ let _handlers = [];
 export const sse = {
   open() {
     if (_es) return;
-    try {
-      _es = new EventSource("/api/events");
-    } catch (e) {
-      console.warn("EventSource unavailable", e);
-      return;
-    }
+    _startPresence();
+    _connect();
   },
   on(fn) {
-    if (_handlers.length === 0) _wire(_es);
     _handlers.push(fn);
   },
 };
+
+// (Re)create the stream. EventSource retries a dropped connection by itself,
+// but once it gives up (the server answered with an error while it was coming
+// back, or the laptop slept through every retry) it stays CLOSED for good and
+// the window would never hear from LanEx again. So a CLOSED stream is rebuilt
+// here, with a growing pause, and at once when the PC wakes up.
+let _retryMs = 2000;
+let _retryTimer = null;
+function _connect() {
+  if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+  if (_es && _es.readyState !== 2) return;   // 2 = CLOSED
+  try {
+    _es = new EventSource("/api/events");
+  } catch (e) {
+    console.warn("EventSource unavailable", e);
+    return;
+  }
+  _wire(_es);
+}
+function _scheduleReconnect() {
+  if (_retryTimer) return;
+  _retryTimer = setTimeout(() => { _retryTimer = null; _connect(); }, _retryMs);
+  _retryMs = Math.min(_retryMs * 2, 30000);
+}
+
+// ----------------------------- presence -------------------------------------
+// The Windows launcher quits LanEx when its last window is gone. A stream that
+// dropped is not proof of that (sleep, Wi-Fi, a frozen background window), so
+// the page also says hello on a timer and goodbye when it really closes.
+
+const _pageId = (typeof crypto !== "undefined" && crypto.randomUUID)
+  ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+let _presenceOn = false;
+function _hello() {
+  fetch("/api/hello?id=" + encodeURIComponent(_pageId), { cache: "no-store" })
+    .then(() => _serverBack()).catch(() => {});
+}
+function _startPresence() {
+  if (_presenceOn) return;
+  _presenceOn = true;
+  _hello();
+  setInterval(_hello, 20000);
+  const wake = () => { _hello(); if (!_es || _es.readyState === 2) { _retryMs = 2000; _connect(); } };
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) wake(); });
+  document.addEventListener("resume", wake);      // Page Lifecycle: unfrozen
+  window.addEventListener("online", wake);
+  window.addEventListener("pageshow", (e) => { if (e.persisted) wake(); });
+  window.addEventListener("pagehide", () => {
+    // keepalive lets the request outlive the page; fetch (not sendBeacon) so it
+    // can carry the header every POST needs.
+    try {
+      fetch("/api/bye", {
+        method: "POST", keepalive: true,
+        headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
+        body: JSON.stringify({ id: _pageId }),
+      }).catch(() => {});
+    } catch (_e) { /* the page is going anyway */ }
+  });
+}
+
+// While the stream is down, ask /api/health every few seconds: the chip says
+// whether LanEx is coming back, and the first good answer rebuilds the stream
+// instead of waiting out EventSource's own back-off.
+let _healthTimer = null;
+let _downSince = 0;
+function _watchHealth() {
+  if (_healthTimer) return;
+  _downSince = _downSince || Date.now();
+  _healthTimer = setInterval(() => {
+    if (Date.now() - _downSince > 8000) _connIndicator(false, "long");
+    _fetch("/api/health", { timeout: 2500 }).then(() => _serverBack()).catch(() => {});
+  }, 3000);
+}
+function _serverBack() {
+  if (!_healthTimer) return;
+  clearInterval(_healthTimer);
+  _healthTimer = null;
+  const long = Date.now() - _downSince > 8000;
+  _downSince = 0;
+  _retryMs = 2000;
+  if (!_es || _es.readyState === 2) _connect();
+  // Lists that failed to load while LanEx was away can load again now.
+  if (long) {
+    _broadcast({ type: "server_back" });
+    document.dispatchEvent(new CustomEvent("g:server_back"));
+  }
+}
 
 function _wire(es) {
   if (!es) return;
   es.addEventListener("hello", (e) => {
     _connIndicator(true);
+    _serverBack();
+    _retryMs = 2000;
     try { _broadcast({ type: "hello", data: JSON.parse(e.data) }); } catch (_) {}
   });
   es.addEventListener("ping", () => {
@@ -302,8 +442,15 @@ function _wire(es) {
   // A dropped stream (server died, laptop slept) must be VISIBLE: EventSource
   // retries silently forever, and until it reconnects the UI would just go
   // quietly stale. Show a small fixed chip while disconnected.
-  es.onerror = () => { _connIndicator(false); _wasDisconnected = true; };
+  es.onerror = () => {
+    if (es !== _es) return;
+    _connIndicator(false);
+    _wasDisconnected = true;
+    _watchHealth();
+    if (es.readyState === 2) _scheduleReconnect();
+  };
   es.onopen = () => {
+    if (es !== _es) return;
     _connIndicator(true);
     // Belt-and-suspenders to the server ``gap`` event: on ANY reconnect that
     // followed a real drop, re-pull the run status so the pipeline can never
@@ -331,17 +478,20 @@ function _resyncRunStatus(reason) {
 
 // Fixed "reconnecting" chip — created lazily, removed the moment the stream is
 // healthy again. Pure DOM, no dependency on other modules (api.js is a leaf).
-function _connIndicator(ok) {
+function _connIndicator(ok, how) {
   let el = document.getElementById("sse-conn-chip");
   if (ok) {
     if (el) el.remove();
     return;
   }
-  if (el) return;
+  const text = how === "long"
+    ? "LanEx is not answering yet. Keep this window open: your unsaved edits stay here, and it reconnects by itself."
+    : "Connection to the LanEx server lost. Reconnecting…";
+  if (el) { if (el.textContent !== text) el.textContent = text; return; }
   el = document.createElement("div");
   el.id = "sse-conn-chip";
   el.setAttribute("role", "status");
-  el.textContent = "Connection to the LanEx server lost — reconnecting…";
+  el.textContent = text;
   el.style.cssText =
     "position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9999;" +
     "background:var(--danger,#b23b3b);color:#fff;padding:6px 14px;border-radius:999px;" +

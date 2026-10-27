@@ -1,0 +1,877 @@
+# Windows installer CI: build LanEx.exe + LanEx-Setup.exe, verify what CAN be
+# verified here, and attach the installer to a tagged release.
+#
+# WHAT THIS WORKFLOW CANNOT DO, STATED PLAINLY: it cannot install LanEx.
+# GitHub-hosted runners have no nested virtualization, so WSL 2 does not run on
+# them — no `wsl --import`, no provisioning, no launch. Real install testing is
+# manual, on VMs, against the matrix in windows/README.md. A green tick here
+# means "the pieces build and their pure logic is correct", nothing more, and
+# pretending otherwise would be worse than having no CI at all.
+#
+# So it verifies exactly the parts that are verifiable off-WSL:
+#   * the launcher compiles for windows/amd64 and its unit tests pass — including
+#     the UTF-16LE decoding of `wsl -l -q`, the classic silent bug that makes a
+#     healthy install look missing;
+#   * lanex.iss compiles (its Pascal is compiled by ISCC, so syntax and every
+#     API name are checked);
+#   * provision.sh passes `bash -n` and shellcheck, AND actually provisions a
+#     plain ubuntu:24.04 container end to end, twice, with the appliance
+#     base self-test passing after each (provision-e2e). Hermetic Python tests
+#     cover finalizer selection/retry/readiness contracts. The real finalizer
+#     still needs WSL systemd + Docker, as do `wsl --import` and GUI launch;
+#   * the pinned Ubuntu rootfs URL still exists and still matches Microsoft's
+#     published WSL image manifest (weekly — see the rootfs-pin job).
+#
+# On a tag it also BAKES the appliance (bake-rootfs): the same provision.sh,
+# in a container, exported as the image Setup downloads. That is a build
+# artifact, not a test — the baked image is still only verified as far as a
+# container can verify it, and `wsl --import`ing it is a manual step in the
+# matrix like everything else that needs WSL.
+name: Windows installer
+
+on:
+  push:
+    # windows-installer-support is the integration branch for this installer;
+    # it carries changes that no other job in the repo covers, and waiting for a
+    # PR to find out whether provisioning still works is too late. Drop it from
+    # this list once it merges — every other branch gets the same coverage from
+    # the pull_request trigger below.
+    branches: [main, dev, windows-installer-support]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    # Weekly, for the rootfs pin: releases.ubuntu.com moves a point release to
+    # old-releases.ubuntu.com some time after the next one ships.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      candidate_version:
+        description: Candidate version stamped into PE, Setup, manifest and diagnostics
+        required: true
+        default: 1.0.0-test.1
+        type: string
+      release_tag:
+        description: Future unique tag for a staged release; blank keeps the candidate local-artifact only
+        required: false
+        default: ''
+        type: string
+      publish_release:
+        description: Publish only after matching acceptance evidence and all same-SHA workflows pass
+        required: true
+        default: false
+        type: boolean
+      acceptance_evidence_path:
+        description: Repository-relative M8 evidence JSON required when publishing
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-installer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  candidate-inputs:
+    name: Exact candidate inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      wheel-sha256: ${{ steps.inputs.outputs.wheel-sha256 }}
+      wheel-name: ${{ steps.inputs.outputs.wheel-name }}
+      image-digest: ${{ steps.inputs.outputs.image-digest }}
+      gds3d-commit: ${{ steps.inputs.outputs.gds3d-commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and lock the exact checkout payload
+        id: inputs
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet build
+          python -m build --wheel
+          wheel=$(find dist -maxdepth 1 -name '*.whl' -type f -print -quit)
+          test -n "$wheel"
+          python -m venv .candidate-venv
+          .candidate-venv/bin/python -m pip install --quiet \
+            -c windows/setup/constraints.txt "$wheel"
+          .candidate-venv/bin/python windows/setup/export_pdk_pins.py \
+            --catalog docs/windows-installer-handoff/CAPABILITY-INVENTORY.json \
+            --output pdk-pins.json
+          wheel_name=$(basename "$wheel")
+          cp "$wheel" "$wheel_name"
+
+          token=$(curl -fsSL 'https://ghcr.io/token?scope=repository%3Alibrelane%2Flibrelane%3Apull' |
+            python -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          digest=$(curl -fsSI \
+            -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            https://ghcr.io/v2/librelane/librelane/manifests/3.0.4 |
+            tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')
+          gds=$(git ls-remote https://github.com/trilomix/GDS3D.git HEAD | cut -f1)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$gds" =~ ^[0-9a-f]{40}$ ]]
+          {
+            echo "wheel-name=$wheel_name"
+            echo "wheel-sha256=$(sha256sum "$wheel_name" | cut -d' ' -f1)"
+            echo "image-digest=$digest"
+            echo "gds3d-commit=$gds"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanex-candidate-inputs
+          path: |
+            lanex-*.whl
+            pdk-pins.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # Phase 2a. Cook the appliance ONCE, here, and let Setup download the result —
+  # instead of every user's machine spending several minutes running apt, pip and
+  # a Docker install that all have to be up at that moment.
+  #
+  # Tag builds and manual runs only. On a PR this would add ~20 minutes to prove
+  # something provision-e2e already proves, and the asset it produces would have
+  # no release to live in — so PR builds compile an installer with no baked
+  # option at all, which is exactly how the installer shipped before this job.
+  bake-rootfs:
+    name: Bake the appliance rootfs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: candidate-inputs
+    outputs:
+      # Empty when the bake produced nothing usable — `build` reads these and
+      # simply omits the ISCC defines, so a failed bake degrades to the old
+      # behaviour rather than shipping a URL that 404s.
+      sha256: ${{ steps.bake.outputs.sha256 }}
+      size-mb: ${{ steps.bake.outputs.size-mb }}
+      size-bytes: ${{ steps.bake.outputs.size-bytes }}
+      inventory-sha256: ${{ steps.bake.outputs.inventory-sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lanex-candidate-inputs
+          path: .candidate-inputs
+
+      - name: Bake
+        id: bake
+        env:
+          # The tag's own ref, so the image contains the LanEx the installer
+          # built beside it claims to install. Self-consistency is the point:
+          # see the release checklist in windows/README.md.
+          LANEX_REF: ${{ github.sha }}
+          LANEX_WHEEL_NAME: ${{ needs.candidate-inputs.outputs.wheel-name }}
+        run: |
+          set -euo pipefail
+          docker run -d --name lanex-bake \
+            -v "$PWD:/checkout:ro" \
+            -e "LANEX_REF=$LANEX_REF" -e LANEX_BAKE=1 \
+            -e LANEX_INSTALL_SCRIPT=/checkout/scripts/install.sh \
+            -e "LANEX_FROM=/candidate/$LANEX_WHEEL_NAME" \
+            -e LANEX_PIP_CONSTRAINT=/checkout/windows/setup/constraints.txt \
+            -v "$PWD/.candidate-inputs:/candidate:ro" \
+            ubuntu:24.04 sleep infinity
+          docker exec lanex-bake bash /checkout/windows/provision/provision.sh
+
+          # Before export, never after: a broken appliance must not be able to
+          # become a published release asset.
+          docker exec lanex-bake bash /checkout/windows/provision/selftest.sh
+
+          docker exec lanex-bake bash -lc '
+            launcher=$(runuser -l lanex -c "command -v lanex")
+            launcher=$(readlink -f "$launcher")
+            app_python=$(sed -n "1s/^#!//p" "$launcher")
+            "$app_python" - <<"PY"
+          import importlib.metadata as metadata
+          import json, platform, subprocess
+          packages = {}
+          for name in ("bash", "curl", "docker-ce", "git", "python3", "sudo"):
+              result = subprocess.run(["dpkg-query", "-W", "-f=${Version}", name], text=True, capture_output=True)
+              packages[name] = result.stdout if result.returncode == 0 else None
+          print(json.dumps({
+              "schema": 1,
+              "architecture": platform.machine(),
+              "packages": packages,
+              "python": {name: metadata.version(name) for name in ("lanex", "librelane", "ciel")},
+          }, sort_keys=True))
+          PY' > baked-package-inventory.json
+
+          # `wsl --import` reads gzipped tar directly. -6 rather than -9: the
+          # last few percent cost minutes of CI for seconds of user download.
+          docker export lanex-bake | gzip -6 > lanex-rootfs-amd64.tar.gz
+          sha=$(sha256sum lanex-rootfs-amd64.tar.gz | cut -d' ' -f1)
+          mb=$(( $(stat -c%s lanex-rootfs-amd64.tar.gz) / 1048576 ))
+          {
+            echo "sha256=$sha"
+            echo "size-mb=$mb"
+            echo "size-bytes=$(stat -c%s lanex-rootfs-amd64.tar.gz)"
+            echo "inventory-sha256=$(sha256sum baked-package-inventory.json | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Pre-baked appliance rootfs"
+            echo "- ref: \`$LANEX_REF\`"
+            echo "- size: ${mb} MB compressed"
+            echo "- sha256: \`$sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanex-rootfs-amd64
+          path: |
+            lanex-rootfs-amd64.tar.gz
+            baked-package-inventory.json
+          if-no-files-found: error
+          retention-days: 14
+
+  build:
+    name: Build LanEx.exe + LanEx-Setup.exe
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      signed: ${{ steps.signing-result.outputs.signed }}
+    # bake-rootfs is skipped on every ordinary push and PR. `always()` keeps this
+    # job running when it is skipped; the two result checks still stop a build
+    # from shipping after a bake that actually broke.
+    needs: [candidate-inputs, bake-rootfs]
+    if: >
+      always() && needs.candidate-inputs.result == 'success'
+      && needs.bake-rootfs.result != 'failure'
+      && needs.bake-rootfs.result != 'cancelled'
+    env:
+      # Signing lights up on its own once the owner adds Azure Trusted Signing
+      # secrets; until then the build is unsigned and the README documents the
+      # SmartScreen "More info -> Run anyway" click. Secrets are unreadable in
+      # `if:` conditions directly, hence this job-level flag.
+      SIGN: ${{ secrets.AZURE_TENANT_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PR artifacts contain the fork head itself, never a synthetic merge
+          # checkout or a silent fallback to the base branch.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lanex-candidate-inputs
+          path: .candidate-inputs
+
+      - uses: actions/download-artifact@v4
+        if: needs.bake-rootfs.result == 'success'
+        with:
+          name: lanex-rootfs-amd64
+          path: .baked-rootfs
+
+      - uses: actions/setup-go@v5
+        with:
+          # Matches the `go` directive in windows/launcher/go.mod. Pinned rather
+          # than "stable" so a new Go release cannot change the produced binary
+          # without a deliberate commit.
+          go-version: "1.22"
+          cache-dependency-path: windows/launcher/go.sum
+
+      # A tag drives the version everywhere: the exe's VERSIONINFO resource, the
+      # installer's AppVersion, and the uninstall entry in Windows Settings.
+      # Untagged builds get 0.0.0 so nothing can masquerade as a release.
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $ver = $env:LANEX_REQUESTED_VERSION
+          } elseif ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $ver = $env:GITHUB_REF -replace '^refs/tags/v', ''
+          } else {
+            $ver = '0.0.0'
+          }
+          if ($ver -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
+            throw "invalid candidate version '$ver'"
+          }
+          # PE binary versions are numeric, but the text resources retain the
+          # complete candidate identity. Map a trailing prerelease number into
+          # the fourth numeric field so test.1 and test.2 do not both claim
+          # 1.0.0.0 in Windows properties.
+          $versionParts = $ver -split '-', 2
+          $base = $versionParts[0]
+          $build = 0
+          if ($versionParts.Count -eq 2 -and $versionParts[1] -match '(\d+)$') {
+            $build = [int]$Matches[1]
+          }
+          if ($build -gt 65535) { throw "candidate numeric build exceeds 65535: $build" }
+          $num = "$base.$build"
+          $parts = $base -split '\.'
+          while ($parts.Count -lt 3) { $parts += '0' }
+          "LANEX_VERSION=$ver"            | Out-File -Append $env:GITHUB_ENV
+          "LANEX_VERSION_NUM=$num"        | Out-File -Append $env:GITHUB_ENV
+          "LANEX_VER_MAJOR=$($parts[0])"  | Out-File -Append $env:GITHUB_ENV
+          "LANEX_VER_MINOR=$($parts[1])"  | Out-File -Append $env:GITHUB_ENV
+          "LANEX_VER_PATCH=$($parts[2])"  | Out-File -Append $env:GITHUB_ENV
+          "LANEX_VER_BUILD=$build"        | Out-File -Append $env:GITHUB_ENV
+          Write-Host "version: $ver (numeric $num)"
+        env:
+          LANEX_REQUESTED_VERSION: ${{ inputs.candidate_version }}
+
+      - name: Bind exact candidate payload and manifest inputs
+        shell: pwsh
+        env:
+          EVENT_SOURCE_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          EVENT_SOURCE_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          LANEX_WHEEL_NAME: ${{ needs.candidate-inputs.outputs.wheel-name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $wheel = (Resolve-Path (Join-Path '.candidate-inputs' $env:LANEX_WHEEL_NAME)).Path
+          $actual = (Get-FileHash $wheel -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '${{ needs.candidate-inputs.outputs.wheel-sha256 }}') {
+            throw 'downloaded candidate wheel does not match the producing job'
+          }
+          Copy-Item -LiteralPath $wheel -Destination 'windows/setup/'
+          $wheel = (Resolve-Path (Join-Path 'windows/setup' $env:LANEX_WHEEL_NAME)).Path
+          Copy-Item -LiteralPath '.candidate-inputs/pdk-pins.json' -Destination 'windows/setup/pdk-pins.json'
+          "LANEX_WHEEL=$wheel" | Out-File -Append $env:GITHUB_ENV
+          "LANEX_SOURCE_SHA=$(git rev-parse HEAD)" | Out-File -Append $env:GITHUB_ENV
+          "LANEX_SOURCE_REF=$env:EVENT_SOURCE_REF" | Out-File -Append $env:GITHUB_ENV
+          "LANEX_SOURCE_REPO=$env:EVENT_SOURCE_REPO" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Resolve immutable external pins and generate build manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $image = 'ghcr.io/librelane/librelane:3.0.4'
+          $digest = '${{ needs.candidate-inputs.outputs.image-digest }}'
+          $gds = '${{ needs.candidate-inputs.outputs.gds3d-commit }}'
+          $args = @{
+            Action = 'NewManifest'
+            OutputPath = 'windows/setup/build-manifest.json'
+            SourceRepository = $env:LANEX_SOURCE_REPO
+            SourceRef = $env:LANEX_SOURCE_REF
+            SourceSha = $env:LANEX_SOURCE_SHA
+            AppVersion = $env:LANEX_VERSION
+            WheelPath = $env:LANEX_WHEEL
+            InstallScriptPath = 'scripts/install.sh'
+            ProvisionScriptPath = 'windows/provision/provision.sh'
+            SelftestPath = 'windows/provision/selftest.sh'
+            ConstraintsPath = 'windows/setup/constraints.txt'
+            CatalogPath = 'docs/windows-installer-handoff/CAPABILITY-INVENTORY.json'
+            PdkPinsPath = 'windows/setup/pdk-pins.json'
+            RootfsUrl = 'https://releases.ubuntu.com/24.04.4/ubuntu-24.04.4-wsl-amd64.wsl'
+            RootfsSha256 = '9b2f7730dc68227dd04a9f3e5eab86ad85caf556b8606ad94f1f29ff5c4fd3f5'
+            RootfsSizeBytes = 391118848
+            ImageReference = $image
+            ImageDigest = $digest
+            Gds3dCommit = $gds
+          }
+          $baked = '${{ needs.bake-rootfs.outputs.sha256 }}'
+          if ($baked) {
+            $args.BakedRootfsSha256 = $baked
+            $args.BakedRootfsSizeBytes = [int64]('${{ needs.bake-rootfs.outputs.size-bytes }}')
+            $args.BakedPackageInventoryPath = '.baked-rootfs/baked-package-inventory.json'
+            $tag = $env:LANEX_RELEASE_TAG
+            if ($tag) {
+              if ($tag -notmatch '^v[0-9A-Za-z][0-9A-Za-z._-]*$') { throw "invalid release tag '$tag'" }
+              $args.BakedRootfsUrl = "https://github.com/$env:LANEX_SOURCE_REPO/releases/download/$tag/lanex-rootfs-amd64.tar.gz"
+            }
+          }
+          & windows/setup/setup.ps1 @args | Write-Host
+        env:
+          LANEX_RELEASE_TAG: ${{ inputs.release_tag }}
+
+      - name: go vet
+        working-directory: windows/launcher
+        run: go vet ./...
+
+      - name: gofmt (formatting is not a matter of taste in CI)
+        working-directory: windows/launcher
+        shell: pwsh
+        run: |
+          $bad = gofmt -l .
+          if ($bad) { Write-Error "gofmt would change: $bad"; exit 1 }
+          Write-Host "gofmt clean"
+
+      # The one piece of launcher logic that can be tested without WSL, and the
+      # one that has historically been wrong in hand-written WSL launchers.
+      - name: Launcher unit tests (UTF-16 distro parsing, health probe)
+        working-directory: windows/launcher
+        run: go test -v ./...
+
+      # Icon + publisher + version + the asInvoker/dpiAware manifest. An exe with
+      # none of these is what SmartScreen and AV heuristics flag, and our target
+      # user is exactly the one who cannot get past a warning wall.
+      - name: Embed icon, version info and manifest
+        working-directory: windows/launcher
+        run: |
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
+          # Four independent fields, four sets of flags. The numeric pair comes
+          # from -ver-* and -product-ver-*; the two STRINGS Explorer actually
+          # displays come from -file-version and -product-version. Miss any one
+          # and that field silently keeps versioninfo.json's local-build
+          # fallback of 1.0.0.0 — goversioninfo prints a "do not match" warning
+          # and still exits 0, so nothing goes red and a v0.9.0 release ships an
+          # exe whose Properties -> Details tab reads 1.0.0.0.
+          goversioninfo -64 -o resource.syso `
+            -ver-major ${{ env.LANEX_VER_MAJOR }} `
+            -ver-minor ${{ env.LANEX_VER_MINOR }} `
+            -ver-patch ${{ env.LANEX_VER_PATCH }} `
+            -ver-build ${{ env.LANEX_VER_BUILD }} `
+            -product-ver-major ${{ env.LANEX_VER_MAJOR }} `
+            -product-ver-minor ${{ env.LANEX_VER_MINOR }} `
+            -product-ver-patch ${{ env.LANEX_VER_PATCH }} `
+            -product-ver-build ${{ env.LANEX_VER_BUILD }} `
+            -file-version "${{ env.LANEX_VERSION }}" `
+            -product-version "${{ env.LANEX_VERSION }}" `
+            versioninfo.json
+        shell: pwsh
+
+      # -H windowsgui: no console window flashes when the user clicks the icon.
+      # -s -w: strip symbols/DWARF — this is a 400-line launcher, not something
+      # anyone debugs from a customer's machine.
+      - name: Build LanEx.exe
+        working-directory: windows/launcher
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags "-H windowsgui -s -w" -o LanEx.exe .
+
+      # Signing the launcher BEFORE the installer packages it — otherwise the
+      # signed installer would carry an unsigned payload, which is the half-fix
+      # SmartScreen still punishes.
+      - name: Sign LanEx.exe
+        if: env.SIGN == 'true'
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
+          files-folder: windows/launcher
+          files-folder-filter: exe
+
+      # 6.3+ for ArchitecturesAllowed=x64compatible. ISCC compiles the [Code]
+      # section too, so this step is a real check of the Pascal, not just packaging.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile LanEx-Setup.exe
+        working-directory: windows/installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $defines = @(
+            "/DAppVersion=${{ env.LANEX_VERSION }}",
+            "/DAppVersionNumeric=${{ env.LANEX_VERSION_NUM }}"
+          )
+          # The ref this Setup was built from, so provision.sh installs the LanEx
+          # that belongs with it — and so a Repair cannot silently pull the
+          # appliance back to main. Same reasoning as the bake job's LANEX_REF.
+          $defines += "/DLanexRef=$env:LANEX_SOURCE_SHA"
+          $defines += "/DLanexSourceSha=$env:LANEX_SOURCE_SHA"
+          $defines += "/DLanexSourceRepo=$env:LANEX_SOURCE_REPO"
+          $defines += "/DLanexWheel=$env:LANEX_WHEEL"
+          $workerHash = (Get-FileHash ..\setup\setup.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
+          $defines += "/DSetupWorkerSha256=$workerHash"
+          # Only a bake that ran AND produced a hash gets wired in. Anything else
+          # compiles the installer exactly as it was before Phase 2a: it
+          # downloads the pinned Ubuntu image and provisions on the user's
+          # machine. No phantom URLs in PR builds.
+          $baked = "${{ needs.bake-rootfs.outputs.sha256 }}"
+          if ($baked) {
+            $defines += "/DBakedRootfsSha256=$baked"
+            $defines += "/DCompanionRootfsSha256=$baked"
+            $defines += "/DBakedRootfsSizeMB=${{ needs.bake-rootfs.outputs.size-mb }}"
+            $tag = $env:LANEX_RELEASE_TAG
+            if ($tag) {
+              $defines += "/DBakedRootfsUrl=https://github.com/$env:LANEX_SOURCE_REPO/releases/download/$tag/lanex-rootfs-amd64.tar.gz"
+            }
+            Write-Host "building for the verified companion rootfs (${{ needs.bake-rootfs.outputs.size-mb }} MB)"
+          } else {
+            Write-Host "building without a pre-baked rootfs (provision runs on the user's machine)"
+          }
+          & $iscc /Qp @defines lanex.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $setup = Get-Item LanEx-Setup.exe
+          $version = $setup.VersionInfo
+          if ($version.FileVersionRaw.ToString() -ne $env:LANEX_VERSION_NUM) {
+            throw "Setup numeric file version '$($version.FileVersionRaw)' does not match '$env:LANEX_VERSION_NUM'"
+          }
+          # Inno pads the PE string table value with spaces on some compiler
+          # builds; compare the displayed text after removing that padding.
+          if ($version.ProductVersion.Trim() -ne $env:LANEX_VERSION) {
+            throw "Setup product version '$($version.ProductVersion)' does not match '$env:LANEX_VERSION'"
+          }
+          $setup
+        env:
+          LANEX_RELEASE_TAG: ${{ inputs.release_tag }}
+
+      - name: Sign LanEx-Setup.exe
+        if: env.SIGN == 'true'
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
+          files-folder: windows/installer
+          files-folder-filter: exe
+
+      - name: Verify both Authenticode signatures and timestamps
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @('windows/launcher/LanEx.exe', 'windows/installer/LanEx-Setup.exe')) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($signature.Status -ne 'Valid') { throw "$path signature is $($signature.Status)" }
+            if ($null -eq $signature.TimeStamperCertificate) { throw "$path has no trusted timestamp" }
+          }
+
+      - name: Record honest signing state
+        id: signing-result
+        shell: pwsh
+        run: |
+          "signed=$($env:SIGN.ToLowerInvariant())" | Out-File -Append $env:GITHUB_OUTPUT
+
+      # The SHA256 belongs in the job summary: it is what a cautious user checks
+      # against the release page before running an installer that asks for admin.
+      - name: Summary
+        if: always()
+        shell: pwsh
+        run: |
+          $exe = "windows/installer/LanEx-Setup.exe"
+          "## Windows installer" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path $exe) {
+            $f = Get-Item $exe
+            $h = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+            "- version: ``${{ env.LANEX_VERSION }}``"                     | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            "- size: $([math]::Round($f.Length/1MB,2)) MB"                | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            "- sha256: ``$h``"                                            | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            "- signed: ${{ env.SIGN == 'true' }}"                         | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            $baked = "${{ needs.bake-rootfs.outputs.sha256 }}"
+            if ($baked) {
+              "- pre-baked rootfs: ${{ needs.bake-rootfs.outputs.size-mb }} MB, ``$baked``" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            } else {
+              "- pre-baked rootfs: none (Setup provisions on the user's machine)"          | Out-File -Append $env:GITHUB_STEP_SUMMARY
+            }
+          } else {
+            "- **the installer did not build**" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          }
+          ""                                                                    | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "Not verified here (no nested virtualization on GitHub runners, so no" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "WSL 2): the actual install, provisioning, and first launch. Those are" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "tested by hand against the matrix in ``windows/README.md``."           | Out-File -Append $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanex-windows-build
+          path: |
+            windows/installer/LanEx-Setup.exe
+            windows/launcher/LanEx.exe
+            windows/setup/build-manifest.json
+            windows/setup/pdk-pins.json
+            windows/setup/lanex-*.whl
+            LICENSE
+            NOTICE
+          if-no-files-found: error
+          retention-days: 14
+
+  provision-lint:
+    name: provision.sh (bash -n + shellcheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # provision.sh is the one component that runs unattended, as root, on a
+      # stranger's machine. shellcheck at style level (not just error level)
+      # because an unquoted expansion there is a broken install, not a nit.
+      - name: Lint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+          bash -n windows/provision/provision.sh
+          shellcheck -S style windows/provision/provision.sh
+          echo "provision.sh OK"
+
+      # Line endings are load-bearing here: a CRLF provision.sh fails inside WSL
+      # on its own shebang with "bad interpreter", which reads like the file is
+      # missing. .gitattributes pins LF; this proves the pin is working.
+      - name: No CRLF in shell scripts
+        run: |
+          if grep -rlU $'\r' --include='*.sh' --exclude-dir=.git . ; then
+            echo "the files above contain CR — fix .gitattributes / re-checkout"; exit 1
+          fi
+          echo "all .sh files are LF — OK"
+
+  provision-e2e:
+    name: provision.sh end-to-end (container)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Build and mount the checkout itself. Fork PRs therefore exercise their
+      # actual wheel/scripts; no ref-probe may silently fall back to base/main.
+      - name: Build exact checkout wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet build
+          python -m build --wheel
+          echo "LANEX_SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "LANEX_WHEEL_NAME=$(basename dist/*.whl)" >> "$GITHUB_ENV"
+
+      # A plain ubuntu:24.04 base, not the WSL image: provision.sh is written to
+      # run in both (see its header, rule 4) and the minimal one is the honest
+      # test — every "Ubuntu already ships this" assumption fails here first.
+      # That is not hypothetical: it is how the curl-before-apt and the
+      # sudoers-before-sudo bugs were caught.
+      - name: Provision a container
+        run: |
+          set -euo pipefail
+          docker run -d --name lanex-e2e \
+            -v "$PWD:/checkout:ro" \
+            -e "LANEX_REF=$LANEX_SOURCE_SHA" \
+            -e "LANEX_SOURCE_SHA=$LANEX_SOURCE_SHA" \
+            -e LANEX_INSTALL_ID=11111111-2222-3333-4444-555555555555 \
+            -e LANEX_MANIFEST_HASH=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            -e LANEX_INSTALL_SCRIPT=/checkout/scripts/install.sh \
+            -e "LANEX_FROM=/checkout/dist/$LANEX_WHEEL_NAME" \
+            -e LANEX_PIP_CONSTRAINT=/checkout/windows/setup/constraints.txt \
+            ubuntu:24.04 sleep infinity
+          start=$(date +%s)
+          docker exec lanex-e2e bash /checkout/windows/provision/provision.sh
+          echo "first run: $(( $(date +%s) - start ))s" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Self-test the provisioned appliance
+        run: docker exec lanex-e2e bash /checkout/windows/provision/selftest.sh
+
+      # The installer's Repair button and a re-run of Setup both re-execute this
+      # script over a working appliance. A second run that is slow is a warning;
+      # a second run that FAILS means Repair is broken for every user who ever
+      # needs it, and nothing else in CI would notice.
+      - name: Idempotency — the Repair path
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          docker exec lanex-e2e bash /checkout/windows/provision/provision.sh | tee repair.log
+          took=$(( $(date +%s) - start ))
+          echo "repair run: ${took}s" >> "$GITHUB_STEP_SUMMARY"
+          grep -q "already exists" repair.log || { echo "::error::repair re-created the user"; exit 1; }
+          grep -q "already installed" repair.log || { echo "::error::repair re-installed Docker"; exit 1; }
+          docker exec lanex-e2e bash /checkout/windows/provision/selftest.sh
+
+      # Sizes the Phase 2a rootfs bake, and a sudden jump is the cheapest
+      # possible signal that a dependency started dragging half of Ubuntu in.
+      - name: Measure the appliance
+        if: always()
+        run: |
+          bytes=$(docker export lanex-e2e | wc -c)
+          echo "- provisioned rootfs: $(( bytes / 1024 / 1024 )) MiB uncompressed" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+  rootfs-pin:
+    name: Ubuntu rootfs pin still valid
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Not on ordinary pushes/PRs: upstream shipping a new point release is not a
+    # reason to block somebody's unrelated pull request. It IS a reason to block
+    # a release, so tags are included.
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      # Two independent failures, both of which break the installer for every
+      # new user, silently, and neither of which any other job would notice:
+      #
+      #   1. The pinned URL 404s. releases.ubuntu.com DELETES a point release's
+      #      files when the next one ships, so this is a matter of when, not if.
+      #   2. Microsoft's WSL manifest now points at a newer image. That is the
+      #      early warning for (1) — usually days ahead of the deletion.
+      #
+      # The fix for either is a one-line change to the #define block in
+      # windows/installer/lanex.iss, which is why this job prints the exact new
+      # values instead of just going red.
+      - name: Check the pin against Microsoft's WSL image manifest
+        run: |
+          set -euo pipefail
+          iss=windows/installer/lanex.iss
+          pin_url=$(sed -n 's/^#define RootfsUrl *"\(.*\)".*/\1/p' "$iss")
+          pin_sha=$(sed -n 's/^#define RootfsSha256 *"\(.*\)".*/\1/p' "$iss")
+          echo "pinned: $pin_url"
+          echo "        $pin_sha"
+          test -n "$pin_url" && test -n "$pin_sha"
+
+          echo "::group::pinned URL reachable?"
+          code=$(curl -o /dev/null -sIL -w '%{http_code}' --max-time 60 "$pin_url")
+          echo "HTTP $code"
+          echo "::endgroup::"
+
+          curl -fsSL --max-time 60 -o distros.json \
+            https://raw.githubusercontent.com/microsoft/WSL/master/distributions/DistributionInfo.json
+          up_line=$(python3 -c "import json; d=json.load(open('distros.json')); print(next(e['Amd64Url']['Url'] + ' ' + e['Amd64Url']['Sha256'] for e in d['ModernDistributions']['Ubuntu'] if e['Name'] == 'Ubuntu-24.04'))")
+          up_url=${up_line%% *}
+          up_sha=${up_line##* }
+          echo "upstream: $up_url"
+          echo "          $up_sha"
+
+          # The pin is frozen on purpose (Ship line): a newer 24.04 image is
+          # news, not a failure. Setup tries our mirror, the point-release
+          # folder and old-releases in turn, so the pin is only broken when
+          # none of the upstream locations serves the pinned file.
+          fail=0
+          old_url="https://old-releases.ubuntu.com/releases/24.04.4/${pin_url##*/}"
+          old_code=$(curl -o /dev/null -sIL -w '%{http_code}' --max-time 60 "$old_url")
+          if [ "$code" != "200" ] && [ "$old_code" != "200" ]; then
+            echo "::error::the pinned Ubuntu image is at neither $pin_url (HTTP $code) nor $old_url (HTTP $old_code). Only our mirror copy (scripts/mirror_deps.py) is left."
+            fail=1
+          fi
+          if [ "$pin_url" != "$up_url" ] || [ "$pin_sha" != "$up_sha" ]; then
+            echo "::warning::Ubuntu ships a newer 24.04 image ($up_url). The pin stays until a deliberate dependency update."
+          fi
+          {
+            echo "## Ubuntu rootfs pin"
+            echo "- pinned: \`$pin_url\` (HTTP $code); old-releases HTTP $old_code"
+            echo "- upstream: \`$up_url\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$fail"
+
+  candidate-gate:
+    name: Gated downloadable candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [candidate-inputs, bake-rootfs, build, provision-lint, provision-e2e, rootfs-pin]
+    if: >
+      always() && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
+      && needs.candidate-inputs.result == 'success'
+      && needs.bake-rootfs.result == 'success'
+      && needs.build.result == 'success'
+      && needs.provision-lint.result == 'success'
+      && needs.provision-e2e.result == 'success'
+      && needs.rootfs-pin.result == 'success'
+    outputs:
+      setup-sha256: ${{ steps.verify.outputs.setup-sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: lanex-windows-build
+          path: .windows-build
+      - uses: actions/download-artifact@v4
+        with:
+          name: lanex-rootfs-amd64
+          path: .rootfs
+      - name: Assemble and verify one self-contained tester bundle
+        id: verify
+        run: |
+          set -euo pipefail
+          mkdir candidate
+          cp .windows-build/windows/installer/LanEx-Setup.exe candidate/
+          cp .windows-build/windows/launcher/LanEx.exe candidate/
+          cp .windows-build/windows/setup/build-manifest.json candidate/
+          cp .windows-build/windows/setup/pdk-pins.json candidate/
+          cp .windows-build/windows/setup/lanex-*.whl candidate/
+          cp .windows-build/LICENSE .windows-build/NOTICE candidate/
+          cp .rootfs/lanex-rootfs-amd64.tar.gz .rootfs/baked-package-inventory.json candidate/
+          python scripts/ci/windows_candidate.py verify-bundle \
+            --manifest candidate/build-manifest.json \
+            --wheel candidate/lanex-*.whl \
+            --pdk-pins candidate/pdk-pins.json \
+            --setup candidate/LanEx-Setup.exe \
+            --launcher candidate/LanEx.exe \
+            --rootfs candidate/lanex-rootfs-amd64.tar.gz \
+            --inventory candidate/baked-package-inventory.json \
+            --source-sha "$GITHUB_SHA" \
+            --output candidate/candidate-manifest.json \
+            ${{ needs.build.outputs.signed == 'true' && '--signed' || '' }}
+          (cd candidate && sha256sum * > SHA256SUMS)
+          echo "setup-sha256=$(sha256sum candidate/LanEx-Setup.exe | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LanEx-Windows-candidate-${{ inputs.candidate_version || github.ref_name }}-${{ github.run_number }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish accepted Windows release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: candidate-gate
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: LanEx-Windows-candidate-${{ inputs.candidate_version }}-${{ github.run_number }}
+          path: candidate
+      - name: Require exact acceptance evidence and same-commit green workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_PATH: ${{ inputs.acceptance_evidence_path }}
+          SETUP_SHA: ${{ needs.candidate-gate.outputs.setup-sha256 }}
+        run: |
+          set -euo pipefail
+          test -n "$EVIDENCE_PATH"
+          evidence=$(python -c 'import os,pathlib; r=pathlib.Path.cwd().resolve(); p=(r/os.environ["EVIDENCE_PATH"]).resolve(); p.relative_to(r); print(p)')
+          python scripts/ci/windows_candidate.py verify-acceptance \
+            --evidence "$evidence" --source-sha "$GITHUB_SHA" --setup-sha "$SETUP_SHA"
+          for workflow in ci.yml differential.yml; do
+            ok=$(gh run list --workflow "$workflow" --commit "$GITHUB_SHA" --status completed \
+              --json conclusion --jq 'any(.[]; .conclusion == "success")')
+            test "$ok" = true || { echo "required workflow $workflow has no successful run for $GITHUB_SHA"; exit 1; }
+          done
+      - name: Create, verify, then publish a new immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9A-Za-z][0-9A-Za-z._-]*$ ]]
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "release $RELEASE_TAG already exists; refusing to overwrite immutable assets"
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" \
+            --title "LanEx $CANDIDATE_VERSION" \
+            --notes "Windows candidate verified against the acceptance evidence in source $GITHUB_SHA."
+          gh release upload "$RELEASE_TAG" \
+            candidate/LanEx-Setup.exe candidate/lanex-rootfs-amd64.tar.gz \
+            candidate/candidate-manifest.json candidate/SHA256SUMS \
+            candidate/LICENSE candidate/NOTICE
+          verify_dir=$(mktemp -d)
+          gh release download "$RELEASE_TAG" --dir "$verify_dir"
+          (cd "$verify_dir" && sha256sum --check SHA256SUMS --ignore-missing)
+          gh release edit "$RELEASE_TAG" --draft=false

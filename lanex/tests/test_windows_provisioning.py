@@ -1,0 +1,458 @@
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+
+import pytest
+
+from lanex.controller import installer, provisioning
+
+
+def _manifest() -> dict:
+    return {
+        "schema": 1,
+        "dependencies": {"librelane": "3.0.4", "ciel": "2.6.1"},
+        "image": {"reference": "ghcr.io/librelane/librelane:3.0.4", "digest": "sha256:" + "d" * 64},
+        "gds3d": {"commit": "e" * 40},
+        "pdkPins": {
+            "variants": {
+                "sky130A": {"family": "sky130", "requiredVersion": "a" * 40},
+                "sky130B": {"family": "sky130", "requiredVersion": "a" * 40},
+            }
+        },
+        "pdkCatalog": {
+            "sky130A": {
+                "family": "sky130",
+                "libraries": ["io", "hd", "sram"],
+                "default_libraries": ["io", "hd"],
+            },
+            "sky130B": {
+                "family": "sky130",
+                "libraries": ["io", "hd"],
+                "default_libraries": ["io", "hd"],
+            },
+        },
+    }
+
+
+def _write(tmp_path: Path, value: dict, name: str = "manifest.json") -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return path
+
+
+def test_default_plan_selects_every_sky130_library(tmp_path: Path) -> None:
+    plan = provisioning.load_plan(_write(tmp_path, _manifest()))
+    assert plan["engine"] == "docker"
+    assert plan["pdks"] == [
+        {
+            "variant": "sky130A",
+            "family": "sky130",
+            "version": "a" * 40,
+            "libraries": ["io", "hd", "sram"],
+        }
+    ]
+    assert {"verilator", "iverilog", "graphviz", "gtkwave", "gds3d"} == set(plan["nativeTools"])
+
+
+def test_advanced_libraries_include_required_and_reject_unknown(tmp_path: Path) -> None:
+    path = _write(tmp_path, _manifest())
+    plan = provisioning.load_plan(
+        path, choices={"pdks": ["sky130A"], "libraries": {"sky130A": ["sram"]}, "engine": "podman"}
+    )
+    assert plan["pdks"][0]["libraries"] == ["io", "hd", "sram"]
+    with pytest.raises(provisioning.ProvisioningInputError, match="unknown libraries"):
+        provisioning.load_plan(
+            path, choices={"pdks": ["sky130A"], "libraries": {"sky130A": ["$(touch /tmp/pwn)"]}}
+        )
+
+
+def test_same_family_variants_can_coexist_in_selection(tmp_path: Path) -> None:
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()),
+        choices={"pdks": ["sky130A", "sky130B"], "libraries": "all"},
+    )
+    assert set(p["variant"] for p in plan["pdks"]) == {"sky130A", "sky130B"}
+
+
+def test_minimal_plan_has_no_implicit_engine_image_tools_or_pdks(tmp_path: Path) -> None:
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()), choices={"profile": "minimal"}
+    )
+    assert plan["engine"] == "none"
+    assert plan["image"] is False
+    assert plan["nativeTools"] == []
+    assert plan["pdks"] == []
+
+
+def test_complete_and_maximum_plans_select_all_published_variants(tmp_path: Path) -> None:
+    from lanex.controller.pdk_catalog import build_canonical_pdk_catalog
+
+    catalog = build_canonical_pdk_catalog()
+    m = _manifest()
+    m["pdkPins"]["variants"] = {k: {"family": v["family"], "requiredVersion": "a" * 40} for k, v in catalog.items()}
+    m["pdkCatalog"] = {k: {"family": v["family"], "libraries": v["libraries"], "default_libraries": v.get("default_libraries", [])} for k, v in catalog.items()}
+    plan_complete = provisioning.load_plan(_write(tmp_path, m), choices={"profile": "complete"})
+    plan_max = provisioning.load_plan(_write(tmp_path, m), choices={"profile": "maximum"})
+    assert set(p["variant"] for p in plan_complete["pdks"]) == {"sky130A", "sky130B", "gf180mcuD", "ihp-sg13g2"}
+    assert set(p["variant"] for p in plan_max["pdks"]) == {"sky130A", "sky130B", "gf180mcuD", "ihp-sg13g2"}
+    assert plan_complete["engine"] == "docker"
+    assert plan_complete["image"] is True
+
+
+def test_custom_plan_rejects_pdk_without_image(tmp_path: Path) -> None:
+    with pytest.raises(provisioning.ProvisioningInputError, match="require.*flow image"):
+        provisioning.load_plan(
+            _write(tmp_path, _manifest()),
+            choices={"profile": "custom", "engine": "docker", "image": False,
+                     "pdks": ["sky130A"], "nativeTools": []},
+        )
+
+
+def test_gds3d_requires_linux_cpp_driver_not_cc(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lanex.controller import platform_env
+
+    monkeypatch.setattr(
+        platform_env,
+        "usable_which",
+        lambda name: "/usr/bin/" + name if name in {"git", "make", "cc"} else None,
+    )
+    assert installer._missing_gds3d_build_tools() == ["a C++ compiler"]
+
+
+def _mock_pdk_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lanex.controller import pdk, platform_env
+
+    monkeypatch.setattr(platform_env, "dns_ok", lambda: True)
+    monkeypatch.setattr(installer, "ciel_permission_status", lambda: {"needs_root": False})
+    monkeypatch.setattr(installer, "_pinned_pdk_version", lambda family: "a" * 40)
+    monkeypatch.setattr(installer, "_ciel_argv", lambda: ["python", "-m", "ciel"])
+    monkeypatch.setattr(installer, "ciel_home", lambda: "/owned/pdks")
+    monkeypatch.setattr(
+        pdk,
+        "check_pdk_library_ready",
+        lambda *a, **k: {"ready": True, "required_version": "a" * 40},
+    )
+    monkeypatch.setattr(installer.time, "sleep", lambda seconds: None)
+
+
+def test_pdk_sync_retries_transient_then_enables_with_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_pdk_environment(monkeypatch)
+    calls = []
+
+    def run(argv, *, label, key, **kwargs):
+        calls.append(argv)
+        if "fetch" in argv:
+            # Download steps opt into progress reporting and stall detection.
+            assert kwargs.get("stall_s") and "expect_bytes" in kwargs
+        if "fetch" in argv and sum("fetch" in c for c in calls) < 3:
+            return {"ok": False, "rc": 1, "output": ["connection reset"]}
+        return {"ok": True, "rc": 0, "output": []}
+
+    monkeypatch.setattr(installer, "_run_argv", run)
+    result = installer.install_pdk_sync(
+        "sky130A", ["io", "hd"], required_version="a" * 40, strict=True
+    )
+    assert result["ok"] is True and result["attempts"] == 3
+    assert sum("fetch" in c for c in calls) == 3
+    assert sum("enable" in c for c in calls) == 1
+    assert all(c[:3] == ["python", "-m", "ciel"] for c in calls)
+    assert calls[-1][-4:] == ["-l", "io", "-l", "hd"]
+
+
+def test_pdk_permanent_or_exhausted_failure_never_enables(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_pdk_environment(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        installer,
+        "_run_argv",
+        lambda argv, **kwargs: (
+            calls.append(argv) or {"ok": False, "rc": 1, "output": ["Permission denied"]}
+        ),
+    )
+    result = installer.install_pdk_sync("sky130A", ["hd"], required_version="a" * 40, strict=True)
+    assert result["ok"] is False and result["permanent"] is True
+    assert len(calls) == 1 and "enable" not in calls[0]
+
+
+def test_pdk_family_lock_serializes_variants() -> None:
+    assert installer._begin_pdk_family("sky130") is True
+    try:
+        result = installer.install_pdk_sync("sky130B", ["hd"])
+        assert result["ok"] is False
+        assert result["status"] == "family-already-running"
+    finally:
+        installer._end_pdk_family("sky130")
+
+
+def test_image_pull_uses_manifest_digest_and_selected_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lanex.controller import tools
+
+    monkeypatch.setattr(
+        tools,
+        "resolve_engine",
+        lambda *args: {"ready": True, "engine": "docker", "sg_wrap": False},
+    )
+    calls = []
+    monkeypatch.setattr(
+        installer,
+        "_run_argv",
+        lambda argv, **kwargs: (calls.append(argv) or {"ok": True, "rc": 0, "output": []}),
+    )
+    monkeypatch.setattr(
+        installer,
+        "_shell_exec_quiet",
+        lambda argv, timeout: (0, "unix:///var/run/docker.sock\n", ""),
+    )
+    monkeypatch.setattr(installer, "record_image_digest", lambda *a, **k: "sha256:" + "d" * 64)
+    digest = "sha256:" + "d" * 64
+    result = installer.pull_image_sync("ghcr.io/librelane/librelane:3.0.4", digest)
+    assert result["ok"] is True
+    assert calls == [["docker", "pull", f"ghcr.io/librelane/librelane:3.0.4@{digest}"]]
+
+
+def test_engine_resolver_honors_selected_podman(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lanex.controller import tools
+
+    monkeypatch.setattr(tools.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(tools, "_engine_usable", lambda name, **kwargs: (True, ""))
+    assert tools.resolve_engine("podman")["engine"] == "podman"
+    assert tools.resolve_engine("docker")["engine"] == "docker"
+
+
+def test_readiness_is_strict_if_any_selected_requirement_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lanex.controller import pdk, tools
+    from lanex.controller import container_run
+
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()),
+        choices={
+            "pdks": ["sky130A"],
+            "libraries": {"sky130A": []},
+            "nativeTools": [],
+            "engine": "docker",
+        },
+    )
+    monkeypatch.setattr(
+        provisioning.importlib.metadata,
+        "version",
+        lambda name: {"librelane": "3.0.4", "ciel": "2.6.1"}[name],
+    )
+    monkeypatch.setattr(tools, "resolve_engine", lambda *args: {"ready": True, "engine": "docker"})
+    monkeypatch.setattr(container_run, "image_ref", lambda: "example/image:3.0.4")
+
+    def probe(argv, timeout=30):
+        if "context" in argv:
+            return {"ready": True, "detail": "unix:///var/run/docker.sock"}
+        return {"ready": "run" not in argv, "detail": "sha256:" + "d" * 64}
+
+    monkeypatch.setattr(provisioning, "_command_probe", probe)
+    monkeypatch.setattr(
+        pdk,
+        "check_pdk_library_ready",
+        lambda *a, **k: {"ready": True, "required_version": "a" * 40},
+    )
+    report = provisioning.readiness_report(plan)
+    assert report["ready"] is False
+    assert report["checks"]["container:image"]["toolProbe"]["ready"] is False
+
+
+def test_readiness_strict_container_image_binary_probe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lanex.controller import container_run, pdk, tools
+
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()),
+        choices={
+            "pdks": ["sky130A"],
+            "libraries": {"sky130A": []},
+            "nativeTools": [],
+            "engine": "docker",
+        },
+    )
+    monkeypatch.setattr(
+        provisioning.importlib.metadata,
+        "version",
+        lambda name: {"librelane": "3.0.4", "ciel": "2.6.1"}[name],
+    )
+    monkeypatch.setattr(tools, "resolve_engine", lambda *args: {"ready": True, "engine": "docker"})
+    monkeypatch.setattr(container_run, "image_ref", lambda: "example/image:3.0.4")
+    monkeypatch.setattr(
+        pdk,
+        "check_pdk_library_ready",
+        lambda *a, **k: {"ready": True, "required_version": "a" * 40},
+    )
+
+    # Case 1: Probe reports missing binaries inside the container
+    def probe_missing(argv, timeout=30):
+        if "context" in argv:
+            return {"ready": True, "detail": "unix:///var/run/docker.sock"}
+        if "inspect" in argv:
+            return {"ready": True, "detail": "sha256:" + "d" * 64}
+        if "run" in argv:
+            return {"ready": False, "rc": 1, "detail": "MISSING:openroad klayout magic"}
+        return {"ready": True}
+
+    monkeypatch.setattr(provisioning, "_command_probe", probe_missing)
+    report = provisioning.readiness_report(plan)
+    assert report["ready"] is False
+    img_check = report["checks"]["container:image"]
+    assert img_check["ready"] is False
+    assert img_check["missingBinaries"] == ["openroad", "klayout", "magic"]
+    assert "openroad" in img_check["missing"]
+
+    # Case 2: Probe finds all binaries successfully
+    def probe_ok(argv, timeout=30):
+        if "context" in argv:
+            return {"ready": True, "detail": "unix:///var/run/docker.sock"}
+        if "inspect" in argv:
+            return {"ready": True, "detail": "sha256:" + "d" * 64}
+        if "run" in argv:
+            return {"ready": True, "rc": 0, "detail": ""}
+        return {"ready": True}
+
+    monkeypatch.setattr(provisioning, "_command_probe", probe_ok)
+    report_ok = provisioning.readiness_report(plan)
+    img_ok = report_ok["checks"]["container:image"]
+    assert img_ok["ready"] is True
+    assert img_ok["missingBinaries"] == []
+
+
+
+def test_readiness_names_missing_gds_daemon_image_and_library(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lanex.controller import pdk, platform_env, tools
+
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()),
+        choices={
+            "pdks": ["sky130A"],
+            "libraries": {"sky130A": []},
+            "nativeTools": ["gds3d"],
+            "engine": "docker",
+        },
+    )
+    monkeypatch.setattr(
+        provisioning.importlib.metadata,
+        "version",
+        lambda name: {"librelane": "3.0.4", "ciel": "2.6.1"}[name],
+    )
+    monkeypatch.setattr(platform_env, "resolve_user_bin", lambda *a, **k: None)
+    monkeypatch.setattr(
+        tools,
+        "resolve_engine",
+        lambda *args: {"ready": False, "engine": "docker", "reason": "daemon unavailable"},
+    )
+    monkeypatch.setattr(
+        pdk,
+        "check_pdk_library_ready",
+        lambda *a, **k: {"ready": False, "required_version": "a" * 40, "missing": ["library"]},
+    )
+    report = provisioning.readiness_report(plan, functional=False)
+    assert report["ready"] is False
+    assert report["checks"]["native:gds3d"]["ready"] is False
+    assert report["checks"]["engine:docker"]["ready"] is False
+    assert report["checks"]["container:image"]["ready"] is False
+    assert report["checks"]["pdk:sky130A:hd"]["ready"] is False
+
+
+def test_finalizer_waits_for_synchronous_pdk_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()),
+        choices={
+            "pdks": ["sky130A"],
+            "libraries": {"sky130A": []},
+            "nativeTools": [],
+            "engine": "docker",
+        },
+    )
+    initial_checks = {
+        "engine:docker": {"ready": True},
+        "container:image": {"ready": True},
+        "pdk:sky130A:io": {"ready": False},
+        "pdk:sky130A:hd": {"ready": False},
+    }
+    reports = iter(
+        [
+            {"schema": 1, "ready": False, "checks": initial_checks},
+            {"schema": 1, "ready": False, "checks": initial_checks},
+        ]
+    )
+    monkeypatch.setattr(provisioning, "readiness_report", lambda *a, **k: next(reports))
+    called = []
+    monkeypatch.setattr(
+        installer,
+        "install_pdk_sync",
+        lambda *a, **k: (called.append((a, k)) or {"ok": False, "reason": "fetch exhausted"}),
+    )
+    report = provisioning.finalize(plan)
+    assert called and report["ready"] is False
+    assert report["installFailures"][0]["component"] == "pdk:sky130A"
+
+
+def test_finalizer_cancel_file_stops_current_job_and_no_later_component(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = provisioning.load_plan(
+        _write(tmp_path, _manifest()),
+        choices={"profile": "custom", "engine": "none", "image": False,
+                 "pdks": [], "libraries": {}, "nativeTools": ["iverilog", "graphviz"]},
+    )
+    initial = {"schema": 1, "ready": False,
+               "checks": {"native:iverilog": {"ready": False},
+                          "native:graphviz": {"ready": False}}}
+    monkeypatch.setattr(provisioning, "readiness_report", lambda *a, **k: initial)
+    cancel_file = tmp_path / "setup.cancel"
+    monkeypatch.setenv("LANEX_SETUP_CANCEL_FILE", str(cancel_file))
+    cancelled = []
+
+    def cancel(key: str) -> dict:
+        cancelled.append(key)
+        return {"ok": True, "status": "cancelling"}
+
+    def install(key: str) -> dict:
+        assert key == "iverilog"
+        cancel_file.touch()
+        for _ in range(100):
+            if cancelled:
+                return {"ok": False, "cancelled": True}
+            time.sleep(0.01)
+        raise AssertionError("cancel watcher did not stop the active component")
+
+    monkeypatch.setattr(installer, "cancel_install", cancel)
+    monkeypatch.setattr(installer, "install_tool", install)
+    report = provisioning.finalize(plan)
+    assert cancelled == ["iverilog"]
+    assert report["cancelled"] is True
+    assert report["ready"] is False
+    out = capsys.readouterr().out
+    # graphviz appears in the up-front step plan, but no step for it may start.
+    assert '"component":"native:graphviz"' not in out
+    assert "Installing native tool: graphviz" not in out
+
+
+def test_shell_and_setup_sequence_base_restart_finalize() -> None:
+    repo = Path(__file__).resolve().parents[2]
+    provision = (repo / "windows/provision/provision.sh").read_text()
+    inno = (repo / "windows/installer/lanex.iss").read_text()
+    assert "base|finalize" in provision
+    assert "DEFERRED(selected-components)" in provision
+    assert 'runuser -m -u "$APP_USER"' in provision and "--provision-finalize" in provision
+    assert 'case "$SELECTED_ENGINE"' in provision
+    assert "LANEX_SETUP_CHOICES=" in inno
+    assert 'bash "' + "' + LinuxPath + '" + '" base' in inno
+    assert inno.index("--terminate") < inno.index("Result := FinalizeDistro")
+    assert "wsl --shutdown" not in inno
+    assert 'CANCEL_FILE="${LANEX_SETUP_CANCEL_FILE:-/run/lanex/setup.cancel}"' in provision
+    base = provision[provision.index('say "Provisioning the LanEx environment'):
+                     provision.index('say "LanEx base provisioning is complete')]
+    assert base.count("check_cancel") >= 7

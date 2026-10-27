@@ -18,7 +18,9 @@ export const toast = {
     this.container = c;
   },
 
-  show(message, type = "info", duration) {
+  // ``action`` adds a button (e.g. {label: "Undo", run}), or several as an
+  // array; each runs and dismisses the toast. Hovering keeps it up.
+  show(message, type = "info", duration, action) {
     if (!this.container) this.init();
     // Cap the stack — drop the oldest so a burst can't wallpaper the screen.
     while (this.container.children.length >= MAX) {
@@ -41,7 +43,18 @@ export const toast = {
     close.className = "toast-close";
     close.setAttribute("aria-label", "Dismiss");
     close.innerHTML = icon("x", { size: 13 });
-    el.append(ic, msg, close);
+    el.append(ic, msg);
+    const acts = (Array.isArray(action) ? action : [action])
+      .filter((a) => a && a.label && typeof a.run === "function")
+      .map((a) => {
+        const b = document.createElement("button");
+        b.className = "toast-act";
+        b.textContent = a.label;
+        b._run = a.run;
+        el.append(b);
+        return b;
+      });
+    el.append(close);
     this.container.appendChild(el);
     requestAnimationFrame(() => el.classList.add("is-in"));
 
@@ -55,9 +68,17 @@ export const toast = {
     };
     const arm = () => { if (ttl > 0) timer = setTimeout(dismiss, ttl); };
     close.addEventListener("click", dismiss);
+    for (const b of acts) b.addEventListener("click", () => { dismiss(); b._run(); });
     el.addEventListener("mouseenter", () => { if (timer) clearTimeout(timer); });
     el.addEventListener("mouseleave", arm);
     arm();
     return dismiss;
+  },
+
+  // Remove every toast at once. A sheet opened from a failure clears them:
+  // on a 768-pixel-high screen the sticky failure toast sat on the sheet's
+  // own action button.
+  clear() {
+    if (this.container) this.container.replaceChildren();
   },
 };

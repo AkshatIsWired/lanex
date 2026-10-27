@@ -110,7 +110,10 @@ def build_lint_command(
     ``cwd=design_dir``); container mode mounts the design dir at ``/work`` and
     runs the image's verilator. Pure / no system probing. All source paths are
     relative to the design dir (the cwd / mount), so they're portable."""
-    flags: List[str] = ["verilator", "--lint-only", "-Wall", "-Wno-fatal"]
+    # --timescale: the default for files without a `timescale, which is what
+    # the simulators assume too. Without it a testbench that has one and a
+    # design file that doesn't (the usual case) raise TIMESCALEMOD.
+    flags: List[str] = ["verilator", "--lint-only", "-Wall", "-Wno-fatal", "--timescale", "1ns/1ps"]
     if top:
         flags += ["--top-module", str(top)]
     for inc in (include_dirs or []):
@@ -199,7 +202,7 @@ class LintJob:
             if timeout and timeout > 0:
                 def _on_timeout() -> None:
                     self._timed_out.set()
-                    events.publish("log", {"message":
+                    events.publish("log", {"source": "lint", "message":
                         f"lint exceeded {timeout}s and was stopped (the linter wedged — on WSL a "
                         "Windows verilator on the PATH can hang; install the Linux build)."})
                     self._kill()
@@ -211,13 +214,13 @@ class LintJob:
                 clean = container_run.strip_ansi(line.rstrip("\n"))
                 out_lines.append(clean)
                 if clean:
-                    events.publish("log", {"message": clean})
+                    events.publish("log", {"source": "lint", "message": clean})
             rc = self._proc.wait()
         except FileNotFoundError as ex:
-            events.publish("log", {"message": f"lint failed to launch: {ex}"})
+            events.publish("log", {"source": "lint", "message": f"lint failed to launch: {ex}"})
             rc = 127
         except Exception as ex:  # pragma: no cover - environment dependent
-            events.publish("log", {"message": f"lint error: {ex}"})
+            events.publish("log", {"source": "lint", "message": f"lint error: {ex}"})
             rc = 1
         finally:
             if watchdog is not None:

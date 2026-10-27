@@ -23,6 +23,7 @@ without internet, the rest still imports) shells out to ``pip``,
 ``ciel``, ``brew`` or ``apt-get`` and streams its stdout back.
 """
 
+import json
 import os
 import re
 import shutil
@@ -332,26 +333,55 @@ def _family_registry() -> Dict[str, Any]:
 
 
 def build_pdk_catalog() -> Dict[str, Dict[str, Any]]:
-    """Build the per-variant PDK catalog from ciel's authoritative metadata."""
+    """Build the per-variant PDK catalog with verified release metadata."""
+    from .pdk_catalog import (
+        build_canonical_pdk_catalog,
+        UNAVAILABLE_LIBRARIES,
+    )
+
+    canonical = build_canonical_pdk_catalog()
     catalog: Dict[str, Dict[str, Any]] = {}
-    for fam_name, fam in _family_registry().items():
+    fam_registry = _family_registry()
+    for variant, entry in canonical.items():
+        fam_name = entry["family"]
         facts = _FAMILY_FACTS.get(fam_name, {})
-        variants = list(getattr(fam, "variants", []) or [fam_name])
-        default_variant = getattr(fam, "default_variant", None)
-        libraries = list(getattr(fam, "all_libraries", []) or [])
-        default_includes = list(getattr(fam, "default_includes", []) or [])
-        for variant in variants:
-            catalog[variant] = {
-                "label": variant,
-                "family": fam_name,
-                "foundry": facts.get("foundry", ""),
-                "node": facts.get("node", ""),
-                "description": facts.get("description", ""),
-                "recommended": variant == default_variant,
-                "libraries": libraries,
-                "default_libraries": default_includes,
-                "approx_gb": facts.get("approx_gb"),
-            }
+        catalog[variant] = {
+            "label": entry.get("label", variant),
+            "family": fam_name,
+            "foundry": entry.get("foundry") or facts.get("foundry", ""),
+            "node": entry.get("node") or facts.get("node", ""),
+            "description": entry.get("description") or facts.get("description", ""),
+            "default_variant": entry.get("default_variant", False),
+            "recommended": entry.get("default_variant", False),  # backward compatibility alias
+            "supported": entry.get("supported", True),
+            "libraries": list(entry.get("libraries", [])),
+            "default_libraries": list(entry.get("default_libraries", [])),
+            "approx_gb": entry.get("approx_gb", facts.get("approx_gb")),
+        }
+        if "unavailable_libraries" in entry:
+            catalog[variant]["unavailable_libraries"] = dict(entry["unavailable_libraries"])
+    for fam_name, fam in fam_registry.items():
+        if fam_name not in {"sky130", "gf180mcu", "ihp-sg13g2"}:
+            facts = _FAMILY_FACTS.get(fam_name, {})
+            variants = list(getattr(fam, "variants", []) or [fam_name])
+            default_variant = getattr(fam, "default_variant", None)
+            libraries = list(getattr(fam, "all_libraries", []) or [])
+            default_includes = list(getattr(fam, "default_includes", []) or [])
+            for variant in variants:
+                if variant not in catalog:
+                    catalog[variant] = {
+                        "label": variant,
+                        "family": fam_name,
+                        "foundry": facts.get("foundry", ""),
+                        "node": facts.get("node", ""),
+                        "description": facts.get("description", ""),
+                        "default_variant": variant == default_variant,
+                        "recommended": variant == default_variant,
+                        "supported": True,
+                        "libraries": libraries,
+                        "default_libraries": default_includes,
+                        "approx_gb": facts.get("approx_gb"),
+                    }
     return catalog
 
 
@@ -647,17 +677,33 @@ def sg_wrap_argv(argv: List[str]) -> List[str]:
     return ["sg", "docker", "-c", shlex.join(argv)]
 
 
-def resolve_engine() -> Dict[str, Any]:
+def resolve_engine(preferred: Optional[str] = None) -> Dict[str, Any]:
     """Single source of truth for which engine to use and how to invoke it.
 
     Preference: a usable Docker → a usable Podman → Docker via ``sg`` group
-    activation. Returns ``{engine, ready, sg_wrap, env}`` where ``env`` forces
-    LibreLane to the chosen engine via the documented ``LIBRELANE_CONTAINER_ENGINE``
-    variable (so a present-but-unusable Docker never shadows a working Podman).
+    activation; when *preferred* is supplied, no different engine substitutes
+    for that saved selection. Returns ``{engine, ready, sg_wrap, env}``, where
+    ``env`` forces LibreLane to the chosen engine via the documented
+    ``LIBRELANE_CONTAINER_ENGINE`` variable (so a present-but-unusable Docker
+    never shadows a working Podman).
     """
+    if preferred is None:
+        try:
+            from . import platform_env
+
+            home = platform_env.home()
+            rt_path = home / "runtime.json"
+            if rt_path.is_file():
+                d = json.loads(rt_path.read_text(encoding="utf-8"))
+                preferred = d.get("engine")
+            elif (home / "image.lock").is_file():
+                d = json.loads((home / "image.lock").read_text(encoding="utf-8"))
+                preferred = d.get("engine")
+        except Exception:
+            pass
     res: Dict[str, Any] = {"engine": None, "ready": False, "sg_wrap": False, "env": {}}
-    docker_path = shutil.which("docker")
-    podman_path = shutil.which("podman")
+    docker_path = shutil.which("docker") if preferred in (None, "docker") else None
+    podman_path = shutil.which("podman") if preferred in (None, "podman") else None
     if docker_path and _engine_usable("docker")[0]:
         res.update(engine="docker", ready=True, env={"LIBRELANE_CONTAINER_ENGINE": "docker"})
     elif podman_path and _engine_usable("podman")[0]:

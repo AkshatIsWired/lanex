@@ -1,10 +1,22 @@
 {
   "name": "counter",
   "title": "8-bit Counter",
-  "description": "A synchronous up-counter with enable + reset. The smallest sequential design that still exercises the full RTL→GDS flow.",
+  "description": "A synchronous up-counter with enable and reset. The smallest sequential design that still runs the whole RTL-to-GDS flow.",
   "top": "counter",
   "clock_port": "clk",
   "clock_period": 10.0,
-  "sources": ["src/counter.v"],
-  "testbench": "verify/counter_tb.v"
+  "sources": [
+    "src/counter.v"
+  ],
+  "testbench": "verify/counter_tb.v",
+  "order": 2,
+  "config": {
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [
+      0,
+      0,
+      150,
+      150
+    ]
+  }
 }

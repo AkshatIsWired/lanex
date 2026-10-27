@@ -33,6 +33,9 @@
 .toast-close { flex: none; background: none; border: 0; cursor: pointer;
   color: var(--text-muted); padding: 0; display: inline-flex; line-height: 1; }
 .toast-close:hover { color: var(--text-strong); }
+.toast-act { flex: none; align-self: center; height: 26px; margin: -4px 0; padding: 0 10px; border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm); background: var(--surface-3); color: var(--text-strong); font: inherit; font-weight: 600; cursor: pointer; }
+.toast-act:hover { border-color: var(--accent); }
 
 /* ---- E4.3 timing compare Δ ------------------------------------------------ */
 .tp-pos { color: var(--pass); }
@@ -58,17 +61,6 @@
 #onboard-checklist li.ck-done .ck-mark { color: var(--pass); }
 #onboard-checklist li.ck-done { color: var(--text-muted); }
 
-/* ---- E5.2 one-time post-run "what now?" card ------------------------------ */
-.postrun-card {
-  position: fixed; right: var(--s-4); bottom: var(--s-4); z-index: var(--z-toast);
-  max-width: 320px; display: flex; flex-direction: column; gap: var(--s-2);
-  padding: var(--s-4); background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r-lg); box-shadow: var(--sh-2);
-}
-.postrun-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
-.postrun-close { background: none; border: 0; color: var(--text-muted); cursor: pointer; font-size: var(--t-md); }
-.postrun-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
-
 /* ---- shared bits ---------------------------------------------------------- */
 .inp {
   background: var(--surface-2); color: var(--text);
@@ -89,30 +81,6 @@
 .chip-pass { background: var(--pass-soft); color: var(--pass); }
 .chip-fail { background: var(--fail-soft); color: var(--fail); }
 .chip-warn { background: var(--warn-soft); color: var(--warn); }
-
-/* ---- Verification Center -------------------------------------------------- */
-.verify-bar { display: flex; gap: var(--s-4); align-items: center; flex-wrap: wrap; margin-bottom: var(--s-3); }
-.verify-bar select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 8px; }
-.verify-tally { display: flex; gap: var(--s-2); flex-wrap: wrap; }
-.vt { font-size: var(--t-xs); padding: 2px 8px; border-radius: var(--r-pill); border: 1px solid var(--border); }
-.vt-pass { color: var(--pass); border-color: var(--pass); }
-.vt-warn { color: var(--warn); border-color: var(--warn); }
-.vt-fail { color: var(--fail); border-color: var(--fail); }
-.vt-absent { color: var(--text-muted); }
-.verdict { padding: var(--s-4); border-radius: var(--r-md); border: 1px solid var(--border); margin-bottom: var(--s-4); display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; }
-.verdict-pass { border-color: var(--pass); background: var(--pass-soft); }
-.verdict-fail { border-color: var(--fail); background: var(--fail-soft); }
-.verdict-incomplete { border-color: var(--warn); background: var(--warn-soft); }
-.verdict-title { font-family: var(--display); font-size: var(--t-xl); font-weight: 700; letter-spacing: -0.01em; color: var(--text-strong); }
-/* the verdict banner is the Verify tab's hero — give the reticle room to breathe */
-.verdict.reticle { padding: var(--s-5) var(--s-4); }
-.verdict-chips { display: flex; gap: var(--s-2); flex-wrap: wrap; width: 100%; }
-.vstages { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
-.vstage-head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); }
-.vstage-head h3 { margin: 0; font-size: var(--t-md); }
-.vcheck { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; border-top: 1px solid var(--border); }
-.vcheck-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.vcheck-val { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text-muted); }
 
 /* ---- Shared file viewer (download / locate / find) ------------------------ */
 .fv-toolbar { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-2); }
@@ -153,7 +121,9 @@
    "text cut, can't scroll" bug). Flex column: the BODY scrolls, so the head
    and the Close button stay reachable however long the content is; height is
    content-driven up to .dlg's 90vh cap. */
-.dlg-xl { width: min(980px, calc(96vw / var(--ll-zoom, 1)));
+/* .dlg.dlg-xl: .dlg (declared later in this file) used to win on width, so
+   the wide variant silently stayed 480px. */
+.dlg.dlg-xl { width: min(980px, calc(96vw / var(--ll-zoom, 1)));
   display: flex; flex-direction: column; }
 .dlg-xl .dlg-body { overflow: auto; flex: 1 1 auto; min-height: 0; }
 .dlg-xl .dlg-head, .dlg-xl .dlg-actions { flex: none; }
@@ -163,18 +133,6 @@
 .report-row .rname { font-family: var(--mono); font-size: var(--t-xs); flex: 1; word-break: break-all; }
 
 /* ---- Right-side log drawer (out-of-pipeline streamed logs) ---------------- */
-.log-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, calc(92vw / var(--ll-zoom, 1)));
-  z-index: var(--z-drawer); display: flex; flex-direction: column; background: var(--surface);
-  border-left: 1px solid var(--border); box-shadow: -8px 0 24px rgba(0,0,0,0.35); }
-.log-drawer[hidden] { display: none; }
-.log-drawer:not([hidden]) { animation: drawer-in var(--dur-3) var(--ease-out); }
-.log-drawer-head { display: flex; align-items: center; gap: var(--s-2);
-  padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--border); background: var(--surface-2); }
-.log-drawer-title { font-family: var(--mono); font-size: var(--t-xs); font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
-.log-drawer-spacer { flex: 1; }
-.log-drawer-btn { font-size: var(--t-xs); padding: 2px 8px; }
-.log-drawer-body { flex: 1; overflow: auto; margin: 0; padding: var(--s-3);
-  font-family: var(--mono); font-size: var(--t-xs); white-space: pre-wrap; color: var(--text); }
 /* Topbar Logs toggle: a dot marks output waiting behind a closed drawer. */
 #logs-btn.has-activity::after { content: ""; position: absolute; top: -3px; right: -3px;
   width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
@@ -198,7 +156,6 @@
 .filesel-row.dir .fs-ico { color: var(--accent); }
 .ac-banner-icon { display: inline-flex; align-items: center; color: var(--accent); }
 .cmdk-ico .ic { vertical-align: middle; }
-.rt-badge .ic, .rt-row-badge .ic { vertical-align: -0.12em; }
 
 /* ---- Privileged-install password banner ----------------------------------- */
 .pw-banner {
@@ -213,10 +170,10 @@
 
 /* ---- Tooltip (one reusable bubble for [data-tip], tooltip.js) ------------- */
 .tip { position: fixed; z-index: var(--z-toast); pointer-events: none;
-  max-width: 240px; padding: 5px var(--s-2);
-  background: var(--surface-3); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--sh-2);
-  font-family: var(--mono); font-size: var(--t-xs); line-height: 1.35; white-space: normal; }
+  max-width: 300px; padding: 6px 10px;
+  background: var(--ink-strong); color: var(--wafer);
+  border: 0; border-radius: var(--r-sm); box-shadow: var(--sh-2);
+  font-family: var(--sans); font-size: 13px; font-weight: 500; line-height: 1.4; white-space: normal; }
 .tip[hidden] { display: none; }
 .pw-banner-close {
   /* Deliberate literal whites: this close button sits on the warn banner fill,
@@ -226,28 +183,6 @@
   padding: 2px var(--s-2); cursor: pointer; font-size: var(--t-xs); white-space: nowrap;
 }
 .pw-banner-close:hover { background: rgba(255, 255, 255, .3); }
-
-/* ---- In-page jump nav (long tabs) ----------------------------------------- */
-.section-jump { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center;
-  flex-wrap: wrap; gap: var(--s-2); padding: var(--s-2) 0; margin-bottom: var(--s-2);
-  background: var(--bg); border-bottom: 1px solid var(--border); }
-
-/* Setup's two-tier jump: the STACK owns the stickiness so the top sections and
-   the constraint milestones pin together as one block (inner navs go static).
-   Scoped to Setup — every other tab's single .section-jump is untouched. */
-.section-jump-stack { position: sticky; top: 0; z-index: var(--z-sticky);
-  background: var(--bg); margin-bottom: var(--s-2); }
-.section-jump-stack .section-jump { position: static; margin-bottom: 0; }
-/* Second tier = constraint category milestones. A single elegant scrollable
-   line (never a chunky wrapped block), muted until hovered, revealed only when
-   the Constraints card is open. */
-.section-jump-sub { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
-  padding-top: 2px; }
-.section-jump-sub::-webkit-scrollbar { display: none; }
-.section-jump-sub .chip-clickable { flex: 0 0 auto; white-space: nowrap;
-  font-size: var(--t-xs); padding: 3px 9px; color: var(--text-muted); }
-.section-jump-sub .chip-clickable:hover { color: var(--accent); border-color: var(--accent); }
-.section-jump-sub[hidden] { display: none; }
 
 /* ---- Compare -------------------------------------------------------------- */
 .cmp-checks { display: flex; flex-wrap: wrap; gap: var(--s-3); margin: var(--s-2) 0; }
@@ -259,12 +194,23 @@
 .cmp-table th, .cmp-table td { border: 1px solid var(--border); padding: var(--s-1) var(--s-2); text-align: left; }
 .cmp-table th { background: var(--surface-2); }
 .cmp-best { background: var(--pass-soft); color: var(--pass); font-weight: 600; }
-.cmp-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--s-3); margin: var(--s-3) 0; }
-.cmp-chart { height: 220px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-2); }
+.cmp-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--s-3); margin: var(--s-3) 0; align-items: start; }
+.cmp-fig { margin: 0; padding: 12px 14px 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); min-width: 0; }
+.cmp-fig figcaption { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; margin-bottom: 4px; }
+.cmp-fig figcaption b { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.cmp-fig figcaption span { font-size: 12.5px; color: var(--text-muted); }
+.cmp-fig figcaption code { flex-basis: 100%; font-size: 11px; color: var(--text-muted); background: none; padding: 0; }
+.cmp-chart { min-height: 80px; }
 
 /* ---- DSE ------------------------------------------------------------------ */
+/* DSE's jump bar sits under the page's own heading, not at the top of the
+   section: no pull-up, or it covers the line above it. */
+#dse-body > .section-jump { margin-top: 0; }
 .dse-builder { padding: var(--s-4); }
 .dse-add { display: flex; gap: var(--s-2); margin: var(--s-2) 0; flex-wrap: wrap; }
+.dse-add > select { flex: 0 1 380px; width: auto; min-width: 220px; }
+.dse-add > input { flex: 1 1 320px; width: auto; min-width: 0; }
+.dse-add > .btn { flex: none; }
 .dse-axis { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; }
 .dse-mode { display: flex; gap: var(--s-4); margin: var(--s-2) 0; }
 .dse-foot { display: flex; align-items: center; gap: var(--s-3); margin-top: var(--s-3); }
@@ -302,46 +248,14 @@
 .cell-card { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); padding: var(--s-2); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); }
 .cell-card code { overflow-wrap: anywhere; }
 
-/* ---- 2D / 3D viewers ------------------------------------------------------ */
-.v2d-wrap { display: flex; gap: var(--s-3); }
-.v2d-layers { display: flex; flex-direction: column; gap: var(--s-1); min-width: 160px; }
-.v2d-stage { position: relative; background: var(--canvas, #fff); border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; height: calc(60vh / var(--ll-zoom, 1)); }
-.v2d-layer { position: absolute; top: 0; left: 0; max-width: 100%; mix-blend-mode: multiply; }
-.v2d-img { display: block; will-change: transform; }
-/* "Open in desktop tool" row (2D + 3D). */
-.v-open { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; margin-top: var(--s-3); }
-.v3d-info .v3d-list { margin: var(--s-2) 0; padding-left: var(--s-4); line-height: 1.7; }
 /* Cells PDK/SCL picker. */
 .cells-pick { display: flex; gap: var(--s-4); align-items: center; flex-wrap: wrap; margin-bottom: var(--s-3); }
-.cells-pick select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 8px; }
-.v3d-canvas { width: 100%; height: 480px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); cursor: grab; }
-.v3d-canvas:active { cursor: grabbing; }
-.v3d-note { font-size: var(--t-xs); margin-bottom: var(--s-2); }
+.cells-pick select { background-color: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 30px 4px 8px; }
 
 /* ---- Wizard --------------------------------------------------------------- */
 .wizard { max-width: 640px; }
 .wizard-body { padding: var(--s-4); }
-.wiz-templates { display: grid; gap: var(--s-2); grid-template-columns: 1fr; }
-.wiz-tpl { display: flex; flex-direction: column; gap: var(--s-1); text-align: left; padding: var(--s-3); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); cursor: pointer; }
-.wiz-tpl:hover { border-color: var(--accent); }
-.wiz-tpl-title { font-weight: 600; color: var(--text-strong); }
-.wiz-field { display: flex; flex-direction: column; gap: var(--s-1); margin: var(--s-2) 0; }
-.wiz-field input, .wiz-field select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-2); }
-.wiz-actions { display: flex; justify-content: space-between; margin-top: var(--s-3); }
 
-/* ---- Learn panel ---------------------------------------------------------- */
-.learn-panel { position: fixed; top: 0; right: 0; width: min(440px, calc(92vw / var(--ll-zoom, 1))); height: calc(100vh / var(--ll-zoom, 1)); background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--sh-3); z-index: var(--z-drawer); display: flex; flex-direction: column; }
-/* display:flex overrides the hidden attribute → restore hide-on-hidden so the ✕ closes it. */
-.learn-panel[hidden] { display: none; }
-.learn-panel:not([hidden]) { animation: drawer-in var(--dur-3) var(--ease-out); }
-.learn-head { display: flex; align-items: center; justify-content: space-between; padding: var(--s-3); border-bottom: 1px solid var(--border); }
-.learn-title { font-family: var(--mono); font-size: var(--t-xs); font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
-
-/* Shared drawer slide-in (learn panel + log drawer); covered by the global
-   prefers-reduced-motion kill-switch. */
-@keyframes drawer-in { from { transform: translateX(24px); opacity: 0.4; } to { transform: translateX(0); opacity: 1; } }
-.learn-body { padding: var(--s-4); overflow: auto; }
-.learn-md code { font-family: var(--mono); }
 [data-explain] { cursor: help; }
 
 /* Cell-usage breakdown (Analytics tab): donut of top masters + full count table. */
@@ -525,6 +439,15 @@
   border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); font-size: var(--t-sm); }
 .runs-list li.run-pass { border-left: 3px solid var(--pass); }
 .runs-list li.run-fail { border-left: 3px solid var(--fail); }
+/* The run the results pages show (context.js): a click on a card picks it. */
+.runs-list li[data-tag] { cursor: pointer; }
+.runs-list li.is-viewing { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent); background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.run-viewing { display: none; }
+.runs-list li.is-viewing .run-viewing {
+  display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 3px;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 .run-note-row { margin: var(--s-2) 0; }
 .run-note-ta { width: 100%; box-sizing: border-box; background: var(--surface-2);
   border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text);
@@ -597,51 +520,12 @@
 }
 
 /* ---- scroll-spy: highlight the jump chip for the section in view -------- */
-.section-jump .chip-clickable.is-current {
-  background: var(--accent); border-color: var(--accent); color: var(--on-accent, #fff);
-}
 
 /* ---- Layout: one unified tool button per tool (incl. GDS3D/OpenROAD) ---- */
-.layout-tools { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin: var(--s-2) 0 var(--s-3); }
-.layout-tools:empty { display: none; }
-.layout-tool { display: inline-flex; align-items: center; gap: var(--s-2); }
-.layout-tool-badge { font-size: var(--t-xs); padding: 1px 6px; border-radius: var(--r-sm); border: 1px solid var(--border); color: var(--text-muted); }
-.layout-tool-badge.lt-container { color: var(--on-accent, #fff); background: var(--accent); border-color: var(--accent); }
-.layout-tool-badge.lt-host { color: var(--text); }
-.layout-tool-badge.lt-install, .layout-tool-badge.lt-nodisplay { color: var(--text-muted); opacity: .8; }
 
-/* ---- DRC/LVS report parser (Analytics → Advisor & reports) ------------- */
-.report-picker { display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--s-3); }
-.report-kind-head {
-  margin-top: var(--s-2); padding: 2px 0; font-family: var(--mono); font-size: var(--t-xs);
-  letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted);
-}
-.report-pick-row {
-  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--s-2);
-  padding: var(--s-1) var(--s-2); border-radius: var(--r-sm); cursor: pointer;
-}
-.report-pick-row:hover { background: var(--hover); }
-.report-pick-row input { accent-color: var(--accent); cursor: pointer; }
-.report-pick-name { font-family: var(--mono); font-size: var(--t-xs); word-break: break-all; }
-.report-pick-ext { font-size: var(--t-xs); color: var(--text-muted); }
-.violations-output { margin-top: var(--s-2); }
-.violations-output:empty { display: none; }
-.report-head { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-2); }
-.report-raw { max-height: 360px; overflow: auto; white-space: pre-wrap; }
 
 /* ---------- liability disclaimer (LanEx is a viewer, not sign-off) ---------- */
-.verify-disclaimer {
-  background: var(--warn-soft);
-  border: 1px solid var(--warn);
-  border-left: 3px solid var(--warn);
-  border-radius: var(--r-md);
-  padding: var(--s-3) var(--s-4);
-  margin: var(--s-3) 0 var(--s-4);
-  font-size: var(--t-sm);
-  line-height: 1.5;
-  color: var(--text);
-}
-.verify-disclaimer strong { color: var(--warn); }
+
 .status-disclaimer {
   color: var(--warn);
   font-size: var(--t-xs);

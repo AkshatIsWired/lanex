@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import logging
+import select
+import socket
 import time
 from typing import Any, Iterable, List, Optional, Set
 
@@ -87,6 +89,29 @@ class ISSEHandler:
             _log.debug("SSE write failed (client likely disconnected): %s", ex)
             self._closed = True
 
+    def _peer_gone(self) -> bool:
+        """True once the browser has closed this stream's socket.
+
+        A closed window otherwise goes unnoticed until the next write fails,
+        which can take a heartbeat plus a buffered write or two (15-45 s). The
+        open-window count in ``/api/presence`` is what the Windows launcher
+        uses to decide that LanEx was closed, so it must drop within a tick.
+        An EventSource never sends anything after its request, so a readable
+        socket that peeks zero bytes can only mean EOF.
+        """
+        try:
+            sock = self.request_handler.connection
+            readable, _, _ = select.select([sock], [], [], 0)
+            if not readable:
+                return False
+            return sock.recv(1, socket.MSG_PEEK) == b""
+        except (BlockingIOError, InterruptedError, socket.timeout):
+            return False
+        except (OSError, ValueError):
+            return True
+        except Exception:
+            return False
+
     def stream_until_closed(self, runner: FlowRunner, *, heartbeat: float = 15.0, idle: float = 0.4, start_seq: int = -1) -> None:
         """Stream events from the shared bus until the client disconnects.
 
@@ -152,6 +177,9 @@ class ISSEHandler:
             except Exception:
                 events = []
             if not events:
+                if self._peer_gone():
+                    self._closed = True
+                    break
                 if time.time() - last_heartbeat > heartbeat:
                     self._write("ping", {"ts": time.time()}, event="ping")
                     last_heartbeat = time.time()

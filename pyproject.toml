@@ -49,7 +49,10 @@ classifiers = [
 # BOTH this ceiling and compat.KNOWN_GOOD_MAX_EXCL together.
 # The container image tag is derived from the *installed* version at run time
 # (see controller/container_run.image_ref), so the toolchain always matches.
-dependencies = ["librelane>=3.0.4,<3.1"]
+# Exact pins since the Ship line: a range let pip pick librelane 3.0.16, which
+# LanEx was never tested against. windows/setup/constraints.txt pins the rest
+# of the tree (pip install -c windows/setup/constraints.txt ...).
+dependencies = ["librelane==3.0.4", "ciel==2.6.1"]
 
 [project.urls]
 Homepage = "https://github.com/AkshatIsWired/lanex"
@@ -81,6 +84,9 @@ lanex = [
   # Project templates (nested src/ and verify/ included).
   "controller/templates/**/*",
   "controller/templates/*/*", "controller/templates/*/*/*",
+  # GDS3D process files per PDK variant (desktop.BUNDLED_GDS3D_DIR): the
+  # in-app 3D view and the GDS3D launch both read them.
+  "data/**/*", "data/gds3d/*.txt",
 ]
 
 [tool.black]

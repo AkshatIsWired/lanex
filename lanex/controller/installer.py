@@ -47,6 +47,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .events import bus
 
+try:
+    import httpx
+    if hasattr(httpx, "Client") and hasattr(httpx.Client.__init__, "__kwdefaults__"):
+        if httpx.Client.__init__.__kwdefaults__ is not None:
+            httpx.Client.__init__.__kwdefaults__["timeout"] = httpx.Timeout(300.0, connect=60.0)
+except Exception:
+    pass
+
 _active_installs: Dict[str, subprocess.Popen] = {}
 
 # Jobs the user cancelled. Consulted by every strategy/retry loop so a cancel
@@ -86,13 +94,64 @@ def _kill_proc_tree(proc: subprocess.Popen, grace: float = 2.0) -> None:
         if os.name != "posix":
             return False
         try:
-            os.killpg(os.getpgid(proc.pid), sig)
+            pgid = os.getpgid(proc.pid)
+            own = os.getpgid(0)
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+        # NEVER signal our own group. A child started WITHOUT
+        # start_new_session=True — the /dev/tty path, which must keep the
+        # controlling terminal for sudo's password prompt — shares THIS process's
+        # group, so killpg would take the LanEx server down with the install it
+        # was asked to cancel. That is not hypothetical: on the Windows appliance
+        # the launcher's `bash -ic` gives the server a pty, so every sudo install
+        # took the tty path, and cancelling one killed the app.
+        if pgid == own:
+            return False
+        try:
+            os.killpg(pgid, sig)
             return True
         except (ProcessLookupError, PermissionError, OSError):
             return False
 
+    def _signal_descendants(sig: int) -> None:
+        """Best-effort walk of /proc when a group kill isn't safe.
+
+        The group kill is the precise tool; this is what's left when the child
+        shares our group. `sudo apt-get` is the shape that matters — terminating
+        only the direct `sudo` would leave apt-get holding the dpkg lock, which
+        wedges every later install.
+        """
+        if os.name != "posix":
+            return
+        children: Dict[int, List[int]] = {}
+        try:
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{entry}/stat", "rb") as fh:
+                        fields = fh.read().rsplit(b")", 1)[1].split()
+                    children.setdefault(int(fields[1]), []).append(int(entry))
+                except (OSError, IndexError, ValueError):
+                    continue
+        except OSError:
+            return
+        # Deepest first, so a parent can't spawn past its own death.
+        order, stack = [], [proc.pid]
+        while stack:
+            pid = stack.pop()
+            kids = children.get(pid, [])
+            order.extend(kids)
+            stack.extend(kids)
+        for pid in reversed(order):
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+
     try:
         if not _signal_group(signal.SIGTERM):
+            _signal_descendants(signal.SIGTERM)
             proc.terminate()
     except Exception:
         pass
@@ -101,6 +160,7 @@ def _kill_proc_tree(proc: subprocess.Popen, grace: float = 2.0) -> None:
     except Exception:
         try:
             if not _signal_group(signal.SIGKILL):
+                _signal_descendants(signal.SIGKILL)
                 proc.kill()
         except Exception:
             pass
@@ -116,6 +176,7 @@ def _kill_proc_tree(proc: subprocess.Popen, grace: float = 2.0) -> None:
 # cache, apt/pip/conda caches, ciel's tarball store); we never wipe those.
 _in_progress: set = set()
 _in_progress_lock = threading.Lock()
+_pdk_families_in_progress: set = set()
 
 
 def _begin_job(key: str) -> bool:
@@ -144,6 +205,19 @@ def _end_job(key: str) -> None:
 def is_in_progress(key: str) -> bool:
     with _in_progress_lock:
         return key in _in_progress
+
+
+def _begin_pdk_family(family: str) -> bool:
+    with _in_progress_lock:
+        if family in _pdk_families_in_progress:
+            return False
+        _pdk_families_in_progress.add(family)
+        return True
+
+
+def _end_pdk_family(family: str) -> None:
+    with _in_progress_lock:
+        _pdk_families_in_progress.discard(family)
 
 # ---------------------------------------------------------------------------
 # Event helpers — push progress to SSE via shared bus
@@ -262,6 +336,74 @@ def _escalate_argv(argv: List[str]) -> Optional[Tuple[List[str], bool]]:
 # (the lock is what stops duplicate downloads). Generous — real downloads of the
 # image/PDK take a while — but finite.
 _INSTALL_TIMEOUT_S = 3600
+
+# A download step that shows neither a new output line nor any received network
+# traffic for this long is treated as stalled: the process tree is killed and the
+# caller's retry loop starts again from the tool's own cache (docker layers,
+# ciel's tarball store). Without this a dead TCP connection on flaky Wi-Fi sat
+# silently until the multi-hour watchdog fired, which looked like a frozen
+# installer.
+_DOWNLOAD_STALL_S = 600.0
+
+
+def _disk_written_bytes() -> Optional[int]:
+    """Total bytes written to block devices (Linux /proc/diskstats), or None.
+
+    After an image's layers have arrived, docker spends minutes unpacking them
+    with no network traffic and no output; disk writes are the only sign of
+    life, and without them the stall guard killed a healthy unpack.
+    """
+    try:
+        with open("/proc/diskstats", "r", encoding="ascii", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    total = 0
+    for line in lines:
+        fields = line.split()
+        # whole disks only (sda, vda, sdb...; not partitions or loop/ram)
+        if len(fields) > 9 and fields[2][:2] in ("sd", "vd") and not fields[2][-1].isdigit():
+            try:
+                total += int(fields[9]) * 512
+            except ValueError:
+                pass
+    return total
+
+
+def _net_rx_bytes() -> Optional[int]:
+    """Total bytes received on every non-loopback interface (Linux), or None.
+
+    Read from /proc/net/dev, so it is cheap, needs no root, and sees traffic
+    from every process on the box -- dockerd's layer downloads included, which
+    the docker CLI itself never reports when its stdout is not a terminal.
+    """
+    try:
+        with open("/proc/net/dev", "r", encoding="ascii", errors="replace") as fh:
+            lines = fh.read().splitlines()[2:]
+    except OSError:
+        return None
+    total = 0
+    for line in lines:
+        name, _, rest = line.partition(":")
+        if not rest or name.strip() == "lo":
+            continue
+        fields = rest.split()
+        if fields:
+            try:
+                total += int(fields[0])
+            except ValueError:
+                continue
+    return total
+
+
+def _human_bytes(n: float) -> str:
+    if n >= 1 << 30:
+        return f"{n / (1 << 30):.2f} GB"
+    if n >= 1 << 20:
+        return f"{n / (1 << 20):.0f} MB"
+    if n >= 1 << 10:
+        return f"{n / (1 << 10):.0f} KB"
+    return f"{int(n)} B"
 
 
 def _shell_exec_quiet(argv: List[str], timeout: float = 10.0) -> Tuple[int, str, str]:
@@ -588,22 +730,29 @@ def _strategy_conda(env: Dict[str, Any], key: str) -> Optional[List[str]]:
 @_strategy(["apt"], "apt install (Linux)", priority=30)
 def _strategy_apt(env: Dict[str, Any], key: str) -> Optional[List[str]]:
     apt = "apt-fast" if _check_cmd("apt-fast") else "apt-get"
+    apt_options = ("-o DPkg::Lock::Timeout=300 "
+                   "-o Acquire::http::Timeout=30 "
+                   "-o Acquire::https::Timeout=30 -o Acquire::Retries=3")
+    base = ["sudo", apt, "-o", "DPkg::Lock::Timeout=300",
+            "-o", "Acquire::http::Timeout=30",
+            "-o", "Acquire::https::Timeout=30",
+            "-o", "Acquire::Retries=3", "install", "-y"]
     # Debian/Ubuntu ship yosys, klayout, verilator. They do NOT package
     # OpenROAD, and their `magic`/`netgen` are unrelated tools — so those are
     # intentionally omitted (use conda/nix/Docker instead).
     mapping = {
-        "yosys": ["sudo", apt, "install", "-y", "yosys"],
-        "klayout": ["sudo", apt, "install", "-y", "klayout"],
-        "verilator": ["sudo", apt, "install", "-y", "verilator"],
-        "iverilog": ["sudo", apt, "install", "-y", "iverilog"],
-        "graphviz": ["sudo", apt, "install", "-y", "graphviz"],
-        "gtkwave": ["sudo", apt, "install", "-y", "gtkwave"],
-        "ciel": ["sh", "-c", f"sudo {apt} install -y python3-pip && pip3 install ciel 2>/dev/null || pipx install ciel 2>/dev/null || pip3 install --break-system-packages ciel"],
+        "yosys": base + ["yosys"],
+        "klayout": base + ["klayout"],
+        "verilator": base + ["verilator"],
+        "iverilog": base + ["iverilog"],
+        "graphviz": base + ["graphviz"],
+        "gtkwave": base + ["gtkwave"],
+        "ciel": ["sh", "-c", f"sudo {apt} {apt_options} install -y python3-pip && pip3 install ciel 2>/dev/null || pipx install ciel 2>/dev/null || pip3 install --break-system-packages ciel"],
         # Container engines: Podman is the rootless, daemonless choice and is the
         # simplest to bring up on Debian/Ubuntu. Docker via apt installs the
         # daemon (you may then need to add your user to the `docker` group).
-        "podman": ["sudo", apt, "install", "-y", "podman"],
-        "docker": ["sudo", apt, "install", "-y", "docker.io"],
+        "podman": base + ["podman"],
+        "docker": base + ["docker.io"],
     }
     return mapping.get(key)
 
@@ -974,6 +1123,9 @@ def _install_env() -> Dict[str, str]:
     # On WSL, keep package managers / build tools from resolving Windows binaries
     # on the inherited /mnt/c PATH.
     env["PATH"] = platform_env.linux_only_path(env.get("PATH"))
+    env["COLUMNS"] = "120"
+    env["LINES"] = "40"
+    env["TERM"] = "dumb"
     # macOS: let Homebrew's internal sudo prompt for the password graphically
     # (there is no terminal when launched from the app window / pipx).
     ap = _darwin_askpass_path()
@@ -1041,15 +1193,30 @@ def _run_argv_on_tty(argv: List[str], *, label: str, key: str,
 
 def _run_argv(argv: List[str], *, label: str, key: str,
               timeout_s: Optional[float] = None,
-              env_extra: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+              env_extra: Optional[Dict[str, str]] = None,
+              expect_bytes: Optional[int] = None,
+              stall_s: Optional[float] = None) -> Dict[str, Any]:
     """Run an install command, streaming output to the event bus.
 
     *timeout_s* overrides the default watchdog ceiling — the image pull passes a
     higher one because a multi-GB download on a slow line legitimately exceeds
     the 1-hour default (the engine resumes cached layers on retry, but killing a
     healthy download is still wrong). *env_extra* is merged over the install
-    environment (e.g. an isolated ``DOCKER_CONFIG`` for a credential-less pull)."""
+    environment (e.g. an isolated ``DOCKER_CONFIG`` for a credential-less pull).
+
+    *expect_bytes* marks a download step: the heartbeat then reports received
+    bytes, rate and an approximate percentage (``installer_progress`` events),
+    so a long quiet download visibly moves. *stall_s* kills the step when there
+    has been no output and no network traffic for that long, returning
+    ``stalled: True`` so the caller retries instead of waiting for the
+    multi-hour watchdog."""
     deadline_s = float(timeout_s or _INSTALL_TIMEOUT_S)
+    if stall_s is None and os.environ.get("LANEX_SETUP_CANCEL_FILE"):
+        # Under Windows Setup nobody can see a terminal or click Cancel on a
+        # single command, so every step (apt, git clone, builds) gets a
+        # generous no-output-and-no-traffic limit instead of only the hour-long
+        # watchdog.
+        stall_s = 900.0
     # A sudo command can't prompt for a password through the browser. Rather than
     # give up, escalate: prompt on the terminal the GUI was launched from (the
     # reliable path on WSL), else a graphical pkexec dialog. Only fall back to a
@@ -1059,22 +1226,32 @@ def _run_argv(argv: List[str], *, label: str, key: str,
     if _needs_sudo(argv):
         have_tty = platform_env.has_controlling_tty()
         passwordless = _can_sudo()
-        if have_tty:
-            # ALWAYS attach a sudo command to the launching terminal when one
-            # exists — even if `sudo -n true` just succeeded. The non-tty branch
-            # below sets start_new_session=True (so cancel/timeout can kill the
-            # whole tree), which drops the controlling terminal; sudo's default
-            # `tty_tickets` keys the cached credential to that tty, so a detached
-            # sudo re-authenticates with no terminal and dies
-            # "sudo: A terminal is required to authenticate" — exactly the failure
-            # the user hit installing GDS3D deps. Attaching to /dev/tty lets sudo
-            # find its ticket (silent when cached) or prompt (when not).
+        if have_tty and not passwordless:
+            # Attach to the launching terminal ONLY when sudo actually has to ask
+            # for something. The non-tty branch below sets start_new_session=True
+            # (so cancel/timeout can kill the whole tree), which drops the
+            # controlling terminal; sudo's default `tty_tickets` keys a cached
+            # credential to that tty, so a detached sudo would re-authenticate
+            # with no terminal and die "sudo: A terminal is required to
+            # authenticate".
+            #
+            # `and not passwordless` is load-bearing, and used not to be. With
+            # NOPASSWD sudo never consults a ticket, so the tty buys nothing —
+            # and it costs three things, all of which the Windows appliance hit
+            # at once, because the launcher's `bash -ic` gives the server a pty
+            # that NO HUMAN CAN SEE:
+            #   * apt's output went to that pty instead of the event bus, so the
+            #     Install log showed our own status lines and nothing else — an
+            #     install that looks hung while it is downloading 236 MB;
+            #   * _run_argv_on_tty returns no captured output, so every decision
+            #     made from it (the stale-index retry in _apt_install) was blind;
+            #   * no start_new_session means the child shares the SERVER's
+            #     process group, so cancelling the install killed LanEx.
             inherit_tty = True
-            if not passwordless:
-                _emit("installer_info", {"key": key, "label": label, "needs_password": True, "message":
-                    "Administrator rights needed. A password prompt is waiting in the TERMINAL "
-                    "where you launched LanEx — switch to that window and enter your password to "
-                    "continue. (For security, sudo cannot prompt inside the browser.)"})
+            _emit("installer_info", {"key": key, "label": label, "needs_password": True, "message":
+                "Administrator rights needed. A password prompt is waiting in the TERMINAL "
+                "where you launched LanEx — switch to that window and enter your password to "
+                "continue. (For security, sudo cannot prompt inside the browser.)"})
         elif not passwordless:
             # No terminal: fall back to a graphical pkexec dialog, else a
             # copy-paste command.
@@ -1137,24 +1314,121 @@ def _run_argv(argv: List[str], *, label: str, key: str,
         wd.daemon = True
         wd.start()
         out_lines: List[str] = []
+        stop_heartbeat = threading.Event()
+        start_tick = time.time()
+        last_line_tick = [start_tick]
+        stalled = {"hit": False}
+        rx_start = _net_rx_bytes()
+        # (time, rx) samples for a ~30 s moving download rate.
+        rx_samples: List[Tuple[float, int]] = []
+        last_rx_activity = [start_tick, rx_start or 0]
+        wr_samples: List[Tuple[float, int]] = []
+        last_wr = [_disk_written_bytes() or 0]
+
+        def _heartbeat() -> None:
+            while not stop_heartbeat.wait(5.0):
+                if proc.poll() is not None:
+                    break
+                now = time.time()
+                elapsed = int(now - start_tick)
+                mins, secs = divmod(elapsed, 60)
+                time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+                rx_now = _net_rx_bytes()
+                received = None
+                rate = 0.0
+                if rx_now is not None and rx_start is not None:
+                    received = max(0, rx_now - rx_start)
+                    rx_samples.append((now, rx_now))
+                    while rx_samples and now - rx_samples[0][0] > 30.0:
+                        rx_samples.pop(0)
+                    if len(rx_samples) >= 2 and rx_samples[-1][0] > rx_samples[0][0]:
+                        rate = (rx_samples[-1][1] - rx_samples[0][1]) / (
+                            rx_samples[-1][0] - rx_samples[0][0])
+                    # 256 KB of traffic counts as "the download is alive".
+                    if rx_now - last_rx_activity[1] > 256 * 1024:
+                        last_rx_activity[:] = [now, rx_now]
+                wr_now = _disk_written_bytes()
+                wr_rate = 0.0
+                if wr_now is not None:
+                    wr_samples.append((now, wr_now))
+                    while wr_samples and now - wr_samples[0][0] > 30.0:
+                        wr_samples.pop(0)
+                    if len(wr_samples) >= 2 and wr_samples[-1][0] > wr_samples[0][0]:
+                        wr_rate = (wr_samples[-1][1] - wr_samples[0][1]) / (
+                            wr_samples[-1][0] - wr_samples[0][0])
+                    # 16 MB written counts as alive too (unpacking, extracting).
+                    if wr_now - last_wr[0] > 16 * 1024 * 1024:
+                        last_wr[0] = wr_now
+                        last_rx_activity[0] = now
+                unpacking = rate < 64 * 1024 and wr_rate > 1024 * 1024
+                if expect_bytes and received is not None:
+                    percent = min(99, int(received * 100 / max(1, expect_bytes)))
+                    no_data_s = int(now - last_rx_activity[0])
+                    if unpacking:
+                        msg = (f"{_human_bytes(received)} downloaded; unpacking "
+                               f"({_human_bytes(wr_rate)}/s written), {time_str} elapsed")
+                    elif no_data_s >= 30:
+                        # A dropped connection read as "11 B/s" on the VM; say it.
+                        msg = (f"{_human_bytes(received)} of ~{_human_bytes(expect_bytes)} downloaded; "
+                               f"no data for {no_data_s} s, waiting for the connection "
+                               f"(LanEx retries by itself), {time_str} elapsed")
+                    else:
+                        msg = (f"{_human_bytes(received)} of ~{_human_bytes(expect_bytes)} downloaded"
+                               f" ({_human_bytes(rate)}/s), {time_str} elapsed")
+                    _emit("installer_progress", {"key": key, "label": label,
+                                                 "bytes": received, "expect": expect_bytes,
+                                                 "percent": percent, "message": msg})
+                    _emit("installer_line", {"key": key, "label": label,
+                                             "line": f"  [active] {msg}"})
+                elif (now - last_line_tick[0]) >= 5.0:
+                    extra = ""
+                    if received:
+                        extra = f", {_human_bytes(received)} received at {_human_bytes(rate)}/s"
+                    _emit("installer_line", {
+                        "key": key,
+                        "line": f"  [active] still working ({time_str} elapsed{extra})",
+                        "label": label,
+                    })
+                if stall_s:
+                    quiet_for = now - max(last_line_tick[0], last_rx_activity[0])
+                    if quiet_for >= stall_s and proc.poll() is None:
+                        stalled["hit"] = True
+                        _emit("installer_line", {"key": key, "label": label, "line": (
+                            f"No download or disk activity for {int(quiet_for // 60)} minutes; the "
+                            "connection looks stuck. Restarting this step (data already "
+                            "downloaded is kept).")})
+                        _kill_proc_tree(proc, grace=5.0)
+                        break
+
+        hb = threading.Thread(target=_heartbeat, daemon=True, name="installer_heartbeat")
+        hb.start()
         try:
             for line in proc.stdout:
                 line = line.rstrip()
+                last_line_tick[0] = time.time()
                 out_lines.append(line)
                 _emit("installer_line", {"key": key, "line": line, "label": label})
             proc.wait()
         finally:
+            stop_heartbeat.set()
             wd.cancel()
             _active_installs.pop(key, None)
 
         rc = proc.returncode
         _emit("installer_done", {"key": key, "rc": rc, "label": label})
-        return {
-            "ok": rc == 0,
+        result: Dict[str, Any] = {
+            "ok": rc == 0 and not stalled["hit"],
             "rc": rc,
-            "output": out_lines,
+            # Bounded: a progress-bar-heavy tool can print tens of thousands of
+            # lines over a multi-GB download; callers only need the tail.
+            "output": out_lines[-400:],
             "label": label,
         }
+        if stalled["hit"]:
+            result["stalled"] = True
+        if timed_out["hit"]:
+            result["timed_out"] = True
+        return result
     except Exception as ex:
         _emit("installer_error", {"key": key, "error": str(ex), "label": label})
         return {
@@ -1162,6 +1436,94 @@ def _run_argv(argv: List[str], *, label: str, key: str,
             "error": str(ex),
             "label": label,
         }
+
+
+_APT_LISTS_DIR = Path("/var/lib/apt/lists")
+
+# apt's own words for "I have never heard of this package", which is what a
+# missing package INDEX looks like from the outside — indistinguishable from a
+# genuinely nonexistent package name until you refresh and try again.
+_APT_STALE_INDEX_MARKERS = (
+    "unable to locate package",
+    "has no installation candidate",
+    "couldn't find any package",
+)
+
+
+def _apt_index_empty() -> bool:
+    """True when apt holds no package lists at all.
+
+    The Windows appliance ships this way on purpose: the image bake deletes
+    ``/var/lib/apt/lists/*`` (windows/provision/provision.sh) because it is a
+    cache that regenerates on demand — but nothing was regenerating it, so the
+    first ``apt-get install`` inside a fresh appliance died with "Unable to
+    locate package build-essential" and the user was handed a manual command for
+    a terminal the appliance deliberately doesn't give them.
+    """
+    try:
+        return not any(p.is_file() and p.name != "lock"
+                       for p in _APT_LISTS_DIR.iterdir())
+    except Exception:
+        # No apt, or no permission to look: let the install attempt speak.
+        return False
+
+
+def _apt_install(packages: List[str], *, label: str, key: str) -> Dict[str, Any]:
+    """``apt-get install -y`` *packages*, refreshing the index when it needs it.
+
+    Refreshes up front when there is no index at all (a freshly baked appliance),
+    and once more on demand if the install fails the way a STALE index fails —
+    an appliance that has sat unused while the archive moved on hits that, and
+    "Unable to locate package" is not something the user can act on. Escalation,
+    streaming and cancellation are ``_run_argv``'s, unchanged.
+    """
+    apt = "apt-fast" if _check_cmd("apt-fast") else "apt-get"
+    # Already root (a container base, the appliance's own provisioning): don't
+    # demand a sudo binary that a minimal image may not even carry.
+    root = getattr(os, "geteuid", lambda: 1)() == 0
+    # Two things this install has that a hand-typed one doesn't need, both copied
+    # from windows/provision/provision.sh because it learned them the hard way:
+    #
+    #  * DEBIAN_FRONTEND=noninteractive — nothing here is attached to a terminal
+    #    (stdout is a log file), so a debconf prompt from a package pulled in as a
+    #    dependency would be a wedged install nobody can answer. Via `env` rather
+    #    than `sudo VAR=…`: sudo's env_reset would drop it, and `env` sidesteps
+    #    the sudoers policy question entirely.
+    #  * DPkg::Lock::Timeout — unattended-upgrades may hold the dpkg lock when the
+    #    user clicks Install. Waiting five minutes beats "Could not get lock".
+    #  * Acquire timeouts + retries — apt has NO fetch timeout by default, so a
+    #    connection that opens and then goes silent hangs until the install
+    #    watchdog fires an hour later, behind a label that says it is working.
+    #    Observed on WSL: archive.ubuntu.com resolves to IPv6 only, the appliance's
+    #    IPv6 egress half-works, and apt parked mid-download with 236 MB already
+    #    fetched. A timeout turns that into a retry against the next address.
+    prefix = ([] if root else ["sudo"]) + [
+        "env", "DEBIAN_FRONTEND=noninteractive",
+        apt, "-o", "DPkg::Lock::Timeout=300",
+        "-o", "Acquire::http::Timeout=30",
+        "-o", "Acquire::https::Timeout=30",
+        "-o", "Acquire::Retries=3",
+    ]
+    update = prefix + ["update"]
+    install = prefix + ["install", "-y"] + list(packages)
+    if _apt_index_empty():
+        _emit("installer_info", {"key": key, "label": label,
+              "message": "refreshing the package lists (first install in this environment)…"})
+        _run_argv(update, label=label + " — apt update", key=key)
+        if _is_cancelled(key):
+            return _cancelled_result(key)
+    res = _run_argv(install, label=label, key=key)
+    if res.get("ok") or _is_cancelled(key):
+        return res
+    blob = "\n".join(res.get("output") or []).lower()
+    if not any(m in blob for m in _APT_STALE_INDEX_MARKERS):
+        return res
+    _emit("installer_info", {"key": key, "label": label,
+          "message": "the package lists look out of date — refreshing and retrying…"})
+    _run_argv(update, label=label + " — apt update", key=key)
+    if _is_cancelled(key):
+        return res
+    return _run_argv(install, label=label, key=key)
 
 
 def _verify_install(key: str) -> bool:
@@ -1207,6 +1569,8 @@ _GDS3D_APT_PACKAGES = [
     "git", "build-essential", "libx11-dev", "libxmu-dev", "libxi-dev",
     "libgl1-mesa-dev", "libglu1-mesa-dev", "freeglut3-dev",
 ]
+# The whole set as one copy-pasteable command — for the manual fallback only.
+# The install path no longer prints it: it installs the packages itself.
 _GDS3D_APT_DEPS_CMD = "sudo apt-get install -y " + " ".join(_GDS3D_APT_PACKAGES)
 
 # RUNTIME (not build) dependency: the legacy X11 ``-misc-fixed-`` bitmap fonts.
@@ -1239,8 +1603,8 @@ def ensure_x11_fixed_fonts() -> Dict[str, Any]:
         return {"ok": False, "need": "x11-fonts", "manual": _GDS3D_FONT_CMD,
                 "error": "Legacy X11 fonts (xfonts-base) are missing and this isn't a "
                          "Debian/apt system. Install the equivalent fonts package, then retry."}
-    res = _run_argv(["sudo", "apt-get", "install", "-y"] + _GDS3D_FONT_PACKAGES,
-                    label="xfonts-base (GDS3D fonts)", key="xfonts-base")
+    res = _apt_install(_GDS3D_FONT_PACKAGES,
+                       label="xfonts-base (GDS3D fonts)", key="xfonts-base")
     installed = bool(res.get("ok")) and platform_env.x11_fixed_fonts_present() is not False
     out: Dict[str, Any] = dict(res)
     out["ok"] = installed
@@ -1290,8 +1654,8 @@ def ensure_gl_runtime() -> Dict[str, Any]:
     if not shutil.which("apt-get"):
         return {"ok": False, "need": "gl-runtime", "manual": _GL_RUNTIME_CMD,
                 "error": gl_runtime_guidance()}
-    res = _run_argv(["sudo", "apt-get", "install", "-y"] + _GL_RUNTIME_PACKAGES,
-                    label="Mesa GL drivers (libgl1-mesa-dri)", key="gl-runtime")
+    res = _apt_install(_GL_RUNTIME_PACKAGES,
+                       label="Mesa GL drivers (libgl1-mesa-dri)", key="gl-runtime")
     installed = bool(res.get("ok")) and platform_env.mesa_dri_present() is not False
     out: Dict[str, Any] = dict(res)
     out["ok"] = installed
@@ -1340,6 +1704,38 @@ def _missing_gds3d_dev_packages() -> List[str]:
         if not _header_present(header) and pkg not in missing:
             missing.append(pkg)
     return missing
+
+
+def _missing_gds3d_build_tools() -> List[str]:
+    """Human names of the build tools GDS3D needs and this host doesn't have.
+
+    Names, not packages, because this list is also what a failure message shows
+    the user (``_gds3d_toolchain_packages`` turns it into apt packages). A real
+    C++ driver is required; a C-only ``cc`` is not sufficient evidence.
+    """
+    from . import platform_env
+
+    missing = [t for t in ("git", "make") if not platform_env.usable_which(t)]
+    # A C compiler driver (cc/gcc) is not proof that this C++ source can link,
+    # and WSL must not accept a similarly named Windows executable on PATH.
+    if not (platform_env.usable_which("g++") or platform_env.usable_which("clang++")):
+        missing.append("a C++ compiler")
+    return missing
+
+
+def _gds3d_toolchain_packages(missing_tools: List[str]) -> List[str]:
+    """Debian packages that supply the missing entries of *missing_tools*.
+
+    ``build-essential`` is the one that carries both make and g++, so a host
+    missing either gets the same package — installing it twice over is what apt
+    is for.
+    """
+    pkgs: List[str] = []
+    if "git" in missing_tools:
+        pkgs.append("git")
+    if "make" in missing_tools or "a C++ compiler" in missing_tools:
+        pkgs.append("build-essential")
+    return pkgs
 
 
 def _x11_fixed_fonts_missing() -> bool:
@@ -1475,23 +1871,17 @@ def _install_gds3d() -> Dict[str, Any]:
     if sys.platform == "darwin":
         return _install_gds3d_darwin()
 
-    missing = [t for t in ("git", "make") if not shutil.which(t)]
-    if not (shutil.which("g++") or shutil.which("clang++") or shutil.which("cc")):
-        missing.append("a C++ compiler")
-    if missing:
-        # Only the apt path can auto-install the toolchain. Inside the bundled
-        # LibreLane image (Nix base, no apt) GDS3D simply can't be built, so don't
-        # show Debian instructions that will never apply — be honest about it.
-        if detect_environment().get("apt"):
-            g = ("GDS3D builds from source and needs: " + ", ".join(missing) +
-                 ". On Debian/Ubuntu: " + _GDS3D_APT_DEPS_CMD + ". "
-                 "Then click Build again, or use the manual steps in Tools.")
-        else:
-            g = ("GDS3D is a desktop OpenGL viewer and is not bundled in this image — "
-                 "it needs a build toolchain (git, make, a C++ compiler) plus an X11 "
-                 "display, which the headless container doesn't have. The web cockpit "
-                 "doesn't need it; run LanEx on a host with those tools to use GDS3D. "
-                 "Missing here: " + ", ".join(missing) + ".")
+    env = detect_environment()
+    missing = _missing_gds3d_build_tools()
+    if missing and not env.get("apt"):
+        # No apt = nothing to auto-install with. Inside the bundled LibreLane
+        # image (Nix base, no apt) GDS3D simply can't be built, so don't show
+        # Debian instructions that will never apply — be honest about it.
+        g = ("GDS3D is a desktop OpenGL viewer and is not bundled in this image — "
+             "it needs a build toolchain (git, make, a C++ compiler) plus an X11 "
+             "display, which the headless container doesn't have. The web cockpit "
+             "doesn't need it; run LanEx on a host with those tools to use GDS3D. "
+             "Missing here: " + ", ".join(missing) + ".")
         _emit("installer_error", {"key": "gds3d", "message": g})
         return {"ok": False, "guidance": g, "reason": g}
 
@@ -1504,31 +1894,42 @@ def _install_gds3d() -> Dict[str, Any]:
     # both compiles and doesn't segfault on first launch. `_run_argv` now
     # escalates on its own (terminal prompt / pkexec), so we no longer require
     # passwordless sudo here — only that apt exists.
-    env = detect_environment()
-    header_pkgs = _missing_gds3d_dev_packages()
+    #
+    # The compiler/git/make packages ride in that same call. They used to be a
+    # dead end instead: a "install these yourself, then click Build again"
+    # message, which on the Windows appliance is a hand-off to a terminal the
+    # installer promises the user will never see — while the very next apt call
+    # in this function proved the machinery to install them was right here.
+    build_pkgs = _gds3d_toolchain_packages(missing) + _missing_gds3d_dev_packages()
     font_pkgs = _GDS3D_FONT_PACKAGES if _x11_fixed_fonts_missing() else []
     # GDS3D is a GL app: without Mesa's DRI drivers (fresh minimal WSL/Ubuntu
     # ships none) it opens a blank window or hangs — even software rendering
     # needs them (llvmpipe IS one of those drivers). Install them alongside.
     from . import platform_env as _penv
     gl_pkgs = _GL_RUNTIME_PACKAGES if _penv.mesa_dri_present() is False else []
-    apt_pkgs = header_pkgs + font_pkgs + gl_pkgs
+    apt_pkgs = build_pkgs + font_pkgs + gl_pkgs
     if apt_pkgs:
         if env.get("apt"):
-            apt = "apt-fast" if _check_cmd("apt-fast") else "apt-get"
             _emit("installer_info", {"key": "gds3d",
                   "message": "installing GDS3D dependencies: " + " ".join(apt_pkgs)})
-            dep_res = _run_argv(["sudo", apt, "install", "-y"] + apt_pkgs,
-                                label="gds3d dependencies (apt)", key="gds3d")
+            dep_res = _apt_install(apt_pkgs, label="gds3d dependencies (apt)", key="gds3d")
             if _is_cancelled("gds3d"):
                 return _cancelled_result("gds3d")
-            still = _missing_gds3d_dev_packages()
-            if still:
-                g = _gds3d_dep_guidance(still)
+            # Re-probe rather than trust apt's exit code: a partially satisfied
+            # install must not be followed by a build that fails on a header.
+            still_tools = _missing_gds3d_build_tools()
+            still_headers = _missing_gds3d_dev_packages()
+            if still_tools or still_headers:
+                g = _gds3d_dep_guidance(
+                    still_headers or _gds3d_toolchain_packages(still_tools))
+                if still_tools:
+                    g = ("GDS3D's build toolchain could not be installed "
+                         "automatically — still missing: " + ", ".join(still_tools) +
+                         ". The Install log above has apt's own error.\n" + g)
                 _emit("installer_error", {"key": "gds3d", "message": g})
                 return {"ok": False, "guidance": g, "reason": g, "rc": dep_res.get("rc")}
-        elif header_pkgs:
-            g = _gds3d_dep_guidance(header_pkgs)
+        elif build_pkgs:
+            g = _gds3d_dep_guidance(build_pkgs)
             _emit("installer_error", {"key": "gds3d", "message": g})
             return {"ok": False, "guidance": g, "reason": g}
 
@@ -1541,6 +1942,21 @@ def _install_gds3d() -> Dict[str, Any]:
     subdir = "linux"
     q = shlex.quote
     dest = bindir / "gds3d"
+    pinned_commit = os.environ.get("LANEX_GDS3D_COMMIT", "")
+    if pinned_commit and not re.fullmatch(r"[0-9a-fA-F]{40}", pinned_commit):
+        return {"ok": False, "reason": "LANEX_GDS3D_COMMIT is not a full commit SHA"}
+    if pinned_commit:
+        source_step = (
+            f"if [ ! -d {q(str(src))}/.git ]; then git clone --no-checkout {q(_GDS3D_REPO)} {q(str(src))}; fi; "
+            f"cd {q(str(src))}; git fetch --depth 1 origin {q(pinned_commit)}; "
+            f"git checkout --detach {q(pinned_commit)}; "
+            f"test \"$(git rev-parse HEAD)\" = {q(pinned_commit)}; "
+        )
+    else:
+        source_step = (
+            f"if [ -d {q(str(src))}/.git ]; then cd {q(str(src))}; git pull --ff-only || true; "
+            f"else git clone --depth 1 {q(_GDS3D_REPO)} {q(str(src))}; fi; "
+        )
     # The Makefile emits the binary as 'GDS3D' (capital). Earlier we cp'd 'gds3d'
     # (lowercase) inside an `&&` list, where `set -e` is suppressed for non-final
     # commands — so the cp failed silently and the build "succeeded" with no
@@ -1549,8 +1965,7 @@ def _install_gds3d() -> Dict[str, Any]:
     script = (
         "set -e; "
         f"mkdir -p {q(str(src.parent))} {q(str(bindir))}; "
-        f"if [ -d {q(str(src))}/.git ]; then cd {q(str(src))}; git pull --ff-only || true; "
-        f"else git clone --depth 1 {q(_GDS3D_REPO)} {q(str(src))}; fi; "
+        f"{source_step}"
         f"cd {q(str(src))}/{subdir}; make; "
         'bin=""; for c in GDS3D gds3d; do [ -f "$c" ] && bin="$c" && break; done; '
         'if [ -z "$bin" ]; then echo "ERROR: build produced no GDS3D binary"; exit 1; fi; '
@@ -2385,94 +2800,264 @@ def _install_guidance(key: str) -> str:
     )
 
 
-def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Try every available strategy to install a PDK in the background.
+_PDK_PERMANENT_FAILURES = (
+    "permission denied", "operation not permitted", "not supported",
+    "incompatible", "unknown library", "invalid choice", "no space left",
+)
 
-    Same multi-layer fallback as :func:`install_tool`, but non-blocking. A second
-    request for a PDK that is already downloading is refused (no double download);
-    ciel resumes from its tarball cache on a fresh attempt after an interruption.
+
+def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
+                     required_version: Optional[str] = None,
+                     strict: bool = False,
+                     variant_libraries: Optional[Dict[str, List[str]]] = None,
+                     expect_bytes: Optional[int] = None,
+                     asset_pins: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Fetch, enable and verify one PDK before returning.
+
+    This is the single completion contract used by Windows finalization and the
+    asynchronous Tools-page wrapper.  Arguments are an argv list (never shell
+    text), valid installed versions and download caches are never deleted, and
+    exhausted retries are an explicit failure.
+
+    When the SHA-256 of every asset of the version is pinned (*asset_pins*, or
+    ``~/.lanex/pdk-assets.json``), the tarballs are downloaded by
+    :mod:`pdkfeed` (resumable, our copy first, hash-checked) and ciel reads
+    them from a local feed instead of the internet.
     """
     key = f"pdk:{pdk}"
+    family = _pdk_family(pdk)
+    if not _begin_pdk_family(family):
+        return {"ok": False, "in_progress": True, "status": "family-already-running",
+                "reason": f"another {family} variant is already being installed"}
     if not _begin_job(key):
-        return {"ok": True, "in_progress": True, "status": "already-running",
+        _end_pdk_family(family)
+        return {"ok": False, "in_progress": True, "status": "already-running",
                 "reason": f"{pdk} is already downloading — no second download started."}
-
-    def _worker():
-      try:
+    try:
         from . import platform_env
+        from . import pdk as pdk_state
 
-        _emit("installer_info", {"key": f"pdk:{pdk}", "message": f"starting {pdk} PDK install…"})
-        # Proactive DNS check — a PDK download (ciel fetch / volare) needs to
-        # resolve github.com. On WSL2 a broken auto-generated /etc/resolv.conf is
-        # a common, fixable cause of repeated timeouts; warn up front (don't block
-        # — the user may have a cache/mirror) with the exact remediation.
+        _emit("installer_info", {"key": key, "message": f"starting {pdk} PDK install…"})
         if platform_env.dns_ok() is False:
             rem = platform_env.network_remediation()
             if rem:
-                _emit("installer_error", {"key": f"pdk:{pdk}", "message": rem})
-        # A ciel store left root-owned by an earlier sudo run can't be written or
-        # self-healed (our chmod/rm are owner-scoped) — every strategy would just
-        # loop on the same 'Permission denied'. Detect it up front and surface the
-        # one-click fix + exact chown command instead of burning retries.
+                _emit("installer_info", {"key": key, "message": rem})
         perm = ciel_permission_status()
         if perm.get("needs_root"):
-            _emit("installer_info", {
-                "key": f"pdk:{pdk}", "needs_root": True, "message": perm["message"],
-                "fix": {"endpoint": "/api/pdk/fix-permissions", "label": "Fix permissions"},
-            })
-            _emit("installer_error", {
-                "key": f"pdk:{pdk}",
-                "message": ("PDK store has root-owned files — install can't write to it. "
-                            "Use 'Fix permissions', or run:  " + perm["chown_cmd"]),
-            })
-            return
-        env = detect_environment()
-        tried: List[str] = []
-        all_output: List[str] = []
-        for strategy in _pdk_strategies_for(env):
-            # Cancel stops the whole job — never fall through to the next
-            # strategy's fresh multi-GB download after the user said stop.
-            if _is_cancelled(key):
-                _cancelled_result(key)
-                return
-            prepare = strategy["prepare"]
+            reason = ("PDK store has root-owned files. Use Fix permissions, or run: "
+                      + perm["chown_cmd"])
+            _emit("installer_error", {"key": key, "message": reason})
+            return {"ok": False, "permanent": True, "reason": reason}
+
+        pinned = _pinned_pdk_version(family)
+        version = required_version or pinned
+        if strict and (not version or not pinned or version != pinned):
+            reason = f"the locked LibreLane environment has no matching {family} PDK pin"
+            _emit("installer_error", {"key": key, "message": reason})
+            return {"ok": False, "permanent": True, "reason": reason}
+        version = version or _get_pdk_version(family)
+        if not version:
+            return {"ok": False, "reason": f"could not resolve a pinned {family} version"}
+        ciel = _ciel_argv()
+        if not ciel:
+            return {"ok": False, "reason": "Ciel is not available in LanEx's Python environment"}
+        root = os.environ.get("PDK_ROOT") or ciel_home()
+        lib_args: List[str] = []
+        for library in libraries or []:
+            if not isinstance(library, str) or not library or library.startswith("-"):
+                return {"ok": False, "permanent": True,
+                        "reason": f"invalid PDK library name: {library!r}"}
+            lib_args.extend(["-l", library])
+        try:
+            import sysconfig
+            sp = sysconfig.get_path("purelib")
+            if sp and os.path.isdir(sp):
+                pth = os.path.join(sp, "lanex_timeout.pth")
+                if not os.path.exists(pth):
+                    with open(pth, "w", encoding="utf-8") as pf:
+                        pf.write(
+                            'import sys; exec("try:\\n import httpx\\n if hasattr(httpx, \'Client\') and '
+                            'hasattr(httpx.Client.__init__, \'__kwdefaults__\') and '
+                            'httpx.Client.__init__.__kwdefaults__ is not None:\\n  '
+                            'httpx.Client.__init__.__kwdefaults__[\'timeout\'] = httpx.Timeout(300.0, connect=60.0)\\n'
+                            'except Exception:\\n pass")\n'
+                        )
+        except Exception:
+            pass
+
+        base = ["--pdk-root", root, "--pdk-family", family, version, *lib_args]
+        from . import pdkfeed
+
+        feed = pdkfeed.load_pins(family, version, asset_pins)
+        ciel_env: Dict[str, str] = {}
+        feed_files: Dict[str, Any] = {}
+        if feed:
+            assets = pdkfeed.needed_assets(family, feed, libraries)
+            total = sum(int(a.get("size") or 0) for a in assets) or 1
+            done = [0]
+            last_emit = [0.0]
+            label = f"{family} PDK files"
+
+            def on_bytes(n: int) -> None:
+                done[0] += n
+                now = time.monotonic()
+                if now - last_emit[0] >= 1.0:
+                    last_emit[0] = now
+                    pct = min(99, done[0] * 100 // total)
+                    msg = f"{_human_bytes(done[0])} of {_human_bytes(total)} downloaded and checked"
+                    _emit("installer_progress", {"key": key, "label": label, "bytes": done[0],
+                                                 "expect": total, "percent": pct, "message": msg})
+                    _emit("installer_line", {"key": key, "label": label,
+                                             "line": f"  [active] {msg}"})
+
+            def log(line: str) -> None:
+                _emit("installer_line", {"key": key, "label": label, "line": line})
+
+            cache = pdkfeed.cache_dir(family, version)
+            cache.mkdir(parents=True, exist_ok=True)
+            log(f"downloading {len(assets)} {family} files ({_human_bytes(total)}); "
+                "each is checked against its pinned SHA-256")
             try:
-                argv = prepare(env, pdk, libraries)
-            except Exception as ex:
-                tried.append(f"{strategy['label']}: prepare failed ({ex})")
-                continue
-            if argv is None:
-                tried.append(f"{strategy['label']}: no recipe")
-                continue
-            result = _run_argv(argv, label=strategy["label"], key=f"pdk:{pdk}")
-            all_output.extend(result.get("output") or [])
-            if _is_cancelled(key) or result.get("rc") in (-15, -9):
-                _cancelled_result(key)
-                return
-            if result.get("ok"):
-                _emit("installer_info", {
-                    "key": f"pdk:{pdk}",
-                    "message": f"{pdk} installed via {strategy['label']}",
-                })
-                # Re-emit done to signal success specifically to frontend installer component
-                _emit("installer_done", {
-                    "key": f"pdk:{pdk}",
-                    "rc": 0,
-                    "label": strategy["label"],
-                    "method": strategy["methods"][0]
-                })
-                return
-            tried.append(f"{strategy['label']}: exit {result.get('rc', '?')}")
-        _emit("installer_error", {
-            "key": f"pdk:{pdk}",
-            "message": f"all install strategies failed for {pdk}",
-        })
-        # If the failures look network-related, surface the (often WSL2 DNS) fix.
-        rem = platform_env.network_remediation("\n".join(all_output))
-        if rem:
-            _emit("installer_error", {"key": f"pdk:{pdk}", "message": rem})
-      finally:
+                for asset in assets:
+                    feed_files[asset["filename"]] = pdkfeed.fetch_verified(
+                        asset, cache, feed.get("mirrorBase", ""), on_bytes=on_bytes,
+                        cancelled=lambda: _is_cancelled(key), log=log)
+            except pdkfeed.Cancelled:
+                return _cancelled_result(key)
+            except Exception as ex:  # noqa: BLE001
+                reason = f"{family} PDK download failed: {ex}"
+                _emit("installer_error", {"key": key, "message": reason})
+                return {"ok": False, "reason": reason}
+            log(f"all {family} files verified")
+
+        # Marked until ciel has unpacked and enabled the version, so a fetch cut
+        # off mid-unpack is never taken for an installed PDK (pdk.py checks it).
+        marker = None
+        try:
+            import ciel as _ciel_mod  # type: ignore
+
+            vdir = _ciel_mod.Version(name=version, pdk=family).get_dir(_ciel_mod.get_ciel_home(root))
+            marker = Path(str(vdir).rstrip("/") + ".lanex-incomplete")
+            if marker.exists() and os.path.isdir(vdir):
+                # The previous attempt never finished: unpack again from the
+                # verified files rather than trust a partial tree.
+                repair_ciel_store(None, pdk_root=root)
+                shutil.rmtree(vdir, ignore_errors=True)
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("LanEx: ciel fetch in progress\n", encoding="utf-8")
+        except Exception:
+            marker = None
+
+        feed_ctx = None
+        if feed:
+            feed_root = pdkfeed.cache_dir(family, version).parent / f"feed-{family}-{version}"
+            feed_ctx = pdkfeed.serve(feed_root)
+            feed_root.mkdir(parents=True, exist_ok=True)
+            feed_url = feed_ctx.__enter__()
+            pdkfeed.write_static_source(feed_root, family, feed, feed_files, feed_url)
+            ciel_env = {"CIEL_DATA_SOURCE": f"static-web:{feed_url}", **pdkfeed.no_proxy_env()}
+        try:
+            result = _install_pdk_ciel(key, family, version, ciel, base, ciel_env,
+                                       expect_bytes=None if feed else expect_bytes)
+        finally:
+            if feed_ctx is not None:
+                feed_ctx.__exit__(None, None, None)
+        if not result.get("ok"):
+            return result
+        attempt = result.get("attempts", 1)
+        if marker is not None:
+            marker.unlink(missing_ok=True)
+        failed_libraries: List[str] = []
+        if variant_libraries:
+            for v_name, v_libs in variant_libraries.items():
+                for library in v_libs:
+                    ready = pdk_state.check_pdk_library_ready(
+                        v_name, library, required_version=version)
+                    if not (ready.get("ready") and ready.get("required_version") == version):
+                        failed_libraries.append(f"{v_name}/{library}")
+        else:
+            for library in libraries or []:
+                ready = pdk_state.check_pdk_library_ready(
+                    pdk, library, required_version=version)
+                if not (ready.get("ready") and ready.get("required_version") == version):
+                    failed_libraries.append(library)
+        if failed_libraries:
+            reason = "PDK installed but readiness failed for: " + ", ".join(failed_libraries)
+            _emit("installer_error", {"key": key, "message": reason})
+            return {"ok": False, "reason": reason, "missingLibraries": failed_libraries}
+        _emit("installer_done", {"key": key, "rc": 0, "label": "ciel fetch+enable",
+                                  "method": "ciel", "version": version,
+                                  "verified": bool(feed)})
+        return {"ok": True, "method": "ciel", "version": version,
+                "libraries": list(libraries or []), "attempts": attempt,
+                "verifiedDownloads": bool(feed)}
+    finally:
         _end_job(key)
+        _end_pdk_family(family)
+
+
+def _install_pdk_ciel(key: str, family: str, version: str, ciel: List[str],
+                      base: List[str], env_extra: Dict[str, str], *,
+                      expect_bytes: Optional[int]) -> Dict[str, Any]:
+    """``ciel fetch`` with retries, then ``ciel enable``."""
+    last: Dict[str, Any] = {"ok": False, "output": []}
+    max_attempts = 8
+    backoffs = [2, 4, 8, 12, 16, 20, 24, 30]
+    attempt = 0
+    for attempt in range(1, max_attempts + 1):
+        if _is_cancelled(key):
+            return _cancelled_result(key)
+        last = _run_argv(ciel + ["fetch", *base],
+                         label=f"ciel fetch {family} ({attempt}/{max_attempts})", key=key,
+                         env_extra=env_extra or None,
+                         expect_bytes=expect_bytes, stall_s=_DOWNLOAD_STALL_S)
+        if _is_cancelled(key) or (last.get("rc") in (-15, -9) and not last.get("stalled")):
+            return _cancelled_result(key)
+        if last.get("ok"):
+            break
+        raw_out = last.get("output") or []
+        if isinstance(raw_out, str):
+            cleaned_out = [l for l in raw_out.splitlines() if l.strip()]
+        else:
+            cleaned_out = [str(l) for l in raw_out if str(l).strip()]
+        blob = "\n".join(cleaned_out).lower()
+        permanent = any(marker in blob for marker in _PDK_PERMANENT_FAILURES)
+        if permanent or attempt == max_attempts:
+            reason = (f"ciel fetch failed permanently for {family}" if permanent else
+                      f"ciel fetch failed after {max_attempts} attempts for {family}")
+            _emit("installer_error", {"key": key, "message": reason})
+            return {"ok": False, "permanent": permanent, "attempts": attempt,
+                    "reason": reason, "output": cleaned_out}
+        delay = backoffs[min(attempt - 1, len(backoffs) - 1)]
+        _emit("installer_info", {"key": key,
+              "message": f"transient PDK fetch failure; retrying in {delay}s (cache retained)…"})
+        time.sleep(delay)
+
+    enabled = _run_argv(ciel + ["enable", *base], label=f"ciel enable {family}", key=key,
+                        env_extra=env_extra or None)
+    if not enabled.get("ok"):
+        raw_en_out = enabled.get("output") or []
+        cleaned_en_out = [l for l in (raw_en_out.splitlines() if isinstance(raw_en_out, str) else raw_en_out) if str(l).strip()]
+        return {"ok": False, "reason": f"ciel enable failed for {family}",
+                "output": cleaned_en_out}
+    return {"ok": True, "attempts": attempt}
+
+
+def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Asynchronous Tools-page wrapper around :func:`install_pdk_sync`."""
+    key = f"pdk:{pdk}"
+    if is_in_progress(key):
+        return {"ok": True, "in_progress": True, "status": "already-running",
+                "reason": f"{pdk} is already downloading — no second download started."}
+
+    def _worker() -> None:
+        try:
+            result = install_pdk_sync(pdk, libraries)
+        except Exception as ex:
+            result = {"ok": False, "reason": f"{type(ex).__name__}: {ex}"}
+        payload = {"key": key}
+        payload.update(result)
+        _emit("installer_result", payload)
 
     t = threading.Thread(target=_worker, daemon=True, name=f"installer_pdk[{pdk}]")
     t.start()
@@ -2481,6 +3066,65 @@ def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, An
         "pid": "thread",
         "status": "started"
     }
+
+
+def pull_image_sync(reference: str, expected_digest: str, *,
+                    expected_engine: Optional[str] = None,
+                    expect_bytes: Optional[int] = None) -> Dict[str, Any]:
+    """Synchronously pull the immutable image selected by a build manifest."""
+    from . import tools
+
+    if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", expected_digest or ""):
+        return {"ok": False, "reason": "the build manifest image digest is invalid"}
+    resolved = tools.resolve_engine(expected_engine)
+    if not resolved.get("ready"):
+        return {"ok": False, "reason": "the selected container engine is not reachable",
+                "resolved": resolved}
+    engine = resolved["engine"]
+    if expected_engine and engine != expected_engine:
+        return {"ok": False,
+                "reason": f"selected engine is {expected_engine}, but {engine} is the resolved engine",
+                "resolved": resolved}
+    if engine == "docker":
+        rc, endpoint, error = _shell_exec_quiet(
+            ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+            timeout=15.0,
+        )
+        if rc != 0 or endpoint.strip() != "unix:///var/run/docker.sock":
+            return {"ok": False, "reason": "Docker is not using the appliance-local socket",
+                    "context": endpoint.strip(), "detail": error.strip()}
+    target = f"{reference.split('@', 1)[0]}@{expected_digest.lower()}"
+    argv = [engine, "pull", target]
+    if resolved.get("sg_wrap"):
+        argv = tools.sg_wrap_argv(argv)
+    key = "container:image"
+    result: Dict[str, Any] = {"ok": False, "reason": "image pull failed"}
+    # Layers already pulled stay in the engine's store, so every retry resumes
+    # rather than restarts. A dropped connection (Wi-Fi gone, laptop asleep, a
+    # VPN reconnecting) fails the pull at once, so the retries are spread over
+    # about six and a half minutes before Setup gives up and offers Retry.
+    max_attempts = 10
+    for attempt in range(1, max_attempts + 1):
+        if _is_cancelled(key):
+            return _cancelled_result(key)
+        label = f"{engine} pull {expected_digest[:19]}…"
+        if attempt > 1:
+            label += f" (attempt {attempt}/{max_attempts})"
+        result = _run_argv(argv, label=label, key=key, timeout_s=4 * 3600,
+                           expect_bytes=expect_bytes, stall_s=_DOWNLOAD_STALL_S)
+        if result.get("ok"):
+            record_image_digest(engine, target, sg_wrap=bool(resolved.get("sg_wrap")))
+            break
+        if _is_cancelled(key) or (result.get("rc") in (-15, -9) and not result.get("stalled")):
+            return _cancelled_result(key)
+        if attempt < max_attempts:
+            delay = min(60, 10 * attempt)
+            _emit("installer_info", {"key": key, "message": (
+                f"image download interrupted; retrying in {delay}s (layers already "
+                "downloaded are kept)…")})
+            time.sleep(delay)
+    result.update({"engine": engine, "image": target})
+    return result
 
 
 def pull_image() -> Dict[str, Any]:
@@ -2704,33 +3348,92 @@ def cancel_install(key: str) -> Dict[str, Any]:
     return {"ok": False, "reason": "not running"}
 
 
+def cancel_all() -> List[str]:
+    """Cancel every running job and kill every live install process.
+
+    Windows Setup's cancel has to stop whatever the finalizer is doing right
+    now, including a step (the image pull) that never claimed a job key; a
+    per-key cancel left those running and let their retry loops start the next
+    attempt.
+    """
+    keys = set(_active_installs)
+    with _in_progress_lock:
+        keys |= set(_in_progress)
+    for key in keys:
+        _mark_cancelled(key)
+    for key in list(keys):
+        proc = _active_installs.get(key)
+        if proc is not None:
+            _kill_proc_tree(proc)
+    return sorted(keys)
+
+
 def _uninstall_gds3d() -> Dict[str, Any]:
     """Remove the source-built GDS3D binary.
 
     GDS3D has no package-manager release (``_install_gds3d`` builds it from
-    source), so removal = delete the binary from the two locations we install
-    it to: ``~/.local/bin/gds3d`` (user-writable, no privileges) and
-    ``/usr/local/bin/gds3d`` (needs root, via the same escalation installs use).
-    Idempotent: removing one that isn't there still succeeds if the other went.
+    source), so removal = delete the binary from every location the *probe*
+    looks in. That set is deliberately taken from
+    :func:`platform_env.user_bin_dirs` — the same list
+    :func:`platform_env.resolve_user_bin` uses to decide "installed" — plus
+    ``/usr/local/bin`` (needs root, via the same escalation installs use).
+
+    Removal used to delete only ``~/.local/bin/gds3d`` while the probe also
+    accepted the BUILD TREE output (``$LANEX_HOME/tools/GDS3D/linux/GDS3D``,
+    left behind by ``make``). One Remove click then deleted the installed copy,
+    the probe still found the build output, so the card stayed "installed" with
+    only a Remove button — and the next click reported "not found (already
+    removed?)" with no way back to Install. Detection and removal must search
+    the same places.
+
+    Both spellings are tried: the Makefile emits ``GDS3D``, the install copies
+    it as ``gds3d``. Idempotent — nothing left to remove is a success (``ok``
+    with ``already_absent``), never an error the UI can get stuck on.
     """
+    from . import platform_env
+
     removed: List[str] = []
     failed: List[str] = []
+    names = ("gds3d", "GDS3D")
 
-    user_bin = Path.home() / ".local" / "bin" / "gds3d"
-    if user_bin.exists():
-        try:
-            user_bin.unlink()
-            removed.append(str(user_bin))
-        except OSError as ex:
-            failed.append(f"{user_bin}: {ex}")
+    # User-writable copies: the installed binary AND the build-tree output the
+    # probe would otherwise keep reporting as installed.
+    dirs: List[Path] = [Path.home() / ".local" / "bin"]
+    for d in platform_env.user_bin_dirs():
+        p = Path(d)
+        if p not in dirs:
+            dirs.append(p)
+    for d in dirs:
+        for name in names:
+            target = d / name
+            if not target.is_file():
+                continue
+            try:
+                target.unlink()
+                removed.append(str(target))
+            except OSError as ex:
+                failed.append(f"{target}: {ex}")
 
-    sys_bin = Path("/usr/local/bin/gds3d")
-    if sys_bin.exists():
-        res = _run_argv(["sudo", "rm", "-f", str(sys_bin)], label="rm gds3d", key="gds3d")
-        if not sys_bin.exists():
-            removed.append(str(sys_bin))
-        else:
-            failed.append(f"{sys_bin}: exit {res.get('rc', '?')}")
+    # Privileged system copies (one escalated rm for whatever is present).
+    sys_bins = [Path("/usr/local/bin") / name for name in names]
+    present = [p for p in sys_bins if p.exists()]
+    if present:
+        res = _run_argv(["sudo", "rm", "-f", *[str(p) for p in present]],
+                        label="rm gds3d", key="gds3d")
+        for p in present:
+            if not p.exists():
+                removed.append(str(p))
+            else:
+                failed.append(f"{p}: exit {res.get('rc', '?')}")
+
+    # Verify with the resolver the UI's badge uses — if it still resolves, the
+    # card would say "installed" and we must say so instead of claiming success.
+    leftover = platform_env.resolve_user_bin("gds3d", list(names))
+    if leftover and leftover not in removed:
+        return {"ok": False, "removed": removed, "tried": failed,
+                "reason": f"GDS3D is still on this machine at {leftover} — "
+                          "it wasn't installed by LanEx, so remove it yourself "
+                          "(or take it off $PATH), then click Recheck."}
 
     if removed and not failed:
         return {"ok": True, "method": "rm", "key": "gds3d", "removed": removed}
@@ -2739,8 +3442,11 @@ def _uninstall_gds3d() -> Dict[str, Any]:
                 "warning": "some copies could not be removed: " + "; ".join(failed)}
     if failed:
         return {"ok": False, "tried": failed, "reason": "Could not remove the GDS3D binary"}
-    return {"ok": False, "tried": [],
-            "reason": "GDS3D binary not found in ~/.local/bin or /usr/local/bin (already removed?)"}
+    # Nothing anywhere: already gone. Report success so the card flips back to
+    # "Build & install" instead of dead-ending on an error toast.
+    return {"ok": True, "method": "rm", "key": "gds3d", "removed": [],
+            "already_absent": True,
+            "reason": "GDS3D was already removed — nothing left to delete."}
 
 
 def _uninstall_engine_macos(key: str) -> Dict[str, Any]:
@@ -2991,8 +3697,8 @@ def uninstall_pdk(pdk: str) -> Dict[str, Any]:
             tried.append(f"ciel rm {version[:12]}… @ {home}: exit {result.get('rc', '?')}")
 
     if removed:
-        return {"ok": True, "method": "ciel rm", "key": pdk, "removed": removed, "tried": tried}
-    return {"ok": False, "tried": tried, "reason": "Could not remove PDK"}
+        return {"ok": True, "method": "ciel rm", "key": pdk, "family": family, "removed": removed, "tried": tried}
+    return {"ok": False, "key": pdk, "family": family, "tried": tried, "reason": "Could not remove PDK"}
 
 
 # ---- Legacy API (backward compat) ----

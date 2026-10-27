@@ -1,0 +1,262 @@
+# Copyright 2026 LanEx Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# LanEx GDS3D process file: IHP SG13G2 (ihp-sg13g2), 5 thin metals + TopMetal1/2.
+#
+# Where the numbers come from: the PDK's own 2.5D stack,
+# ihp-sg13g2/libs.tech/klayout/tech/d25/sg13g2_beol.lyd25 (IHP Open PDK,
+# Apache-2.0), "z(<layer>, zstart, height, color)" lines, with the GDS numbers
+# from that file's input() lines (they match libs.tech/klayout/tech/sg13g2.lyp).
+# Activ is 1/0 (GDS3D's upstream sg13g2.txt has it on layer 0, so it never drew).
+# Cont (6/0) is drawn as the contact down to Activ (the stack's Cont->Activ);
+# its contacts onto GatPoly are the same GDS layer. The stack file has no wells
+# or implants, so none are drawn.
+#
+# Format: GDS3D process file (gds3d -p <this file>). Height and Thickness are
+# in nanometres from the top of the substrate. LanEx's in-app 3D view reads
+# the same file. Layers not listed here are not drawn in 3D.
+
+LayerStart: Activ
+Layer: 1
+Datatype: 0
+Height: 0
+Thickness: 400
+Red: 0.00
+Green: 1.00
+Blue: 0.00
+Filter: 0.0
+Metal: 0
+Show: 1
+LayerEnd
+
+LayerStart: GatPoly
+Layer: 5
+Datatype: 0
+Height: 400
+Thickness: 140
+Red: 0.00
+Green: 0.00
+Blue: 1.00
+Filter: 0.0
+Metal: 0
+Show: 1
+LayerEnd
+
+LayerStart: Cont
+Layer: 6
+Datatype: 0
+Height: 400
+Thickness: 640
+Red: 0.00
+Green: 1.00
+Blue: 1.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: Metal1
+Layer: 8
+Datatype: 0
+Height: 1040
+Thickness: 420
+Red: 0.22
+Green: 0.75
+Blue: 1.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: Via1
+Layer: 19
+Datatype: 0
+Height: 1460
+Thickness: 540
+Red: 0.80
+Green: 0.80
+Blue: 1.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: Metal2
+Layer: 10
+Datatype: 0
+Height: 2000
+Thickness: 490
+Red: 0.80
+Green: 0.80
+Blue: 0.85
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: Via2
+Layer: 29
+Datatype: 0
+Height: 2490
+Thickness: 540
+Red: 1.00
+Green: 0.22
+Blue: 0.21
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: Metal3
+Layer: 30
+Datatype: 0
+Height: 3030
+Thickness: 490
+Red: 0.85
+Green: 0.00
+Blue: 0.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: Via3
+Layer: 49
+Datatype: 0
+Height: 3520
+Thickness: 540
+Red: 0.61
+Green: 0.66
+Blue: 0.25
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: Metal4
+Layer: 50
+Datatype: 0
+Height: 4060
+Thickness: 490
+Red: 0.58
+Green: 0.91
+Blue: 0.22
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: Via4
+Layer: 66
+Datatype: 0
+Height: 4550
+Thickness: 540
+Red: 0.87
+Green: 0.67
+Blue: 0.37
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: Metal5
+Layer: 67
+Datatype: 0
+Height: 5090
+Thickness: 490
+Red: 0.86
+Green: 0.82
+Blue: 0.27
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: MIM
+Layer: 36
+Datatype: 0
+Height: 5604
+Thickness: 150
+Red: 0.15
+Green: 0.55
+Blue: 0.42
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: Vmim
+Layer: 129
+Datatype: 0
+Height: 5754
+Thickness: 676
+Red: 0.75
+Green: 0.75
+Blue: 0.75
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: TopVia1
+Layer: 125
+Datatype: 0
+Height: 5580
+Thickness: 850
+Red: 1.00
+Green: 0.90
+Blue: 0.75
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: TopMetal1
+Layer: 126
+Datatype: 0
+Height: 6430
+Thickness: 2000
+Red: 1.00
+Green: 0.90
+Blue: 0.75
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: TopVia2
+Layer: 133
+Datatype: 0
+Height: 8430
+Thickness: 2800
+Red: 1.00
+Green: 0.50
+Blue: 0.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd
+
+LayerStart: TopMetal2
+Layer: 134
+Datatype: 0
+Height: 11230
+Thickness: 3000
+Red: 1.00
+Green: 0.50
+Blue: 0.00
+Filter: 0.0
+Metal: 1
+Show: 1
+LayerEnd

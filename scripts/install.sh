@@ -17,11 +17,23 @@
 #   * Idempotent: re-running upgrades LanEx in place.
 #   * bash 3.2 compatible (macOS ships bash 3.2): no readarray, no assoc arrays.
 #
+export COLUMNS=120
+export LINES=40
+export TERM=dumb
+
 # Environment knobs:
 #   LANEX_FROM=github|pypi|<path or pip URL>  install source. Default: the
 #                     GitHub tarball of main (works before the PyPI release and
 #                     cannot be name-squatted). After the PyPI release, pypi.
-#   LANEX_REF=<ref>   GitHub branch/tag for the default source (default: main)
+#   LANEX_REF=<ref>   GitHub branch, tag, or commit SHA for the default source
+#                     (default: main)
+#   LANEX_REPO=<owner/name>  GitHub repository for LANEX_REF (default:
+#                     AkshatIsWired/lanex; useful for fork candidates)
+#   LANEX_PIP_CONSTRAINT=<path>  optional pip constraints file (versions only).
+#   LANEX_PIP_LOCK=<path>  hash-locked requirements file (the Windows appliance).
+#                     Every dependency is installed with pip --require-hashes
+#                     into a plain venv at pipx's usual path; there is no
+#                     unpinned fallback when this is set.
 #   LANEX_SKIP_PULL=1 skip the optional container-image pre-pull
 #   LANEX_SKIP_GDS3D=1  skip the optional GDS3D 3D-viewer build/install
 #   LANEX_NO_PIPX=1   skip pipx entirely (escape hatch for a broken pipx);
@@ -29,9 +41,18 @@
 #   LANEX_ASSUME_YES=1  never prompt (CI / unattended)
 set -u -o pipefail
 
-REPO="AkshatIsWired/lanex"
+REPO="${LANEX_REPO:-AkshatIsWired/lanex}"
 REF="${LANEX_REF:-main}"
-TARBALL="https://github.com/${REPO}/archive/refs/heads/${REF}.tar.gz"
+# codeload's ref-aware endpoint resolves branches, tags, and full commit SHAs.
+# The old branch-qualified archive URL silently made tags and SHAs impossible.
+TARBALL="https://codeload.github.com/${REPO}/tar.gz/${REF}"
+
+if [ -n "${LANEX_PIP_CONSTRAINT:-}" ]; then
+    [ -f "$LANEX_PIP_CONSTRAINT" ] \
+        || { printf 'LanEx pip constraints file not found: %s\n' "$LANEX_PIP_CONSTRAINT" >&2; exit 1; }
+    # pip and the pip subprocess launched by pipx both honour PIP_CONSTRAINT.
+    export PIP_CONSTRAINT="$LANEX_PIP_CONSTRAINT"
+fi
 
 say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
@@ -85,23 +106,43 @@ setup_privileges() {
 
 # --------------------------------------------------------------- preflight --
 net_check() {
+    local source="${LANEX_FROM:-github}"
+    if [ "$source" != "github" ] && [ "$source" != "pypi" ] && [ -e "$source" ]; then
+        return 0
+    fi
+    local url="https://codeload.github.com/${REPO}/tar.gz/${REF}" out rc detail
     if command -v curl >/dev/null 2>&1; then
-        curl -fsI -m 12 https://github.com >/dev/null 2>&1 && return 0
+        out="$(mktemp)" || die "Could not create a temporary network diagnostic."
+        curl -fsSL -I --connect-timeout 10 --max-time 15 --retry 2 \
+            -o /dev/null "$url" 2>"$out"
+        rc=$?
+        if [ "$rc" -eq 0 ]; then rm -f "$out"; return 0; fi
+        detail="$(tail -n 8 "$out" | sed -E \
+            's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[redacted]@#g')"
+        rm -f "$out"
+        case "$rc" in
+            5|6) die "DNS could not resolve the LanEx source host.
+   ${detail}
+   Preserve WSL's generated resolver/DNS tunneling; check VPN or company DNS, then re-run." ;;
+            7) die "The source host resolved, but no connection route was available.
+   ${detail}
+   Check VPN, firewall and IPv4/IPv6 routing, then re-run." ;;
+            28) die "The source download exceeded its bounded timeout.
+   ${detail}
+   Check a slow connection or proxy, then re-run; completed caches are retained." ;;
+            35|51|58|60|77|80|83|90) die "TLS certificate verification failed for the LanEx source.
+   ${detail}
+   Check the clock, CA certificates or inspecting proxy; TLS verification is not disabled." ;;
+            *) die "The LanEx source download failed (curl ${rc}).
+   ${detail}
+   Check the exact error, current proxy/VPN and source access, then re-run." ;;
+        esac
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --spider -T 12 https://github.com >/dev/null 2>&1 && return 0
+        wget -q --spider -T 25 "$url" >/dev/null 2>&1 && return 0
     else
         return 0   # no probe tool yet — let the real download speak later
     fi
-    if [ "$WSL" = "1" ]; then
-        die "Cannot reach github.com — on WSL this is almost always the broken
-   auto-generated /etc/resolv.conf. Fix (one time):
-     sudo sh -c 'printf \"[network]\\ngenerateResolvConf = false\\n\" >> /etc/wsl.conf'
-     sudo rm -f /etc/resolv.conf
-     sudo sh -c 'echo nameserver 8.8.8.8 > /etc/resolv.conf'
-   then from Windows:  wsl --shutdown   and re-open Ubuntu and re-run this."
-    fi
-    die "Cannot reach github.com — check your network/proxy and re-run.
-   (Proxies: export https_proxy=... before re-running; apt/pip/curl honour it.)"
+    die "The LanEx source could not be reached with wget. Check its output, network/proxy and re-run."
 }
 
 disk_free_gb() {  # free space in GiB on $HOME (portable-ish df)
@@ -109,29 +150,38 @@ disk_free_gb() {  # free space in GiB on $HOME (portable-ish df)
 }
 
 # ------------------------------------------------------------ system deps  --
+apt_run() {
+    if [ -n "$SUDO" ]; then
+        sudo apt-get -o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 -o Acquire::Retries=3 "$@"
+    else
+        apt-get -o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 -o Acquire::Retries=3 "$@"
+    fi
+}
+
 apt_stage() {
     # Fresh-boot Ubuntu/WSL often holds the dpkg lock (unattended-upgrades);
     # DPkg::Lock::Timeout waits instead of dying with "could not get lock".
-    local A="$SUDO apt-get -o DPkg::Lock::Timeout=300"
     say "System packages (apt)"
-    $A update || warn "apt update failed — trying with the existing package lists."
+    apt_run update || warn "apt update failed — trying with the existing package lists."
     # Must-haves: interpreter + venv (pipx AND the venv fallback both need it).
-    $A install -y python3 python3-venv ca-certificates \
+    apt_run install -y python3 python3-venv ca-certificates \
         || die "apt could not install python3/python3-venv. Run 'sudo apt update' manually, read its error, then re-run this script."
     # Nice-to-haves: each degrades alone. pipx: not packaged before Ubuntu 22.04
     # / Debian 12 (those pythons are too old anyway — caught below).
-    $A install -y pipx || warn "no apt 'pipx' package — will fall back to pip/venv."
+    apt_run install -y pipx || warn "no apt 'pipx' package — will fall back to pip/venv."
     # git: the in-app GDS3D viewer build clones its source, and git-based
     # installs need it. Its absence surfaces much later as a confusing
     # "gds3d install failed — needs: git" in the Tools tab.
-    $A install -y git || warn "git failed to install — the GDS3D build (Tools tab) needs it."
+    apt_run install -y git || warn "git failed to install — the GDS3D build (Tools tab) needs it."
     # X11 fixed fonts + Mesa GL: without them GDS3D segfaults and GL viewers
     # open blank windows. Cosmetic for the cockpit itself → never fatal.
-    $A install -y xfonts-base libgl1 libgl1-mesa-dri libegl1 \
+    apt_run install -y xfonts-base libgl1 libgl1-mesa-dri libegl1 \
         || warn "GL/font packages failed to install — desktop viewers may need them later (Tools tab offers a one-click fix)."
     # gtkwave: the RTL IDE's "Open in GTKWave" waveform viewer. Optional —
     # the built-in canvas viewer works without it; the Tools tab can retry.
-    $A install -y gtkwave \
+    apt_run install -y gtkwave \
         || warn "gtkwave failed to install — the RTL IDE's 'Open in GTKWave' needs it (Tools tab can retry)."
 }
 
@@ -299,11 +349,47 @@ install_with_venv() {
     LAUNCHER="$venv/bin/lanex"
 }
 
+install_with_lock() {
+    # Same location pipx would use, so the appliance's paths stay the same, but
+    # no pipx: pipx upgrades its own shared pip from PyPI and cannot install a
+    # local wheel in hash-checking mode. The venv's pip is the one python3-venv
+    # ships, which comes from the pinned package snapshot.
+    say "Installing LanEx and its locked dependencies (hash-checked)"
+    local venv="$HOME/.local/share/pipx/venvs/lanex" src
+    src="$(resolve_source)"
+    [ -f "$src" ] || die "LANEX_PIP_LOCK needs a local LanEx wheel in LANEX_FROM, got: $src"
+    rm -rf "$venv"
+    "$PY" -m venv "$venv" || die "python3 -m venv failed for $venv."
+    "$venv/bin/pip" install --disable-pip-version-check --require-hashes --no-deps \
+        --only-binary=:all: -r "$LANEX_PIP_LOCK" \
+        || die "A locked Python dependency could not be downloaded or did not match its pinned SHA-256.
+   The pip output above names the package. Check the connection and run Setup again."
+    "$venv/bin/pip" install --disable-pip-version-check --no-deps --no-index "$src" \
+        || die "The bundled LanEx wheel could not be installed: $src"
+    "$venv/bin/pip" check --disable-pip-version-check \
+        || die "The locked Python dependencies are inconsistent (pip check failed)."
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$venv/bin/lanex" "$HOME/.local/bin/lanex"
+    LAUNCHER="$HOME/.local/bin/lanex"
+}
+
 attempt_install() {
-    if [ "${LANEX_NO_PIPX:-0}" != "1" ] && install_with_pipx; then
-        return 0
+    local rc=0
+    if [ -n "${LANEX_PIP_LOCK:-}" ]; then
+        install_with_lock
+    elif [ "${LANEX_NO_PIPX:-0}" != "1" ] && install_with_pipx; then
+        rc=0
+    else
+        install_with_venv || return 1
     fi
-    install_with_venv
+    local py_site
+    py_site="$("$LAUNCHER" -c "import sysconfig; print(sysconfig.get_path('purelib'))" 2>/dev/null || true)"
+    if [ -d "$py_site" ]; then
+        cat << 'EOFPTH' > "$py_site/lanex_timeout.pth" 2>/dev/null || true
+import sys; exec("try:\n import httpx\n if hasattr(httpx, 'Client') and hasattr(httpx.Client.__init__, '__kwdefaults__') and httpx.Client.__init__.__kwdefaults__ is not None:\n  httpx.Client.__init__.__kwdefaults__['timeout'] = httpx.Timeout(300.0, connect=60.0)\nexcept Exception:\n pass")
+EOFPTH
+    fi
+    return "$rc"
 }
 
 build_tools_stage() {
@@ -312,7 +398,7 @@ build_tools_stage() {
     # which needs a C/C++ toolchain that minimal installs don't have.
     say "A dependency must be compiled from source — installing build tools, then retrying"
     case "$PKG" in
-        apt)    $SUDO apt-get -o DPkg::Lock::Timeout=300 install -y build-essential python3-dev || true ;;
+        apt)    apt_run install -y build-essential python3-dev || true ;;
         dnf)    $SUDO dnf install -y gcc gcc-c++ make python3-devel || true ;;
         pacman) $SUDO pacman -S --noconfirm --needed base-devel || true ;;
         zypper) $SUDO zypper --non-interactive install gcc gcc-c++ make python3-devel || true ;;
@@ -358,6 +444,8 @@ expose_on_path() {
     case ":${PATH}:" in *":$(dirname "$LAUNCHER"):"*) : ;; *)
         local rc="$HOME/.bashrc"
         case "${SHELL:-}" in */zsh) rc="$HOME/.zshrc" ;; esac
+        # $PATH is intentionally literal so the user's shell expands it later.
+        # shellcheck disable=SC2016
         printf '\nexport PATH="%s:$PATH"\n' "$(dirname "$LAUNCHER")" >> "$rc" 2>/dev/null || true
     esac
 }
@@ -416,7 +504,7 @@ gds3d_stage() {
     # Build deps first, per package manager. The apt path can self-install these
     # from inside the app later; dnf/pacman/zypper cannot, so seed them now.
     case "$PKG" in
-        apt)    $SUDO apt-get -o DPkg::Lock::Timeout=300 install -y \
+        apt)    apt_run install -y \
                     build-essential libx11-dev libxmu-dev libxi-dev \
                     libgl1-mesa-dev libglu1-mesa-dev freeglut3-dev \
                     || warn "GDS3D build deps failed — the Tools tab can retry them later." ;;
@@ -451,6 +539,12 @@ wsl_notes() {
 
 # -------------------------------------------------------------------- main --
 main() {
+    # Side-effect-free diagnostic used by packaging tests to prove that branch,
+    # tag, SHA, fork repository, and local-wheel inputs resolve exactly.
+    if [ "${1:-}" = "--print-source" ]; then
+        resolve_source
+        return 0
+    fi
     detect_platform
     setup_privileges
     say "LanEx installer — $OS$( [ "$WSL" = "1" ] && echo ' (WSL)') / packages: $PKG"

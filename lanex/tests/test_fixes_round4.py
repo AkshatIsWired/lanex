@@ -89,11 +89,16 @@ def test_gds3d_process_file_maps_pdk(tmp_path, monkeypatch):
         (tf / name).write_text("# techfile\n", encoding="utf-8")
     monkeypatch.setenv("LANEX_HOME", str(tmp_path))
 
-    # sky130A -> sky130.txt (shortest stem wins over sky130_s10.txt).
+    # LanEx's own per-variant files win over GDS3D's family-level upstream set
+    # (which has no gf180 file and puts sg13g2's Activ on the wrong layer).
+    assert Path(desktop.gds3d_process_file("sky130A")).name == "sky130A.txt"
+    assert Path(desktop.gds3d_process_file("ihp-sg13g2")).name == "ihp-sg13g2.txt"
+    assert Path(desktop.gds3d_process_file("gf180mcuD")).name == "gf180mcuD.txt"
+    # With no exact or family file, the family token still finds an upstream
+    # one (shortest stem wins over sky130_s10.txt).
+    monkeypatch.setattr(desktop, "BUNDLED_GDS3D_DIR", tmp_path / "none")
     assert Path(desktop.gds3d_process_file("sky130A")).name == "sky130.txt"
-    # ihp-sg13g2 -> sg13g2.txt
     assert Path(desktop.gds3d_process_file("ihp-sg13g2")).name == "sg13g2.txt"
-    # gf180mcuD -> none shipped here.
     assert desktop.gds3d_process_file("gf180mcuD") is None
 
 

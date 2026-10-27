@@ -1,0 +1,31 @@
+# Line endings that matter.
+#
+# The Windows installer ships shell scripts THROUGH a Windows checkout and runs
+# them inside WSL. A CRLF provision.sh fails on its own shebang line with
+# "bad interpreter: No such file or directory" — a baffling error for a file that
+# is plainly there. Pinning LF here is the fix; windows/installer/lanex.iss also
+# strips CRs at run time as a second line of defence.
+*.sh          text eol=lf
+*.bash        text eol=lf
+
+# Go's formatter emits LF, full stop — there is no CRLF-flavoured gofmt. Without
+# this pin a Windows checkout gets CRLF .go files and `gofmt -l` lists every one
+# of them, so the CI gofmt gate on windows-latest fails 100% of the time and
+# says only "gofmt would change: main.go probe.go ..." — which reads like a
+# formatting problem in code that is perfectly formatted.
+*.go          text eol=lf
+go.mod        text eol=lf
+go.sum        text eol=lf
+
+# Windows-native tooling expects CRLF (and .bat in particular can misbehave
+# without it).
+*.bat         text eol=crlf
+*.cmd         text eol=crlf
+*.iss         text eol=crlf
+*.manifest    text eol=crlf
+
+# Never touched by line-ending or encoding conversion.
+*.ico         binary
+*.png         binary
+*.gds         binary
+*.vcd         binary

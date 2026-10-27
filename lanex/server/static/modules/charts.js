@@ -119,6 +119,9 @@ export function paretoOption(points, { xName = "area", yName = "WNS" } = {}) {
     tooltip: { trigger: "item", formatter: (o) => o.name + "<br>" + xName + ": " + o.value[0] + "<br>" + yName + ": " + o.value[1] },
     xAxis: { type: "value", name: xName },
     yAxis: { type: "value", name: yName },
-    series: [{ type: "scatter", symbolSize: 14, data, label: { show: true, formatter: "{b}", position: "top" } }],
+    // Runs that land on the same point would print their names over each
+    // other: keep one label, the tooltip names the rest.
+    series: [{ type: "scatter", symbolSize: 12, data, itemStyle: { borderWidth: 2, borderColor: "rgba(0,0,0,0.35)" },
+      label: { show: true, formatter: "{b}", position: "top", fontSize: 11.5 }, labelLayout: { hideOverlap: true } }],
   };
 }

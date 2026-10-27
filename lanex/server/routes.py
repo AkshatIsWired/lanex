@@ -22,12 +22,12 @@ import datetime
 import json
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..controller import (
-    alerts,
     fsbrowser,
     history,
     installer,
@@ -148,11 +148,54 @@ def _path_within_roots(path: str) -> bool:
 
 def h_health(handler: Any) -> None:
     from ..controller import compat
+    from ..controller.instance_identity import current
     try:
         probe = compat.probe_compat()
     except Exception:  # never let the probe break the health check
         probe = {"ok": True, "issues": []}
-    _respond(handler, {"service": "lanex", "alive": True, "compat": probe})
+    _respond(handler, {"service": "lanex", "alive": True,
+                       **current(), "compat": probe})
+
+
+def h_presence(handler: Any) -> None:
+    """How many LanEx windows are open, and what a quit would interrupt.
+
+    Polled by the Windows launcher, which quits LanEx (and frees the WSL
+    appliance's memory) once the last window has been closed for a few seconds,
+    asking first when ``busy`` is non-empty. Every page keeps exactly one
+    ``/api/events`` stream open for its lifetime, so the live stream count is
+    the open-window count. ``idleSeconds`` (time since any page request) is
+    what tells a reloading window, whose stream is briefly gone, from a closed
+    one.
+    """
+    from ..controller import activity
+    from .sse import active_handlers
+    bye = activity.seconds_since_bye()
+    _respond(handler, {
+        # A page counts while its stream is open OR its heartbeat is fresh: a
+        # stream that died in sleep is not a closed window.
+        "windows": max(len(active_handlers()), activity.live_pages()),
+        "idleSeconds": round(activity.seconds_since_page_request(), 1),
+        # Lets the launcher tell "the user closed the window" (quit soon) from
+        # "the window went quiet" (wait much longer).
+        "byeSeconds": None if bye is None else round(bye, 1),
+        "busy": activity.busy(),
+    })
+
+
+def h_page_hello(handler: Any) -> None:
+    """Heartbeat from an open LanEx page (``GET /api/hello?id=…``)."""
+    from ..controller import activity
+    activity.note_hello(_query_param(handler.path, "id"))
+    _respond(handler, {"seen": True})
+
+
+def h_page_bye(handler: Any) -> None:
+    """A page closing on purpose (``POST /api/bye``, sent from ``pagehide``)."""
+    from ..controller import activity
+    body = getattr(handler, "_body", {}) or {}
+    activity.note_bye(str(body.get("id") or _query_param(handler.path, "id")))
+    _respond(handler, {"bye": True})
 
 
 def h_about(handler: Any) -> None:
@@ -439,9 +482,25 @@ def h_fs_roots(handler: Any) -> None:
     roots: List[Dict[str, str]] = []
     system = platform.system()
     if system in ("Linux", "Darwin"):
-        roots.append({"label": "/ (root)", "path": "/"})
+        from ..controller import platform_env
         roots.append({"label": "Home", "path": str(Path.home())})
-        roots.append({"label": "Current dir", "path": str(Path.cwd())})
+        proj = platform_env.projects_dir()
+        if proj.is_dir():
+            roots.append({"label": "Projects", "path": str(proj)})
+        win_home = platform_env.wsl_windows_home()
+        if win_home:
+            roots.append({"label": "Windows files", "path": win_home})
+        roots.append({"label": "/ (root)", "path": "/"})
+        # "Current dir" only when it is somewhere the user could actually put a
+        # design. On the Windows appliance the server's cwd is inherited from the
+        # launcher's install directory (``/mnt/c/Program Files/LanEx``), so this
+        # shortcut used to offer a folder every write into which is denied.
+        try:
+            cwd = Path.cwd()
+        except Exception:
+            cwd = None
+        if cwd is not None and cwd != Path.home() and _writable_dir(cwd):
+            roots.append({"label": "Current dir", "path": str(cwd)})
     elif system == "Windows":
         for drive in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
             p = Path(f"{drive}:\\")
@@ -452,7 +511,7 @@ def h_fs_roots(handler: Any) -> None:
 
 
 def h_fs_list(handler: Any) -> None:
-    path = _query_param(handler.path, "path")
+    path = platform_env.to_host_path(_query_param(handler.path, "path"))
     if not path:
         _respond(handler, "missing path", 400)
         return
@@ -507,6 +566,8 @@ def h_provenance(handler: Any) -> None:
     """Where did a displayed value come from? (GET, read-only.)
 
     ``?kind=metric&key=<metric>&tag=<run>``   -> final/metrics.json line
+                                                 (``&step=<dir>``: that step's
+                                                 state_out.json instead)
     ``?kind=var&key=<VAR>&tag=<run>``         -> resolved.json line (what the
                                                  flow ACTUALLY used)
     ``?kind=input&key=<VAR>``                 -> the design's own config line
@@ -560,7 +621,7 @@ def h_provenance(handler: Any) -> None:
                                "reason": "unknown run tag for the active design"})
             return
         if kind == "metric":
-            res = provenance.metric_provenance(run_dir, key)
+            res = provenance.metric_provenance(run_dir, key, _query_param(handler.path, "step") or None)
         elif kind == "var":
             res = provenance.config_provenance(run_dir, key)
         elif kind == "resolved-map":
@@ -576,7 +637,8 @@ def h_provenance(handler: Any) -> None:
             if not rel or not target.is_relative_to(run_dir):
                 _respond(handler, "invalid path", 400)
                 return
-            res = provenance.report_provenance(run_dir, rel, needle)
+            res = provenance.report_provenance(run_dir, rel, needle,
+                                               last=_query_param(handler.path, "last") == "1")
         else:
             _respond(handler, "unknown kind", 400)
             return
@@ -628,6 +690,41 @@ def _config_source_count(design_dir: Path, cfg_name: Optional[str]) -> Optional[
         return None
 
 
+def _design_facts(design_dir: Path, cfg_name: Optional[str]) -> Dict[str, Any]:
+    """The few config values the Setup project card shows (top module, clock,
+    PDK) plus the run count and how the newest run ended. Missing values are
+    left out rather than guessed."""
+    facts: Dict[str, Any] = {}
+    if cfg_name and not cfg_name.endswith(".tcl"):
+        try:
+            text = (design_dir / cfg_name).read_text(encoding="utf-8")
+            if cfg_name.endswith(".json"):
+                data = json.loads(text)
+            else:
+                import yaml as _yaml
+                data = _yaml.safe_load(text)
+            if isinstance(data, dict):
+                for key, out in (("DESIGN_NAME", "top"), ("CLOCK_PERIOD", "clock_ns"),
+                                 ("PDK", "pdk"), ("STD_CELL_LIBRARY", "scl")):
+                    v = data.get(key)
+                    if isinstance(v, (str, int, float)) and not isinstance(v, bool) and str(v).strip():
+                        facts[out] = v
+        except Exception:
+            pass
+    runs = design_dir / "runs"
+    try:
+        dirs = sorted((d for d in runs.iterdir() if d.is_dir()),
+                      key=lambda d: d.stat().st_mtime, reverse=True) if runs.is_dir() else []
+    except OSError:
+        dirs = []
+    facts["runs"] = len(dirs)
+    if dirs:
+        facts["last_run"] = {"tag": dirs[0].name,
+                             "finished": (dirs[0] / "final").is_dir(),
+                             "at": dirs[0].stat().st_mtime}
+    return facts
+
+
 def h_design_summary(handler: Any) -> None:
     # C5 — decision (kept intentionally unconfined): this endpoint reads an
     # arbitrary directory the user is about to pick as their design. It is the
@@ -661,9 +758,9 @@ def h_design_summary(handler: Any) -> None:
             # here but not in VERILOG_FILES. Say what it is so the number can't
             # be read as the flow's source list.
             cfg_count = _config_source_count(p, cfg)
-            label = f"{v_count} HDL file{'s' if v_count != 1 else ''} found"
+            label = f"{v_count} Verilog file{'s' if v_count != 1 else ''}"
             if cfg_count is not None and cfg_count != v_count:
-                label += f" (config uses {cfg_count})"
+                label += f", {cfg_count} used by the config"
             pills.append({"type": "info", "text": label})
             if mem_count:
                 pills.append({"type": "info", "text": f"{mem_count} memory files"})
@@ -671,12 +768,15 @@ def h_design_summary(handler: Any) -> None:
         # only when there ARE sources to derive one from.
         config_missing = cfg is None
         if config_missing and v_count:
-            pills.append({"type": "warn", "text": "no config — can auto-generate"})
+            pills.append({"type": "warn", "text": "No config yet. LanEx can write one"})
         if _whitespace_path_error(str(p)):
-            pills.append({"type": "warn", "text": "path contains spaces — runs will fail; use a space-free folder"})
+            pills.append({"type": "warn", "text": "The path has spaces, which breaks runs. Use a folder without spaces"})
         pills.append({"type": "pending", "text": str(p)})
+        facts = _design_facts(p, cfg)
+        facts.update({"config": cfg, "verilog_files": v_count,
+                      "used_by_config": _config_source_count(p, cfg)})
         _respond(handler, {"pills": pills, "config_missing": config_missing,
-                           "has_sources": bool(v_count)})
+                           "has_sources": bool(v_count), "facts": facts})
     except Exception as ex:
         _respond(handler, str(ex), 500)
 
@@ -822,19 +922,52 @@ def h_preflight(handler: Any) -> None:
             source_count = len(srcs.get("sources", [])) if srcs.get("ok") else 0
         except Exception:
             source_count = 0
+    # When the config lists its sources in a form LanEx reads, count what it
+    # will actually build, and catch entries that point at nothing (synthesis
+    # would stop on them). Otherwise fall back to the folder count, since the
+    # run then sends the ticked files itself.
+    missing_sources: List[str] = []
+    top_empty = None
+    if design_ok and config_file:
+        try:
+            from ..controller import configedit, projectfiles
+            info = configedit.read_config(design_dir)
+            res = configedit.resolve_sources(design_dir, info["data"]) if info["editable"] else None
+            if res and res["mode"] == "list":
+                present = [f for f in res["files"] if Path(f).is_file()]
+                missing_sources = [f for f in res["files"] if not Path(f).is_file()]
+                source_count = len(present)
+            # A top module with ports but no logic (a fresh starter module)
+            # synthesizes to nothing and the run stops at placement. Say so
+            # before the run, as a heads-up rather than a blocker.
+            top = info["data"].get("DESIGN_NAME")
+            if isinstance(top, str) and top and not missing_sources:
+                files = present if res and res["mode"] == "list" else None
+                f = projectfiles.find_module_file(design_dir, top, files)
+                if f is not None and projectfiles.module_is_empty(
+                        f.read_text(encoding="utf-8", errors="replace"), top):
+                    top_empty = {"module": top, "rel": Path(f).resolve().relative_to(
+                        Path(design_dir).resolve()).as_posix()}
+        except Exception:
+            pass
     if not design_ok:
-        blockers.append("Pick a design folder (or click ‘Use the SPM example’).")
+        blockers.append("Open a project first.")
     elif not config_file:
         blockers.append("No config.yaml/json found in the design folder.")
+    elif missing_sources:
+        names = ", ".join(Path(f).name for f in missing_sources[:3])
+        blockers.append(f"The config lists source files that don't exist: {names}.")
     elif source_count == 0:
         blockers.append("No Verilog (.v/.sv) sources found in the design folder.")
 
     design_block = {
-        "ok": bool(design_ok and config_file and source_count),
+        "ok": bool(design_ok and config_file and source_count and not missing_sources),
+        "missing_sources": [Path(f).name for f in missing_sources],
         "dir": design_dir,
         "config_file": config_file,
         "config_note": config_note,
         "source_count": source_count,
+        "top_empty": top_empty,
     }
 
     # 2) PDK readiness (mode-aware: container needs the exact pinned version in
@@ -858,6 +991,17 @@ def h_preflight(handler: Any) -> None:
             )
         else:
             blockers.append(f"PDK not ready: {miss}.")
+    # The config's own PDK wins in LibreLane (see _start_run): a picker that
+    # disagrees blocks the run, and the checklist offers the one-click fix.
+    if design_ok and config_file and (pdk or scl):
+        try:
+            from ..controller import configedit
+            mm = configedit.pdk_mismatch(design_dir, pdk, scl)
+        except Exception:
+            mm = None
+        if mm:
+            pdk_block["mismatch"] = mm
+            blockers.append(mm["message"])
 
     # 3) Engine: in container mode the only host requirement is Docker/Podman
     #    (every EDA tool ships in the version-matched image). In local mode we
@@ -930,11 +1074,11 @@ def h_preflight(handler: Any) -> None:
 
 def h_set_design_dir(handler: Any) -> None:
     body = getattr(handler, "_body", {})
-    path = body.get("path", "")
+    path = platform_env.to_host_path(body.get("path", ""))
     if not path:
         _respond(handler, "missing path", 400)
         return
-    p = Path(path).resolve()
+    p = Path(path).expanduser().resolve()
     if not p.is_dir():
         _respond(handler, "directory not found", 400)
         return
@@ -970,33 +1114,6 @@ def h_diff(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
-def h_explain(handler: Any) -> None:
-    body = getattr(handler, "_body", {})
-    message = body.get("message", "")
-    if not message:
-        _respond(handler, "missing message", 400)
-        return
-    try:
-        _respond(handler, alerts.explain_alert(message))
-    except Exception as ex:
-        _log.exception("explain_alert failed")
-        _respond(handler, str(ex), 500)
-
-
-def h_explain_checker(handler: Any) -> None:
-    body = getattr(handler, "_body", {})
-    checker = body.get("checker", "")
-    metric = body.get("metric")
-    if not checker:
-        _respond(handler, "missing checker", 400)
-        return
-    try:
-        _respond(handler, alerts.explain_checker_failure(checker, metric))
-    except Exception as ex:
-        _log.exception("explain_checker failed")
-        _respond(handler, str(ex), 500)
-
-
 def _clean_overrides(overrides: Dict[str, Any]) -> Dict[str, Any]:
     """Drop override keys with an empty / null / whitespace-only value so the GUI
     never passes a bare ``KEY=`` to LibreLane.
@@ -1027,7 +1144,8 @@ def _clean_overrides(overrides: Dict[str, Any]) -> Dict[str, Any]:
     return clean
 
 
-def _assemble_overrides(design_dir: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
+                       custom_cells: bool = True) -> Dict[str, Any]:
     """Single source of truth for the user-data payload of a run.
 
     Turns a run-request body into the pieces that carry USER-SUPPLIED data into
@@ -1050,9 +1168,11 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any]) -> Dict[str, Any]
     # bare ``KEY=`` the engine can't type-parse (issue #11); real 0/False kept.
     overrides = _clean_overrides(overrides)
     # Fold in any custom standard cells configured for this design. Per-run only.
+    # (A run resumed from another arrives with that run's merged values; the
+    # caller takes the cells out first, so they are merged once, as they are now.)
     try:
         from ..controller import customcells
-        cc = customcells.build_overrides(design_dir)
+        cc = customcells.build_overrides(design_dir) if custom_cells else None
         if cc:
             overrides = customcells.merge_into(overrides, cc)
     except Exception:
@@ -1137,25 +1257,41 @@ def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None,
 
 
 def h_run_start(handler: Any) -> None:
+    body = getattr(handler, "_body", {}) or {}
+    if body.get("branch_from"):
+        # "Resume from <stage>" (Run menu): a new run from a step of another
+        # run, with nothing changed. The fix route plans and starts it.
+        b = body["branch_from"] if isinstance(body["branch_from"], dict) else {}
+        _apply_fix(handler, {"tag": b.get("tag"), "sets": {}, "start": b.get("step") or "auto",
+                             "run_mode": body.get("run_mode"), "mode": body.get("mode"), "to": body.get("to"), "new_tag": body.get("tag")})
+        return
+    data, status = _start_run(body)
+    _respond(handler, data, status)
+
+
+def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
+               branched_from: Optional[Dict[str, Any]] = None,
+               overrides_ready: bool = False) -> Tuple[Any, int]:
+    """Start a run from a run-request body: ``(reply, status)``.
+
+    *initial_state* and *branched_from* make it a run resumed from another
+    one (``-i`` with ``frm``; recorded in ``gui-run.json``). *overrides_ready*
+    says the body's overrides already hold the per-run custom cells (a
+    resumed run inherits the old run's), so they are not merged again."""
     from ..server.app import get_runner
-    body = getattr(handler, "_body", {})
     design_dir = _get_active_design_dir()
     if not design_dir:
-        _respond(handler, "no active design dir", 400)
-        return
+        return "no active design dir", 400
     ws_err = _whitespace_path_error(design_dir)
     if ws_err:
-        _respond(handler, ws_err, 400)
-        return
+        return ws_err, 400
     config_file = _resolve_config_file(design_dir)
     if config_file is None:
-        _respond(handler, "no config.{json,yaml,tcl} found in design directory", 400)
-        return
+        return "no config.{json,yaml,tcl} found in design directory", 400
     config_warning = _multi_config_warning(design_dir)
     r = get_runner()
     if r.running:
-        _respond(handler, "already running", 400)
-        return
+        return "already running", 400
     try:
         from librelane.flows import Flow
         flow_name = body.get("flow") or "Classic"
@@ -1166,8 +1302,7 @@ def h_run_start(handler: Any) -> None:
             if flows:
                 flow_factory = flows[0]
             else:
-                _respond(handler, f"Flow '{flow_name}' not found", 500)
-                return
+                return f"Flow '{flow_name}' not found", 500
         # PDK / SCL are construction-time options, not plain config variables.
         # The SPA folds the picker selection into ``overrides``; pull them back
         # out so they reach the Flow constructor as dedicated kwargs.
@@ -1176,10 +1311,20 @@ def h_run_start(handler: Any) -> None:
         # ONE shared helper (override cleaning that preserves 0/False, custom-cell
         # overrides, the hard-macro overlay). The DSE sweep path calls the exact
         # same helper, so a swept run can never silently differ from this one.
-        _asm = _assemble_overrides(design_dir, body)
+        _asm = _assemble_overrides(design_dir, body, custom_cells=not overrides_ready)
         pdk, scl = _asm["pdk"], _asm["scl"]
         overrides = _asm["overrides"]
         extra_config_files: List[str] = list(_asm["extra_config_files"] or [])
+
+        # LibreLane builds for the PDK/library the config file names, whatever
+        # -p/-s say (and resolves that PDK's defaults and pdk:: sections before
+        # any -c override), so a picker that disagrees would quietly build for
+        # the other PDK, or stop with "PDK not found". Refuse and say which two
+        # values disagree; the reply carries the keys that make them agree.
+        from ..controller import configedit
+        mismatch = configedit.pdk_mismatch(design_dir, pdk, scl) if (pdk or scl) else None
+        if mismatch:
+            return {"ok": False, "started": False, "reason": mismatch["message"], "pdk_mismatch": mismatch}, 200
 
         # Resolve the pdk_root that actually holds the files this mode needs, and
         # refuse a run that we already know will fail (PDK genuinely absent and
@@ -1194,18 +1339,18 @@ def h_run_start(handler: Any) -> None:
                 if not will_download:
                     miss = "; ".join(pf.get("missing") or ["PDK not ready"])
                     rem = pf.get("remediation") or ""
-                    _respond(
-                        handler,
-                        f"PDK not ready for {run_mode} mode: {miss}." + (f" {rem}" if rem else ""),
-                        400,
-                    )
-                    return
+                    return f"PDK not ready for {run_mode} mode: {miss}." + (f" {rem}" if rem else ""), 400
         ws_err = _whitespace_path_error(
             design_dir, pdk_root,
             files=list(body.get("sources") or []) + list(body.get("extras") or []))
         if ws_err:
-            _respond(handler, ws_err, 400)
-            return
+            return ws_err, 400
+        state_rel = None
+        if initial_state:
+            try:
+                state_rel = str(Path(initial_state).resolve().relative_to(Path(design_dir).resolve()))
+            except ValueError:
+                state_rel = str(initial_state)
         # Snapshot of exactly what the GUI launched, persisted into the run dir
         # as gui-run.json so the user can reproduce this run later (issue #4).
         # LibreLane writes the resolved config; this captures the GUI-only choices
@@ -1234,6 +1379,10 @@ def h_run_start(handler: Any) -> None:
             # preview and Run (TOCTOU, N7).
             "config_hash": _hash_files([str(config_file)]),
         }
+        if branched_from:
+            # Resumed from another run: its steps before ``frm`` are this run's
+            # too (history.lineage_steps), and that run must stay.
+            gui_meta["branched_from"] = branched_from
         try:
             from ..controller import manualcmd
             gui_meta["cli_command"] = manualcmd.cli_command_for(
@@ -1245,6 +1394,7 @@ def h_run_start(handler: Any) -> None:
                 extra_sources=body.get("sources") or None,
                 extra_extras=body.get("extras") or None,
                 extra_config_files=extra_config_files or None,
+                initial_state=state_rel,
             )
         except Exception:
             _log.debug("cli_command_for failed for gui-run.json", exc_info=True)
@@ -1267,6 +1417,7 @@ def h_run_start(handler: Any) -> None:
             run_mode=run_mode,
             flow_name=flow_name,
             gui_meta=gui_meta,
+            initial_state=str(Path(initial_state).resolve()) if initial_state else None,
         )
         if isinstance(result, dict):
             result = dict(result)
@@ -1276,10 +1427,11 @@ def h_run_start(handler: Any) -> None:
             # The exact config bytes this run used — the client compares it to the
             # hash it previewed in Final-settings to catch a mid-flight edit (N7).
             result["config_hash"] = gui_meta.get("config_hash")
-        _respond(handler, result)
+            result["command"] = gui_meta.get("cli_command")
+        return result, 200
     except Exception as ex:
         _log.exception("run start failed")
-        _respond(handler, str(ex), 500)
+        return str(ex), 500
 
 
 # The ONE canonical order LanEx resolves a design's config file in. Preflight and
@@ -1611,6 +1763,34 @@ def h_tools_install_ciel(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def _writable_dir(p: Path) -> bool:
+    """True when *p* is a directory we can create entries in."""
+    try:
+        return p.is_dir() and os.access(str(p), os.W_OK | os.X_OK)
+    except Exception:
+        return False
+
+
+def _default_write_base() -> Path:
+    """Where to put a new folder when the user named no design dir.
+
+    The current directory, unless we can't write into it — which is exactly the
+    Windows-appliance case (the server inherits the launcher's
+    ``/mnt/c/Program Files/LanEx``; see cli._leave_unwritable_cwd). Falling back
+    to the home directory keeps the "Load the SPM example" button working with
+    one click instead of failing with a raw ``[Errno 13] Permission denied`` on a
+    path the user never chose and cannot see. Home is also where the Start menu's
+    "LanEx Project Files" shortcut points, so the folder lands where they look.
+    """
+    try:
+        cwd = Path.cwd()
+    except Exception:
+        cwd = None
+    if cwd is not None and _writable_dir(cwd):
+        return cwd
+    return Path.home()
+
+
 def _dir_empty_or_absent(p: Path) -> bool:
     """True when *p* doesn't exist yet or contains no entries (safe to fill)."""
     if not p.exists():
@@ -1625,7 +1805,12 @@ def h_copy_spm(handler: Any) -> None:
     body = getattr(handler, "_body", {})
     base_str = body.get("design_dir") or ""
     try:
-        spm_src = Path(__file__).resolve().parent.parent.parent.parent / "spm"
+        # parents[2] is the repo root in a source checkout (lanex/server/routes.py
+        # → …/lanex/server → …/lanex → repo). It was one level too high, so the
+        # bundled spm/ was never found and even a checkout fell through to
+        # librelane's copy — harmless where librelane is installed, a flat
+        # "SPM example not found" where it isn't.
+        spm_src = Path(__file__).resolve().parents[2] / "spm"
         if not spm_src.is_dir():
             try:
                 import librelane
@@ -1642,7 +1827,7 @@ def h_copy_spm(handler: Any) -> None:
         # which the user's own designs fail with "top-module 'spm' not found".
         # So: copy into the base only when it's already SPM or empty; otherwise
         # nest a fresh ``spm_example`` subdir so the user's files are untouched.
-        base = Path(base_str).resolve() if base_str else Path.cwd()
+        base = Path(base_str).resolve() if base_str else _default_write_base()
         if base.name == "spm_example" or (base / "src" / "spm.v").is_file():
             target = base                      # already an SPM example — reuse it
         elif _dir_empty_or_absent(base):
@@ -1653,6 +1838,13 @@ def h_copy_spm(handler: Any) -> None:
         shutil.copytree(str(spm_src), str(target), dirs_exist_ok=True)
         _set_active_design_dir(str(target))
         _respond(handler, {"design_dir": str(target)})
+    except PermissionError as ex:
+        # Say what to DO. The bare "[Errno 13] Permission denied: <path>" this
+        # replaces named a directory the user never picked and could not fix.
+        where = base_str or str(_default_write_base())
+        _log.warning("copy_spm: no write access under %s (%s)", where, ex)
+        _respond(handler, f"No permission to create a folder in {where}. Choose a "
+                         "folder inside your home directory (Browse…) and try again.", 500)
     except Exception as ex:
         _log.exception("copy_spm failed")
         _respond(handler, str(ex), 500)
@@ -1857,8 +2049,26 @@ def _reveal_in_file_manager(target: Path) -> Tuple[bool, str]:
 
 
 def h_reveal(handler: Any) -> None:
-    """Reveal a run file in the host file manager (traversal-guarded)."""
+    """Reveal a run file in the host file manager (traversal-guarded).
+
+    With ``{"design_dir": <path>}`` instead, reveal a design folder itself, but
+    only one the server already knows (the active design or a remembered one),
+    so this never opens arbitrary paths.
+    """
     body = getattr(handler, "_body", {})
+    if body.get("design_dir"):
+        from ..controller import designs
+        want = str(body.get("design_dir"))
+        known = set(designs.list_designs())
+        active = _get_active_design_dir()
+        if active:
+            known.add(active)
+        if want not in known or not Path(want).is_dir():
+            _respond(handler, "not a known design folder", 404)
+            return
+        ok, info = _reveal_in_file_manager(Path(want))
+        _respond(handler, {"ok": True, "opened": info} if ok else info, 200 if ok else 500)
+        return
     tag = body.get("tag")
     rel = body.get("path")
     run_dir = _resolve_run_dir(tag)
@@ -1982,7 +2192,16 @@ def h_open_in_tool(handler: Any) -> None:
                                "file types."}, 200)
             return
         gds = target if (target and target.suffix.lower() in (".gds", ".gz")) else _final_gds(run_dir)
-        odb = _final_odb(run_dir) if tool == "openroad" else None
+        odb = None
+        if tool == "openroad":
+            # A stage's own database (Layout tab: "open this stage"), else the final one.
+            if target is not None and target.suffix.lower() == ".odb":
+                if not target.is_file():
+                    _respond(handler, {"ok": False, "error": f"this step wrote no OpenROAD database ({target.name})"}, 200)
+                    return
+                odb = target
+            else:
+                odb = _final_odb(run_dir)
         if tool in ("magic", "klayout") and gds is None:
             _respond(handler, {"ok": False, "error": "this run has no final GDS to open"}, 200)
             return
@@ -2018,6 +2237,198 @@ def _run_pdk(run_dir: "Path") -> Tuple[Optional[str], Optional[str]]:
         except Exception:
             continue
     return None, None
+
+
+# --------------------------------------------------------------------------- Layout tab
+# The live layout viewer (controller/layoutview.py): KLayout's own renderer in
+# this process draws whatever viewport the browser asks for.
+
+def _float_param(path: str, key: str, default: Optional[float] = None) -> Optional[float]:
+    raw = _query_param(path, key, "")
+    try:
+        return float(raw) if raw != "" else default
+    except ValueError:
+        return default
+
+
+def h_layout_sources(handler: Any) -> None:
+    """Stage snapshots + final GDS a run can show, and whether KLayout can draw them."""
+    from ..controller import layoutview
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag)
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    data = layoutview.sources(run_dir)
+    data["tag"] = tag
+    data["engine"] = layoutview.available()
+    _respond(handler, data)
+
+
+def h_layout_open(handler: Any) -> None:
+    """Load one source of a run; returns layers, cells, labels and the bbox."""
+    from ..controller import layoutview
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag)
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    _respond(handler, layoutview.open_session(run_dir, _query_param(handler.path, "source", "final")))
+
+
+def h_layout_render(handler: Any) -> None:
+    """PNG of a viewport: ?sid=&box=x1,y1,x2,y2&w=&h=&vis=1,2,..|all&depth=&labels=&bg=&os=&res=&dl="""
+    from ..controller import layoutview
+    p = handler.path
+    sid = _query_param(p, "sid")
+    box = None
+    raw = _query_param(p, "box")
+    if raw:
+        try:
+            box = [float(x) for x in raw.split(",")][:4]
+            if len(box) != 4:
+                box = None
+        except ValueError:
+            box = None
+    vis_raw = _query_param(p, "vis", "all")
+    visible = None
+    if vis_raw != "all":
+        try:
+            visible = [int(x) for x in vis_raw.split(",") if x != ""]
+        except ValueError:
+            visible = None
+    depth_raw = _query_param(p, "depth", "")
+    depth = int(depth_raw) if depth_raw.lstrip("-").isdigit() else None
+    bg = _query_param(p, "bg", "#06080d")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", bg):
+        bg = "#06080d"
+    try:
+        png = layoutview.render(
+            sid, box=box, w=int(_float_param(p, "w", 800) or 800), h=int(_float_param(p, "h", 600) or 600),
+            visible=visible, depth=depth, labels=_query_param(p, "labels", "1") != "0", bg=bg,
+            boxes=_query_param(p, "boxes", "1") != "0",
+            oversampling=int(_float_param(p, "os", 1) or 1), resolution=_float_param(p, "res", 0.0) or 0.0)
+    except Exception as ex:
+        _log.exception("layout render failed")
+        _respond(handler, "render failed: " + str(ex), 500)
+        return
+    if png is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    name = _query_param(p, "dl")
+    handler.send_response(200)
+    handler.send_header("Content-Type", "image/png")
+    handler.send_header("Content-Length", str(len(png)))
+    handler.send_header("Cache-Control", "no-store")
+    if name:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)[:120] or "layout.png"
+        handler.send_header("Content-Disposition", 'attachment; filename="' + safe + '"')
+    handler.end_headers()
+    handler.wfile.write(png)
+
+
+def h_layout_thumb(handler: Any) -> None:
+    """Small fit-to-window PNG of one stage (stage strip)."""
+    from ..controller import layoutview
+    p = handler.path
+    run_dir = _resolve_run_dir(_query_param(p, "tag"))
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    bg = _query_param(p, "bg", "#06080d")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", bg):
+        bg = "#06080d"
+    w = max(32, min(640, int(_float_param(p, "w", 240) or 240)))
+    h = max(32, min(640, int(_float_param(p, "h", 160) or 160)))
+    try:
+        png = layoutview.thumbnail(run_dir, _query_param(p, "source", "final"), w, h, bg)
+    except Exception as ex:
+        _log.exception("layout thumbnail failed")
+        _respond(handler, str(ex), 500)
+        return
+    if png is None:
+        _respond(handler, "no layout for that stage", 404)
+        return
+    handler._send_bytes(png, 200, "image/png")
+
+
+def h_layout_probe(handler: Any) -> None:
+    """What is under a click: shapes on visible layers, top of the stack first."""
+    from ..controller import layoutview
+    p = handler.path
+    hits = layoutview.probe(_query_param(p, "sid"), _float_param(p, "x", 0.0) or 0.0,
+                            _float_param(p, "y", 0.0) or 0.0, max(0.0, _float_param(p, "r", 0.05) or 0.05))
+    if hits is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    _respond(handler, {"hits": hits})
+
+
+def h_layout_instances(handler: Any) -> None:
+    """Where every placement of one cell type sits (for highlighting)."""
+    from ..controller import layoutview
+    res = layoutview.instances(_query_param(handler.path, "sid"), _query_param(handler.path, "cell"))
+    if res is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    _respond(handler, res)
+
+
+def h_layout_mesh(handler: Any) -> None:
+    """3D mesh of a session (binary: u32 header length, JSON header, float32 data)."""
+    from ..controller import layoutview
+    p = handler.path
+    box = None
+    raw = _query_param(p, "box")
+    if raw:
+        try:
+            box = [float(x) for x in raw.split(",")][:4]
+            box = box if len(box) == 4 else None
+        except ValueError:
+            box = None
+    vis_raw = _query_param(p, "vis", "all")
+    visible = None
+    if vis_raw != "all":
+        try:
+            visible = [int(x) for x in vis_raw.split(",") if x != ""]
+        except ValueError:
+            visible = None
+    try:
+        blob = layoutview.mesh(_query_param(p, "sid"), box, visible)
+    except ValueError as ex:
+        if str(ex) == "too_big":
+            _respond(handler, "too much geometry for 3D here; zoom in to a smaller area first", 413)
+            return
+        raise
+    except Exception as ex:
+        _log.exception("layout mesh failed")
+        _respond(handler, "3D failed: " + str(ex), 500)
+        return
+    if blob is None:
+        _respond(handler, "layout session expired; reopen the layout", 410)
+        return
+    handler._send_bytes(blob, 200, "application/octet-stream")
+
+
+def h_layout_markers(handler: Any) -> None:
+    """DRC / routing-DRC / XOR markers of a run, with their geometry."""
+    from ..controller import layoutview
+    run_dir = _resolve_run_dir(_query_param(handler.path, "tag"))
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    _respond(handler, layoutview.markers(run_dir))
+
+
+def h_layout_commands(handler: Any) -> None:
+    """The terminal commands that open this run in KLayout / OpenROAD."""
+    from ..controller import layoutview
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag)
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    _respond(handler, layoutview.viewer_commands(run_dir, tag))
 
 
 def h_run_note(handler: Any) -> None:
@@ -2235,11 +2646,21 @@ def h_run_delete(handler: Any) -> None:
             return
     except Exception:
         pass
+    # Runs resumed from this one read files in its folders: say which, and
+    # delete only when asked again (``force``).
+    try:
+        from ..controller import branch
+        kids = branch.children(run_dir.parent.parent, tag)
+    except Exception:
+        kids = []
+    if kids and not body.get("force"):
+        handler._send_json({"ok": False, "error": "resumed-from", "children": kids}, 409)
+        return
     try:
         import shutil
 
         shutil.rmtree(run_dir)
-        _respond(handler, {"ok": True, "deleted": tag})
+        _respond(handler, {"ok": True, "deleted": tag, "broke": kids})
     except Exception as ex:
         _log.exception("delete_run failed")
         _respond(handler, str(ex), 500)
@@ -2329,10 +2750,91 @@ def h_templates(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def h_project_defaults(handler: Any) -> None:
+    """Where New project suggests putting a design, whether it exists yet, and
+    what the UI needs to show paths the way the person's OS does."""
+    proj = platform_env.projects_dir()
+    # Create it up front: the Windows folder picker opens in Documents when its
+    # start folder doesn't exist, so "Change..." would land somewhere else.
+    try:
+        proj.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    _respond(handler, {"projects_dir": str(proj), "exists": proj.is_dir(),
+                       "wsl": platform_env.is_wsl(),
+                       "distro": os.environ.get("WSL_DISTRO_NAME") or None})
+
+
+def h_native_pick(handler: Any) -> None:
+    """Open the OS's own folder/file picker; blocks until the person answers.
+    ``native: false`` tells the UI to use its built-in browser instead."""
+    from ..controller import native_pick
+    body = getattr(handler, "_body", {})
+    start = platform_env.to_host_path(body.get("start") or "")
+    # Open at the nearest folder that exists (a not-yet-created project path
+    # would otherwise drop the person in Documents).
+    p = Path(start) if start else None
+    while p is not None and not p.is_dir() and p.parent != p:
+        p = p.parent
+    start = str(p) if p is not None and p.is_dir() else start
+    _respond(handler, native_pick.pick(body.get("mode") or "folder",
+                                       str(body.get("title") or ""), start))
+
+
+def h_project_forget(handler: Any) -> None:
+    """Remove a project from the recent list. The folder is left alone."""
+    from ..controller import designs
+    body = getattr(handler, "_body", {})
+    path = body.get("design_dir") or ""
+    if not path:
+        _respond(handler, "missing design_dir", 400)
+        return
+    _respond(handler, {"forgotten": designs.forget(path)})
+
+
+def h_project_delete(handler: Any) -> None:
+    """Delete a project folder, but only one inside the LanEx projects folder
+    and only when the request repeats its folder name (a typed confirmation).
+    Folders anywhere else are the person's own and are never deleted here."""
+    from ..controller import designs
+    body = getattr(handler, "_body", {})
+    raw = body.get("design_dir") or ""
+    try:
+        target = Path(raw).resolve()
+        root = platform_env.projects_dir().resolve()
+    except Exception:
+        _respond(handler, "invalid path", 400)
+        return
+    if not raw or target == root or not target.is_relative_to(root):
+        _respond(handler, "only projects inside the LanEx projects folder can be deleted here", 403)
+        return
+    if (body.get("confirm_name") or "") != target.name:
+        _respond(handler, "confirmation does not match the project name", 400)
+        return
+    if not target.is_dir():
+        designs.forget(str(target))
+        _respond(handler, {"deleted": False, "forgotten": True})
+        return
+    # The open project may have a run writing into it; switching first keeps
+    # that decision with the person rather than racing a live flow.
+    active = _get_active_design_dir()
+    if active and Path(active).resolve() == target:
+        _respond(handler, "this project is open; switch to another project first", 409)
+        return
+    try:
+        shutil.rmtree(target)
+    except Exception as ex:
+        _log.exception("project delete failed")
+        _respond(handler, "could not delete the folder: " + str(ex), 500)
+        return
+    designs.forget(str(target))
+    _respond(handler, {"deleted": True})
+
+
 def h_project_new(handler: Any) -> None:
     """Scaffold a new design from a template, then make it the active design."""
     body = getattr(handler, "_body", {})
-    dest = body.get("dest_dir") or ""
+    dest = platform_env.to_host_path(body.get("dest_dir") or "")
     template = body.get("template") or ""
     top = (body.get("top") or "").strip()
     pdk = (body.get("pdk") or "").strip()
@@ -2346,7 +2848,9 @@ def h_project_new(handler: Any) -> None:
     except (TypeError, ValueError):
         cp = None
     try:
-        result = scaffold.create_project(dest, template, top=top or template, pdk=pdk, scl=scl, clock_period=cp)
+        language = "systemverilog" if body.get("language") == "systemverilog" else "verilog"
+        result = scaffold.create_project(dest, template, top=top or template, pdk=pdk, scl=scl, clock_period=cp,
+                                         language=language)
     except Exception as ex:
         _log.exception("create_project failed")
         _respond(handler, str(ex), 500)
@@ -2484,6 +2988,38 @@ def h_cell_usage(handler: Any) -> None:
         _respond(handler, {"tag": run_dir.name, "cells": history.cell_usage(run_dir)})
     except Exception as ex:
         _log.exception("cell_usage failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_run_explain(handler: Any) -> None:
+    """How a run ended, why, what to change, and its warnings by code (Flow).
+    ``base`` names the run its warnings are compared with ("new" codes)."""
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    base = _query_param(handler.path, "base")
+    base_dir = _resolve_run_dir(base) if base else None
+    try:
+        from ..controller import runexplain
+        _respond(handler, runexplain.explain_run(run_dir, base_dir))
+    except Exception as ex:
+        _log.exception("run_explain failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_run_stages(handler: Any) -> None:
+    """Per-step metrics, runtime and peak memory for a run (Analytics)."""
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        _respond(handler, history.run_stages(run_dir))
+    except Exception as ex:
+        _log.exception("run_stages failed")
         _respond(handler, str(ex), 500)
 
 
@@ -2675,6 +3211,15 @@ def h_dse_start(handler: Any) -> None:
         _respond(handler, str(ex), 400)
         return
     base_overrides = dict(body.get("base_overrides") or {})
+    # Every point builds for the PDK the config names (see _start_run): a
+    # sweep whose picker disagrees would sweep another chip, or none.
+    from ..controller import configedit
+    _pk = base_overrides.get("PDK") or body.get("pdk") or None
+    _sc = base_overrides.get("STD_CELL_LIBRARY") or body.get("scl") or None
+    mismatch = configedit.pdk_mismatch(design_dir, _pk, _sc) if (_pk or _sc) else None
+    if mismatch:
+        _respond(handler, mismatch["message"], 409)
+        return
     run_mode = "container" if body.get("run_mode") == "container" else "local"
     flow_name = body.get("flow_name") or "Classic"
     base_tag = body.get("base_tag") or Path(design_dir).name
@@ -2782,6 +3327,37 @@ def h_file_delete(handler: Any) -> None:
     if not result.get("ok"):
         _respond(handler, result.get("error"), 400)
         return
+    _respond(handler, result)
+
+
+def h_file_rename(handler: Any) -> None:
+    """Rename a project file and keep the config pointing at it."""
+    from ..controller import configedit, editor
+    body = getattr(handler, "_body", {})
+    rel = (body.get("rel_path") or "").strip()
+    new_rel = (body.get("new_rel") or "").strip()
+    if not rel or not new_rel:
+        _respond(handler, "missing rel_path or new_rel", 400)
+        return
+    d = _design_dir_or_400(handler)
+    if d is None or _refuse_while_running(handler):
+        return
+    try:
+        before = configedit.resolve_sources(d, configedit.read_config(d)["data"])
+    except Exception:
+        before = None
+    result = editor.rename_file(d, rel, new_rel)
+    if not result.get("ok"):
+        _respond(handler, result.get("error"), 400)
+        return
+    try:
+        cfg = configedit.follow_rename(d, str(Path(d) / rel), result["abs"], before)
+        result["config"] = {"name": cfg.get("name"), "changed": cfg.get("changed") or []}
+    except configedit.ConfigEditError as ex:
+        result["config_error"] = str(ex)
+    except Exception as ex:  # the rename stands; say the config wasn't followed
+        _log.exception("config follow-rename failed")
+        result["config_error"] = str(ex)
     _respond(handler, result)
 
 
@@ -3035,6 +3611,14 @@ def h_ide_open_wave(handler: Any) -> None:
         try:
             from ..controller import waveview
             sigs = waveview.vcd_signals(target)
+            # The IDE sends the signals on its screen: preload those, in
+            # that order, so GTKWave opens on the same picture.
+            wanted = [s for s in (body.get("signals") or []) if isinstance(s, str)]
+            if wanted:
+                widths = dict(waveview.vcd_signals(target, limit=200000, dedupe=False))
+                picked = [(s, widths[s]) for s in wanted if s in widths]
+                if picked:
+                    sigs = picked
             if sigs:
                 save = waveview.write_gtkw(base / ".lanex-wave.gtkw", target, sigs)
                 n_sigs = len(sigs)
@@ -3153,6 +3737,8 @@ def h_custom_macro_save(handler: Any) -> None:
         instances=body.get("instances") or [],
         views=body.get("views") or {},
         enabled=body.get("enabled", True),
+        power=body.get("power"),
+        source=body.get("source") or ({"kind": "upload", "label": "Uploaded files"} if body.get("views") else None),
     )
     if not result.get("ok"):
         _respond(handler, result.get("error", "save failed"), 400)
@@ -3192,17 +3778,514 @@ def h_cells(handler: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Cells tab: the library as the flow sees it, and hard macros
+# ---------------------------------------------------------------------------
+
+def _usage_for(design_dir: Optional[str], scl: str) -> Dict[str, Any]:
+    """Cell-by-master counts from the newest run of *design_dir* that used *scl*
+    (and finished synthesis far enough to write the report)."""
+    if not design_dir:
+        return {}
+    try:
+        for r in history.list_runs(design_dir)[:12]:
+            if r.get("scl") and r.get("scl") != scl:
+                continue
+            rows = history.cell_usage(r["run_dir"])
+            named = [x for x in rows if isinstance(x.get("cell"), str) and x.get("count") is not None
+                     and not str(x["cell"]).startswith(("design__", "class:"))]
+            if named:
+                return {"tag": r.get("tag"), "success": r.get("success"), "started_at": r.get("started_at"),
+                        "cells": {x["cell"]: x.get("count") for x in named}}
+    except Exception:
+        _log.exception("cell usage lookup failed")
+    return {}
+
+
+def h_celllib(handler: Any) -> None:
+    """Every cell of a standard-cell library with function, size, speed,
+    leakage, flow exclusions and roles, plus last-run usage for the design."""
+    from ..controller import celllib, configedit
+    pdk = _query_param(handler.path, "pdk")
+    scl = _query_param(handler.path, "scl")
+    dd = _query_param(handler.path, "design_dir") or _get_active_design_dir()
+    res = celllib.library(pdk, scl, dd)
+    if res.get("ok"):
+        res["usage"] = _usage_for(dd, scl)
+        if dd:
+            info = configedit.read_config(dd)
+            res["config"] = {"name": info.get("name"), "editable": bool(info.get("editable")),
+                             "reason": info.get("reason")}
+    _respond(handler, res)
+
+
+def h_celllib_cell(handler: Any) -> None:
+    from ..controller import celllib
+    _respond(handler, celllib.cell_detail(_query_param(handler.path, "pdk"),
+                                          _query_param(handler.path, "scl"),
+                                          _query_param(handler.path, "cell")))
+
+
+def h_celllib_layout(handler: Any) -> None:
+    from ..controller import celllib
+    _respond(handler, celllib.cell_layout(_query_param(handler.path, "pdk"),
+                                          _query_param(handler.path, "scl"),
+                                          _query_param(handler.path, "cell")))
+
+
+def h_macro_catalog(handler: Any) -> None:
+    from ..controller import macrolib
+    _respond(handler, macrolib.catalog(_query_param(handler.path, "pdk"),
+                                       _query_param(handler.path, "scl") or None))
+
+
+def h_macro_projects(handler: Any) -> None:
+    from ..controller import macrolib
+    dd = _query_param(handler.path, "design_dir") or _get_active_design_dir()
+    _respond(handler, macrolib.project_sources(exclude_dir=dd))
+
+
+def h_macro_add(handler: Any) -> None:
+    """Add a macro from the PDK catalog (referenced in place) or from another
+    project's finished run (views copied in)."""
+    from ..controller import custommacros, macrolib
+    body = getattr(handler, "_body", {}) or {}
+    dd = _custom_cells_dir(handler)
+    if not dd:
+        _respond(handler, "no active design dir", 400)
+        return
+    src = body.get("source") or {}
+    kind = src.get("kind")
+    refs = copies = None
+    name = (body.get("name") or "").strip()
+    if kind == "pdk":
+        refs = {k: v for k, v in (src.get("views") or {}).items() if isinstance(v, str)}
+        label = f"{src.get('library') or 'PDK'} ({src.get('pdk') or ''})".strip()
+        source = {"kind": "pdk", "label": label, "pdk": src.get("pdk"), "library": src.get("library")}
+    elif kind == "run":
+        rv = macrolib.run_views(src.get("design_dir") or "", src.get("tag") or "")
+        if not rv.get("ok"):
+            _respond(handler, rv.get("error", "run not found"), 400)
+            return
+        copies = {k: ({c: str(p) for c, p in v.items()} if isinstance(v, dict) else str(v))
+                  for k, v in rv["views"].items()}
+        name = name or rv["module"]
+        source = {"kind": "run", "label": f"{Path(src['design_dir']).name} · {src['tag']}",
+                  "design_dir": src.get("design_dir"), "tag": src.get("tag")}
+    else:
+        _respond(handler, "source.kind must be 'pdk' or 'run'", 400)
+        return
+    result = custommacros.save_macro(dd, name, instances=body.get("instances") or [],
+                                     refs=refs, copies=copies, power=body.get("power"),
+                                     source=source, enabled=body.get("enabled", True))
+    if not result.get("ok"):
+        _respond(handler, result.get("error", "save failed"), 400)
+        return
+    _respond(handler, result)
+
+
+def h_macro_inspect(handler: Any) -> None:
+    """Pins, power pins, size, an instantiation template and the RTL check
+    (instantiated where? behavioural model in the sources?) for the design's
+    macros."""
+    from ..controller import custommacros, macrolib, configedit
+    dd = _custom_cells_dir(handler)
+    if not dd:
+        _respond(handler, "no active design dir", 400)
+        return
+    pdk = _query_param(handler.path, "pdk") or None
+    macros = custommacros.list_macros(dd).get("macros", [])
+    data = configedit.read_config(dd).get("data") or {}
+    scan = macrolib.find_instances(dd, data.get("DESIGN_NAME"), [m["name"] for m in macros])
+    out = {}
+    for m in macros:
+        lef = (m.get("views") or {}).get("lef")
+        p = macrolib.resolve_view(lef if isinstance(lef, str) else "", dd,
+                                  pdk or (m.get("source") or {}).get("pdk") or data.get("PDK"))
+        info = macrolib.macro_pins(p, m["name"]) if p and p.is_file() else {"ok": False, "error": "LEF file not found"}
+        out[m["name"]] = info
+    # The die as the last run drew it, for the floorplan sketch when the config
+    # leaves sizing to LibreLane (FP_SIZING relative).
+    last_die = None
+    try:
+        for r in history.list_runs(dd)[:6]:
+            bb = history._load_metrics(Path(r["run_dir"])).get("design__die__bbox")
+            if bb:
+                last_die = {"tag": r.get("tag"), "bbox": bb}
+                break
+    except Exception:
+        last_die = None
+    _respond(handler, {"ok": True, "macros": out, "scan": scan,
+                       "die_area": data.get("DIE_AREA"), "fp_sizing": data.get("FP_SIZING"),
+                       "last_die": last_die, "top": data.get("DESIGN_NAME"),
+                       "vdd": (data.get("VDD_NETS") or [None])[0] if isinstance(data.get("VDD_NETS"), list) else data.get("VDD_NETS"),
+                       "gnd": (data.get("GND_NETS") or [None])[0] if isinstance(data.get("GND_NETS"), list) else data.get("GND_NETS")})
+
+
+def h_macro_settings(handler: Any) -> None:
+    from ..controller import custommacros
+    body = getattr(handler, "_body", {}) or {}
+    dd = _custom_cells_dir(handler)
+    if not dd:
+        _respond(handler, "no active design dir", 400)
+        return
+    res = custommacros.set_settings(dd, body.get("settings") or {})
+    if not res.get("ok"):
+        _respond(handler, res.get("error", "invalid settings"), 400)
+        return
+    _respond(handler, res)
+
+
+# ---------------------------------------------------------------------------
 # Route table
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Project files and the design's own config (the Setup page's project model)
+# ---------------------------------------------------------------------------
+
+def _design_dir_or_400(handler: Any) -> Optional[str]:
+    body = getattr(handler, "_body", {}) or {}
+    d = body.get("design_dir") or _query_param(handler.path, "path") or _get_active_design_dir()
+    if not d or not Path(d).is_dir():
+        _respond(handler, "no project is open", 400)
+        return None
+    return str(Path(d).resolve())
+
+
+def _refuse_while_running(handler: Any) -> bool:
+    """The config is re-read between steps of a step-by-step run, so it must
+    not change under a live run."""
+    from ..server.app import get_runner
+    if get_runner().running:
+        _respond(handler, "A run is in progress. Change the project's settings after it finishes.", 409)
+        return True
+    return False
+
+
+def _scoped_report(scoped: Dict[str, Any], pdk: Optional[str], scl: Optional[str]) -> Dict[str, Any]:
+    from ..controller import configedit
+    return {k: [dict(e, applies=configedit.applies(e, pdk, scl)) for e in v] for k, v in scoped.items()}
+
+
+def h_project_files(handler: Any) -> None:
+    """Every file in the project with its role and the config variable using it."""
+    from ..controller import projectfiles
+    d = _design_dir_or_400(handler)
+    if d is None:
+        return
+    try:
+        _respond(handler, projectfiles.list_files(d))
+    except Exception as ex:
+        _log.exception("list_files failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_design_info(handler: Any) -> None:
+    """What the Setup page's Design row needs: the modules in the ticked files,
+    the config's top/clock values (and any pdk::/scl:: section overriding
+    them), and the ports of the chosen top module."""
+    from ..controller import autoconfig, configedit, projectfiles
+    d = _design_dir_or_400(handler)
+    if d is None:
+        return
+    body = getattr(handler, "_body", {}) or {}
+    files = [f for f in (body.get("files") or []) if isinstance(f, str)]
+    pdk, scl = body.get("pdk") or None, body.get("scl") or None
+    try:
+        info = configedit.read_config(d)
+        data = info["data"]
+        scan = autoconfig.scan_sources(d, only_files=files or None)
+        modules = [m for m in scan.get("modules", []) if m not in set(scan.get("testbench_modules", []))]
+        top = body.get("top") or data.get("DESIGN_NAME") or scan.get("top")
+        ports = projectfiles.find_module_ports(d, top, files or None) if isinstance(top, str) and top else []
+        scoped = {k: configedit.scoped_values(data, k) for k in ("DESIGN_NAME", "CLOCK_PORT", "CLOCK_PERIOD")}
+        # The Setup page's Settings card asks for a few more keys: their
+        # top-level values as the config writes them, and any pdk::/scl::
+        # section that sets them too.
+        keys = [k for k in (body.get("keys") or []) if isinstance(k, str) and re.match(r"^[A-Z][A-Z0-9_]*$", k)]
+        settings_scoped = {k: configedit.scoped_values(data, k) for k in keys}
+        _respond(handler, {
+            "settings": {k: data.get(k) for k in keys},
+            "settings_scoped": _scoped_report({k: v for k, v in settings_scoped.items() if v}, pdk, scl),
+            "config": {k: info[k] for k in ("name", "format", "editable", "reason")},
+            "values": {k: data.get(k) for k in ("DESIGN_NAME", "CLOCK_PORT", "CLOCK_PERIOD")},
+            "scoped": _scoped_report({k: v for k, v in scoped.items() if v}, pdk, scl),
+            "modules": modules,
+            "top_candidates": scan.get("top_candidates", []),
+            "suggested_top": scan.get("top"),
+            "module_files": {m: str((Path(d) / f).resolve()) for m, f in (scan.get("module_files") or {}).items()},
+            "ports": ports,
+        })
+    except Exception as ex:
+        _log.exception("design_info failed")
+        _respond(handler, str(ex), 500)
+
+
+def h_config_set(handler: Any) -> None:
+    """Set/remove top-level keys in the design's config file (key by key)."""
+    from ..controller import configedit
+    d = _design_dir_or_400(handler)
+    if d is None or _refuse_while_running(handler):
+        return
+    body = getattr(handler, "_body", {}) or {}
+    sets = body.get("set") or {}
+    removes = body.get("remove") or []
+    if not isinstance(sets, dict) or not isinstance(removes, list):
+        _respond(handler, "set must be an object and remove a list", 400)
+        return
+    try:
+        res = configedit.set_keys(d, sets, removes)
+    except configedit.ConfigEditError as ex:
+        _respond(handler, str(ex), 400)
+        return
+    res.pop("text", None)
+    res["scoped"] = _scoped_report(res["scoped"], body.get("pdk") or None, body.get("scl") or None)
+    _respond(handler, res)
+
+
+def h_config_sources(handler: Any) -> None:
+    """Make the config's VERILOG_FILES resolve to exactly the ticked files."""
+    from ..controller import configedit
+    d = _design_dir_or_400(handler)
+    if d is None or _refuse_while_running(handler):
+        return
+    body = getattr(handler, "_body", {}) or {}
+    files = body.get("files")
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        _respond(handler, "files must be a list of paths", 400)
+        return
+    try:
+        res = configedit.set_sources(d, files)
+    except configedit.ConfigEditError as ex:
+        _respond(handler, str(ex), 400)
+        return
+    res.pop("text", None)
+    _respond(handler, res)
+
+
+def h_project_new_file(handler: Any) -> None:
+    """Create a starter file (module, testbench, header, SDC, pin order, memory
+    contents or any editable file) and, with ``use``, point the config at it."""
+    from ..controller import projectfiles
+    d = _design_dir_or_400(handler)
+    if d is None:
+        return
+    body = getattr(handler, "_body", {}) or {}
+    use = body.get("use", True) is not False
+    if use and _refuse_while_running(handler):
+        return
+    res = projectfiles.new_file(d, str(body.get("kind") or ""), str(body.get("name") or ""),
+                                top=body.get("top") or None, clock=body.get("clock") or None, use=use)
+    if not res.get("ok"):
+        _respond(handler, res.get("error") or "could not create the file", 400)
+        return
+    _respond(handler, res)
+
+
+# ---------------------------------------------------------------------------
+# The fix loop: problems of a run, and a fix applied as a run resumed from it.
+# ---------------------------------------------------------------------------
+
+def h_problems(handler: Any) -> None:
+    """Every problem of one run, worst first, each with its diagnosis and
+    fixes (controller/problems.py, the one knowledge base)."""
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    try:
+        from ..controller import problems
+        _respond(handler, problems.run_problems(run_dir))
+    except Exception as ex:
+        _log.exception("problems failed")
+        _respond(handler, str(ex), 500)
+
+
+def _fix_plan(body: Dict[str, Any]) -> Tuple[Any, int]:
+    from ..controller import branch, manualcmd
+    design_dir = _get_active_design_dir()
+    if not design_dir:
+        return "no active design dir", 400
+    sets = body.get("sets") or {}
+    if not isinstance(sets, dict):
+        return "sets must be an object", 400
+    try:
+        p = branch.plan(design_dir, str(body.get("tag") or ""), sets,
+                        save=str(body.get("save") or "auto"), start=str(body.get("start") or "auto"),
+                        new_tag=(str(body.get("new_tag")).strip() or None) if body.get("new_tag") else None)
+    except branch.BranchError as ex:
+        return str(ex), 400
+    # The command the new run will be, exactly as the runner will start it.
+    try:
+        config_file = _resolve_config_file(design_dir)
+        pdk_root = os.environ.get("PDK_ROOT") or None
+        run_mode = "container" if (body.get("run_mode") or "container") == "container" else "local"
+        if p["parent"]["pdk"]:
+            pdk_root = pdk_mod.check_pdk_ready(p["parent"]["pdk"], p["parent"]["scl"] or None, run_mode).get("pdk_root") or pdk_root
+        r = p["resume"] or {}
+        p["command"] = manualcmd.cli_command_for(
+            design_dir=design_dir, config_file=str(config_file), flow=p["parent"]["flow"],
+            pdk=p["parent"]["pdk"], scl=p["parent"]["scl"], pdk_root=pdk_root, run_mode=run_mode,
+            tag=p["tag"], frm=r.get("step"), overrides=p["overrides"],
+            extra_sources=p["sources"] or None, extra_extras=p["extras"] or None,
+            initial_state=r.get("state"))
+    except Exception:
+        _log.debug("fix plan command failed", exc_info=True)
+        p["command"] = None
+    return p, 200
+
+
+def h_fix_plan(handler: Any) -> None:
+    """What applying a fix would do, without doing it: the change and where
+    its old value came from, the config diff, where the new run resumes and
+    why, what else changed since the run, and the command."""
+    data, status = _fix_plan(getattr(handler, "_body", {}) or {})
+    if status == 200:
+        data.pop("_values", None)
+    _respond(handler, data, status)
+
+
+def h_fix_apply(handler: Any) -> None:
+    """Apply a fix: save it (config file or this run only), then start a run
+    resumed from the old one at the first step that reads it (or the whole
+    flow). Returns the new run's tag and the Undo token of a config change."""
+    _apply_fix(handler, getattr(handler, "_body", {}) or {})
+
+
+def _unmerge(overrides: Dict[str, Any], cc: Dict[str, Any]) -> Dict[str, Any]:
+    """The old run's settings without the custom-cell values merged into them
+    (they are merged again for the new run, from the cells as they are now)."""
+    out = dict(overrides)
+    for k, v in (cc or {}).items():
+        cur = out.get(k)
+        if cur is None:
+            continue
+        if str(cur) == str(v):
+            del out[k]
+        elif str(cur).endswith(" " + str(v)):
+            out[k] = str(cur)[: -len(str(v)) - 1]
+    return out
+
+
+def _apply_fix(handler: Any, body: Dict[str, Any]) -> None:
+    from ..controller import branch, configedit
+    from ..server.app import get_runner
+    if get_runner().running:
+        _respond(handler, "A run is in progress. Apply the change after it finishes.", 409)
+        return
+    p, status = _fix_plan(body)
+    if status != 200:
+        _respond(handler, p, status)
+        return
+    if p.get("blocked"):
+        _respond(handler, p["blocked"], 409)
+        return
+    then = body.get("then") or "run"           # run | save (save only, no run)
+    design_dir = _get_active_design_dir()
+    values = p.pop("_values", {})
+    undo = None
+    saved = [c for c in p["changes"] if c["save"] == "config"]
+    if saved:
+        if p.get("config_error"):
+            _respond(handler, p["config_error"], 400)
+            return
+        try:
+            by_scope: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+            for c in saved:
+                by_scope.setdefault(tuple(c["scope"] or ()), {})[c["var"]] = values[c["var"]]
+            res = None
+            diff: List[Dict[str, Any]] = []
+            backup = after = None
+            for scope, kv in by_scope.items():
+                res = configedit.set_keys(design_dir, kv, scope=list(scope) or None)
+                diff += res.get("diff") or []
+                u = res.get("undo") or {}
+                backup = backup or u.get("backup")      # the file before the first write
+                after = u.get("after") or after          # the file after the last one
+            undo = {"name": res["name"], "diff": diff, "backup": backup, "after": after} if res and backup else None
+        except configedit.ConfigEditError as ex:
+            _respond(handler, str(ex), 400)
+            return
+    if then == "save":
+        _respond(handler, {"ok": True, "started": False, "undo": undo, "plan": p})
+        return
+    r = p["resume"]
+    overrides = dict(p["overrides"])
+    try:
+        from ..controller import customcells
+        overrides = _unmerge(overrides, customcells.build_overrides(design_dir) or {})
+    except Exception:
+        pass
+    run_body = {
+        "flow": p["parent"]["flow"], "run_mode": body.get("run_mode") or "container",
+        "mode": body.get("mode") or "auto", "tag": p["tag"],
+        "overrides": dict(overrides, PDK=p["parent"]["pdk"], STD_CELL_LIBRARY=p["parent"]["scl"]),
+        "sources": p["sources"], "extras": p["extras"], "frm": r["step"] if r else None, "to": body.get("to") or None,
+    }
+    state = str(Path(design_dir) / r["state"]) if r and r.get("state") else None
+    data, st = _start_run(run_body, initial_state=state, branched_from=branch.branch_meta(p) if r else None)
+    if st != 200 or not (isinstance(data, dict) and data.get("ok")):
+        # The config change stays (with its Undo): say so rather than hide it.
+        msg = data if st != 200 else (data or {}).get("reason") or "the run didn't start"
+        _respond(handler, {"ok": True, "started": False, "error": str(msg), "undo": undo, "plan": p})
+        return
+    _respond(handler, {"ok": True, "started": True, "tag": p["tag"], "resume": r, "undo": undo,
+                       "changes": p["changes"], "command": data.get("command")})
+
+
+def h_config_undo(handler: Any) -> None:
+    """Put the config back as it was before a LanEx change (the fix sheet's
+    Undo). Refused when the file changed since, and until a run that just
+    started has read it (its resolved.json exists)."""
+    from ..controller import configedit
+    from ..server.app import get_runner
+    d = _design_dir_or_400(handler)
+    if d is None:
+        return
+    body = getattr(handler, "_body", {}) or {}
+    r = get_runner()
+    if r.running:
+        rd = getattr(r, "_run_dir", None)
+        if getattr(r, "_step_mode", False):
+            _respond(handler, "A step-by-step run reads the config before every step. Undo after it finishes.", 409)
+            return
+        if not rd or not (Path(rd) / "resolved.json").is_file():
+            _respond(handler, "The run that just started hasn't read the config yet. Undo in a moment.", 409)
+            return
+    try:
+        res = configedit.undo(d, str(body.get("backup") or ""), str(body.get("after") or ""))
+    except configedit.ConfigEditError as ex:
+        _respond(handler, str(ex), 409)
+        return
+    res["running"] = bool(r.running)
+    _respond(handler, res)
+
 
 ROUTES: List[Tuple[str, Any]] = [
     ("/api/templates", h_templates),
     ("/api/project/new", h_project_new),
+    ("/api/project/defaults", h_project_defaults),
+    ("/api/project/files", h_project_files),
+    ("/api/project/design-info", h_design_info),
+    ("/api/project/new-file", h_project_new_file),
+    ("/api/config/set", h_config_set),
+    ("/api/config/sources", h_config_sources),
+    ("/api/project/forget", h_project_forget),
+    ("/api/project/delete", h_project_delete),
+    ("/api/fs/native-pick", h_native_pick),
     ("/api/run-export", h_run_export),
     ("/api/verify/rerun", h_verify_rerun),
     ("/api/verify", h_verify),
     ("/api/compare", h_compare),
     ("/api/cell-usage", h_cell_usage),
+    ("/api/run-stages", h_run_stages),
+    ("/api/run-explain", h_run_explain),
+    ("/api/problems", h_problems),
+    ("/api/fix/plan", h_fix_plan),
+    ("/api/fix/apply", h_fix_apply),
+    ("/api/config/undo", h_config_undo),
     ("/api/timing-paths", h_timing_paths),
     ("/api/dse/start", h_dse_start),
     ("/api/dse/cancel", h_dse_cancel),
@@ -3211,6 +4294,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/system-resources", h_system_resources),
     ("/api/file/write", h_file_write),
     ("/api/file/delete", h_file_delete),
+    ("/api/file/rename", h_file_rename),
     ("/api/lint", h_lint),
     ("/api/lint-result", h_lint_result),
     ("/api/sim/testbenches", h_sim_testbenches),
@@ -3218,6 +4302,14 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/sim/cancel", h_sim_cancel),
     ("/api/waveform", h_waveform),
     ("/api/ide/open-wave", h_ide_open_wave),
+    ("/api/celllib/cell", h_celllib_cell),
+    ("/api/celllib/layout", h_celllib_layout),
+    ("/api/celllib", h_celllib),
+    ("/api/macros/catalog", h_macro_catalog),
+    ("/api/macros/projects", h_macro_projects),
+    ("/api/macros/add", h_macro_add),
+    ("/api/macros/inspect", h_macro_inspect),
+    ("/api/macros/settings", h_macro_settings),
     ("/api/cells", h_cells),
     ("/api/custom-cells/save", h_custom_cell_save),
     ("/api/custom-cells/remove", h_custom_cell_remove),
@@ -3228,6 +4320,9 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/custom-macros/enable", h_custom_macro_enable),
     ("/api/custom-macros", h_custom_macros),
     ("/api/health", h_health),
+    ("/api/presence", h_presence),
+    ("/api/hello", h_page_hello),
+    ("/api/bye", h_page_bye),
     ("/api/about", h_about),
     ("/api/steps", h_steps),
     ("/api/variables", h_variables),
@@ -3258,6 +4353,15 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/container-tools", h_container_tools),
     ("/api/container-tools/open", h_container_tool_open),
     ("/api/open-in-tool", h_open_in_tool),
+    ("/api/layout/sources", h_layout_sources),
+    ("/api/layout/open", h_layout_open),
+    ("/api/layout/render", h_layout_render),
+    ("/api/layout/thumb", h_layout_thumb),
+    ("/api/layout/probe", h_layout_probe),
+    ("/api/layout/instances", h_layout_instances),
+    ("/api/layout/mesh", h_layout_mesh),
+    ("/api/layout/markers", h_layout_markers),
+    ("/api/layout/commands", h_layout_commands),
     ("/api/runs/", h_run),
     ("/api/tools", h_tools),
     ("/api/metrics-catalog", h_metrics_catalog),
@@ -3278,8 +4382,6 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/preflight", h_preflight),
     ("/api/set-design-dir", h_set_design_dir),
     ("/api/diff", h_diff),
-    ("/api/explain", h_explain),
-    ("/api/explain-checker", h_explain_checker),
     ("/api/cli-command", h_cli_command),
     ("/api/manual/run", h_manual_run),
     ("/api/manual/cancel", h_manual_cancel),

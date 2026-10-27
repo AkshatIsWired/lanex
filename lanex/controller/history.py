@@ -24,7 +24,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
+import threading
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -41,13 +43,21 @@ def _walk_runs(design_dir: Path) -> List[Path]:
     runs_root = design_dir / "runs"
     if not runs_root.is_dir():
         return []
-    out: List[Path] = []
+    out: List[tuple] = []
     for p in runs_root.iterdir():
-        if not p.is_dir() or p.name.startswith("."):
+        if p.name.startswith("."):
             continue
-        out.append(p)
-    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return out
+        # One stat per run, and a run deleted or renamed while we list (Runs
+        # tab "delete", a run being written) is skipped, not a failed list.
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if not stat.S_ISDIR(st.st_mode):
+            continue
+        out.append((st.st_mtime, p))
+    out.sort(key=lambda x: x[0], reverse=True)
+    return [p for _, p in out]
 
 
 def _read_json(path: Path) -> Any:
@@ -70,12 +80,13 @@ def _read_config(run_dir: Path) -> Dict[str, Any]:
 
 
 def _completed(run_dir: Path) -> bool:
-    """A flow that finished writes its output views to ``<run>/final/``.
+    """A flow that reached its end writes its output views to ``<run>/final/``.
 
-    LibreLane only saves ``final/`` on a clean completion (a failing step
-    raises and aborts first), so its presence is the authoritative
-    "this run finished" signal. We also accept a run-root ``state_out.json``
-    for layouts/older flows that write completion state there.
+    A step that raises an immediate error aborts before ``final/`` is saved.
+    Deferred checker errors (DRC, LVS, XOR, timing…) do NOT: LibreLane saves
+    ``final/`` and then fails the run, so ``final/`` means "reached the end",
+    not "passed" (``_success_from_metrics`` looks for the raised checkers). We
+    also accept a run-root ``state_out.json`` for older flows.
     """
     return (run_dir / "final").is_dir() or (run_dir / "state_out.json").is_file()
 
@@ -99,9 +110,10 @@ _FAIL_METRICS = (
     "design__lint_error__count",
     "synthesis__check_error__count",
     "magic__drc_error__count",
-    # The KLayout/routing DRC count is `route__drc_errors` — `klayout__drc_error__count`
-    # is NOT a real metric (verified against introspect.list_metrics()), so the old
-    # key never matched and a run with KLayout DRC violations could be marked success.
+    # KLayout.DRC writes klayout__drc_error__count (librelane/steps/klayout.py);
+    # Checker.KLayoutDRC and Checker.XOR fail the run on these by default.
+    "klayout__drc_error__count",
+    "design__xor_difference__count",
     "route__drc_errors",
     "design__lvs_error__count",
     "design__critical_disconnected_pin__count",
@@ -109,11 +121,17 @@ _FAIL_METRICS = (
 )
 
 
-def _success_from_metrics(metrics: Dict[str, Any], *, run_dir: Optional[Path] = None) -> bool:
+def _success_from_metrics(metrics: Dict[str, Any], *, run_dir: Optional[Path] = None,
+                          unfinished: Optional[bool] = None) -> bool:
     # A run is a success when it completed (wrote final/) and no hard-error
     # counter is non-zero. Completion alone is a strong signal (gating checkers
     # abort the flow), but we still honour explicit error counts when present.
     if run_dir is not None and not _completed(run_dir):
+        return False
+    # A step dir that began (state_in.json) but never finished (no
+    # state_out.json) is a step that raised: a checker's deferred error leaves
+    # exactly this behind while final/ is still written. That run failed.
+    if run_dir is not None and (unfinished if unfinished is not None else _has_unfinished_step(run_dir)):
         return False
     for key in _FAIL_METRICS:
         v = metrics.get(key)
@@ -122,36 +140,151 @@ def _success_from_metrics(metrics: Dict[str, Any], *, run_dir: Optional[Path] = 
                 return False
         elif v is not None and v:
             return False
-    # No metrics but completed -> still a success (e.g. a partial -F/-T run) —
-    # but only when every step dir actually finished (has state_out.json). A
-    # final/ dir sitting next to an aborted step means the run dir is mangled;
-    # claiming green there would let the Runs list disagree with Verify.
-    if run_dir is not None and not metrics:
-        try:
-            for entry in run_dir.iterdir():
-                if not entry.is_dir():
-                    continue
-                prefix, sep, _ = entry.name.partition("-")
-                if not prefix.isdigit() or not sep:
-                    continue
-                if (entry / "state_in.json").is_file() and not (entry / "state_out.json").is_file():
-                    return False
-        except Exception:
-            pass
+    # No metrics but completed (e.g. a partial -F/-T run) -> still a success;
+    # unfinished steps were ruled out above.
     return True if run_dir is not None else bool(metrics)
+
+
+def _has_unfinished_step(run_dir: Path) -> bool:
+    try:
+        for entry in run_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            prefix, sep, _ = entry.name.partition("-")
+            if not prefix.isdigit() or not sep:
+                continue
+            if (entry / "state_in.json").is_file() and not (entry / "state_out.json").is_file():
+                return True
+    except Exception:
+        pass
+    return False
+
+
+# Run summaries, by run folder, with the signature they were made from.
+# Summarising reads every step folder (2-3 stats each, ~80 steps a run), and on
+# Windows the projects live on /mnt/c, where each of those is a round trip to
+# Windows: dozens of runs took long enough that the UI's request timed out and
+# the run lists went empty. A finished run never changes, so it is summarised
+# once; a live one again whenever its signature moves.
+_SUMMARY_CACHE: Dict[str, tuple] = {}
+_SUMMARY_LOCK = threading.Lock()
+_SUMMARY_MAX = 4000
+# One listing per design at a time: the pages that open together share it
+# instead of each walking the same folders.
+_LIST_LOCKS: Dict[str, threading.Lock] = {}
+
+
+def _mtime_ns(path: str) -> int:
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _run_signature(run_dir: Path) -> tuple:
+    """What changes whenever the run's summary could change, in a few stats.
+
+    New step folders, ``final/``, markers and run-level files change the run
+    folder's own mtime; a step finishing writes ``state_out.json`` into its
+    folder (only the newest step can still be running); metrics and runtime
+    files are rewritten in place.
+    """
+    rd = str(run_dir)
+    newest, newest_n = "", -1
+    with os.scandir(rd) as it:
+        for e in it:
+            prefix, sep, _ = e.name.partition("-")
+            if sep and prefix.isdigit() and int(prefix) > newest_n:
+                newest, newest_n = e.path, int(prefix)
+    return (
+        _mtime_ns(rd),
+        newest_n,
+        _mtime_ns(newest) if newest else 0,
+        _mtime_ns(os.path.join(rd, "final", "metrics.json")),
+        _mtime_ns(os.path.join(rd, "metrics.json")),
+        _mtime_ns(os.path.join(rd, "runtime.yaml")),
+    )
+
+
+# The cache is also kept on disk, so the first listing after LanEx starts (a
+# cold summary of 4 runs on /mnt/c measured 6.8 s; cached, 65 ms) is fast too.
+_CACHE_FILE_VERSION = 1
+_cache_loaded = False
+_cache_dirty = False
+
+
+def _cache_file() -> Optional[Path]:
+    try:
+        from . import platform_env
+        return platform_env.home() / "cache" / "run-summaries.json"
+    except Exception:
+        return None
+
+
+def _load_disk_cache() -> None:
+    global _cache_loaded
+    if _cache_loaded:
+        return
+    _cache_loaded = True
+    f = _cache_file()
+    doc = _read_json(f) if f else None
+    if not isinstance(doc, dict) or doc.get("version") != _CACHE_FILE_VERSION:
+        return
+    for key, ent in (doc.get("runs") or {}).items():
+        try:
+            _SUMMARY_CACHE.setdefault(key, (tuple(ent["sig"]), ent["doc"]))
+        except Exception:
+            continue
+
+
+def _save_disk_cache() -> None:
+    global _cache_dirty
+    f = _cache_file()
+    with _SUMMARY_LOCK:
+        if not _cache_dirty or f is None:
+            return
+        _cache_dirty = False
+        runs = {k: {"sig": list(sig), "doc": doc} for k, (sig, doc) in _SUMMARY_CACHE.items()}
+    try:
+        from . import platform_env
+        f.parent.mkdir(parents=True, exist_ok=True)
+        platform_env.atomic_write_text(f, json.dumps({"version": _CACHE_FILE_VERSION, "runs": runs}))
+    except Exception:
+        pass  # a cache that cannot be written is only slower next time
+
+
+def _summary_json(run: Path) -> Dict[str, Any]:
+    global _cache_dirty
+    key = str(run)
+    sig = _run_signature(run)
+    with _SUMMARY_LOCK:
+        _load_disk_cache()
+        hit = _SUMMARY_CACHE.get(key)
+    if hit and hit[0] == sig:
+        return dict(hit[1])
+    doc = to_json(_summarise(run))
+    with _SUMMARY_LOCK:
+        if len(_SUMMARY_CACHE) >= _SUMMARY_MAX:
+            _SUMMARY_CACHE.clear()
+        _SUMMARY_CACHE[key] = (sig, doc)
+        _cache_dirty = True
+    return dict(doc)
 
 
 def list_runs(design_dir: str | Path) -> List[Dict[str, Any]]:
     design_dir = Path(design_dir).resolve()
-    runs = _walk_runs(design_dir)
-    out: List[Dict[str, Any]] = []
-    for run in runs:
-        try:
-            summary = _summarise(run)
-            out.append(to_json(summary))
-        except Exception:
-            # Don't let a malformed run hide the others.
-            continue
+    with _SUMMARY_LOCK:
+        lock = _LIST_LOCKS.setdefault(str(design_dir), threading.Lock())
+    with lock:
+        runs = _walk_runs(design_dir)
+        out: List[Dict[str, Any]] = []
+        for run in runs:
+            try:
+                out.append(_summary_json(run))
+            except Exception:
+                # Don't let a malformed run hide the others.
+                continue
+    _save_disk_cache()
     return out
 
 
@@ -166,23 +299,33 @@ def _summarise(run_dir: Path) -> RunSummary:
     pdk = cfg.get("PDK") if isinstance(cfg.get("PDK"), str) else None
     scl = cfg.get("STD_CELL_LIBRARY") if isinstance(cfg.get("STD_CELL_LIBRARY"), str) else None
 
-    # Step completion: presence of <NNN-StepName>/<writable marker>
+    # Step completion: presence of <NNN-StepName>/<writable marker>. One
+    # directory read per step folder, not a stat per marker file: on /mnt/c
+    # every call is a round trip to Windows, and a run has ~80 steps.
     steps_done = 0
     steps_failed = 0
     step_count = 0
-    for entry in run_dir.iterdir():
-        if not entry.is_dir():
-            continue
+    step_runtimes: List[Path] = []
+    with os.scandir(run_dir) as it:
+        entries = [e for e in it]
+    for entry in entries:
         prefix, sep, _ = entry.name.partition("-")
         if not prefix.isdigit() or not sep:
             continue
+        try:
+            with os.scandir(entry.path) as sit:
+                names = {x.name for x in sit}
+        except NotADirectoryError:
+            continue
+        except OSError:
+            names = set()
         step_count += 1
-        state_out = entry / "state_out.json"
-        state_in = entry / "state_in.json"
-        if state_out.is_file():
+        if "state_out.json" in names:
             steps_done += 1
-        elif state_in.is_file() and not state_out.is_file():
+        elif "state_in.json" in names:
             steps_failed += 1
+        if "runtime.txt" in names:
+            step_runtimes.append(Path(entry.path) / "runtime.txt")
 
     wall_time = None
     rt = _read_yaml(run_dir / "runtime.yaml")
@@ -197,13 +340,11 @@ def _summarise(run_dir: Path) -> RunSummary:
         # each formatted ``HH:MM:SS.mmm``.
         total = 0.0
         found = False
-        for entry in run_dir.iterdir():
-            rtf = entry / "runtime.txt"
-            if entry.is_dir() and rtf.is_file():
-                secs = _parse_runtime_txt(rtf)
-                if secs is not None:
-                    total += secs
-                    found = True
+        for rtf in step_runtimes:
+            secs = _parse_runtime_txt(rtf)
+            if secs is not None:
+                total += secs
+                found = True
         if found:
             wall_time = total
 
@@ -225,7 +366,7 @@ def _summarise(run_dir: Path) -> RunSummary:
     return RunSummary(
         tag=run_dir.name,
         run_dir=str(run_dir),
-        success=_success_from_metrics(metrics, run_dir=run_dir),
+        success=_success_from_metrics(metrics, run_dir=run_dir, unfinished=steps_failed > 0),
         flow=flow_name or "Classic",
         pdk=pdk,
         scl=scl,
@@ -1681,6 +1822,154 @@ def metric_trends(design_dir: str | Path, keys: Optional[List[str]] = None,
     # Drop series that are entirely empty so the chart only offers real metrics.
     series = {k: v for k, v in series.items() if any(x is not None for x in v)}
     return {"ok": True, "runs": runs_meta, "series": series, "keys": list(series.keys())}
+
+
+def _mib(text: Any) -> Optional[float]:
+    """``"198MiB"`` / ``"1.2GiB"`` / ``"512KiB"`` (process_stats.json) -> MiB."""
+    if not isinstance(text, str):
+        return None
+    s = text.strip()
+    for unit, scale in (("GiB", 1024.0), ("MiB", 1.0), ("KiB", 1 / 1024.0), ("B", 1 / 1048576.0)):
+        if s.endswith(unit):
+            try:
+                return round(float(s[: -len(unit)]) * scale, 1)
+            except ValueError:
+                return None
+    return None
+
+
+def _step_ids_from_flow_log(run_dir: Path) -> Dict[str, str]:
+    """Step dir name -> LibreLane step id, from the run's ``flow.log`` lines
+    ``Running '<Step.Id>' at '<...>/<NN-dir>'``. Empty when the log is absent."""
+    out: Dict[str, str] = {}
+    log = run_dir / "flow.log"
+    if not log.is_file():
+        return out
+    try:
+        with log.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if not line.startswith("Running '") or "' at '" not in line:
+                    continue
+                sid, _, rest = line[len("Running '"):].partition("' at '")
+                where = rest.split("'", 1)[0].rstrip("/")
+                name = where.rsplit("/", 1)[-1]
+                if sid and name:
+                    out[name] = sid
+    except Exception:
+        return {}
+    return out
+
+
+def branch_of(run_dir: str | Path) -> Optional[Dict[str, Any]]:
+    """The run this one was resumed from (``gui-run.json`` ``branched_from``):
+    ``{tag, step, state, dir}``, ``dir`` the parent's folder when it still
+    exists. None for a run that started from the beginning."""
+    run = Path(run_dir)
+    doc = _read_json(run / "gui-run.json")
+    b = doc.get("branched_from") if isinstance(doc, dict) else None
+    if not isinstance(b, dict) or not b.get("tag") or not b.get("step"):
+        return None
+    out = {k: b.get(k) for k in ("tag", "step", "state", "stage", "changes")}
+    parent = run.parent / str(b["tag"])
+    out["dir"] = str(parent) if parent.is_dir() and parent.resolve() != run.resolve() else None
+    return out
+
+
+def _step_entries(run: Path) -> List[Path]:
+    try:
+        return sorted((e for e in run.iterdir() if e.is_dir() and _is_step_dir(e.name)),
+                      key=lambda e: int(e.name.split("-", 1)[0]))
+    except Exception:
+        return []
+
+
+def lineage_steps(run_dir: str | Path, _depth: int = 0) -> List[Dict[str, Any]]:
+    """Every step folder a run's results stand on, in flow order:
+    ``[{dir, id, path, run}]``. A resumed run starts with the steps it took
+    from the run it was resumed from (``run`` names that run), then its own.
+    LibreLane's ``-i`` state points into those folders, so they are part of
+    this run's results even though they live in another run."""
+    run = Path(run_dir).resolve()
+    ids = _step_ids_from_flow_log(run)
+    own = [{"dir": e.name, "id": ids.get(e.name), "path": e, "run": run.name} for e in _step_entries(run)]
+    b = branch_of(run)
+    if not b or not b.get("dir") or _depth > 8:
+        return own
+    # Folder names are the step id in lower case with dashes ("OpenROAD.STAMidPNR-1"
+    # -> "NN-openroad-stamidpnr-1"): enough when flow.log is missing.
+    slug = str(b["step"]).lower().replace(".", "-")
+    head: List[Dict[str, Any]] = []
+    for s in lineage_steps(b["dir"], _depth + 1):
+        if s["id"] == b["step"] or (not s["id"] and s["dir"].split("-", 1)[-1] == slug):
+            break
+        head.append(s)
+    return head + own
+
+
+def run_stages(run_dir: str | Path) -> Dict[str, Any]:
+    """Per-step view of one run, for the Analytics "through the flow" charts.
+
+    Reads only what LibreLane already wrote: each ``<NN-step>/state_out.json``
+    carries the run's metrics *as of that step*, ``runtime.txt`` the step's
+    wall time and ``*.process_stats.json`` its peak memory. To keep the payload
+    small each step lists only the metrics that changed since the previous step
+    (``changed``); the UI rebuilds the running totals. ``status`` is ``done``
+    (state_out.json written) or ``stopped`` (state_in.json only: the step began
+    and never finished). Nothing is computed beyond unit conversion.
+    """
+    run = Path(run_dir).resolve()
+    # A resumed run lists the steps it took from its parent first, marked
+    # with ``from`` (the run whose folder holds them).
+    prev: Dict[str, Any] = {}
+    steps: List[Dict[str, Any]] = []
+    for s in lineage_steps(run):
+        e = s["path"]
+        out_doc = _read_json(e / "state_out.json")
+        if isinstance(out_doc, dict):
+            status = "done"
+        elif (e / "state_in.json").is_file():
+            status = "stopped"
+        else:
+            status = "unknown"
+        changed: Dict[str, Any] = {}
+        if isinstance(out_doc, dict) and isinstance(out_doc.get("metrics"), dict):
+            cur = out_doc["metrics"]
+            changed = {k: v for k, v in cur.items() if k not in prev or prev[k] != v}
+            prev = cur
+        peak = None
+        for ps in e.glob("*.process_stats.json"):
+            doc = _read_json(ps)
+            if isinstance(doc, dict):
+                m = _mib(((doc.get("peak_resources") or {}).get("memory_rss")))
+                if m is not None:
+                    peak = m if peak is None else max(peak, m)
+        rt = e / "runtime.txt"
+        row = {
+            "n": int(e.name.split("-", 1)[0]),
+            "dir": e.name,
+            "id": s["id"],
+            "status": status,
+            "runtime_s": _parse_runtime_txt(rt) if rt.is_file() else None,
+            "peak_rss_mib": peak,
+            "changed": changed,
+        }
+        if s["run"] != run.name:
+            row["from"] = s["run"]
+        steps.append(row)
+    cfg = _read_config(run)
+    meta = cfg.get("meta") if isinstance(cfg.get("meta"), dict) else {}
+    return {
+        "tag": run.name,
+        "branched_from": branch_of(run),
+        "completed": _completed(run),
+        "design_name": cfg.get("DESIGN_NAME"),
+        "pdk": cfg.get("PDK"),
+        "scl": cfg.get("STD_CELL_LIBRARY"),
+        "flow": (meta or {}).get("flow") or "",
+        "clock_period": cfg.get("CLOCK_PERIOD"),
+        "clock_port": cfg.get("CLOCK_PORT"),
+        "steps": steps,
+    }
 
 
 def diff_runs(run_dir_a: str | Path, run_dir_b: str | Path) -> Dict[str, Any]:

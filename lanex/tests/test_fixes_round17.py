@@ -158,11 +158,13 @@ def test_container_netgen_sources_setup(tmp_path):
         "netgen", tmp_path, odb=None, pdk="sky130A", pdk_root=str(tmp_path)
     )
     assert script is not None
-    assert "source" in script.read_text()
+    # The setup is lvs's 3rd argument, kept in $setup (sourcing it alone errors).
+    assert f"set setup {{{setup}}}" in script.read_text()
     cmd = container_tools._tool_command(
         "netgen", gds=None, pdk="sky130A", pdk_root=str(tmp_path), odb=None, script=script
     )
-    assert cmd == ["netgen", str(script)]
+    # netgen.tcl does `eval $argv`: the script must be passed as `source <path>`.
+    assert cmd == ["netgen", "source", str(script)]
 
 
 # --------------------------------------------------- DSE resource preflight (Q1)

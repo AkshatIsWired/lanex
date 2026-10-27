@@ -6,254 +6,265 @@ import { fmt } from "./api.js";
 
 const CATALOG = {
   setup: {
-    title: "Setup tab",
-    goal: "Tell LibreLane which design to harden, on which PDK.",
+    title: "Setup",
+    goal: "Everything a run needs, in the order every RTL-to-GDS flow uses: the project, its sources, the process, a few settings, a readiness check and the Run button.",
     how: [
-      "Click \ud83d\udcc1 Browse\u2026 to navigate the filesystem and pick the folder that contains your Verilog sources, SDC, and (optionally) config.yaml.",
-      "Pick a PDK + standard-cell library. Most beginners use sky130A / sky130_fd_sc_hd. The green/pill on the right of the SCL picker reflects whether the libs are installed locally.",
-      "In the Configuration card, hit a Preset to apply sane defaults, or copy values verbatim from an example. Search to find any variable by name.",
+      "<b>Project</b>: one design folder. With none open, start a new one (blank or an example) or open a folder that already has your Verilog or a LibreLane/OpenLane config. The top module, clock port and clock period are saved straight into <code>config.json</code>.",
+      "<b>Sources</b> sorts the files the way FPGA tools do: design files (ticked ones are built into the chip), testbenches (simulation only) and constraint files (SDC timing, pin order). <b>New file</b> and <b>Edit</b> open the RTL IDE.",
+      "Before the long run, write and simulate in the <b>RTL IDE</b>: Check syntax, then Simulate a testbench and read the waveform. Minutes saved per mistake.",
+      "<b>PDK</b>: sky130A with <code>sky130_fd_sc_hd</code> is the usual first choice and is set by default.",
+      "<b>Settings</b> holds the handful of LibreLane variables most projects change, each with when to change it. They're saved in <code>config.json</code>, so a terminal run of the same folder builds the same chip.",
+      "When <b>Ready to run?</b> is green, press <b>Run flow</b> (or Run in the top bar, from any tab) and follow it on the Flow page.",
+      "<b>All settings</b> lists every LibreLane variable by stage. Values there go with LanEx's runs as overrides and leave <code>config.json</code> alone, which suits one-off experiments.",
     ],
     samples: [
-      { key: "CLOCK_PERIOD", sample: "10 (ns)" },
-      { key: "FP_CORE_UTIL", sample: "50 (%)" },
-      { key: "STREAM\\_OUT\\_RESOLUTION", sample: "(per PDK)" },
+      { key: "CLOCK_PERIOD", sample: "10 (ns, which is 100 MHz)" },
+      { key: "FP_CORE_UTIL", sample: "50 (% of the core filled with cells)" },
+      { key: "PL_TARGET_DENSITY_PCT", sample: "raise it if placement fails with GPL-0302" },
     ],
     pitfalls: [
-      "Picking a SCL that isn't installed yields a fast failure; install via the Tools tab first.",
-      "Wrong VERILOG_FILES glob here shows up as 'module not found' in the synthesis log.",
+      "A very small design (a few dozen cells) on a utilization-sized die can fail placement (DPL-0036 or GPL-0302). A fixed die area in Settings, such as 0 0 150 150, gives it room.",
+      "A folder path with spaces breaks LibreLane runs. New projects are always created without them.",
+      "The top module's name has to match DESIGN_NAME in the config. The project card keeps the two in step.",
+      "A ticked testbench is sent to synthesis. Leave testbenches unticked; they belong in the RTL IDE's simulator.",
+      "A library that isn't installed can't be picked; add it from the Tools tab.",
     ],
   },
   pipeline: {
-    title: "Pipeline tab",
-    goal: "Watch the Classic flow run step-by-step, and run a sub-section of it.",
+    title: "Flow",
+    goal: "Watch a run stage by stage, and when it stops, see why and what to change.",
     how: [
-      "The timeline lists every Step (Yosys.Synthesis, OpenROAD.Placement, \u2026) and lights each one up as the run reaches it. Click a step row to load that step's log + output into the Step Output panel below.",
-      "The From / To / Skip fields at the top take step ids. Range-select \u21d2 partial flow (wired into flow.start(frm=, to=, skip=)).",
-      "Step-by-step mode holds after each step so you can inspect before continuing.",
+      "The seven tiles are the stages every page uses: Synthesis, Floorplan, Power grid, Placement, Clock tree, Routing, Sign-off. Each shows its time (against the run it is compared with), one number from the end of the stage, and the chip at that point.",
+      "Below them is every step in flow order, under its stage, and beside it the run's output as LibreLane prints it. While a run goes the list keeps the running step in view; scroll it yourself and a chip brings you back. Pick a step to see only its log, what it does, the settings it reads and its reports.",
+      "A run that stops says why first, in plain words, with the line from the log and what to change. A run that finishes shows its report card: the verdict, the key numbers, and its warnings counted by code.",
+      "The Run menu can stop a run after any stage: Synthesis alone gives the cell count and area in seconds.",
     ],
     samples: [
-      { key: "From", sample: "Yosys.JsonHeader" },
-      { key: "To", sample: "Magic.StreamOut" },
+      { key: "Run up to", sample: "Synthesis" },
+      { key: "Step ID", sample: "OpenROAD.GlobalPlacement" },
     ],
     pitfalls: [
-      "Skipping a step depends on what earlier steps produced. LibreLane won't refabricate inputs.",
+      "A run started elsewhere (your own terminal) shows here once it has finished; Flow follows runs LanEx started.",
+      "Clean means LibreLane's checks passed. It does not cover gate-level simulation, a shuttle's precheck or the foundry's own decks.",
     ],
   },
   runs: {
     title: "Runs tab",
-    goal: "Every past invocation of the flow; pick one to inspect deeply.",
+    goal: "Review historical flow runs and load detailed metrics and deliverables.",
     how: [
-      "Each row tells you PDK, SCL, total steps, passed/failed, and wall-clock time.",
-      "Click Open to load its metrics into the Analytics tab and its final views into the Preview tab.",
-      "Pick two or more runs in the Analytics tab's Compare card to see what changed between them.",
-      "Import… adopts a run directory or a LanEx bundle from elsewhere; each row also has Files, Note, Bundle, Reproduce and Export actions.",
+      "Each row reports the PDK, SCL, completed steps, final status, and elapsed execution time.",
+      "Click Open to show that run's chip in the Layout tab; Analytics and Verify follow the same run.",
+      "Select multiple runs in the Analytics Compare card to view delta tables and configuration differences.",
+      "Use Import to adopt external run directories or LanEx bundles; each row also provides Files, Notes, Bundle, and Reproduce actions.",
     ],
     samples: [
-      { key: "Tag format", sample: "RUN\\_2025-01-19\\_14-30-00" },
+      { key: "Tag format", sample: "RUN_2025-01-19_14-30-00" },
     ],
     pitfalls: [
-      "A 'passed' chip means every checker hit 0; it doesn't guarantee silicon-clean. Read the Advisor tab.",
+      "A passed run indicates flow checkers completed without error flags; review the Advisor and Verify tabs to inspect timing and signoff margins.",
     ],
   },
-  preview: {
-    title: "Preview tab",
-    goal: "Inspect the GDS, DEF netlist, and rendered PNG of the latest run.",
+  layout: {
+    title: "Layout tab",
+    goal: "See the chip a run built, stage by stage and layer by layer, and open it in the desktop viewers.",
     how: [
-      "Pick a run, then a DesignFormat (render, gds, def, nl, lef, etc.).",
-      "Click Render Layout to (re-)run KLayout.Render for the selected run. PNGs stream back once generated.",
-      "Files fall back to text preview for netlists / SDC; images render inline.",
+      "Pick a run at the top. The layout is drawn by KLayout itself, with the PDK's layer colours, at any zoom. Drag to pan, scroll to zoom, double-click to zoom in, right-drag to zoom to a box. F fits the chip.",
+      "The strip above the view steps through the flow: Floorplan, Power grid, Placement, Clock tree, Routing and the Final GDS. Your zoom stays put when you switch, so you can watch one spot change. Play the flow animates them; Other snapshot opens any step that wrote a DEF.",
+      "Click anything to see what it is: the layer in plain words, its size, and the standard cell it belongs to, with buttons to highlight every copy of that cell or open it in the Cells tab.",
+      "Layers: tick layers on and off, Alt-click (or 'only') to see one alone, or use the presets Wiring and Transistors. Cells: every cell type placed, grouped by what it does; click one to highlight all of them. Find: jump to a pin or label by name. Checks: DRC and XOR markers from the run, drawn on the layout; click one to zoom to it.",
+      "M measures (rulers snap to straight and 45-degree lines; Alt for any angle), L hides labels, O draws cells as named outlines, [ and ] step through the stages.",
+      "Open in KLayout / OpenROAD GUI / Magic / GDS3D starts the full tool in its own window, inside the LibreLane container when possible. OpenROAD opens the stage on screen. Command copies the LibreLane or KLayout command that does the same from a terminal. Save image writes this view, or the whole chip at 4K or 8K.",
+      "Run files, under the viewer, lists every output in final/, shows any design format as text, and renders the Yosys synthesis diagrams.",
     ],
     pitfalls: [
-      "If final/gds/ is empty, the run never reached OpenROAD.DetailedRouting. Use Pipeline to see what failed.",
+      "Stage snapshots before the final GDS come from each step's DEF, so cells are drawn as their LEF outlines and pins. Only the Final GDS has the transistor-level shapes.",
+      "A run that stopped early shows the last stage it reached. If there is no stage at all, the run stopped before the floorplan; the Flow page says where and why.",
+      "The picture is what the tools wrote. It is not a sign-off; check Verify and the foundry decks before tape-out.",
     ],
   },
   tools: {
     title: "Tools tab",
-    goal: "Verify the EDA toolchain LibreLane needs; install anything missing with one click.",
+    goal: "Verify required EDA toolchains and manage container and native dependencies.",
     how: [
-      "Each tile is green if installed. Click the version link \u2014 it parses the binary's --version output.",
-      "pip-installable tools (librelane, ciel) get an in-place install button: we stream stdout into the Live Logs panel on the right.",
-      "Non-pip tools (yosys/openroad/klayout/magic/netgen/verilator) display the OS-specific install recipe in a modal \u2014 follow the URLs or apt commands.",
-      "Use the PDK store row at the bottom to pull a sky130/gf180mcu variant via ciel.",
+      "Each tile displays green when installed. Click the version indicator to view the parsed output of the binary's --version flag.",
+      "Python packages (librelane, ciel) provide direct in-app installation with stdout streamed to Live Logs.",
+      "Non-pip tools (Yosys, OpenROAD, KLayout, Magic, Netgen, Verilator) display OS-specific package commands and repository links.",
+      "The PDK store section pulls sky130, gf180mcu, and related PDK variants via ciel.",
     ],
     samples: [
       { key: "Ciel pull", sample: "ciel pull sky130A" },
       { key: "OpenROAD install", sample: "apt:openroad or GitHub release tarball" },
     ],
     pitfalls: [
-      "Don't pull into system Python; use a venv when running pip outside a container.",
+      "Avoid installing packages directly into system Python; use a virtual environment when running pip outside container mode.",
     ],
   },
   analytics: {
     title: "Analytics tab",
-    goal: "Every metric LibreLane persisted in metrics.json, grouped by stage.",
+    goal: "See how a run went, from \"is it clean?\" down to every number LibreLane recorded.",
     how: [
-      "Switch runs from the dropdown at the top \u2014 metrics reflow.",
-      "Tiles turn green/red based on OpenLane heuristics: WNS \u2265 0, LVS errors == 0, density \u2208 [0, 1]. Negative violations are red.",
-      "Per-corner / per-direction metrics arrive as nested objects; we render them as key:value pairs compressed into one line.",
-      "The Advisory glossary at the bottom explains every category with a sample value \u2014 use it as a Bayes' table when something fails.",
+      "Pick a run at the top. Compare with picks a second run of the same design (by default the previous clean one); every change on the page is measured against it.",
+      "Overview: the verdict, each check LibreLane ran (hover a chip for what it means), and the four headline numbers: setup slack, area, power and wirelength.",
+      "Timing shows setup and hold side by side, slack in every PVT corner (the outlined row is the worst), and how slack moved at each timing check from synthesis to signoff.",
+      "Area, Power and Routing break those numbers down: floorplan to scale, area by cell type, the cells used, power split, IR drop per supply net, wire and router convergence.",
+      "Flow shows the design at the end of each stage, where the runtime went, and tool warnings by message code. History plots the same numbers over this design's runs; click a point to open that run.",
+      "All metrics lists every value with its raw key. Rows with corners or nets open with the arrow. The magnifier opens the tool's own file at that line.",
     ],
     pitfalls: [
-      "A red tile doesn't always mean failure \u2014 it can be non-blocking. Read the matching step's log via the Pipeline tab.",
+      "Green and red deltas follow LibreLane's own direction for each metric. Metrics without a known direction are never coloured.",
+      "A run that stopped has no final metrics.json; the page then shows the metrics saved by the last step that finished, and says so.",
+      "Power is OpenSTA's estimate with default switching activity, and none of this is a sign-off. Check Verify and the foundry decks before tape-out.",
     ],
   },
   files: {
     title: "Design files",
-    goal: "Confirm every source/memory file LibreLane will read.",
+    goal: "Verify HDL sources and memory initialization files processed by the flow.",
     how: [
-      "Files are deduped and grouped: Sources (.v/.sv/.vh) and Memory files (.mem/.hex/.bin).",
-      "Items are checked by default. Untick anything LibreLane should ignore (e.g. a Testbench that belongs to simulation only).",
-      "Extra files \u2014 pin\\_order.cfg, readme.txt, etc. \u2014 go in the bottom input field as a comma-separated list.",
-      "Click \u21bb Rescan after adding new .v files to the directory.",
+      "Files are grouped into Verilog sources (.v, .sv, .vh) and memory contents (.mem, .hex, .bin).",
+      "Detected files are selected by default. Deselect items that should be excluded from synthesis (such as simulation testbenches).",
+      "Additional files (such as pin_order.cfg or custom scripts) can be specified as a comma-separated list in the extra files input.",
+      "Click \u21bb Rescan after modifying files in the design directory.",
     ],
     pitfalls: [
-      "Memory files misclicked as unchecked will silently leave initial regs at X.",
+      "Unchecking required memory initialization files causes affected registers to remain uninitialized (X state).",
     ],
   },
   ide: {
     title: "RTL IDE tab",
-    goal: "Edit your Verilog/SystemVerilog, lint it, and simulate a testbench to a waveform — without leaving the GUI.",
+    goal: "Write, check and simulate the design before the long RTL-to-GDS run: the same loop as in any HDL editor or FPGA tool.",
     how: [
-      "The file tree on the left lists the design's sources. Click a file to open it in the editor (syntax highlighting; Ctrl/⌘F = find & replace).",
-      "Upload Sources lands files in the design root; Upload Testbench lands them in verify/ (so the flow won't try to synthesise them).",
-      "Check syntax runs Verilator --lint-only on the current sources — no run dir, no PDK — and lists problems in the Problems panel; click a diagnostic to jump to the line.",
-      "Simulate picks an engine (Icarus for classic `initial`/`#delay` benches, Verilator for speed, or Auto) and runs the selected testbench; $dumpvars output renders in the waveform viewer (zoom with the wheel, click to lock a cursor, export PNG/CSV).",
-      "GTKWave opens the same dump in the desktop GTKWave with the signals already on screen (LanEx writes a .gtkw save file from the dump's own header). If GTKWave isn't installed, the button walks you through a one-click install.",
+      "The explorer sorts the project's files by what they're for: Design (built into the chip), Simulation (testbenches), Constraints (SDC, pin order) and Project. The + on each group makes that kind of file; a new testbench is wired to the top module's ports and clock. Right-click a file (or its ⋯) to make one of its modules the top, build it into the chip or leave it out, or simulate a testbench.",
+      "The editor works like VS Code: Ctrl S saves, Ctrl F finds and replaces (case, regex, whole word), Ctrl / comments a line, Alt ↑/↓ moves it, Ctrl D adds the next match, Ctrl Z undoes per file. Typing offers keywords, system tasks and blocks (module, always_ff, case, a testbench clock); Tab accepts.",
+      "Check syntax runs Verilator in lint-only mode over every design and testbench file, and runs again on each save while Check on save is ticked. Problems groups what it finds by file; a click jumps to the line and explains the warning code. Style notes in testbenches are folded away.",
+      "Simulate saves every changed file, builds the testbench named on the button (its arrow picks another) with the design files, and says how it went: ran to the end, reported failures, didn't build. File:line in the output is a link.",
+      "Waveform: Signals lists everything in the dump; click one to add it, click it again to take it off. Click a name to select it (click it again, the empty space below, or Esc to let it go). Click the waves for the cursor, right-click for the marker (Δ shows the time and frequency between them), drag across to zoom in, Ctrl+wheel to zoom, Shift+wheel to pan, ←/→ to jump between changes, F to fit. Right-click a name for its number format and colour; double-click it to open its declaration. The signal list is kept per testbench.",
+      "GTKWave opens the same dump in the desktop viewer with the signals on screen already loaded.",
     ],
     samples: [
-      { key: "Sim engine", sample: "Auto (Icarus → host Verilator → container)" },
-      { key: "Testbench top", sample: "left blank → auto-derived from the bench" },
+      { key: "Simulator", sample: "Auto (Icarus if installed, else Verilator)" },
+      { key: "Top module", sample: "left blank: taken from the testbench" },
+      { key: "Waveform dump", sample: "$dumpfile(\"dump.vcd\"); $dumpvars(0, counter_tb);" },
     ],
     pitfalls: [
-      "No waveform usually means the testbench has no $dumpfile/$dumpvars, or the top is the DUT not the bench — leave the top field blank to auto-pick the bench.",
-      "Lint is static only; it never proves functional correctness — run a sim for that.",
+      "No waveform means the testbench has no $dumpfile/$dumpvars, or the top module is set to the design instead of the testbench. Leave Top module blank to take it from the testbench.",
+      "A testbench with a free-running clock needs $finish, or the simulation stops at the 120 s limit with a partial waveform.",
+      "A clean syntax check doesn't prove the logic is right. Simulate it, and check the waveform against what you expect.",
     ],
   },
   verify: {
-    title: "Verification Center tab",
-    goal: "A tape-out readiness verdict for a finished run: lint, synthesis equivalence, timing, and DRC / LVS / antenna, plus the signoff reports.",
+    title: "Verify tab",
+    goal: "See whether a run passes sign-off, and if not, which check failed, why, and what to change. Every verdict is LibreLane's own, judged with that run's settings.",
     how: [
-      "Pick a run from the dropdown. Each stage card turns green / amber / red from that run's own metrics (no invented numbers).",
-      "Expand a card to read why; use View / Download / Locate on any signoff report (DRC, LVS, antenna, STA).",
-      "A green verdict means every gating checker hit zero in THIS run — read the cards before trusting it.",
+      "Pick a run. The top banner gives the verdict; the strip of squares is every check in flow order (click one to jump to it).",
+      "Compare with picks an earlier run: checks that broke or got fixed since then are called out.",
+      "The four tiles (Timing, Design rules, Layout matches netlist, Antenna & power) open their detail sections.",
+      "In Checks, click a row to see what it checks, why it matters, what to try, the exact value (with the source file one click away), the step that checked it, and the report.",
+      "Timing shows every corner: setup and hold slack, violations, and which corners fail the run versus only warn.",
+      "DRC lists each broken rule with the PDK's description and a location in µm; Open in KLayout loads the layout with the markers.",
+      "Copy summary puts a plain-text checklist on the clipboard for an issue or a review.",
     ],
     pitfalls: [
-      "“No data” for a stage means that step didn't run (e.g. a partial From/To run) — not that it passed.",
+      "Not checked is not a pass: the run stopped first, or the step isn't in this flow. Turned off means a RUN_ setting disabled it.",
+      "Warning only means LibreLane prints a warning and carries on (for example max slew, or anything whose ERROR_ON_ switch is off). Check them anyway.",
+      "LanEx is not a sign-off tool. Before fabrication, verify with the foundry's own rule decks.",
     ],
   },
   dse: {
     title: "Design-Space Exploration tab",
-    goal: "Sweep one or more config variables across a range of values, run each combination, and compare the results on a Pareto plot.",
+    goal: "Sweep configuration parameters across specified values to analyze tradeoffs on a Pareto plot.",
     how: [
-      "Add an axis: pick a variable, type comma-separated values (e.g. 40,50,60), Add axis. Repeat for more dimensions.",
-      "Grid = every combination (cartesian); List = zip the axes index-by-index. The counter shows how many runs that is.",
-      "Run sweep launches them sequentially on one engine. Watch the queue; on completion the runs are plotted (area vs setup slack).",
-      "Use the Runs picker to choose which runs go on the Pareto / compare — it pre-selects the sweep's runs and survives a page reload.",
+      "Add a sweep axis: select a configuration variable, provide comma-separated values, and click Add axis.",
+      "Grid executes the Cartesian product of all values; List pairs axis values index-by-index.",
+      "Run sweep launches combinations sequentially. Completed runs plot on the Pareto chart (cell area versus setup slack).",
+      "Use the Runs selector to pick which iterations populate the Pareto plot and comparison tables.",
     ],
     samples: [
       { key: "FP_CORE_UTIL", sample: "40,50,60,70" },
       { key: "Combinations", sample: "Grid 3×3 = 9 runs" },
     ],
     pitfalls: [
-      "Each point is a full RTL→GDS run — a 4×4 grid is 16 runs. Start small.",
-      "Sweeps share the active design's config.json as the base; only the swept vars change.",
+      "Each sweep point executes a full RTL-to-GDSII flow run. A 4x4 parameter grid executes 16 complete iterations.",
+      "Sweeps inherit the base configuration from the active design's config.json; only swept parameters change.",
     ],
   },
   layout: {
     title: "Layout tab",
-    goal: "View the run's final layout and open it in your own desktop tools (KLayout / Magic / GDS3D), or in the version-matched container.",
+    goal: "View final layouts in the embedded viewer or launch desktop layout tools (KLayout, Magic, GDS3D).",
     how: [
-      "Pick a run; the 2D view is the KLayout PNG the flow already rendered (pan / zoom). No klayout subprocess needed.",
-      "Open in KLayout / Magic launches your installed tool on the run's GDS; toggle “PDK layer colours” for the techfile view vs the tool's plain default.",
-      "Open in the container runs the matched-version tool from the LibreLane image (forwards your X11 display) — use this when your host tool is too old for the PDK techfile.",
-      "3D opens GDS3D (a desktop app) on the layer stack; install it from Tools if missing.",
+      "Select a run to view the 2D layout rendering generated by the flow.",
+      "Click Open in KLayout or Open in Magic to launch local layout viewers with target PDK techfiles.",
+      "Opening in the container runs the version-matched tool from the LibreLane image with X11 display forwarding, useful when host binaries are out of date.",
+      "3D launches GDS3D to inspect multi-layer physical metal stacks.",
     ],
     pitfalls: [
-      "A blank Magic/KLayout window usually means the PDK techfile didn't load — keep “PDK layer colours” on, or use the container launch.",
-      "Desktop / container tool launches only work when the GUI runs on your own machine with a display.",
+      "A blank viewer window typically indicates the PDK techfile was not located. Keep 'PDK layer colours' enabled or launch via the container.",
+      "External desktop and container tool launches require running the GUI on a host with an active display server.",
     ],
   },
   cells: {
-    title: "Standard-cell library tab",
-    goal: "Browse the PDK's standard cells — their kind, area and pins — and register your own custom cells for a swap.",
+    title: "Cells & macros tab",
+    goal: "Know the cells your design is built from, add memories and pre-built blocks, and control which cells the flow may use.",
     how: [
-      "Pick a PDK + SCL (independent of the Setup tab). The table lists every cell; search and sort by kind/area.",
-      "The Custom cells panel lets you upload cell views (LEF required, plus LIB/GDS/SPICE/Verilog) to swap a stock cell for your own — applied per-run via EXTRA_LEFS/LIBS/… + EXTRA_EXCLUDED_CELLS, never written into config.json.",
-      "Its own “?” button opens a full guide to views, the swap-out list, and caveats.",
+      "Library: every cell of the project's library, grouped by family with its drive strengths (_1, _2, _4…). Search by name, by function (\"flip-flop\", \"xor\") or paste a name from a report. Green drives were used by the last run; struck-out ones the flow won't use.",
+      "Pick a cell to see what it does (formula, gate diagram, truth table or flip-flop behaviour), its real layout from the PDK's GDS, how each drive strength trades area for speed (delay versus load at the typical corner), its pins and timing arcs, and whether this project's flow may use it.",
+      "Macros: add an SRAM the PDK ships, a block hardened in another LanEx project (its finished run is copied in), or files you were given. Each macro is checked: instantiated in the RTL under the right flattened name, its behavioural model kept out of synthesis, a timing model present, power pins hooked to the grid, and a position inside the die.",
+      "Flow rules: the PDK's own exclusion lists, your EXTRA_EXCLUDED_CELLS (with a live preview of what a wildcard catches), the cells LibreLane inserts by itself (fill, taps, ties, clock buffers) and custom cells swapped in for library ones.",
     ],
     pitfalls: [
-      "“Could not locate the SCL's LEF” means the chosen SCL isn't installed for that PDK — pull it from Tools.",
-      "A custom cell needs an on-grid LEF or placement/routing will reject it.",
+      "LibreLane has no automatic macro placer: every macro instance needs a position, or the run stops at the power grid with \"Design has unplaced macros\". Use Arrange for me, then drag on the sketch.",
+      "Most designs with macros need FP_SIZING absolute and a DIE_AREA big enough for the blocks and their halos.",
+      "Custom standard cells must be a whole number of placement sites wide and exactly the row height tall.",
     ],
   },
   manual: {
     title: "Manual / CLI tab",
-    goal: "Run LibreLane or an EDA tool yourself, and copy the exact CLI command equivalent to your GUI run.",
+    goal: "Inspect equivalent command-line invocations or execute approved EDA tool commands directly.",
     how: [
-      "Reveal CLI builds the precise `librelane` command (container or local) for the current design + config + overrides — copy it to reproduce the run in a terminal.",
-      "The console runs an allow-listed command (librelane, openroad, yosys, magic, klayout, netgen, iverilog, verilator, ciel, docker/podman, dot) and streams its output here.",
-      "It is NOT a shell: sudo / pipes / redirects / ; / backticks are rejected, and python is only allowed as `-m librelane`.",
+      "Reveal CLI generates the exact command line for the current design, configuration, and overrides, allowing reproduction in an external terminal.",
+      "The console executes allow-listed tools (librelane, openroad, yosys, magic, klayout, netgen, iverilog, verilator, ciel, docker, podman, dot) and streams outputs live.",
+      "This console is not an interactive shell. Piped commands, redirects, semicolons, backticks, and sudo are blocked; Python execution is restricted to '-m librelane'.",
     ],
     samples: [
       { key: "Allowed", sample: "openroad -version" },
       { key: "Rejected", sample: "sudo … / cmd | cmd / rm …" },
     ],
     pitfalls: [
-      "One command at a time; cancel stops the running process.",
+      "Commands run sequentially; click Stop to cancel an active process.",
     ],
   },
 };
 
-function openHelp(key) {
+// The page guide shown at the top of the help sheet's Learn tab: what this tab
+// is for, how to use it, sample values and pitfalls. Catalog strings are
+// trusted literals from this file.
+export function guideHtml(key) {
   const def = CATALOG[key];
-  const title = def ? def.title : key;
-  // Built on the shared `.dlg-backdrop`/`.dlg` overlay (fixed, centered, blurred
-  // backdrop). The old `.onboard` classes were deleted with the onboarding tour
-  // in round 39, so this dialog had no CSS and rendered as a plain block at the
-  // bottom of <body> \u2014 you had to scroll to see/close it. `.dlg-*` is guaranteed
-  // present (folder browser, presets, etc. use it).
-  const body =
-    (def ? "<p><strong>Goal:</strong> " + def.goal + "</p>" : "") +
-    (def && def.how && def.how.length
-      ? "<h3 style='margin:var(--s-3) 0 var(--s-2)'>How to use</h3><ol style='margin:0;padding-left:1.2em'>" +
-        def.how.map((x) => "<li style='margin-bottom:4px'>" + x + "</li>").join("") + "</ol>"
+  if (!def) return "";
+  const list = (tag, items) => "<" + tag + " class='guide-list'>" + items.map((x) => "<li>" + x + "</li>").join("") + "</" + tag + ">";
+  return "<section class='guide'>" +
+    "<div class='sheet-lane'>This page</div>" +
+    "<h2>" + def.title + "</h2>" +
+    (def.goal ? "<p>" + def.goal + "</p>" : "") +
+    (def.how && def.how.length ? "<h3>How to use it</h3>" + list("ol", def.how) : "") +
+    (def.samples && def.samples.length
+      ? "<h3>Example values</h3><dl class='guide-samples'>" +
+        def.samples.map((x) => "<dt>" + x.key + "</dt><dd><code>" + x.sample + "</code></dd>").join("") + "</dl>"
       : "") +
-    (def && def.samples && def.samples.length
-      ? "<h3 style='margin:var(--s-3) 0 var(--s-2)'>Sample values</h3><pre class='code'>" +
-        def.samples.map((s) => s.key + ": " + s.sample).join("\n") + "</pre>"
-      : "") +
-    (def && def.pitfalls && def.pitfalls.length
-      ? "<h3 style='margin:var(--s-3) 0 var(--s-2)'>Pitfalls</h3><ul style='margin:0;padding-left:1.2em'>" +
-        def.pitfalls.map((x) => "<li style='margin-bottom:4px'>" + x + "</li>").join("") + "</ul>"
-      : "");
-  const back = document.createElement("div");
-  back.className = "dlg-backdrop";
-  back.innerHTML =
-    "<div class='dlg' style='max-width:680px' role='dialog' aria-modal='true'>" +
-    "<div class='dlg-head' style='display:flex;align-items:center;justify-content:space-between;gap:var(--s-3)'>" +
-    "<span>" + title + "</span>" +
-    "<button class='iconbtn dlg-x' aria-label='Close' style='margin:-4px -6px'>\u00d7</button></div>" +
-    "<div class='dlg-body'>" + body + "</div>" +
-    "</div>";
-  function close() {
-    back.remove();
-    document.removeEventListener("keydown", onKey);
-  }
-  function onKey(e) {
-    if (e.key === "Escape") close();
-  }
-  back.addEventListener("click", (e) => {
-    if (e.target === back || e.target.closest(".dlg-x")) close();
-  });
-  document.addEventListener("keydown", onKey);
-  document.body.appendChild(back);
+    (def.pitfalls && def.pitfalls.length ? "<h3>Watch out for</h3>" + list("ul", def.pitfalls) : "") +
+    "</section>";
+}
+
+async function openHelp(key) {
+  const [{ openHelp: openSheet }, learn] = await Promise.all([import("./shell.js"), import("./learn.js")]);
+  const body = openSheet("learn", { render: false });
+  learn.renderGlossary(body, { pageKey: key });
 }
 
 export const help = {
   catalog: CATALOG,
   open: openHelp,
   bind() {
-    // Event delegation — catches both static and dynamically created pills.
+    // Event delegation: any [data-help] affordance opens that page's guide.
     document.addEventListener("click", (e) => {
       const pill = e.target.closest("[data-help]");
       if (pill) {
@@ -261,18 +272,5 @@ export const help = {
         openHelp(pill.dataset.help);
       }
     });
-    // Side-tab help icons (rendered dynamically).
-    setInterval(() => {
-      document.querySelectorAll(".side-tab").forEach((tab) => {
-        if (!tab.querySelector(".help-pill")) {
-          const span = document.createElement("span");
-          span.className = "help-pill";
-          span.dataset.help = tab.dataset.tab;
-          span.textContent = "?";
-          span.title = "What does this tab do?";
-          tab.appendChild(span);
-        }
-      });
-    }, 600);
   },
 };

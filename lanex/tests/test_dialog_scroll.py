@@ -18,6 +18,7 @@ other way. Skips honestly when no Chromium-family browser is available.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -68,6 +69,8 @@ def _browser() -> str | None:
 
 
 def test_long_dialog_body_scrolls_and_close_stays_visible(tmp_path: Path) -> None:
+    if os.environ.get("LANEX_SKIP_BROWSER_LAYOUT") == "1":
+        pytest.skip("real-browser layout probe runs once on the Python 3.12 CI leg")
     browser = _browser()
     if not browser:
         pytest.skip("no Chromium-family browser on this machine — the CSS "

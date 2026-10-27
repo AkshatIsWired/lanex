@@ -35,6 +35,7 @@ image tag, which is already importable).
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -71,16 +72,60 @@ def is_progress_bar(line: str) -> bool:
 # Image reference (matches librelane/__main__.py exactly).
 # ---------------------------------------------------------------------------
 
+def _canonical_image_ref(image: str, digest: str = "") -> str:
+    """Combine image and digest cleanly without duplicate @ or repo prefixes."""
+    image = str(image or "").strip()
+    digest = str(digest or "").strip()
+    if not image and not digest:
+        return ""
+    if not image:
+        return digest
+    if not digest:
+        return image
+    if "@" in image:
+        return image
+    if "@" in digest:
+        digest = digest.split("@", 1)[1]
+    if not digest.startswith("sha256:"):
+        digest = f"sha256:{digest}"
+    return f"{image}@{digest}"
+
+
 def image_ref() -> str:
     """The image LibreLane's own ``--dockerized`` path would use.
 
     Honours ``LIBRELANE_IMAGE_OVERRIDE`` and otherwise pins the tag to the
     installed ``librelane.__version__`` so tool versions always match the host
-    package.
+    package. Setup-installed appliances consume the verified digest from
+    ``runtime.json`` or ``image.lock``.
     """
     override = os.environ.get("LIBRELANE_IMAGE_OVERRIDE")
     if override:
         return override
+    try:
+        from . import platform_env
+
+        home = platform_env.home()
+        rt_path = home / "runtime.json"
+        if rt_path.is_file():
+            data = json.loads(rt_path.read_text(encoding="utf-8"))
+            if data.get("imageRef"):
+                return str(data["imageRef"])
+            img = data.get("image", "")
+            dig = data.get("digest", "")
+            canon = _canonical_image_ref(img, dig)
+            if canon:
+                return canon
+        lock_path = home / "image.lock"
+        if lock_path.is_file():
+            data = json.loads(lock_path.read_text(encoding="utf-8"))
+            img = data.get("image", "")
+            dig = data.get("digest", "")
+            canon = _canonical_image_ref(img, dig)
+            if canon:
+                return canon
+    except Exception:
+        pass
     ver = "latest"
     try:
         import librelane  # type: ignore
@@ -88,7 +133,17 @@ def image_ref() -> str:
         ver = getattr(librelane, "__version__", "") or "latest"
     except Exception:  # pragma: no cover - librelane missing
         ver = "latest"
-    return f"ghcr.io/librelane/librelane:{ver}"
+    ref = f"ghcr.io/librelane/librelane:{ver}"
+    # Installs without runtime.json / image.lock (pip, install.sh) still get the
+    # exact image the release was tested with, not whatever the tag points at.
+    return _canonical_image_ref(ref, _KNOWN_IMAGE_DIGESTS.get(ver, ""))
+
+
+# Multi-arch index digests (amd64 + arm64) of the images LanEx releases are
+# tested against; same value as windows/setup/build-manifest.json "image".
+_KNOWN_IMAGE_DIGESTS = {
+    "3.0.4": "sha256:eab07a50fa9ae481f631d904bd9fbaa99752c587fdbddb7c8cf2ac04208eecd9",
+}
 
 
 def pull_argv(engine: str) -> List[str]:
@@ -117,7 +172,9 @@ def build_dockerized_argv(
     extra_sources: Optional[Sequence[str]] = None,
     extra_extras: Optional[Sequence[str]] = None,
     overwrite: bool = False,
+    initial_state: Optional[str] = None,
     python_exe: Optional[str] = None,
+    entry_module: str = "librelane",
 ) -> List[str]:
     """Build ``python -m librelane [--pdk-root R] --dockerized CONFIG …``.
 
@@ -129,7 +186,8 @@ def build_dockerized_argv(
 
     The container's working directory is the host CWD (the design dir), so we
     pass the config as a path **relative** to the design dir when possible —
-    that is mount-safe on Linux/macOS/Windows alike.
+    that is mount-safe on Linux/macOS/Windows alike. *initial_state* (``-i``,
+    another run's ``state_out.json``) is relativised the same way.
     """
     python_exe = python_exe or sys.executable or "python3"
     design_dir = Path(design_dir)
@@ -140,7 +198,7 @@ def build_dockerized_argv(
         cfg_arg = str(cfg)
 
     # Host-side options — must precede --dockerized.
-    host: List[str] = [python_exe, "-m", "librelane"]
+    host: List[str] = [python_exe, "-m", entry_module]
     if pdk_root:
         host += ["--pdk-root", str(pdk_root)]
     # The GUI streams the container over a pipe (no controlling terminal), so the
@@ -173,6 +231,12 @@ def build_dockerized_argv(
         inner += ["--run-tag", str(tag)]
     if overwrite:
         inner += ["--overwrite"]
+    if initial_state:
+        try:
+            st = str(Path(initial_state).resolve().relative_to(design_dir.resolve()))
+        except Exception:
+            st = str(initial_state)
+        inner += ["-i", st]
     if frm:
         inner += ["-F", str(frm)]
     if to:

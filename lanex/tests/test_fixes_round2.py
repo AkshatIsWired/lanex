@@ -45,6 +45,9 @@ def test_build_lint_command_local_and_container():
     argv = lint.build_lint_command("/d", sources=["src/a.v"], top="a", run_mode="local")
     assert argv[0] == "verilator" and "--lint-only" in argv
     assert "src/a.v" in argv and "--top-module" in argv
+    # A testbench with `timescale next to design files without one is the
+    # normal case, not a warning (TIMESCALEMOD).
+    assert argv[argv.index("--timescale") + 1] == "1ns/1ps"
 
     cargv = lint.build_lint_command("/d", sources=["src/a.v"], run_mode="container",
                                     engine="podman", image="img:1")

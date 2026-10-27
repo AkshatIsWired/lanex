@@ -75,9 +75,20 @@ def available_tools() -> List[Dict[str, Any]]:
     return out
 
 
+# LanEx's own process files, written from each PDK's data (see their headers):
+# GDS3D's upstream set has no gf180mcu file at all and puts sg13g2's Activ on
+# the wrong layer, so these are searched before the ones a GDS3D install brings.
+BUNDLED_GDS3D_DIR = Path(__file__).resolve().parent.parent / "data" / "gds3d"
+
+# A variant with no file of its own (and no family-level file) uses the
+# variant LanEx targets for that family.
+_GDS3D_DEFAULT_VARIANT = {"sky130": "sky130A", "gf180mcu": "gf180mcuD", "ihp-sg13g2": "ihp-sg13g2"}
+
+
 def _gds3d_techfile_dirs() -> List[Path]:
-    """Directories that may hold GDS3D process/tech files (the ``-p`` argument)."""
-    dirs: List[Path] = []
+    """Directories that may hold GDS3D process/tech files (the ``-p`` argument),
+    LanEx's bundled set first."""
+    dirs: List[Path] = [BUNDLED_GDS3D_DIR]
     from . import platform_env
     home = platform_env.home()
     dirs.append(home / "tools" / "GDS3D" / "techfiles")
@@ -99,29 +110,40 @@ def gds3d_process_file(pdk: Optional[str]) -> Optional[str]:
     """Locate a GDS3D process/tech file matching *pdk*.
 
     GDS3D **requires** a process file (``-p``) describing the layer stack — a bare
-    ``gds3d -i x.gds`` opens nothing. GDS3D ships example tech files (sky130.txt,
-    sg13g2.txt, …) in its ``techfiles/`` dir; map the PDK to one. Returns None when
-    none is found so the caller can give honest guidance instead of a dud launch."""
+    ``gds3d -i x.gds`` opens nothing. LanEx bundles one per supported PDK variant
+    (``lanex/data/gds3d``); GDS3D's own ``techfiles/`` dir and anything the user
+    dropped there are searched after it. Most specific match first, each across
+    every directory in that order: the exact PDK name, then the family name,
+    then the variant LanEx targets for that family, then any file whose name
+    holds the family token (shortest stem wins, so sky130.txt beats
+    sky130_s10.txt). So GDS3D's family-level upstream files (sky130.txt,
+    sg13g2.txt) never replace LanEx's per-variant ones. Returns None when the
+    PDK has no file anywhere, so the caller can give honest guidance instead
+    of a dud launch."""
     if not pdk:
         return None
     p = pdk.lower()
+    try:
+        from . import installer
+        family = installer._pdk_family(pdk).lower()
+    except Exception:
+        family = p
     if p.startswith("sky130"):
-        tokens = ["sky130"]
+        token = "sky130"
     elif p.startswith("gf180"):
-        tokens = ["gf180"]
+        token = "gf180"
     elif "sg13g2" in p:
-        tokens = ["sg13g2"]
+        token = "sg13g2"
     else:
-        tokens = [p]
-    for d in _gds3d_techfile_dirs():
-        files = sorted(d.glob("*.txt"))
-        for tok in tokens:
-            cands = [f for f in files if tok in f.stem.lower()]
-            # shortest stem wins → sky130.txt over sky130_s10.txt
-            cands.sort(key=lambda f: len(f.stem))
-            if cands:
-                return str(cands[0])
-    return None
+        token = p
+    files = [f for d in _gds3d_techfile_dirs() for f in sorted(d.glob("*.txt"))]
+    for want in dict.fromkeys((p, family, _GDS3D_DEFAULT_VARIANT.get(family, p).lower())):
+        hit = next((f for f in files if f.stem.lower() == want), None)
+        if hit is not None:
+            return str(hit)
+    cands = [f for f in files if token in f.stem.lower()]
+    cands.sort(key=lambda f: len(f.stem))   # stable: bundled dir first on ties
+    return str(cands[0]) if cands else None
 
 
 def find_klayout_lyp(libs_tech: Path, pdk: str) -> Optional[Path]:
@@ -177,6 +199,43 @@ def find_magicrc(libs_tech: Path, pdk: str) -> Optional[Path]:
         if hits:
             return hits[0]
     return None
+
+
+def magic_scaled_rcfile(rcfile: Optional[str], scale: float, dest_dir: Path) -> Optional[str]:
+    """A Magic startup file that enlarges Magic's Tk UI by *scale*, then loads
+    *rcfile* (the PDK magicrc) — or, without one, the ``.magicrc`` files Magic
+    would read by itself, since ``-rcfile`` replaces those.
+
+    Tk has no scale environment variable, so the scaling has to run inside
+    Magic. Written into *dest_dir* under a content-hash name: concurrent
+    launches with the same PDK share one file and never see a half-written
+    one. None (launch unchanged) when no scaling is needed or the write fails.
+    """
+    from . import platform_env
+    snippet = platform_env.tk_scale_tcl(scale)
+    if not snippet:
+        return None
+    if rcfile:
+        load = f"source {{{rcfile}}}\n"
+    else:
+        load = (
+            "set _lx_home [expr {[info exists ::env(HOME)] ? $::env(HOME) : [pwd]}]\n"
+            "foreach _lx_rc [lsort -unique [list [file join $_lx_home .magicrc] [file join [pwd] .magicrc]]] {\n"
+            "  if {[file readable $_lx_rc]} { source $_lx_rc }\n"
+            "}\n"
+        )
+    text = snippet + load
+    try:
+        import hashlib
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f".lanex-magic-{hashlib.sha1(text.encode()).hexdigest()[:12]}.tcl"
+        if not dest.is_file():
+            tmp = dest.with_name(dest.name + f".{os.getpid()}.tmp")
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, dest)
+        return str(dest)
+    except OSError:
+        return None
 
 
 def _latest_step_dir(run_dir: Path, pattern: str) -> Optional[Path]:
@@ -289,6 +348,9 @@ def _build_argv(tool: str, binary: str, f: str, tech: Dict[str, Any], use_tech: 
     e.g. KLayout's plain colours vs the PDK layer-properties). *binary* is the
     resolved executable (e.g. ``gds3d`` may actually be ``GDS3D``)."""
     if tool == "magic":
+        # The display-scaling startup file already sources the PDK magicrc.
+        if tech.get("magic_startup"):
+            return [binary, "-rcfile", tech["magic_startup"], f]
         if use_tech and tech.get("magicrc"):
             return [binary, "-rcfile", tech["magicrc"], f]
         return [binary, f]
@@ -394,9 +456,9 @@ def open_in_tool(tool: str, file_path: str | Path, *,
         if not proc:
             return {"ok": False, "need": "gds3d-techfile",
                     "error": "GDS3D needs a process/tech file (the layer stack) to render"
-                             + (f" {pdk}" if pdk else "") + ", and none was found. GDS3D ships "
-                             "example tech files in its techfiles/ folder — install GDS3D from "
-                             "Tools (it builds those in), or drop a matching <pdk>.txt into "
+                             + (f" {pdk}" if pdk else "") + ", and none was found. LanEx "
+                             "brings its own for sky130, gf180mcu and ihp-sg13g2; for another "
+                             "PDK, drop a matching <pdk>.txt into "
                              "~/.lanex/tools/GDS3D/techfiles/, then retry."}
         tech["gds3d_process"] = proc
         # GDS3D segfaults the instant its window opens if the legacy X11
@@ -434,6 +496,18 @@ def open_in_tool(tool: str, file_path: str | Path, *,
                     tech["marker_dbs"] = dbs
         except Exception:
             pass
+    # Magic is Tk: no environment variable scales it, so on a HiDPI display it
+    # starts through a small script that enlarges its fonts first.
+    if tool == "magic":
+        try:
+            from . import platform_env
+            startup = magic_scaled_rcfile(
+                tech.get("magicrc") if use_tech else None,
+                platform_env.viewer_scale(), platform_env.home() / "viewer-scale")
+            if startup:
+                tech["magic_startup"] = startup
+        except Exception:
+            pass
     argv = _build_argv(tool, binary, str(f), tech, use_tech)
     # Magic's magicrc resolves $PDK_ROOT/$PDK/$PDKPATH; export them so it doesn't
     # error out with the 'minimum' tech and close immediately.
@@ -448,7 +522,8 @@ def open_in_tool(tool: str, file_path: str | Path, *,
     # AND pin GTK/Qt to the X11 transport — GTK3 (GTKWave) otherwise picks
     # WSLg's Wayland path, whose copy-mode degradation shows a blank
     # taskbar-only window titled [WARN: COPY MODE]. No-op off WSL; opt out with
-    # LIBRELANE_GUI_WSL_HW_GL=1 (GL) / LANEX_WAYLAND=1 (transport).
+    # LIBRELANE_GUI_WSL_HW_GL=1 (GL) / LANEX_WAYLAND=1 (transport). Also sizes
+    # Qt/GTK viewers to the Windows display scale (LANEX_VIEWER_SCALE overrides).
     try:
         from . import platform_env
         launch_env = platform_env.wsl_gui_env(launch_env)
@@ -463,7 +538,9 @@ def open_in_tool(tool: str, file_path: str | Path, *,
         }
         if sys.platform != "win32":
             kwargs["start_new_session"] = True  # detach from the server process
-        subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool only
+        proc = subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool only
+        from . import activity
+        activity.track_viewer(proc, spec["label"])
         out: Dict[str, Any] = {
             "ok": True, "tool": tool, "label": spec["label"], "file": str(f),
             "used_tech": bool((use_tech and (tech.get("magicrc") or tech.get("klayout_lyp")))

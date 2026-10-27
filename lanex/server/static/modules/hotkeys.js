@@ -1,82 +1,76 @@
 // hotkeys.js — global keyboard shortcuts + the single source of truth for the
-// "?" shortcut dialog (so the dialog and the handlers can never drift, F4/D8c).
+// Shortcuts tab of the help sheet (so the list and the handlers can never drift).
+import { toggleDensity } from "./density.js";
+import { go, railKeys } from "./nav.js";
+import { state } from "./state.js";
 
-// Number keys → tab. One declarative map drives BOTH the handler and the dialog
-// text, so adding a tab key is a one-line change that stays documented.
-const TAB_KEYS = {
-  "1": ["setup", "Setup"],
-  "2": ["pipeline", "Pipeline"],
-  "3": ["runs", "Runs"],
-  "4": ["preview", "Preview"],
-  "5": ["tools", "Tools"],
-  "6": ["analytics", "Analytics"],
-  "7": ["verify", "Verify"],
-  "8": ["dse", "DSE"],
-  "9": ["layout", "Layout"],
-  "0": ["cells", "Cells"],
-};
+// Number keys follow the rail, top to bottom (1–9, then 0), read from the rail
+// itself so they can't drift from it; each rail tab's tooltip shows its key.
 
-// Rendered verbatim into the "?" dialog. Kept next to the handlers below.
+// Rendered verbatim into the help sheet's Shortcuts tab. Kept next to the handlers.
 export const SHORTCUTS = [
-  { keys: "⌘/Ctrl+K", desc: "command palette (everything)" },
-  { keys: "1..6", desc: "Setup / Pipeline / Runs / Preview / Tools / Analytics" },
-  { keys: "7..0", desc: "Verify / DSE / Layout / Cells" },
-  { keys: "r / s", desc: "start a run / stop a run" },
-  { keys: "/", desc: "focus the log filter" },
-  { keys: "t / d", desc: "toggle theme / toggle compact density" },
-  { keys: "? / Esc", desc: "this help / close" },
+  { keys: "Ctrl K", desc: "Search every command and setting" },
+  { keys: "1 … 9, 0", desc: "The pages, top to bottom in the left rail" },
+  { keys: "Alt ← / Alt →", desc: "Back and forward between pages (the mouse's side buttons too)" },
+  { keys: "r", desc: "Start a run" },
+  { keys: "s", desc: "Stop the running flow" },
+  { keys: "/", desc: "Filter the step log on Flow" },
+  { keys: "t", desc: "Switch light or dark" },
+  { keys: "d", desc: "Compact spacing on or off" },
+  { keys: "?", desc: "Open this help" },
+  { keys: "Esc", desc: "Close a menu, panel or dialog" },
+];
+
+// The RTL IDE's own keys (editor and waveform). Listed in the help sheet; the
+// editor and the waveform viewer handle them, so they never reach the app.
+export const IDE_SHORTCUTS = [
+  { keys: "Ctrl S", desc: "Save (and check the syntax, with Check on save)" },
+  { keys: "Ctrl F / Ctrl H", desc: "Find, find and replace" },
+  { keys: "Ctrl /", desc: "Comment or uncomment the line" },
+  { keys: "Alt ↑ / Alt ↓", desc: "Move the line up or down" },
+  { keys: "Ctrl D", desc: "Add the next match to the selection" },
+  { keys: "Ctrl Space", desc: "Suggest keywords, blocks and names" },
+  { keys: "Ctrl Z / Ctrl Y", desc: "Undo, redo (each file keeps its own history)" },
+  { keys: "← / →", desc: "Waveform: previous or next change of the selected signals" },
+  { keys: "+ / − / F", desc: "Waveform: zoom in, out, show the whole run" },
+  { keys: "M", desc: "Waveform: put the marker at the cursor" },
+  { keys: "Delete", desc: "Waveform: remove the selected signals" },
+  { keys: "Esc", desc: "Waveform: let the selected signals go, then drop the marker" },
 ];
 
 export function setupHotkeys() {
-  renderShortcutList();
   window.addEventListener("keydown", (e) => {
     const tag = (e.target && e.target.tagName) || "";
     if (/input|textarea|select/i.test(tag)) {
       if (e.key === "Escape") e.target.blur();
       return;
     }
+    // Typing in the code editor (a contenteditable, not a textarea) and keys the
+    // waveform viewer uses (f, m, arrows, digits) are never app shortcuts: a
+    // stray "r" there must not start a run.
+    if (e.defaultPrevented || (e.target && (e.target.isContentEditable ||
+        (e.target.closest && e.target.closest(".cm-editor, .wv"))))) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // In the RTL IDE (its explorer, tabs, panels) a press meant for the code
+    // easily lands on a button instead; there r and s must not start or stop
+    // the RTL-to-GDS run.
+    if ((e.key === "r" || e.key === "s") && e.target && e.target.closest && e.target.closest(".ide-embed")) return;
     if (e.key === "?") {
-      const d = document.getElementById("help-dialog");
-      if (d && d.showModal) d.showModal();
+      import("./shell.js").then((m) => m.openHelp("keys"));
       e.preventDefault();
       return;
     }
-    if (e.key === "Escape") {
-      const d = document.getElementById("help-dialog");
-      if (d && d.close) d.close();
-    }
-    if (e.key === "t") toggleThemeDispatch();
-    if (e.key === "d") document.getElementById("density-btn")?.click();
-    if (Object.prototype.hasOwnProperty.call(TAB_KEYS, e.key)) dispatchJump(TAB_KEYS[e.key][0]);
-    if (e.key === "r") document.getElementById("btn-run")?.click();
+    if (e.key === "t") document.getElementById("theme-btn")?.click();
+    if (e.key === "d") toggleDensity();
+    const page = railKeys().find(([k]) => k === e.key);
+    if (page) go(page[1], {}, { link: false });
+    // The top bar's Run: it starts the flow without leaving this page.
+    if (e.key === "r" && !(state.status && state.status.running)) document.getElementById("btn-run-global")?.click();
     if (e.key === "s") document.getElementById("btn-cancel")?.click();
     if (e.key === "/") {
-      const s = document.getElementById("log-search");
-      if (s) {
-        document.querySelector('.side-pane-tab[data-itab="logs"]')?.click();
-        s.focus();
-        e.preventDefault();
-      }
+      // Flow: filter the log of the step on screen.
+      const s = document.querySelector("#sec-pipeline.section-active .fl-insp .lv-q input");
+      if (s) { s.focus(); e.preventDefault(); }
     }
   });
-}
-
-function renderShortcutList() {
-  const ul = document.getElementById("help-shortcut-list");
-  if (!ul) return;
-  // The key strings are fixed, HTML-safe literals defined above.
-  ul.innerHTML = SHORTCUTS.map((s) => "<li><kbd>" + s.keys + "</kbd> — " + s.desc + "</li>").join("");
-}
-
-function dispatchJump(name) {
-  document.querySelector('.side-tab[data-tab="' + name + '"]')?.click();
-}
-
-function toggleThemeDispatch() {
-  const isDark = document.body.classList.contains("theme-dark");
-  document.body.classList.toggle("theme-dark", !isDark);
-  document.body.classList.toggle("theme-light", isDark);
-  try {
-    localStorage.setItem("ll.theme", isDark ? "light" : "dark");
-  } catch (_) {}
 }

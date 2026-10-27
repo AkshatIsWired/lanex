@@ -1,259 +1,420 @@
-// editor.js — a dependency-free code editor with Verilog/SystemVerilog syntax
-// highlighting, a line-number gutter, lint markers, and find & replace.
+// editor.js — the RTL IDE's code editor: CodeMirror 6 (vendor/codemirror.js,
+// bundled so it works offline) set up for Verilog and SystemVerilog the way
+// VS Code and the FPGA tools behave: line numbers, folding, bracket matching
+// and auto-closing, auto-indent, real undo history per file, find and replace
+// with case/regex/word options, multiple cursors, Ctrl+/ comments, Alt+↑/↓
+// to move lines, Verilator's diagnostics as squiggles with the message on
+// hover, and completion of keywords, system tasks, the file's own names and
+// the usual blocks (module, always_ff, case, a testbench clock …).
 //
-// Technique (no npm, no CodeMirror): a transparent <textarea> for editing sits
-// on top of a <pre> that shows the syntax-highlighted text. Both share the exact
-// same font/padding/scroll, so the colored layer tracks the caret perfectly.
-// Keeps the same load()/getValue()/setMarkers()/gotoLine() API the rest of the
-// IDE already calls, so this is a drop-in upgrade.
+// The rest of the IDE talks to it through a small API: open/load, getValue,
+// setMarkers, gotoLine, openFind, forget; callbacks onChange, onCursor, onSave.
+import {
+  EditorState, Compartment, EditorSelection, Prec,
+  EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection,
+  dropCursor, rectangularSelection, crosshairCursor, highlightSpecialChars, hoverTooltip,
+  history, defaultKeymap, historyKeymap, indentWithTab, toggleComment,
+  foldGutter, foldKeymap, indentOnInput, bracketMatching, syntaxHighlighting, HighlightStyle,
+  StreamLanguage, indentUnit, foldService, tags,
+  autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap, snippetCompletion, completeAnyWord,
+  searchKeymap, highlightSelectionMatches, openSearchPanel, search,
+  setDiagnostics, lintGutter, lintKeymap,
+  verilog, tcl, yaml, json,
+} from "../../vendor/codemirror.js";
 
-// Verilog + SystemVerilog keyword set (highlight only — not a parser).
-const KEYWORDS = new Set((
-  "module endmodule input output inout wire reg logic integer genvar parameter " +
-  "localparam assign always always_comb always_ff always_latch initial begin end " +
-  "if else case casez casex endcase default for while repeat forever generate " +
-  "endgenerate function endfunction task endtask posedge negedge or and not nand " +
-  "nor xor xnor buf signed unsigned typedef struct union enum packed bit byte " +
-  "shortint int longint real time string void return break continue " +
-  "package endpackage import export interface endinterface modport class endclass " +
-  "virtual extends pure local protected static automatic const ref " +
-  "wait fork join join_any join_none disable assert assume cover property " +
-  "endproperty sequence endsequence clocking endclocking default_nettype " +
-  "specify endspecify defparam supply0 supply1 tri triand trior wand wor"
-).split(/\s+/));
+// ------------------------------------------------------------------ languages
 
-const COMPILER = new Set("define ifdef ifndef endif else elsif include timescale default_nettype undef".split(" "));
+const VERILOG = StreamLanguage.define(verilog);
+const TCL = StreamLanguage.define(tcl);
+const YAML = StreamLanguage.define(yaml);
 
-function esc(s) {
-  return s.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
+export function languageOf(relPath) {
+  const ext = (String(relPath || "").match(/\.[^./\\]+$/) || [""])[0].toLowerCase();
+  if ([".v", ".sv", ".vh", ".svh", ".verilog", ".vlt"].includes(ext)) return "verilog";
+  if ([".sdc", ".tcl", ".xdc"].includes(ext)) return "tcl";
+  if ([".yaml", ".yml"].includes(ext)) return "yaml";
+  if (ext === ".json") return "json";
+  return "text";
 }
 
-// One tokenizing regex pass: comments, strings, (compiler) directives, numbers,
-// identifiers/keywords. Everything else passes through escaped (operators etc.).
-const TOKEN_RX = new RegExp([
-  "(\\/\\/[^\\n]*)",                         // 1 line comment
-  "(\\/\\*[\\s\\S]*?\\*\\/)",                // 2 block comment
-  "(\"(?:\\\\.|[^\"\\\\])*\")",             // 3 string
-  "(`[A-Za-z_][A-Za-z0-9_]*)",              // 4 compiler directive `define etc.
-  "(\\b\\d+'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_]+)", // 5 sized literal 8'hFF
-  "(\\b\\d[\\d_.]*\\b)",                     // 6 number
-  "([A-Za-z_][A-Za-z0-9_$]*)",              // 7 identifier / keyword
-].join("|"), "g");
+// Colours come from the app's syntax tokens, so both themes follow.
+const HIGHLIGHT = HighlightStyle.define([
+  { tag: tags.keyword, color: "var(--syntax-kw)" },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "var(--syntax-com)", fontStyle: "italic" },
+  { tag: [tags.string, tags.special(tags.string)], color: "var(--syntax-str)" },
+  { tag: [tags.number, tags.bool, tags.null], color: "var(--syntax-num)" },
+  { tag: tags.definition(tags.variableName), color: "var(--syntax-pp)" },      // `define, #delay
+  { tag: tags.meta, color: "var(--syntax-sys)" },                               // $display …
+  { tag: [tags.propertyName, tags.attributeName], color: "var(--syntax-num)" }, // JSON / YAML keys
+  { tag: tags.bracket, color: "var(--text-muted)" },
+  { tag: tags.invalid, color: "var(--fail)" },
+]);
 
-function highlight(code) {
-  let out = "";
-  let last = 0;
-  let m;
-  TOKEN_RX.lastIndex = 0;
-  while ((m = TOKEN_RX.exec(code)) !== null) {
-    if (m.index > last) out += esc(code.slice(last, m.index));
-    const [full, lineC, blockC, str, dir, sized, num, ident] = m;
-    if (lineC || blockC) out += "<span class='tk-com'>" + esc(full) + "</span>";
-    else if (str) out += "<span class='tk-str'>" + esc(full) + "</span>";
-    else if (dir) out += "<span class='tk-pp'>" + esc(full) + "</span>";
-    else if (sized || num) out += "<span class='tk-num'>" + esc(full) + "</span>";
-    else if (ident) {
-      const cls = KEYWORDS.has(ident) ? "tk-kw" : null;
-      out += cls ? "<span class='" + cls + "'>" + esc(ident) + "</span>" : esc(ident);
-    } else out += esc(full);
-    last = m.index + full.length;
+// ------------------------------------------------------------------ folding
+
+// Block keywords and what closes them. The Verilog mode has no syntax tree,
+// so the folds come from matching these words, skipping comments and strings.
+const CLOSERS = {
+  begin: ["end"], module: ["endmodule"], macromodule: ["endmodule"], case: ["endcase"], casez: ["endcase"],
+  casex: ["endcase"], randcase: ["endcase"], function: ["endfunction"], task: ["endtask"],
+  generate: ["endgenerate"], fork: ["join", "join_any", "join_none"], interface: ["endinterface"],
+  package: ["endpackage"], class: ["endclass"], specify: ["endspecify"], property: ["endproperty"],
+  sequence: ["endsequence"], clocking: ["endclocking"], covergroup: ["endgroup"],
+};
+const CLOSE_OF = {};
+for (const [open, closes] of Object.entries(CLOSERS)) for (const c of closes) (CLOSE_OF[c] = CLOSE_OF[c] || []).push(open);
+const WORD_RX = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\\n])*"|`?[A-Za-z_][\w$]*/g;
+
+const _folds = new WeakMap();
+// Line number -> position of the line holding its block's closing keyword.
+function blockPairs(doc) {
+  let map = _folds.get(doc);
+  if (map) return map;
+  map = new Map();
+  const text = doc.toString();
+  const stack = [];
+  let prev = "", m;
+  WORD_RX.lastIndex = 0;
+  while ((m = WORD_RX.exec(text)) !== null) {
+    const w = m[0];
+    if (w[0] === "/" || w[0] === '"' || w[0] === "`") { continue; }
+    // "wait fork" / "disable fork" and prototypes ("extern function") close nothing.
+    if (CLOSERS[w] && !(w === "fork" && (prev === "wait" || prev === "disable")) &&
+        !((w === "function" || w === "task") && (prev === "extern" || prev === "import" || prev === "export" || prev === "pure"))) {
+      stack.push({ w, pos: m.index });
+    } else if (CLOSE_OF[w]) {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (CLOSE_OF[w].includes(stack[i].w)) {
+          const open = stack[i];
+          stack.length = i;
+          const ol = doc.lineAt(open.pos).number, cl = doc.lineAt(m.index).number;
+          // The outermost block wins when one line opens several.
+          if (cl > ol + 1 && !(map.has(ol) && map.get(ol) > m.index)) map.set(ol, m.index);
+          break;
+        }
+      }
+    }
+    prev = w;
   }
-  if (last < code.length) out += esc(code.slice(last));
-  // Trailing newline keeps the <pre> height in step with the textarea.
-  return out + "\n";
+  _folds.set(doc, map);
+  return map;
+}
+
+const VERILOG_FOLDING = foldService.of((state, lineStart) => {
+  const line = state.doc.lineAt(lineStart);
+  const close = blockPairs(state.doc).get(line.number);
+  if (close === undefined) return null;
+  const closeLine = state.doc.lineAt(close);
+  return { from: line.to, to: closeLine.from - 1 };
+});
+
+// ------------------------------------------------------------------ completion
+
+const KW = (
+  "module endmodule input output inout wire reg logic integer genvar parameter localparam assign " +
+  "always always_comb always_ff always_latch initial begin end if else case casez casex endcase " +
+  "default for while repeat forever generate endgenerate function endfunction task endtask posedge " +
+  "negedge or signed unsigned typedef struct union enum packed bit byte int shortint longint real " +
+  "string void return break continue package endpackage import interface endinterface modport " +
+  "automatic const unique unique0 priority assert assume cover property endproperty sequence " +
+  "endsequence default_nettype timescale define include ifdef ifndef endif elsif"
+).split(" ");
+const SYS = (
+  "$display $write $strobe $monitor $finish $stop $time $realtime $stime $dumpfile $dumpvars $dumpoff " +
+  "$dumpon $random $urandom $urandom_range $readmemh $readmemb $writememh $clog2 $signed $unsigned $bits " +
+  "$countones $onehot $onehot0 $isunknown $error $fatal $warning $info $fopen $fclose $fwrite $fdisplay " +
+  "$sformatf $rose $fell $stable $past $value$plusargs $test$plusargs"
+).split(" ");
+
+// "\t" in a snippet is one indent unit (CodeMirror expands it per file).
+const SNIPPETS = [
+  ["module", "module ${name} (\n\tinput  wire clk,\n\tinput  wire rst,\n\t${}\n);\n\nendmodule", "module … endmodule"],
+  ["always @(posedge clk)", "always @(posedge ${clk}) begin\n\tif (${rst}) begin\n\t\t${}\n\tend else begin\n\t\t\n\tend\nend", "clocked block with reset"],
+  ["always @(*)", "always @(*) begin\n\t${}\nend", "combinational block"],
+  ["always_ff", "always_ff @(posedge ${clk}) begin\n\tif (${rst}) begin\n\t\t${}\n\tend else begin\n\t\t\n\tend\nend", "SystemVerilog clocked block"],
+  ["always_comb", "always_comb begin\n\t${}\nend", "SystemVerilog combinational block"],
+  ["case", "case (${sel})\n\t${value}: ${};\n\tdefault: ;\nendcase", "case … endcase"],
+  ["if", "if (${cond}) begin\n\t${}\nend", "if … end"],
+  ["ifelse", "if (${cond}) begin\n\t${}\nend else begin\n\t\nend", "if … else … end"],
+  ["for", "for (${i} = 0; ${i} < ${N}; ${i} = ${i} + 1) begin\n\t${}\nend", "for loop"],
+  ["generate for", "genvar ${g};\ngenerate\n\tfor (${g} = 0; ${g} < ${N}; ${g} = ${g} + 1) begin : ${gen_block}\n\t\t${}\n\tend\nendgenerate", "generate loop"],
+  ["initial", "initial begin\n\t${}\nend", "initial block"],
+  ["clock", "always #${5} ${clk} = ~${clk};", "testbench clock (period = 2 × delay)"],
+  ["dumpvars", "initial begin\n\t$dumpfile(\"dump.vcd\");\n\t$dumpvars(0, ${tb});\nend", "write a waveform"],
+  ["function", "function ${[7:0]} ${name}(input ${[7:0]} ${a});\n\t${name} = ${};\nendfunction", "function … endfunction"],
+  ["task", "task ${name};\n\tbegin\n\t\t${}\n\tend\nendtask", "task … endtask"],
+  ["localparam", "localparam ${NAME} = ${value};", "constant"],
+  ["assign", "assign ${lhs} = ${rhs};", "continuous assignment"],
+];
+
+const VERILOG_COMPLETIONS = [
+  ...SNIPPETS.map(([label, tpl, detail]) => snippetCompletion(tpl, { label, detail, type: "text", boost: 2 })),
+  ...KW.map((k) => ({ label: k, type: "keyword" })),
+  ...SYS.map((k) => ({ label: k, type: "function" })),
+];
+
+// Words already in the file, minus the keywords the list above has.
+const KW_SET = new Set(KW.concat(SYS));
+async function fileWords(context) {
+  const r = await completeAnyWord(context);
+  if (r && r.options) r.options = r.options.filter((o) => !KW_SET.has(o.label));
+  return r;
+}
+
+function verilogSource(context) {
+  const word = context.matchBefore(/[$`]?[\w$]*/);
+  if (!word || (word.from === word.to && !context.explicit)) return null;
+  // Not inside a comment or a string.
+  const line = context.state.doc.lineAt(context.pos);
+  const before = line.text.slice(0, context.pos - line.from);
+  if (/\/\//.test(before) || (before.split('"').length % 2 === 0)) return null;
+  return { from: word.from, options: VERILOG_COMPLETIONS, validFor: /^[$`]?[\w$]*$/ };
+}
+
+// ------------------------------------------------------------------ theme
+
+const THEME = EditorView.theme({
+  "&": { height: "100%", fontSize: "13px", color: "var(--text)", backgroundColor: "var(--bg)" },
+  "&.cm-focused": { outline: "none" },
+  ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.55", fontVariantLigatures: "none" },
+  ".cm-content": { padding: "8px 0", caretColor: "var(--text-strong)" },
+  ".cm-line": { padding: "0 12px 0 10px" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text-strong)", borderLeftWidth: "2px" },
+  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
+    { backgroundColor: "var(--editor-sel)" },
+  ".cm-activeLine": { backgroundColor: "var(--editor-line)" },
+  ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--text-disabled)", border: "none", borderRight: "1px solid var(--border)" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px 0 12px", minWidth: "32px" },
+  ".cm-activeLineGutter": { backgroundColor: "var(--editor-line)", color: "var(--text-strong)" },
+  ".cm-foldGutter .cm-gutterElement": { width: "16px", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", cursor: "pointer" },
+  ".cm-foldPlaceholder": { backgroundColor: "var(--surface-3)", border: "1px solid var(--border-strong)", color: "var(--text-muted)", padding: "0 6px", borderRadius: "3px" },
+  ".cm-matchingBracket": { backgroundColor: "var(--editor-match)", outline: "1px solid var(--border-strong)", color: "inherit" },
+  "&.cm-focused .cm-matchingBracket": { backgroundColor: "var(--editor-match)" },
+  ".cm-nonmatchingBracket": { color: "var(--fail)" },
+  ".cm-selectionMatch": { backgroundColor: "var(--editor-match)" },
+  ".cm-searchMatch": { backgroundColor: "var(--warn-soft)", outline: "1px solid var(--warn)" },
+  ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "var(--accent-glow)", outline: "1px solid var(--met1)" },
+  ".cm-panels": { backgroundColor: "var(--surface)", color: "var(--text)" },
+  ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
+  ".cm-panels.cm-panels-bottom": { borderTop: "1px solid var(--border)" },
+  ".cm-search": { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", padding: "8px 10px", fontSize: "13px" },
+  ".cm-search br": { flexBasis: "100%", height: 0, content: "''" },
+  ".cm-search label": { display: "inline-flex", alignItems: "center", gap: "4px", color: "var(--text-muted)", fontSize: "12.5px" },
+  ".cm-search .cm-textfield": { height: "28px", padding: "3px 8px", fontSize: "13px", fontFamily: "var(--mono)", color: "var(--text)",
+    backgroundColor: "var(--bg)", border: "1px solid var(--border)", borderRadius: "4px", minWidth: "200px" },
+  ".cm-search .cm-textfield:focus": { outline: "none", borderColor: "var(--accent)" },
+  ".cm-search .cm-button": { height: "28px", padding: "0 10px", fontSize: "12.5px", color: "var(--text)", backgroundImage: "none",
+    backgroundColor: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "4px", textTransform: "none" },
+  ".cm-search .cm-button:hover": { borderColor: "var(--border-strong)", color: "var(--text-strong)" },
+  ".cm-search button[name=close]": { position: "static", marginLeft: "auto", fontSize: "18px", padding: "0 8px", color: "var(--text-muted)", background: "none", border: "0" },
+  ".cm-tooltip": { backgroundColor: "var(--surface-2)", color: "var(--text)", border: "1px solid var(--border-strong)", borderRadius: "4px", boxShadow: "var(--sh-2)" },
+  ".cm-tooltip-autocomplete > ul": { fontFamily: "var(--mono)", fontSize: "12.5px", maxHeight: "16em" },
+  ".cm-tooltip-autocomplete > ul > li": { padding: "2px 10px 2px 6px", lineHeight: "1.6" },
+  ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--accent-soft)", color: "var(--text-strong)" },
+  ".cm-completionDetail": { marginLeft: "12px", fontStyle: "normal", fontFamily: "var(--sans)", color: "var(--text-muted)" },
+  ".cm-completionMatchedText": { textDecoration: "none", color: "var(--met1)" },
+  ".cm-completionIcon": { opacity: "0.7", width: "1.2em" },
+  ".cm-tooltip-lint": { padding: "2px 0" },
+  ".cm-diagnostic": { padding: "4px 10px", fontFamily: "var(--mono)", fontSize: "12.5px", whiteSpace: "pre-wrap", maxWidth: "640px" },
+  ".cm-diagnostic-error": { borderLeft: "3px solid var(--fail)" },
+  ".cm-diagnostic-warning": { borderLeft: "3px solid var(--warn)" },
+  ".cm-lintRange-error": { backgroundImage: "none", textDecoration: "underline wavy var(--fail)", textDecorationSkipInk: "none", textUnderlineOffset: "3px" },
+  ".cm-lintRange-warning": { backgroundImage: "none", textDecoration: "underline wavy var(--warn)", textDecorationSkipInk: "none", textUnderlineOffset: "3px" },
+  ".cm-lint-marker": { width: "0.8em", height: "0.8em" },
+  ".cm-gutter-lint": { width: "1.1em" },
+  ".cm-gutter-lint .cm-gutterElement": { padding: "0 0 0 4px" },
+  ".cm-flash-line": { backgroundColor: "var(--accent-soft)", transition: "background-color 1.2s ease" },
+});
+
+const FOLD_OPEN = () => {
+  const s = document.createElement("span");
+  s.innerHTML = "<svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>";
+  return s;
+};
+const FOLD_SHUT = () => {
+  const s = document.createElement("span");
+  s.innerHTML = "<svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M9 6l6 6-6 6'/></svg>";
+  return s;
+};
+
+// The indent a file already uses (2 or 4 spaces, or tabs), so new lines match.
+function detectIndent(text) {
+  const lines = String(text || "").split("\n").slice(0, 400);
+  if (lines.filter((l) => /^\t+\S/.test(l)).length > lines.filter((l) => /^ +\S/.test(l)).length) return "\t";
+  const counts = { 2: 0, 4: 0 };
+  let prev = 0;
+  for (const l of lines) {
+    const m = l.match(/^( *)\S/);
+    if (!m) continue;
+    const d = Math.abs(m[1].length - prev);
+    if (d === 2 || d === 4) counts[d]++;
+    prev = m[1].length;
+  }
+  return counts[2] > counts[4] ? "  " : "    ";
 }
 
 export class Editor {
-  constructor(host) {
+  constructor(host, { onChange, onCursor, onSave } = {}) {
     this.host = host;
     this.relPath = null;
-    this.markers = [];
-    host.classList.add("editor", "hl-editor");
-    host.innerHTML =
-      "<div class='ed-find' hidden>" +
-      "  <input class='ed-find-q' type='text' placeholder='Find' />" +
-      "  <input class='ed-find-r' type='text' placeholder='Replace' />" +
-      "  <button class='btn btn-ghost ed-find-next' title='Find next (Enter)'>Next</button>" +
-      "  <button class='btn btn-ghost ed-find-rep'>Replace</button>" +
-      "  <button class='btn btn-ghost ed-find-all'>All</button>" +
-      "  <span class='ed-find-count muted'></span>" +
-      "  <button class='btn btn-ghost ed-find-x' title='Close (Esc)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button>" +
-      "</div>" +
-      "<div class='hl-wrap'>" +
-      "  <div class='ed-gutter' aria-hidden='true'></div>" +
-      "  <pre class='hl-pre' aria-hidden='true'><code class='hl-code'></code></pre>" +
-      "  <textarea class='ed-area' spellcheck='false' wrap='off'></textarea>" +
-      "</div>";
-    this.findBar = host.querySelector(".ed-find");
-    this.gutter = host.querySelector(".ed-gutter");
-    this.pre = host.querySelector(".hl-code");
-    this.area = host.querySelector(".ed-area");
-
-    this.area.addEventListener("input", () => { this._repaint(); this._updateStatus(); });
-    this.area.addEventListener("scroll", () => this._syncScroll());
-    this.area.addEventListener("keyup", () => this._updateStatus());
-    this.area.addEventListener("click", () => this._updateStatus());
-    this.area.addEventListener("select", () => this._updateStatus());
-    this.area.addEventListener("keydown", (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") { e.preventDefault(); this.openFind(); }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "h") { e.preventDefault(); this.openFind(true); }
-      if (e.key === "Tab") {                       // insert two spaces, don't tab out
-        e.preventDefault();
-        const s = this.area.selectionStart, en = this.area.selectionEnd;
-        this.area.setRangeText("  ", s, en, "end");
-        this._repaint();
-      }
-    });
-    this._wireFind();
+    this.onChange = onChange || (() => {});
+    this.onCursor = onCursor || (() => {});
+    this.onSave = onSave || (() => {});
+    this.states = new Map();       // relPath -> { state, scroll }
+    this.lang = new Compartment();
+    this.tabSize = new Compartment();
+    this.readOnly = new Compartment();
+    host.classList.add("editor", "cm-host");
+    this.view = new EditorView({ parent: host, state: this._state("", null) });
   }
 
-  load(relPath, text) {
+  _extensions(relPath, text) {
+    const kind = languageOf(relPath);
+    const langExt = kind === "verilog" ? [VERILOG, VERILOG_FOLDING, this._valueHover(), autocompletion({ override: [verilogSource, fileWords], activateOnTyping: true })]
+      : kind === "tcl" ? [TCL, autocompletion({ override: [completeAnyWord] })]
+      : kind === "yaml" ? [YAML, autocompletion({ override: [completeAnyWord] })]
+      : kind === "json" ? [json(), autocompletion({ override: [completeAnyWord] })]
+      : [autocompletion({ override: [completeAnyWord] })];
+    const unit = detectIndent(text);
+    return [
+      lineNumbers(),
+      foldGutter({ markerDOM: (open) => (open ? FOLD_OPEN() : FOLD_SHUT()) }),
+      lintGutter(),
+      highlightActiveLineGutter(),
+      highlightSpecialChars(),
+      history(),
+      drawSelection(),
+      dropCursor(),
+      EditorState.allowMultipleSelections.of(true),
+      indentOnInput(),
+      bracketMatching(),
+      closeBrackets(),
+      rectangularSelection(),
+      crosshairCursor(),
+      highlightActiveLine(),
+      highlightSelectionMatches(),
+      search({ top: true }),
+      syntaxHighlighting(HIGHLIGHT),
+      this.lang.of(langExt),
+      this.tabSize.of([indentUnit.of(unit), EditorState.tabSize.of(unit === "\t" ? 4 : unit.length)]),
+      this.readOnly.of([EditorState.readOnly.of(relPath === null), EditorView.editable.of(relPath !== null)]),
+      Prec.highest(keymap.of([
+        { key: "Mod-s", preventDefault: true, run: () => { this.onSave(); return true; } },
+        { key: "Mod-/", run: toggleComment },
+        { key: "Mod-h", preventDefault: true, run: () => { this.openFind(true); return true; } },
+      ])),
+      keymap.of([
+        ...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap,
+        ...completionKeymap, ...lintKeymap, indentWithTab,
+      ]),
+      THEME,
+      EditorState.phrases.of({
+        "Find": "Find", "Replace": "Replace", "next": "Next", "previous": "Previous", "all": "All",
+        "match case": "Match case", "regexp": "Regex", "by word": "Whole word", "replace": "Replace",
+        "replace all": "Replace all", "close": "Close", "Go to line": "Go to line", "go": "Go",
+        "Folded lines": "Folded lines", "Unfolded lines": "Unfolded lines", "Fold line": "Fold", "Unfold line": "Unfold",
+      }),
+      EditorView.updateListener.of((u) => {
+        if (u.docChanged) this.onChange(u.state.doc.toString());
+        if (u.selectionSet || u.docChanged) this._cursor(u.state);
+      }),
+    ];
+  }
+
+  // Hovering a name asks the IDE for its value in the simulation (Verdi-style
+  // annotation); the IDE answers with a DOM node, or null for no tooltip.
+  _valueHover() {
+    return hoverTooltip(async (view, pos) => {
+      if (!this.hoverProvider) return null;
+      const w = view.state.wordAt(pos);
+      if (!w) return null;
+      const word = view.state.sliceDoc(w.from, w.to);
+      if (!/^[A-Za-z_][\w$]*$/.test(word)) return null;
+      const dom = await this.hoverProvider(word, this.relPath);
+      if (!dom) return null;
+      return { pos: w.from, end: w.to, above: true, create: () => ({ dom }) };
+    }, { hoverTime: 350 });
+  }
+
+  _state(text, relPath) {
+    return EditorState.create({ doc: text || "", extensions: this._extensions(relPath, text) });
+  }
+
+  _cursor(state) {
+    const sel = state.selection.main;
+    const line = state.doc.lineAt(sel.head);
+    const n = sel.to - sel.from;
+    this.onCursor({ line: line.number, col: sel.head - line.from + 1, selected: n, cursors: state.selection.ranges.length });
+  }
+
+  // Show a file. A file seen before comes back with its undo history,
+  // selection and scroll position, as long as its text is what we left.
+  open(relPath, text) {
+    if (this.relPath !== null) {
+      this.states.set(this.relPath, { state: this.view.state, scroll: this.view.scrollDOM.scrollTop });
+    }
     this.relPath = relPath;
-    this.area.value = text || "";
-    this.markers = [];
-    this._repaint();
-    this._updateStatus();
+    const kept = relPath !== null && this.states.get(relPath);
+    if (kept && kept.state.doc.toString() === (text || "")) {
+      this.view.setState(kept.state);
+      requestAnimationFrame(() => { this.view.scrollDOM.scrollTop = kept.scroll || 0; });
+    } else {
+      this.view.setState(this._state(text, relPath));
+    }
+    this._cursor(this.view.state);
   }
+  load(relPath, text) { this.open(relPath, text); }
 
-  getValue() { return this.area.value; }
+  // Drop a closed file's kept state.
+  forget(relPath) { this.states.delete(relPath); }
 
+  getValue() { return this.view.state.doc.toString(); }
+
+  focus() { this.view.focus(); }
+
+  // Verilator diagnostics: [{ line, col, severity, msg, code }] for this file.
   setMarkers(markers) {
-    this.markers = markers || [];
-    this._paintGutter();
-  }
-
-  gotoLine(line) {
-    const lines = this.area.value.split("\n");
-    let pos = 0;
-    for (let i = 0; i < line - 1 && i < lines.length; i++) pos += lines[i].length + 1;
-    this.area.focus();
-    this.area.setSelectionRange(pos, pos + (lines[line - 1] ? lines[line - 1].length : 0));
-    // Scroll the line roughly into view.
-    const lh = parseFloat(getComputedStyle(this.area).lineHeight) || 18;
-    this.area.scrollTop = Math.max(0, (line - 3) * lh);
-    this._syncScroll();
-  }
-
-  _repaint() {
-    this.pre.innerHTML = highlight(this.area.value);
-    this._paintGutter();
-    this._syncScroll();
-  }
-
-  // Report "Ln X, Col Y" to an optional #ide-cursor status element, and mark the
-  // caret's line number in the gutter so the user always knows where they are.
-  _updateStatus() {
-    const upto = this.area.value.slice(0, this.area.selectionStart);
-    const line = upto.split("\n").length;
-    const col = upto.length - upto.lastIndexOf("\n");
-    const el = document.getElementById("ide-cursor");
-    if (el) el.textContent = "Ln " + line + ", Col " + col;
-    this._highlightActiveLine(line);
-  }
-
-  // Toggle the .ed-ln-active class onto the current line's gutter cell only.
-  _highlightActiveLine(line) {
-    if (this._activeLineEl) this._activeLineEl.classList.remove("ed-ln-active");
-    const el = this.gutter.children[line - 1];
-    if (el) { el.classList.add("ed-ln-active"); this._activeLineEl = el; }
-  }
-
-  _syncScroll() {
-    this.pre.parentElement.scrollTop = this.area.scrollTop;
-    this.pre.parentElement.scrollLeft = this.area.scrollLeft;
-    this.gutter.scrollTop = this.area.scrollTop;
-  }
-
-  _paintGutter() {
-    const n = this.area.value.split("\n").length;
-    const markByLine = {};
-    for (const m of this.markers) markByLine[m.line] = m.severity;
-    let html = "";
-    for (let i = 1; i <= n; i++) {
-      const sev = markByLine[i];
-      html += "<div class='ed-ln" + (sev ? " ed-ln-" + sev : "") + "'>" + i + "</div>";
+    const doc = this.view.state.doc;
+    const diags = [];
+    for (const m of markers || []) {
+      if (!m.line || m.line > doc.lines) continue;
+      const line = doc.line(m.line);
+      const from = Math.min(line.to, line.from + Math.max(0, (m.col || 1) - 1));
+      // Underline the word at the column (or the rest of the line).
+      const rest = line.text.slice(from - line.from);
+      const w = rest.match(/^[\w$`'.]+/);
+      const to = w ? from + w[0].length : line.to > from ? line.to : from;
+      diags.push({
+        from, to, severity: m.severity === "error" ? "error" : "warning",
+        message: m.msg + (m.code ? "  [" + m.code + "]" : ""), source: "Verilator",
+      });
     }
-    this.gutter.innerHTML = html;
-    // The rebuild dropped the active-line marker — re-apply it for the caret line.
-    this._activeLineEl = null;
-    const cur = this.area.value.slice(0, this.area.selectionStart).split("\n").length;
-    this._highlightActiveLine(cur);
+    this.view.dispatch(setDiagnostics(this.view.state, diags));
   }
 
-  // ---- find & replace ----
-  openFind(focusReplace) {
-    this.findBar.hidden = false;
-    const q = this.findBar.querySelector(".ed-find-q");
-    const sel = this.area.value.substring(this.area.selectionStart, this.area.selectionEnd);
-    if (sel && sel.length < 80) q.value = sel;
-    (focusReplace ? this.findBar.querySelector(".ed-find-r") : q).focus();
-    q.select();
-    this._countMatches();
-  }
-  closeFind() { this.findBar.hidden = true; this.area.focus(); }
-
-  _wireFind() {
-    const q = this.findBar.querySelector(".ed-find-q");
-    const r = this.findBar.querySelector(".ed-find-r");
-    this.findBar.querySelector(".ed-find-next").addEventListener("click", () => this._findNext());
-    this.findBar.querySelector(".ed-find-rep").addEventListener("click", () => this._replaceOne());
-    this.findBar.querySelector(".ed-find-all").addEventListener("click", () => this._replaceAll());
-    this.findBar.querySelector(".ed-find-x").addEventListener("click", () => this.closeFind());
-    q.addEventListener("input", () => this._countMatches());
-    q.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); this._findNext(); }
-      if (e.key === "Escape") { e.preventDefault(); this.closeFind(); }
+  gotoLine(line, col) {
+    const doc = this.view.state.doc;
+    const n = Math.max(1, Math.min(doc.lines, line || 1));
+    const l = doc.line(n);
+    const pos = col ? Math.min(l.to, l.from + col - 1) : l.from;
+    this.view.dispatch({
+      selection: col ? EditorSelection.cursor(pos) : EditorSelection.range(l.from, l.to),
+      effects: EditorView.scrollIntoView(pos, { y: "center" }),
     });
-    r.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); this._replaceOne(); }
-      if (e.key === "Escape") { e.preventDefault(); this.closeFind(); }
-    });
+    this.view.focus();
   }
 
-  _query() { return this.findBar.querySelector(".ed-find-q").value; }
-
-  _countMatches() {
-    const q = this._query();
-    const el = this.findBar.querySelector(".ed-find-count");
-    if (!q) { el.textContent = ""; return; }
-    const n = this.area.value.split(q).length - 1;
-    el.textContent = n + (n === 1 ? " match" : " matches");
-  }
-
-  _findNext() {
-    const q = this._query();
-    if (!q) return;
-    const from = this.area.selectionEnd;
-    let idx = this.area.value.indexOf(q, from);
-    if (idx === -1) idx = this.area.value.indexOf(q, 0);   // wrap
-    if (idx === -1) return;
-    this.area.focus();
-    this.area.setSelectionRange(idx, idx + q.length);
-    const lh = parseFloat(getComputedStyle(this.area).lineHeight) || 18;
-    const line = this.area.value.slice(0, idx).split("\n").length;
-    this.area.scrollTop = Math.max(0, (line - 3) * lh);
-    this._syncScroll();
-  }
-
-  _replaceOne() {
-    const q = this._query();
-    const rep = this.findBar.querySelector(".ed-find-r").value;
-    if (!q) return;
-    const s = this.area.selectionStart, e = this.area.selectionEnd;
-    if (this.area.value.substring(s, e) === q) {
-      this.area.setRangeText(rep, s, e, "end");
-      this._repaint();
+  openFind(replace) {
+    openSearchPanel(this.view);
+    if (replace) {
+      requestAnimationFrame(() => this.host.querySelector(".cm-search input[name=replace]")?.focus());
     }
-    this._findNext();
-    this._countMatches();
   }
 
-  _replaceAll() {
-    const q = this._query();
-    const rep = this.findBar.querySelector(".ed-find-r").value;
-    if (!q) return;
-    this.area.value = this.area.value.split(q).join(rep);
-    this._repaint();
-    this._countMatches();
+  // Insert text at the cursor (used by the "insert dump block" helper).
+  insert(text) {
+    const sel = this.view.state.selection.main;
+    this.view.dispatch({ changes: { from: sel.from, to: sel.to, insert: text }, selection: { anchor: sel.from + text.length } });
+    this.view.focus();
   }
 }

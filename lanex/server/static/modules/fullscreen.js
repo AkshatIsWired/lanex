@@ -41,7 +41,9 @@ export function setupFullscreen() {
     target.classList.contains("panel-fullscreen") ? exit(target) : enter(target);
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
+    // An Escape the editor or the waveform already used (closing find,
+    // clearing the marker) doesn't also leave fullscreen.
+    if (e.key !== "Escape" || e.defaultPrevented) return;
     const open = document.querySelector(".panel-fullscreen");
     if (open) { e.preventDefault(); exit(open); }
   });

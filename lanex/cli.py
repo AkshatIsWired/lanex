@@ -14,6 +14,7 @@ plus the EDA tools it orchestrates; it does not modify or depend on internals of
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import socket
@@ -74,10 +75,36 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="install one supporting tool headlessly and exit (e.g. gds3d, "
                              "gtkwave, iverilog, graphviz) — the same strategies as the "
                              "Tools tab's Install button; skips the GUI")
+    parser.add_argument("--provision-finalize", metavar="MANIFEST", default=None,
+                        help="install and strictly verify saved Windows-appliance selections")
+    parser.add_argument("--setup-check", metavar="MANIFEST", default=None,
+                        help="read-only machine-readable Windows-appliance readiness check")
+    parser.add_argument("--setup-choices", metavar="JSON", default=None,
+                        help="owner-state or choices JSON used with appliance setup commands")
     parser.add_argument("--verbose", action="store_true")
+    # Not argparse's `action="version"`: that evaluates its version string while
+    # the parser is being built, and get_version() imports librelane — a cost
+    # every single `lanex` invocation would pay for one rarely used flag.
+    parser.add_argument("--version", action="store_true",
+                        help="print the LanEx version and exit")
     args = parser.parse_args(argv)
 
+    if args.version:
+        from ._version import get_version
+
+        sys.stdout.write(f"lanex {get_version()}\n")
+        return 0
+
     _setup_logging(args.verbose)
+
+    # Resolve the path arguments against the cwd the user typed them in BEFORE
+    # _leave_unwritable_cwd() possibly moves us: `lanex --design-dir ./cpu` must
+    # keep meaning ./cpu.
+    if args.pdk_root:
+        args.pdk_root = os.path.abspath(os.path.expanduser(args.pdk_root))
+    if args.design_dir:
+        args.design_dir = os.path.abspath(os.path.expanduser(args.design_dir))
+    _leave_unwritable_cwd()
 
     if args.pdk_root:
         os.environ["PDK_ROOT"] = args.pdk_root
@@ -87,6 +114,24 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.install_tool:
         return _install_tool_cli(args.install_tool)
+
+    if args.provision_finalize or args.setup_check:
+        try:
+            from .controller import provisioning
+            plan = provisioning.load_plan(
+                args.provision_finalize or args.setup_check,
+                choices_path=args.setup_choices,
+            )
+            report = (
+                provisioning.finalize(plan)
+                if args.provision_finalize
+                else provisioning.readiness_report(plan)
+            )
+        except Exception as ex:
+            report = {"schema": 1, "ready": False,
+                      "error": f"{type(ex).__name__}: {ex}"}
+        sys.stdout.write(json.dumps(report, sort_keys=True) + "\n")
+        return 0 if report.get("ready") else 1
 
     # Defer imports: read controller and server only when launched.
     try:
@@ -104,20 +149,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     # IPv6 literals need brackets in a URL (http://[::1]:8765/).
     host_disp = f"[{args.host}]" if ":" in args.host else args.host
     url = f"http://{host_disp}:{port}/"
-    # The browser opens on the landing home screen; the printed URL stays the
-    # cockpit root. The landing page honours the user's "skip this screen"
-    # choice client-side and forwards to "/" instantly when set.
-    home_url = url + "landing"
+    # The window opens straight on the cockpit, the same page the Windows
+    # launcher opens. /landing is still served for anyone who links to it.
+    home_url = url
     _print_url(url)
     if args.design_dir:
         # Register the initial design directory directly with the server so the
         # GUI opens already pointed at it.
         try:
-            import os.path
-
             from .server import routes as _routes
 
-            p = os.path.abspath(os.path.expanduser(args.design_dir))
+            # Already absolute — resolved above, against the cwd the user typed
+            # it in rather than whichever one we ended up with.
+            p = args.design_dir
             if os.path.isdir(p):
                 _routes._set_active_design_dir(p)
                 sys.stdout.write(f"loaded design: {p}\n")
@@ -127,6 +171,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             sys.stderr.write(f"could not set --design-dir: {ex}\n")
 
     threading.Timer(0.5, _lazy_open, args=(home_url, args.no_browser, args.tab)).start()
+    _write_server_record(url, port)
     try:
         serve_forever(httpd, open_after=False)
     except KeyboardInterrupt:
@@ -136,7 +181,101 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception:
             pass
         return 0
+    finally:
+        _clear_server_record()
     return 0
+
+
+def _leave_unwritable_cwd() -> None:
+    """Move off a working directory we cannot write into.
+
+    A long-running server's cwd is invisible to the user but not harmless: it is
+    what everything defaulting to "the current directory" resolves to, and what
+    every child process inherits. On the Windows appliance the launcher
+    (``windows/launcher``) lives in ``C:\\Program Files\\LanEx`` and ``wsl.exe``
+    translates its Windows cwd into the Linux one, so the server started life in
+    ``/mnt/c/Program Files/LanEx`` — read-only for the appliance user. The visible
+    symptom was "Could not copy the SPM example: [Errno 13] Permission denied:
+    '/mnt/c/Program Files/LanEx/spm_example'"; the file picker's "Current dir"
+    root pointed at the same dead end.
+
+    ``wsl.go``'s ``cd ~`` fixes it at the source, but that lives in ``LanEx.exe``
+    and only reaches users who reinstall — whereas this file ships in the pip
+    layer, so an existing install gets the fix on a server update alone. It also
+    covers the native case: LanEx started from a read-only directory anywhere.
+
+    Only ever moves when the cwd is genuinely unwritable — a deliberate
+    ``cd my-design && lanex`` must keep its cwd, because relative paths the user
+    types into the GUI resolve against it.
+    """
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        # cwd deleted under us. Nothing to preserve; anywhere writable is better.
+        cwd = None
+    if cwd is not None and os.access(cwd, os.W_OK | os.X_OK):
+        return
+    import tempfile
+
+    for candidate in (os.path.expanduser("~"), tempfile.gettempdir()):
+        if not candidate or not os.access(candidate, os.W_OK | os.X_OK):
+            continue
+        try:
+            os.chdir(candidate)
+        except OSError:
+            continue
+        _log.info("working directory %s is not writable — using %s instead",
+                  cwd, candidate)
+        return
+    # Nowhere to go: leave it be. Every write path reports its own error, and a
+    # server that refuses to start is strictly worse than one with a bad cwd.
+    _log.warning("working directory %s is not writable and no alternative was "
+                 "usable", cwd)
+
+
+def _server_record_path():
+    """``~/.lanex/server.json`` — where this process advertises its port."""
+    from .controller.platform_env import home
+
+    return home() / "server.json"
+
+
+def _write_server_record(url: str, port: int) -> None:
+    """Record the bound URL/port/pid for out-of-process launchers.
+
+    ``find_free_port`` may settle on 8766+ when something else owns 8765
+    (app.py:436-453), so anything outside this process — the Windows launcher in
+    ``windows/launcher``, a shortcut, a script — otherwise has to probe the whole
+    range to find the cockpit. This file turns that into one read.
+
+    Entirely best-effort, in both directions: a failure to write must never stop
+    the server from serving, and readers must treat the file as a hint (a hard
+    kill leaves it stale), health-check what they read, and keep the port scan as
+    the fallback.
+    """
+    import json
+
+    try:
+        path = _server_record_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        from .controller.instance_identity import current
+
+        record = {"url": url, "port": port, "pid": os.getpid(), **current()}
+        # Write-then-rename: a reader polling every 500 ms must never catch a
+        # half-written file and conclude LanEx isn't running.
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:  # pragma: no cover - best-effort only
+        pass
+
+
+def _clear_server_record() -> None:
+    """Remove the record on a clean shutdown (a stale one only costs a probe)."""
+    try:
+        _server_record_path().unlink()
+    except Exception:  # pragma: no cover - best-effort only
+        pass
 
 
 def _pull_image_cli() -> int:

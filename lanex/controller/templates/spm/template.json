@@ -1,0 +1,14 @@
+{
+  "name": "spm",
+  "title": "Serial-parallel multiplier (SPM)",
+  "description": "LibreLane's reference example, with its own tuned settings for sky130 and gf180. The design the LibreLane docs walk through.",
+  "top": "spm",
+  "clock_port": "clk",
+  "clock_period": 10.0,
+  "sources": [
+    "src/spm.v"
+  ],
+  "testbench": "verify/spm_tb.v",
+  "copy_from": "spm",
+  "order": 3
+}

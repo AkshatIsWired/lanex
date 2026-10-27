@@ -7,6 +7,7 @@
 import { api, fmt } from "./api.js";
 import { state, safeStorage } from "./state.js";
 import { toast } from "./toast.js";
+import { wireJumpNav } from "./jumpnav.js";
 
 const STAGE_GROUPS = [
   {
@@ -72,7 +73,7 @@ const STAGE_GROUPS = [
   {
     id: "signoff",
     name: "Signoff",
-    description: "DRC, LVS, XOR, IR drop, density — what gets reported at the end.",
+    description: "DRC, LVS, XOR, IR drop, and density reports generated at flow signoff.",
     // NB: no "LVS_" here — LVS_* vars belong to the dedicated "lvs" group below.
     // Listing it in both made the first-match win send every LVS_* to Signoff and
     // left the LVS group empty (B5).
@@ -194,7 +195,7 @@ export function renderConfig() {
       if (p.reset) {
         const nOv = Object.keys(state.varsValues || {}).length;
         changes.push(nOv ? ("clear " + nOv + " current override(s) → LibreLane defaults")
-                         : "nothing to clear — no overrides set");
+                         : "nothing to clear: no overrides set");
       }
       for (const [k, v] of Object.entries(p.values)) {
         const cur = state.varsValues[k];
@@ -202,7 +203,7 @@ export function renderConfig() {
         changes.push(k + ": " + from + " → " + String(v));
       }
       const ok = await confirmDialog({
-        title: "Apply preset “" + (p.label || btn.dataset.preset) + "”?",
+        title: "Apply preset " + (p.label || btn.dataset.preset) + "?",
         body: "This preset will " + changes.join("; ") + "." +
           (p.reset ? "" : " Overrides not listed here are kept."),
         confirmText: "Apply preset",
@@ -322,14 +323,14 @@ export function renderOverridesSummary() {
   // assembled from the same collectRunPayload() the Run button sends.
   const viewCfg =
     "<button class='btn btn-ghost' id='ov-final-settings' " +
-    "title='The merged picture: every value this run will send — your changes, your config file&#39;s lines, and what falls to defaults'>Final settings</button> " +
+    "title='Complete run configuration: combines overrides, design config settings, and PDK defaults'>Final settings</button> " +
     "<button class='btn btn-ghost' id='ov-view-config' " +
     "title='Open your design&#39;s own config file, exactly as it is on disk'>View config file</button>";
   const wireViewCfg = () => {
     el.querySelector("#ov-view-config")?.addEventListener("click", async () => {
       const { openProvenance } = await import("./provenance.js");
       openProvenance({ kind: "input", key: "" },
-        { title: "Your design's config file (as on disk — LanEx never edits it)" });
+        { title: "Design configuration file on disk (read-only view; LanEx does not edit it directly)" });
     });
     el.querySelector("#ov-final-settings")?.addEventListener("click", async () => {
       const { openFinalSettings } = await import("./finalsettings.js");
@@ -338,7 +339,7 @@ export function renderOverridesSummary() {
   };
   if (!keys.length) {
     el.innerHTML =
-      "<span class='ov-none'>No overrides set — every variable uses LibreLane's default for this PDK. " +
+      "<span class='ov-none'>No overrides set. Every variable uses LibreLane defaults for this PDK. " +
       "Pick a preset or edit a field to override.</span> " + viewCfg;
     wireViewCfg();
     return;
@@ -350,7 +351,7 @@ export function renderOverridesSummary() {
     .join("");
   el.innerHTML =
     "<div class='ov-head'><strong>" + keys.length + " override" + (keys.length === 1 ? "" : "s") +
-    " will be sent</strong> <span class='muted'>(preset values + your edits; unset fields use defaults — click a chip to trace where it goes)</span> " +
+    " will be sent</strong> <span class='muted'>(preset values + overrides; unset parameters use PDK defaults; click a chip to trace sources)</span> " +
     viewCfg + "</div>" +
     "<div class='ov-chips'>" + chips + "</div>";
   wireViewCfg();
@@ -389,14 +390,14 @@ async function showOverrideTrail(varName, value) {
   let cfgHtml;
   if (inp && inp.ok) {
     cfgHtml =
-      "<p><b>" + fmt.escape(inp.rel) + "</b> sets it on <b>line " + inp.line + "</b> — " +
-      "your override supersedes this line for the run (the file is not touched):</p>" +
+      "<p><b>" + fmt.escape(inp.rel) + "</b> sets this on <b>line " + inp.line + "</b>. " +
+      "Your override supersedes this line during execution without modifying the file on disk:</p>" +
       lineRow(inp);
   } else if (inp && inp.rel) {
     cfgHtml =
       "<p><b>" + fmt.escape(inp.rel) + "</b> does <b>not</b> set <code>" + fmt.escape(varName) +
-      "</code> — nothing is inserted into your file at any line. The override simply adds " +
-      "the value for the run; without it the flow would use the PDK/flow default.</p>";
+      "</code>, and nothing is inserted into your file. The override passes as a runtime argument; " +
+      "without it, the flow uses the PDK and flow defaults.</p>";
   } else {
     cfgHtml = "<p class='muted'>" +
       fmt.escape((inp && inp.reason) || "no config file found in the design folder") + "</p>";
@@ -411,15 +412,15 @@ async function showOverrideTrail(varName, value) {
     runHtml = "<p class='muted'>Run " + fmt.escape(runTag) + ": " +
       fmt.escape((run && run.reason) || "no resolved.json") + "</p>";
   } else {
-    runHtml = "<p class='muted'>No runs yet — after a run, LibreLane's <code>resolved.json</code> " +
-      "records the value the flow actually used, and it will be traceable here.</p>";
+    runHtml = "<p class='muted'>No runs recorded yet. After a run completes, LibreLane's <code>resolved.json</code> " +
+      "records the exact parameters used, which will appear here.</p>";
   }
 
   const choice = await customDialog({
     title: "Where does " + fmt.escape(varName) + " go?",
     bodyHtml:
-      "<p>This setting rides the run command as an override argument — your design's " +
-      "config file is <b>never edited</b>:</p>" +
+      "<p>This setting is passed as a command-line override. Your design's " +
+      "config file is <b>never modified</b>:</p>" +
       "<pre class='code'>-c " + fmt.escape(varName) + "=" + fmt.escape(String(value)) + "</pre>" +
       cfgHtml + runHtml,
     buttons: [
@@ -441,6 +442,23 @@ async function showOverrideTrail(varName, value) {
 
 // Reflect the current SYNTH_SHOW override into the quick toggle (e.g. after a
 // preset reset cleared it).
+// A link to one setting (nav.js go("setup", { setting })): open All settings
+// filtered to it, focus its field and flash the row. Returns the row's id so
+// nav.js keeps it in view while the page settles.
+export async function revealSetting(name) {
+  const card = document.getElementById("cfg-card");
+  if (card && !card.open) card.open = true;
+  const search = document.getElementById("var-search");
+  if (search) { search.value = name; _searchTerm = String(name).toUpperCase(); paint(); }
+  const row = document.querySelector('#vars-form .var-row[data-var="' + cssEscape(name) + '"]');
+  if (!row) return null;
+  row.id = "var-row-" + name;
+  row.classList.add("is-flash");
+  setTimeout(() => row.classList.remove("is-flash"), 2600);
+  row.querySelector("input, select, textarea")?.focus({ preventScroll: true });
+  return row.id;
+}
+
 function syncReportToggles() {
   const ss = document.getElementById("cfg-synth-show");
   if (ss) ss.checked = state.varsValues.SYNTH_SHOW === true || state.varsValues.SYNTH_SHOW === "true";
@@ -453,10 +471,6 @@ function paint() {
   if (!nav) return;
   nav.innerHTML = "";
   root.innerHTML = "";
-  // Mirror the same category milestones into the Setup jump bar's second tier
-  // (revealed when the Constraints card is open — see setup.js).
-  const subnav = document.getElementById("setup-jump-config");
-  if (subnav) subnav.innerHTML = "";
 
   const buckets = new Map(STAGE_GROUPS.map((g) => [g.id, []]));
   const sorted = [...state.variables].sort((a, b) => a.name.localeCompare(b.name));
@@ -482,27 +496,19 @@ function paint() {
     } else {
       root.appendChild(heading);
     }
+    // Category tabs; jumpnav's scroll-spy underlines the one in view.
     const navChip = document.createElement("button");
     navChip.className = "nav-chip";
     navChip.type = "button";
-    navChip.textContent = def.name + " (" + vs.length + ")";
-    navChip.addEventListener("click", () => jumpToSection(stageId, navChip));
+    navChip.dataset.jump = heading.id;
+    navChip.innerHTML = fmt.escape(def.name) + " <span class='nav-count'>" + vs.length + "</span>";
     nav.appendChild(navChip);
-    if (subnav) {
-      const c2 = document.createElement("button");
-      c2.className = "chip chip-clickable";
-      c2.type = "button";
-      c2.textContent = def.name + " (" + vs.length + ")";
-      // From the top-of-page milestone rail: make sure the Constraints card is
-      // open, then scroll to that category.
-      c2.addEventListener("click", () => openConstraintsAndJump(stageId));
-      subnav.appendChild(c2);
-    }
     const grid = document.createElement("div");
     grid.className = "vars-form";
     for (const v of vs) grid.appendChild(buildRow(v));
     root.appendChild(grid);
   }
+  wireJumpNav(nav);
   annotateConfigLines(root);
 }
 
@@ -540,26 +546,6 @@ async function annotateConfigLines(root) {
   });
 }
 
-function jumpToSection(id, navChip) {
-  const target = document.getElementById("cfg-section-" + id);
-  if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "start" });
-  document.querySelectorAll(".config-nav .nav-chip").forEach((c) => c.classList.remove("nav-active"));
-  if (navChip) navChip.classList.add("nav-active");
-}
-
-// Open the (collapsed-by-default) Constraints card, then jump to a category.
-// Used by the Setup jump bar's milestone rail, which lives above the card.
-function openConstraintsAndJump(id) {
-  const card = document.getElementById("cfg-card");
-  if (card && !card.open) {
-    card.open = true;
-    // Let the <details> lay out before scrolling to the now-visible section.
-    requestAnimationFrame(() => jumpToSection(id, null));
-  } else {
-    jumpToSection(id, null);
-  }
-}
 
 function buildRow(v) {
   const row = document.createElement("div");

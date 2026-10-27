@@ -101,24 +101,24 @@ export function buildCumulativeModel(payloadOverrides, map, variables) {
 // differently.
 export function sourceLabel(row, configRel) {
   switch (row.source) {
-    case "override": return "your Setup change (sent as an override — beats the file)";
+    case "override": return "Setup parameter (runtime override; supersedes configuration file)";
     case "picker": return "your Setup picker (flow option)";
     case "config": {
       const rel = configRel || "your config";
       return rel + " line " + (row.config_line || row.line) +
-        (row.scoped ? " (" + (row.scope || "scoped") + " — applied only if the run's PDK/SCL matches)" : "");
+        (row.scoped ? " (" + (row.scope || "scoped") + ": applied only if the run PDK/SCL matches)" : "");
     }
-    case "pdk": return "PDK-provided — the PDK's files set this; resolved.json shows the value a run used";
+    case "pdk": return "PDK-provided: set by PDK definition files; verified in resolved.json after run";
     case "default": return "LibreLane default";
-    case "unset": return "not set by anything visible pre-run — required, or resolved by the flow";
+    case "unset": return "Not explicitly set pre-run; resolved by the flow engine or left unset";
     default: return row.source || "";
   }
 }
 
 function _sentRows(model) {
   if (!model.sent.length) {
-    return "<p class='muted'>None — you changed nothing in Setup, so every value " +
-      "comes from your config file or the LibreLane/PDK defaults.</p>";
+    return "<p class='muted'>None: no changes made in Setup. All parameters " +
+      "derive from your design configuration or LibreLane and PDK defaults.</p>";
   }
   const rows = model.sent.map((s) => {
     let vs;
@@ -128,9 +128,9 @@ function _sentRows(model) {
         "</code>" + (s.conflict.scoped ? ", " + fmt.escape(s.conflict.scope || "scoped") : "") +
         ")</span> " +
         provBtnHtml({ kind: "input", key: s.name },
-          "Open the superseded config line — the file itself is never edited");
+          "Open the superseded config line (file on disk is never modified)");
     } else {
-      vs = "<span class='muted'>not in your config — the override adds it for this run only</span>";
+      vs = "<span class='muted'>not in config: runtime override applies to this run only</span>";
     }
     return "<tr><td><code>" + fmt.escape(s.name) + "</code></td><td><b>" +
       fmt.escape(s.value) + "</b></td><td>" + vs + "</td></tr>";
@@ -141,8 +141,8 @@ function _sentRows(model) {
 
 function _configRows(model) {
   if (!model.rel) {
-    return "<p class='muted'>No config file was found in the design folder — " +
-      "a run needs one, so this preview cannot apply.</p>";
+    return "<p class='muted'>No configuration file found in the design directory. " +
+      "A configuration file is required before running the flow.</p>";
   }
   if (!model.fromConfig.length) {
     return "<p class='muted'>Every variable your config sets is overridden above" +
@@ -154,7 +154,7 @@ function _configRows(model) {
         fmt.escape(c.scope || "its section") + "</code></span>"
       : "applies as written";
     return "<tr><td><code>" + fmt.escape(c.name) + "</code></td><td><b>" +
-      fmt.escape(c.value) + "</b></td><td>line " + c.line + " — " + cond + " " +
+      fmt.escape(c.value) + "</b></td><td>line " + c.line + ": " + cond + " " +
       provBtnHtml({ kind: "input", key: c.name },
         "Open " + (model.rel || "the config") + " at this line") + "</td></tr>";
   }).join("");
@@ -216,7 +216,7 @@ export async function openFinalSettings(payload = null) {
 
   const srcNote = (payload.sources || []).length
     ? "<p class='fs-note'>You picked <b>" + payload.sources.length + "</b> source file" +
-      ((payload.sources || []).length === 1 ? "" : "s") + " in the IDE — they are sent as a " +
+      ((payload.sources || []).length === 1 ? "" : "s") + " in the IDE. They are sent as a " +
       "<code>VERILOG_FILES</code> override and replace the config's source list for this run.</p>"
     : "";
   const macroNote = macros.length
@@ -228,28 +228,25 @@ export async function openFinalSettings(payload = null) {
   const cumulative = buildCumulativeModel(payload.overrides, map, state.variables);
   const c = cumulative.counts;
   const bodyHtml =
-    "<p>A run is assembled in this order — later wins, and your config file is " +
-    "<b>never edited</b>:</p>" +
+    "<p>Configuration precedence order (later sources override earlier; config files on disk are <b>never modified</b>):</p>" +
     "<ol class='fs-order'>" +
-    "<li>LibreLane's built-in defaults, then values the chosen PDK provides — " +
-    "so a config that sets only a few variables is normal: <b>every other variable " +
-    "still has a value</b>, from here</li>" +
+    "<li>LibreLane built-in defaults followed by PDK definitions. A configuration setting only a few variables is normal; " +
+    "<b>all other parameters</b> take values from these defaults.</li>" +
     "<li>Your config file" + (model.rel ? " (<code>" + fmt.escape(model.rel) + "</code>)" : "") +
     ", including <code>pdk::</code>/<code>scl::</code> sections that match the chosen PDK/SCL</li>" +
-    "<li>Your Setup changes, sent as override arguments — these beat the file</li>" +
+    "<li>Setup overrides passed as runtime arguments; these supersede config file entries.</li>" +
     "</ol>" +
     "<h4>PDK &amp; standard-cell library</h4>" +
     "<p>" + (model.pdk
       ? "<code>PDK=" + fmt.escape(model.pdk) + "</code>" +
         (model.scl ? " · <code>SCL=" + fmt.escape(model.scl) + "</code>" : "") +
-        " — from the Setup pickers, passed as flow options; they also decide which " +
-        "scoped config sections apply."
-      : "<span class='muted'>No PDK picked yet — the flow will refuse to start without one.</span>") +
+        " (selected in Setup; passed as flow options and determines which scoped config sections apply)."
+      : "<span class='muted'>No PDK selected yet. A PDK is required before running the flow.</span>") +
     "</p>" +
-    "<h4>Your changes — sent as overrides (" + model.sent.length + ")</h4>" + _sentRows(model) +
-    "<h4>Set by your config file — no override, so these apply (" + model.fromConfig.length + ")</h4>" +
+    "<h4>Your changes: sent as overrides (" + model.sent.length + ")</h4>" + _sentRows(model) +
+    "<h4>Set by your config file (" + model.fromConfig.length + ")</h4>" +
     _configRows(model) +
-    "<h4>Every variable — the cumulative directory</h4>" +
+    "<h4>All variables: complete configuration directory</h4>" +
     (cumulative.haveRegistry
       ? "<p class='muted'>" + c.override + " from your changes · " + c.config +
         " from your config · " + c.pdk + " PDK-provided · " + c.default +
@@ -257,18 +254,17 @@ export async function openFinalSettings(payload = null) {
         "<details class='fs-all'><summary>Show all " + cumulative.rows.length +
         " variables with value + source</summary><div class='fs-alltable'></div></details>"
       : "<p class='muted'>The full variable registry isn't available here " +
-        "(LibreLane isn't importable on this machine — container-only setup), so the " +
+        "(LibreLane is not installed locally on the host; container runtime active), so the " +
         "cumulative pre-run table can't be built. After a run, <code>resolved.json</code> " +
         "and the Analytics tab's <b>Final settings used</b> give the complete record.</p>") +
     srcNote + macroNote +
     "<p class='fs-note'>This preview is assembled from the run request itself plus your " +
-    "config file's bytes. After a run, <code>resolved.json</code> — LibreLane's own record — " +
-    "is the final word on every value the flow used." +
+    "config file. After execution, <code>resolved.json</code> records every exact value used by the flow." +
     (lastTag ? " <button class='btn btn-ghost' id='fs-resolved'>Open resolved.json of run '" +
       fmt.escape(lastTag) + "'</button>" : "") + "</p>";
 
   await customDialog({
-    title: "Final settings — what this run will send to LibreLane",
+    title: "Final settings: runtime configuration sent to LibreLane",
     wide: true,
     bodyHtml,
     onMount: (back) => {
@@ -276,7 +272,7 @@ export async function openFinalSettings(payload = null) {
       back.querySelector("#fs-resolved")?.addEventListener("click", async () => {
         const { openProvenance } = await import("./provenance.js");
         openProvenance({ kind: "report", tag: lastTag, path: "resolved.json", needle: "" },
-          { title: "resolved.json of run '" + lastTag + "' — every value the flow actually used" });
+          { title: "resolved.json of run '" + lastTag + "': values recorded during flow execution" });
       });
       // The 400+-row cumulative table renders lazily, on first open.
       const det = back.querySelector(".fs-all");
@@ -325,11 +321,9 @@ export async function openResolvedSettings(tag) {
     title: "Final settings used by run '" + fmt.escape(tag) + "' (" + r.rows.length + " variables)",
     wide: true,
     bodyHtml:
-      "<p>Values are <b>resolved.json verbatim</b> — LibreLane's own record of every " +
-      "variable this run used, including empty ones. The source column says which input " +
-      "carried each variable in (attribution by origin; LibreLane may expand what it " +
-      "reads — <code>dir::</code> globs, expressions — so a value can differ textually " +
-      "from the config line that set it).</p>" + note +
+      "<p>Values are loaded directly from <b>resolved.json</b>, LibreLane's complete execution record. " +
+      "The source column indicates which layer introduced each variable. " +
+      "LibreLane expands path globs (e.g. <code>dir::</code>) and expressions, so values may differ in formatting from literal configuration lines.</p>" + note +
       "<div class='fs-resolvedtable'></div>",
     onMount: (back) => {
       const host = back.querySelector(".fs-resolvedtable");
@@ -340,7 +334,7 @@ export async function openResolvedSettings(tag) {
         cells: (row) =>
           "<td><code>" + esc(row.name) + "</code></td><td>" + esc(row.value) +
           (row.line ? " " + provBtnHtml({ kind: "var", key: row.name, tag },
-            "Open resolved.json at this variable's line — the flow's own record") : "") +
+            "Open resolved.json at this variable's line") : "") +
           "</td><td>" + esc(sourceLabel(row, r.config_rel)) +
           (row.source === "config"
             ? " " + provBtnHtml({ kind: "input", key: row.name },

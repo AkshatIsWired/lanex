@@ -5,7 +5,9 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { paretoOption } from "./charts.js";
-import { gatherRunsScoped, getRunScope, designLabel, scopeToggleHtml, wireScopeToggle } from "./runscope.js";
+import { runBarsOption, runBarsHeight } from "./barchart.js";
+import { chartTheme } from "./theme-echarts.js";
+import { gatherRunsScoped, getRunScope, designLabel, scopeToggleHtml, wireScopeToggle } from "./context.js";
 import { jumpBarHtml, wireJump } from "./jumpnav.js";
 import { collectRunPayload } from "./setup.js";
 
@@ -69,7 +71,7 @@ export function renderDse() {
     "    <button class='btn btn-ghost' id='dse-export-csv'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Export CSV</button></div>" +
     "  <div id='dse-results-table' class='dse-results-table'></div>" +
     "  <div class='dse-charts'>" +
-    "    <div class='dse-chart-col'><div class='dse-chart-title'>Pareto — cell area vs setup slack</div>" +
+    "    <div class='dse-chart-col'><div class='dse-chart-title'>Pareto: cell area vs setup slack</div>" +
     "      <div id='dse-pareto' class='chart-box' style='height:300px'></div></div>" +
     "    <div class='dse-chart-col'><div class='dse-chart-title'>Metric across runs " +
     "      <select id='dse-bar-metric' class='dse-bar-metric'></select></div>" +
@@ -156,7 +158,7 @@ async function renderRunPicker(root) {
       _sweepTags[key] = live;
       const when = (m.created_at || "").replace("T", " ").slice(0, 16);
       opts.push("<option value='" + fmt.escape(key) + "'>" +
-        fmt.escape(m.base) + " — " + live.length + " runs" + (when ? " · " + fmt.escape(when) : "") + "</option>");
+        fmt.escape(m.base) + " (" + live.length + " runs)" + (when ? " · " + fmt.escape(when) : "") + "</option>");
     }
     // Regex fallback for legacy (un-manifested) sweeps.
     const bases = {};
@@ -248,10 +250,10 @@ async function confirmResources(root) {
     }
     return true;
   }
-  const parts = ["This launches " + n + " full RTL→GDS runs, one after another. " +
-    "Each is a complete flow — OpenROAD routing/STA can peak at several GB of RAM."];
+  const parts = ["This launches " + n + " full RTL-to-GDS runs sequentially. " +
+    "Each run executes a complete flow; OpenROAD routing and STA can consume several gigabytes of RAM."];
   if (r.available_gb != null) parts.push("Free RAM now: ~" + r.available_gb + " GB of " + r.total_gb + " GB.");
-  if (r.swap_gb === 0) parts.push("Swap: none — a memory spike will hang the machine instead of slowing it.");
+  if (r.swap_gb === 0) parts.push("Swap: none configured. A memory spike may cause the system to freeze rather than page memory.");
   if (r.reasons && r.reasons.length) parts.push("Why this is risky here: " + r.reasons.join("; ") + ".");
   parts.push("Tip: sweep fewer values, run one at a time, or add swap.");
   return confirmDialog({ title: "Resource warning", danger: true, confirmText: "Launch anyway",
@@ -378,7 +380,7 @@ async function renderResults(root, tags) {
     (rowsCfg ? "<tr class='sec'><td colspan='" + (runs.length + 1) + "'>Configuration (differs)</td></tr>" + rowsCfg : "") +
     (rowsMetric ? "<tr class='sec'><td colspan='" + (runs.length + 1) + "'>Metrics (best highlighted)</td></tr>" + rowsMetric : "") +
     "</tbody></table>" +
-    (!rowsCfg && !rowsMetric ? "<p class='muted'>No comparable config/metrics — the runs may not have completed.</p>" : "");
+    (!rowsCfg && !rowsMetric ? "<p class='muted'>No comparable configuration or metric data found. Selected runs may not have completed.</p>" : "");
 
   // ---- Pareto (cell area vs setup slack)
   const points = runs.map((r) => ({
@@ -441,14 +443,9 @@ function drawBar(root, runs, mt, key) {
     const v = mt[key] ? Number(mt[key][r.col]) : null;   // lookup by unique col
     return (v === v && Math.abs(v) !== Infinity) ? v : null;   // drop NaN/Inf
   });
-  const opt = (!key || vals.every((v) => v === null)) ? null : {
-    tooltip: { trigger: "axis" },
-    grid: { left: 60, right: 16, top: 16, bottom: 60 },
-    xAxis: { type: "category", data: tags, axisLabel: { rotate: 30, interval: 0 } },
-    yAxis: { type: "value", name: meta ? (meta.label + (meta.unit ? " (" + meta.unit + ")" : "")) : key },
-    series: [{ type: "bar", data: vals, label: { show: true, position: "top",
-      formatter: (o) => (o.value == null ? "" : o.value) } }],
-  };
+  const opt = !key ? null : runBarsOption({ labels: tags, values: vals, unit: meta ? meta.unit : "" });
+  const box = root.querySelector("#dse-bars");
+  if (box) box.style.height = Math.max(160, runBarsHeight(tags.length)) + "px";
   drawChart(root, "#dse-bars", opt, "No numeric values for this metric.");
 }
 
@@ -469,12 +466,12 @@ function drawChart(root, sel, opt, emptyMsg) {
   }
   if (!chart) {
     el.innerHTML = "";            // clear any prior empty-state message
-    chart = window.echarts.init(el);
+    chart = window.echarts.init(el, chartTheme());   // theme keys only apply at init
   }
-  chart.setOption(opt, true);      // notMerge: replace series on metric change
+  chart.setOption({ ...chartTheme(), ...opt }, true);      // notMerge: replace series on metric change
   chart.resize();
   el.setAttribute("role", "img");
-  el.setAttribute("aria-label", "Design-space exploration scatter — the same points are in the results table below.");
+  el.setAttribute("aria-label", "Design-space exploration scatter plot, showing the points listed in the results table below.");
 }
 
 function fmtVal(v) {

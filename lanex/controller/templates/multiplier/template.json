@@ -1,10 +1,22 @@
 {
   "name": "multiplier",
   "title": "Registered Multiplier",
-  "description": "An NxN registered multiplier. A small datapath design that stresses synthesis area/timing trade-offs — a good DSE target.",
+  "description": "An N×N multiplier with registered outputs. A small datapath where synthesis trades area against timing, so it's a good one to sweep in DSE.",
   "top": "mult",
   "clock_port": "clk",
   "clock_period": 15.0,
-  "sources": ["src/mult.v"],
-  "testbench": "verify/mult_tb.v"
+  "sources": [
+    "src/mult.v"
+  ],
+  "testbench": "verify/mult_tb.v",
+  "order": 5,
+  "pdk": {
+    "gf180mcu*": {
+      "clock_period": 40.0,
+      "config": {
+        "FP_CORE_UTIL": 38,
+        "PL_TARGET_DENSITY_PCT": 50
+      }
+    }
+  }
 }

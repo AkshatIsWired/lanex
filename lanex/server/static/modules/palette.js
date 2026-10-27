@@ -3,7 +3,7 @@
 // tabs, run/stop, install, toggle theme/density, jump to docs. The power-user
 // fast path; also a discoverability aid for beginners (everything is here).
 
-import { activate } from "./tabs.js";
+import { go, recentPlaces } from "./nav.js";
 import { toggleTheme } from "./theme.js";
 import { toggleDensity } from "./density.js";
 import { toggleRunMode, getRunMode } from "./runmode.js";
@@ -21,16 +21,15 @@ function click(id) {
 }
 
 function tab(name) {
-  document.querySelector('.side-tab[data-tab="' + name + '"]')?.click() || activate(name);
+  go(name, {}, { link: false });
 }
 
 // Action registry. `when` (optional) hides actions that aren't applicable.
 function actions() {
   return [
     { id: "go-setup", title: "Go to Setup", hint: "tab", icon: icon("folder"), run: () => tab("setup") },
-    { id: "go-pipeline", title: "Go to Pipeline", hint: "tab", icon: icon("flow"), run: () => tab("pipeline") },
+    { id: "go-pipeline", title: "Go to Flow", hint: "tab", icon: icon("flow"), run: () => tab("pipeline") },
     { id: "go-runs", title: "Go to Runs", hint: "tab", icon: icon("clock"), run: () => tab("runs") },
-    { id: "go-preview", title: "Go to Preview", hint: "tab", icon: icon("image"), run: () => tab("preview") },
     { id: "go-tools", title: "Go to Tools", hint: "tab", icon: icon("tools"), run: () => tab("tools") },
     { id: "go-analytics", title: "Go to Analytics", hint: "tab", icon: icon("chart"), run: () => tab("analytics") },
     { id: "run", title: "Run flow", hint: "action", icon: icon("play"), run: () => click("btn-run") },
@@ -38,12 +37,35 @@ function actions() {
     { id: "resume", title: "Resume / next step", hint: "action", icon: icon("play"), run: () => click("btn-resume") },
     { id: "preflight", title: "Check my setup (preflight)", hint: "action", icon: icon("check"), run: () => click("btn-preflight") },
     { id: "runmode", title: "Switch run engine (Container / Local tools)", hint: "action", icon: icon("refresh"), run: () => toggleRunMode() },
-    { id: "spm", title: "Load the SPM example", hint: "action", icon: icon("plus"), run: () => click("btn-load-spm") },
+    { id: "spm", title: "New project from the SPM example", hint: "project", icon: icon("plus"), run: () => import("./wizard.js").then((m) => m.openWizard({ template: "spm" })) },
     { id: "theme", title: "Toggle dark / light theme", hint: "view", icon: icon("moon"), run: () => toggleTheme() },
-    { id: "density", title: "Toggle compact density", hint: "view", icon: icon("grid"), run: () => toggleDensity() },
-    { id: "shortcuts", title: "Keyboard shortcuts", hint: "help", icon: icon("command"), run: () => document.getElementById("help-dialog")?.showModal?.() },
+    { id: "density", title: "Compact spacing on or off", hint: "view", icon: icon("grid"), run: () => toggleDensity() },
+    { id: "go-ide", title: "Go to RTL IDE", hint: "tab", icon: icon("code"), run: () => tab("ide") },
+    { id: "go-verify", title: "Go to Verify", hint: "tab", icon: icon("check"), run: () => tab("verify") },
+    { id: "go-dse", title: "Go to DSE", hint: "tab", icon: icon("beaker"), run: () => tab("dse") },
+    { id: "go-layout", title: "Go to Layout", hint: "tab", icon: icon("grid"), run: () => tab("layout") },
+    { id: "go-cells", title: "Go to Cells & macros", hint: "tab", icon: icon("layers"), run: () => tab("cells") },
+    { id: "go-manual", title: "Go to Manual", hint: "tab", icon: icon("command"), run: () => tab("manual") },
+    { id: "new-project", title: "New project from a template", hint: "project", icon: icon("plus"), run: () => click("btn-new-project") },
+    { id: "open-project", title: "Open a project folder", hint: "project", icon: icon("folder"), run: () => click("btn-open-project") },
+    { id: "reveal-project", title: "Show project in file manager", hint: "project", icon: icon("popout"), run: () => click("btn-reveal-project") },
+    { id: "logs", title: "Show install and tool logs", hint: "view", icon: icon("file"), run: () => click("logs-btn") },
+    { id: "reload", title: "Reload LanEx", hint: "view", icon: icon("refresh"), run: () => location.reload() },
+    { id: "glossary", title: "Glossary and help for this page", hint: "help", icon: icon("book"), run: () => import("./shell.js").then((m) => m.openHelp("learn")) },
+    { id: "shortcuts", title: "Keyboard shortcuts", hint: "help", icon: icon("command"), run: () => import("./shell.js").then((m) => m.openHelp("keys")) },
+    { id: "license", title: "License and notices", hint: "help", icon: icon("book"), run: () => import("./shell.js").then((m) => m.openHelp("about")) },
     { id: "docs", title: "Open LibreLane docs", hint: "help", icon: icon("arrowUp"), run: () => window.open("https://librelane.readthedocs.io/", "_blank", "noopener") },
   ];
+}
+
+// The places visited before this one, newest first (nav.js): on top while
+// nothing is typed, so going back is one pick, not one step at a time.
+function recents() {
+  return recentPlaces().map((r, i) => ({
+    // Titles are HTML in the list; a place names files and cells, so escape it.
+    id: "recent-" + i, title: r.label.replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";"), hint: "recent", icon: icon("clock"),
+    run: () => go(r.tab, r.params, { link: false }),
+  }));
 }
 
 function score(q, text) {
@@ -123,7 +145,7 @@ function runSel() {
 
 export function openPalette() {
   if (!_el) build();
-  _items = actions();
+  _items = recents().concat(actions());
   _input.value = "";
   _sel = 0;
   refresh();

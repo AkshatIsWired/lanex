@@ -1,0 +1,369 @@
+/* flow.css — the Flow page (modules/flow.js), its log viewer (logview.js) and
+ * the run report card (reportcard.js). Built on the results pages' language
+ * (an-verdict panels with a thin tone line, mono uppercase eyebrows, square
+ * vf-mark vias, the faint plate grid). Layout follows the page's own width
+ * through container queries (the UI zoom changes the window's width, not the
+ * page's), so 1366, 1920 and 2560 each get their columns. */
+
+/* One screen: the page is a column as tall as the work area, and the two
+ * panes at the bottom take whatever height the run bar, the head and the strip
+ * leave (never less than --fl-body-min; below that the page scrolls). flow.js
+ * sets --fl-h (the work area's height) and data-fit="short" under 720 px. */
+#sec-pipeline { container: flow / inline-size; --fl-gap: var(--s-3); --fl-body-min: 300px; }
+#sec-pipeline.section-active { display: flex; flex-direction: column; min-height: 100%; }
+#sec-pipeline > * { flex: none; }
+.fl-runbar { margin: 0 0 var(--fl-gap); }
+#fl-live[hidden] { display: none; }
+
+/* ---------- head: live / why it stopped / report card ---------- */
+#fl-head { margin-bottom: var(--fl-gap); }
+#fl-head:empty { display: none; }
+.fl-hero { align-items: stretch; }
+.fl-hero .an-verdict-main { flex: 1 1 auto; }
+.fl-hero .an-lede { max-width: 86ch; }
+.fl-hero .an-verdict-act { justify-content: flex-start; gap: var(--s-2); min-width: 170px; }
+.fl-hero .an-verdict-act .btn { width: 100%; justify-content: center; }
+.fl-hero.is-live { --tone: var(--accent); }
+.fl-hero.is-idle { --tone: var(--met1); }
+.fl-sep { color: var(--text-disabled); font-weight: 400; margin: 0 4px; }
+.fl-vs { margin-left: 10px; color: var(--text-muted); letter-spacing: 0.08em; }
+.fl-live-dot {
+  display: inline-block; width: 8px; height: 8px; margin-right: 8px; vertical-align: 1px;
+  background: var(--accent); box-shadow: 0 0 0 0 var(--accent-glow); animation: fl-pulse 1.4s ease-out infinite;
+}
+@keyframes fl-pulse { 0% { box-shadow: 0 0 0 0 var(--accent-glow); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.fl-bar { height: 4px; margin-top: var(--s-4); background: var(--surface-2); border-radius: 2px; overflow: hidden; max-width: 760px; }
+.fl-bar > span { display: block; width: 100%; height: 100%; transform-origin: left center; background: linear-gradient(90deg, var(--accent), var(--met1)); transition: transform var(--dur-3) var(--ease-out); }
+.fl-elapsed { font-family: var(--mono); font-size: 26px; font-weight: 500; color: var(--met1); font-variant-numeric: tabular-nums; text-align: right; }
+
+/* A short window (a 1366 x 768 laptop): the head tightens so the panes keep
+ * room for the steps and the output. */
+#sec-pipeline[data-fit=short] .fl-hero { padding: var(--s-3) var(--s-5); }
+#sec-pipeline[data-fit=short] .fl-hero .an-title { font-size: 23px; margin-top: 4px; }
+#sec-pipeline[data-fit=short] .fl-hero .an-lede { margin-top: 4px; font-size: 14px; }
+#sec-pipeline[data-fit=short] .fl-bar { margin-top: var(--s-3); }
+#sec-pipeline[data-fit=short] .fl-elapsed { font-size: 22px; }
+#sec-pipeline[data-fit=short] .fl-kpis { gap: var(--s-2) var(--s-3); }
+#sec-pipeline[data-fit=short] .fl-kpi { flex-direction: row; flex-wrap: wrap; align-items: baseline; column-gap: 8px; padding-top: 6px; }
+#sec-pipeline[data-fit=short] .fl-kpi-k { flex-basis: 100%; }
+#sec-pipeline[data-fit=short] .fl-kpi-v { font-size: 18px; }
+#sec-pipeline[data-fit=short] .fl-kpi-s { display: none; }
+#sec-pipeline[data-fit=short] .fl-warns { margin-top: var(--s-3); padding-top: var(--s-2); }
+#sec-pipeline[data-fit=short] .fl-ev { margin-top: var(--s-3); }
+#sec-pipeline[data-fit=short] .px-fix { padding: 6px 10px; }
+#sec-pipeline[data-fit=short] .fl-fix-note { display: none; }
+
+/* The failure and report cards put their parts side by side when the page is
+ * wide: the reason (or verdict) on the left, what to change (or the numbers)
+ * on the right, the warnings under both. */
+@container flow (min-width: 1240px) {
+  .fl-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); column-gap: var(--s-6); align-items: start; }
+  .fl-split-c { grid-column: 1 / -1; }
+  .fl-split .fl-fixes-h { margin-top: 2px; }
+  .fl-split .fl-kpis { margin-top: 2px; }
+  .fl-split .fl-ev { max-width: none; }
+  .fl-report .fl-split { grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.6fr); }
+  .fl-split .fl-kpis { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); max-width: none; }
+  .fl-split .fl-kpi-v { font-size: 20px; }
+  .fl-split-c .fl-warns { margin-top: var(--s-3); max-width: none; }
+}
+
+/* failure: the reason, the line from the log, what to change */
+.fl-ev { position: relative; margin-top: var(--s-4); max-width: 980px; }
+.fl-ev pre {
+  margin: 0; padding: 10px 12px; white-space: pre-wrap; word-break: break-word;
+  font: 13px/1.5 var(--mono); color: var(--text-strong);
+  background: color-mix(in srgb, var(--fail) 9%, var(--bg)); border: 1px solid color-mix(in srgb, var(--fail) 40%, var(--border));
+  border-radius: var(--r-sm);
+}
+.fl-code {
+  position: absolute; top: -9px; right: 10px; padding: 1px 7px; border-radius: 3px;
+  font: 600 11px/1.5 var(--mono); letter-spacing: 0.06em; color: var(--fail); background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--fail) 40%, var(--border));
+}
+.fl-fixes-h {
+  margin: var(--s-5) 0 var(--s-2); font-family: var(--mono); font-size: 11.5px; font-weight: 500;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--met1);
+}
+body.theme-light .fl-fixes-h { color: var(--accent); }
+.fl-fix-note { margin: var(--s-2) 0 0; font-size: 12.5px; color: var(--text-muted); }
+
+/* report card */
+.fl-covers { margin-top: 6px; font-size: 13px; color: var(--text-muted); max-width: 86ch; }
+.fl-covers summary { cursor: pointer; color: var(--met1); width: max-content; }
+body.theme-light .fl-covers summary { color: var(--accent); }
+.fl-covers p { margin: 6px 0 0; line-height: 1.5; }
+.fl-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s-2) var(--s-4); margin-top: var(--s-4); max-width: 1180px; }
+.fl-kpi { display: flex; flex-direction: column; gap: 2px; padding: 8px 0 0; border-top: 1px solid var(--border); min-width: 0; }
+.fl-kpi-k { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); }
+.fl-kpi-v { font-size: 22px; font-weight: 700; color: var(--text-strong); font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: -0.01em; }
+.fl-kpi-v small { margin-left: 4px; font-size: 13px; font-weight: 500; color: var(--text-muted); }
+.fl-kpi.is-bad .fl-kpi-v { color: var(--fail); }
+.fl-kpi-s { font-size: 12.5px; color: var(--text-muted); }
+.fl-delta { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.fl-delta.is-better { color: var(--pass); }
+.fl-delta.is-worse { color: var(--fail); }
+/* the warnings: the count, the codes and "every code" on one line */
+.fl-warns {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  margin-top: var(--s-4); padding-top: var(--s-3); border-top: 1px dashed var(--border); max-width: 1180px; font-size: 13px;
+}
+.fl-warns-h { display: flex; align-items: center; gap: 6px; color: var(--text); }
+.fl-warns-h svg { color: var(--warn); }
+.fl-w-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.fl-warns .fl-notes { flex-basis: 100%; margin-top: 0; }
+.fl-warns .fl-w-all { margin-top: 0; }
+.fl-warns .fl-w-all[open] { flex-basis: 100%; }
+.fl-w { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted); }
+.fl-w code { font: 12px var(--mono); color: var(--text); }
+.fl-w.is-new { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); }
+.fl-w b, .fl-w-all b { font: 600 10.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--warn); }
+.fl-notes { margin: 8px 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; color: var(--text); }
+.fl-notes code { font: 600 12px var(--mono); margin-right: 6px; color: var(--warn); }
+.fl-w-all { margin-top: 6px; }
+.fl-w-all summary { cursor: pointer; color: var(--text-muted); width: max-content; }
+.fl-w-all ul { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.fl-w-all li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fl-w-all code { font: 12px var(--mono); }
+
+/* ---------- strip: seven stages ---------- */
+.fl-strip { list-style: none; margin: 0 0 var(--fl-gap); padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: var(--s-2); }
+@container flow (min-width: 1080px) { .fl-strip { grid-template-columns: repeat(7, minmax(0, 1fr)); } }
+.fl-strip > li { min-width: 0; display: flex; }
+.fl-tile {
+  position: relative; display: flex; flex-direction: column; width: 100%; padding: 0; overflow: hidden; text-align: left;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--border); border-radius: var(--r-md); color: var(--text); cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
+}
+li.fl-tile { cursor: default; }
+button.fl-tile:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.fl-tile::before { content: ""; position: absolute; z-index: 1; top: 0; left: 0; right: 0; height: 2px; background: var(--tone, transparent); }
+.fl-tile.is-done { --tone: var(--pass); }
+.fl-tile.is-failed { --tone: var(--fail); border-color: color-mix(in srgb, var(--fail) 55%, var(--border)); }
+.fl-tile.is-stopped { --tone: var(--warn); }
+.fl-tile.is-running { --tone: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow), 0 6px 22px var(--accent-soft); }
+.fl-tile.is-pending, .fl-tile.is-not_run { border-style: dashed; }
+.fl-tile.is-not_run .fl-tile-txt, .fl-tile.is-pending .fl-tile-txt { opacity: 0.7; }
+/* The picture gives up height first when the window is short, so the panes
+ * below keep theirs: about 60 px on a 1366 x 768 laptop, 125 at 1080p, 150 at 1440p. */
+.fl-pic {
+  position: relative; display: grid; place-items: center; aspect-ratio: 16 / 9; overflow: hidden;
+  max-height: clamp(44px, calc(var(--fl-h, 900px) * 0.2 - 60px), 150px);
+  border-bottom: 1px solid var(--border);
+  background:
+    linear-gradient(color-mix(in srgb, var(--border) 60%, transparent) 1px, transparent 1px) 0 0 / 14px 14px,
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 60%, transparent) 1px, transparent 1px) 0 0 / 14px 14px,
+    var(--bg);
+}
+.fl-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity var(--dur-3) var(--ease-out); }
+.fl-pic img.is-in { opacity: 1; }
+#sec-pipeline[data-fit=short] { padding-top: var(--s-3); --fl-body-min: 240px; }
+#sec-pipeline[data-fit=short] .fl-pic { max-height: 44px; }
+#sec-pipeline[data-fit=short] .fl-pic:not(.has-img) .fl-pic-n { font-size: 22px; }
+#sec-pipeline[data-fit=short] .fl-tile-txt { padding: 6px 10px 7px; gap: 1px; }
+.fl-pic-n {
+  font: 600 30px/1 var(--mono); letter-spacing: -0.02em; color: color-mix(in srgb, var(--text-muted) 38%, transparent);
+}
+.fl-pic img + .fl-pic-n {
+  position: absolute; top: 6px; left: 8px; font-size: 12px; color: var(--met1);
+  background: color-mix(in srgb, var(--bg) 70%, transparent); padding: 1px 5px; border-radius: 2px;
+}
+.fl-tile.is-running .fl-pic-n { color: var(--met1); animation: fl-breathe 1.6s ease-in-out infinite; }
+@keyframes fl-breathe { 50% { opacity: 0.45; } }
+.fl-tile-txt { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 10px; min-width: 0; }
+.fl-tile-h { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.fl-tile-h b { font-size: 14px; font-weight: 600; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fl-tile-sub { font-size: 12.5px; line-height: 1.35; color: var(--text); min-height: 1.35em; }
+li.fl-tile .fl-tile-sub { color: var(--text-muted); }
+.fl-tile-time { display: flex; flex-wrap: wrap; gap: 0 8px; font-family: var(--mono); font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.fl-was { color: var(--text-disabled); }
+.fl-was.is-slow { color: var(--warn); }
+.vf-mark.is-run { background: var(--accent); animation: fl-breathe 1.2s ease-in-out infinite; border-radius: 2px; }
+@media (prefers-reduced-motion: reduce) { .fl-live-dot, .fl-tile.is-running .fl-pic-n, .vf-mark.is-run { animation: none; } }
+
+/* ---------- body: every step | the output, two panes of one height ---------- */
+.fl-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--fl-gap); }
+.fl-body[hidden] { display: none; }
+.fl-body > .fl-steps { height: 340px; }
+.fl-body > .fl-insp { height: 560px; }
+@container flow (min-width: 1100px) {
+  #sec-pipeline > .fl-body {
+    flex: 1 1 0; min-height: var(--fl-body-min);
+    grid-template-columns: clamp(360px, 28%, 560px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+  }
+  .fl-body > .fl-steps, .fl-body > .fl-insp { height: auto; }
+}
+
+.fl-pane {
+  position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+}
+.fl-pane::before { content: ""; position: absolute; z-index: 3; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); opacity: 0.45; }
+.fl-pane-h {
+  flex: none; display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 8px 12px 8px 14px;
+  border-bottom: 1px solid var(--border); font-size: 15px; color: var(--text-strong);
+}
+.fl-pane-sub { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.fl-follow { margin-left: auto; }
+
+/* the steps: one list, the stage names as lane headings that stay at the top
+   while their steps scroll under them */
+.fl-steps-scroll { position: relative; flex: 1 1 0; min-height: 0; overflow: auto; padding: 0 6px 10px; outline: none; }
+.fl-stage-h {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px;
+  margin: 0 -6px 2px; padding: 9px 14px 6px;
+  background: var(--surface); border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.fl-grp-n { font: 500 11.5px var(--mono); color: var(--met1); }
+body.theme-light .fl-grp-n { color: var(--accent); }
+.fl-stage-h b { font-family: var(--cond); font-size: 12.5px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-strong); }
+.fl-grp-meta { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
+.fl-stage.is-running .fl-stage-h b { color: var(--met1); }
+body.theme-light .fl-stage.is-running .fl-stage-h b { color: var(--accent); }
+.fl-stage.is-failed .fl-stage-h b { color: var(--fail); }
+.fl-stage.is-pending .fl-stage-h b, .fl-stage.is-not_run .fl-stage-h b { color: var(--text-muted); }
+
+.fl-step {
+  display: grid; grid-template-columns: 12px 22px minmax(0, 1fr) auto 54px; align-items: center; gap: 8px;
+  width: 100%; height: 28px; padding: 0 8px; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--text); text-align: left; cursor: pointer;
+  transition: background-color var(--dur-3) var(--ease-out);
+}
+.fl-step:hover { background: var(--hover); }
+.fl-step-no { font: 11px var(--mono); color: var(--text-disabled); font-variant-numeric: tabular-nums; }
+.fl-step-name { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fl-step-tool { font: 11px var(--mono); letter-spacing: 0.04em; color: color-mix(in srgb, var(--tool, var(--text-muted)) 85%, var(--text)); white-space: nowrap; }
+.fl-step-time { font: 12px var(--mono); color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fl-step.is-running { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.fl-step.is-running .fl-step-name { color: var(--text-strong); font-weight: 600; }
+.fl-step.is-running .fl-step-no, .fl-step.is-running .fl-step-time { color: var(--met1); }
+.fl-step.is-failed .fl-step-name { color: var(--fail); font-weight: 600; }
+.fl-step.is-pending .fl-step-name, .fl-step.is-not_run .fl-step-name, .fl-step.is-skipped .fl-step-name { color: var(--text-muted); }
+.fl-step.is-pending .fl-step-tool, .fl-step.is-not_run .fl-step-tool { opacity: 0.6; }
+.fl-step.is-sel { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent); }
+.fl-step.is-sel.is-running { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.fl-step:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* the way back to the running step after scrolling away from it */
+.fl-now {
+  position: absolute; z-index: 2; left: 50%; bottom: 12px; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 6px; max-width: calc(100% - 24px); height: 30px; padding: 0 12px;
+  border: 0; border-radius: var(--r-sm); background: var(--accent); color: var(--on-accent);
+  font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.fl-now[hidden] { display: none; }
+.fl-now svg { transform: rotate(90deg); flex: none; }
+
+/* the output: the run's own, or one step's */
+.fl-insp-h { flex-direction: column; align-items: stretch; gap: 4px; padding: 8px 12px 8px 14px; }
+.fl-insp-top { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 28px; }
+.fl-insp-top h3 { margin: 0; font-size: 17px; font-weight: 700; color: var(--text-strong); letter-spacing: -0.01em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-insp-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-height: 24px; font-size: 12.5px; color: var(--text-muted); }
+.fl-insp-acts { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.fl-insp-acts:empty { display: none; }
+.fl-back {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px 0 5px;
+  border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--text-muted); font-size: 12.5px; cursor: pointer;
+}
+.fl-back svg { transform: rotate(180deg); }
+.fl-back:hover { color: var(--text-strong); border-color: var(--accent); }
+.fl-tabs { flex: none; margin-left: auto; display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); }
+.fl-tabs button {
+  height: 26px; padding: 0 10px; border: 0; border-radius: 3px; background: transparent;
+  color: var(--text-muted); font-size: 12.5px; white-space: nowrap; cursor: pointer;
+}
+.fl-tabs button:hover { color: var(--text-strong); }
+.fl-tabs button[aria-selected=true] { background: var(--surface-2); color: var(--text-strong); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.fl-id {
+  display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg); font: 12px var(--mono); color: var(--text); cursor: pointer;
+}
+.fl-id:hover { border-color: var(--accent); }
+.fl-insp-body { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; padding: 8px; }
+.fl-log { flex: 1 1 0; min-height: 0; }
+.fl-log[hidden], .fl-page[hidden] { display: none; }
+.fl-page { flex: 1 1 0; min-height: 0; overflow: auto; padding: 4px 8px 12px; }
+.fl-page > .an-sub:first-child { margin-top: var(--s-2); }
+.fl-what { margin: var(--s-2) 0 0; font-size: 14px; line-height: 1.55; color: var(--text); max-width: 92ch; }
+.fl-kv { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px var(--s-4); }
+.fl-kv > div { display: flex; justify-content: space-between; gap: var(--s-3); padding: 4px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); font-size: 13px; }
+.fl-kv dt { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-kv dd { margin: 0; font-weight: 600; color: var(--text-strong); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fl-kv dd small { font-weight: 400; color: var(--text-muted); }
+.fl-vars { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fl-var {
+  padding: 2px 8px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg);
+  font: 12px var(--mono); color: var(--text); cursor: pointer;
+}
+.fl-var:hover { border-color: var(--accent); color: var(--text-strong); }
+
+/* ---------- log viewer (logview.js) ---------- */
+.lv { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg); overflow: hidden; }
+.lv-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.lv-q { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 180px; min-width: 140px; max-width: 320px; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text-muted); }
+.lv-q:focus-within { border-color: var(--accent); }
+.lv-q input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font-size: 13px; outline: none; }
+.lv-chip { height: 24px; padding: 0 8px; border-radius: 3px; border: 1px solid var(--border); background: var(--surface-2); font: 12px var(--mono); cursor: pointer; }
+.lv-chip.is-err { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 45%, var(--border)); }
+.lv-chip.is-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
+.lv-chip:hover { background: var(--hover); }
+.lv-tog { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--text-muted); cursor: pointer; white-space: nowrap; }
+.lv-tog input { accent-color: var(--accent); }
+.lv-tog[hidden] { display: none; }
+.lv-count { font: 11.5px var(--mono); color: var(--text-disabled); white-space: nowrap; }
+.lv-acts { margin-left: auto; display: inline-flex; gap: 4px; }
+.lv-acts .btn { height: 26px; }
+.lv-scroll { position: relative; flex: 1; min-height: 0; overflow: auto; outline: none; }
+.lv-spacer { position: relative; min-width: max-content; }
+.lv-rows { position: absolute; top: 0; left: 0; min-width: 100%; will-change: transform; }
+.lv-row { display: flex; height: 20px; line-height: 20px; font: 12.5px/20px var(--mono); white-space: pre; color: var(--text); }
+.lv-n { flex: 0 0 auto; width: 56px; padding-right: 10px; text-align: right; color: var(--text-disabled); user-select: none; border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.lv-t { padding: 0 12px 0 10px; }
+.lv-row.is-err { background: color-mix(in srgb, var(--fail) 12%, transparent); }
+.lv-row.is-err .lv-n { color: var(--fail); box-shadow: inset 2px 0 0 var(--fail); }
+.lv-row.is-warn { background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.lv-row.is-warn .lv-n { color: var(--warn); }
+.lv-row.is-head { color: var(--met1); font-weight: 600; background: color-mix(in srgb, var(--met1) 9%, transparent); }
+body.theme-light .lv-row.is-head { color: var(--accent); }
+.lv-row.is-hit { outline: 1px solid var(--accent); outline-offset: -1px; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.lv-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: var(--s-4); color: var(--text-muted); font-size: 13px; text-align: center; }
+.lv-empty[hidden] { display: none; }
+
+/* ---------- rail: a ring on Flow while a run goes, a mark when it failed ---------- */
+.side-tab .ico { position: relative; }
+.side-tab.is-running .ico::after {
+  content: ""; position: absolute; inset: -6px; border-radius: 50%;
+  background: conic-gradient(var(--met1) var(--run-pct, 0%), color-mix(in srgb, var(--met1) 18%, transparent) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+}
+.side-tab.has-failed .ico::after {
+  content: ""; position: absolute; top: -3px; right: -5px; width: 8px; height: 8px; border-radius: 1px;
+  background: var(--fail); box-shadow: 0 0 0 2px var(--bg);
+}
+/* The status line's run text is a link to Flow. */
+#overall-progress[data-go] { cursor: pointer; }
+#overall-progress[data-go]:hover { color: var(--text-strong); text-decoration: underline; text-underline-offset: 3px; }
+/* "Run to Placement": a partial run says so on the button. */
+.run-main.is-partial { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 80%, var(--warn)) 0%, var(--accent-2) 100%); }
+.menu-field { display: block; padding: 2px 6px 6px; }
+.menu-field select { width: 100%; height: 32px; }
+.menu-check { align-items: flex-start; cursor: pointer; }
+.menu-check input { margin-top: 3px; accent-color: var(--accent); }
+
+/* where the time went (finished run, no step picked) */
+.fl-time { list-style: none; margin: var(--s-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.fl-time-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 0.9fr) 92px; align-items: center; gap: var(--s-3);
+  width: 100%; padding: 7px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); text-align: left; cursor: pointer;
+}
+.fl-time-row:hover { background: var(--hover); }
+.fl-time-name { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fl-time-name .muted { font-size: 12px; margin-left: 6px; }
+.fl-time-bar { height: 8px; background: var(--surface-2); border-radius: 1px; overflow: hidden; }
+.fl-time-bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--chart-1), var(--met1)); }
+.fl-time-v { font: 12.5px var(--mono); text-align: right; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.fl-time-v small { color: var(--text-muted); }

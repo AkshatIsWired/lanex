@@ -52,6 +52,7 @@ def _needed_data_files() -> set:
     roots = [
         _GUI / "server" / "static",
         _GUI / "controller" / "templates",
+        _GUI / "data",
     ]
     for root in roots:
         for dirpath, _dirs, files in os.walk(root):

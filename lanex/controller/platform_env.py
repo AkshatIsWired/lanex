@@ -21,6 +21,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import re
 import shutil
 import socket
 import sys
@@ -146,7 +147,211 @@ def wsl_gui_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     if is_wsl() and not os.environ.get("LANEX_WAYLAND"):
         env.setdefault("GDK_BACKEND", "x11,*")
         env.setdefault("QT_QPA_PLATFORM", "xcb;wayland")
+        # With systemd on (the Windows appliance), /run/user/<uid> has no
+        # wayland-0 while WSL still exports WAYLAND_DISPLAY; Mesa's EGL and any
+        # toolkit that ignores the pins above then pick the Wayland path anyway.
+        # Without the variable, X11/XWayland is the only transport left.
+        if env.get("DISPLAY"):
+            env.pop("WAYLAND_DISPLAY", None)
+    return viewer_scale_env(env)
+
+
+# ------------------------------------------------------------ HiDPI scaling --
+# WSLg presents X11 apps 1:1 in physical pixels. Its Weston compositor learns
+# the Windows display scale (it logs ``desktopScaleFactor:175``) but keeps
+# ``scale:1`` unless the user hand-edits a global .wslgconfig, and XWayland then
+# reports 96 DPI. So on a 4K / 150-200 % laptop every viewer (KLayout, GTKWave,
+# Magic, the OpenROAD GUI) opens at roughly half the size of the Windows UI
+# around it. The fix is the toolkit's own scale knob, set per launch: the app
+# re-renders at the larger size (sharp text), nothing global changes, and the
+# user's other WSL distros are untouched.
+_WESTON_LOG = Path("/mnt/wslg/weston.log")
+_SCALE_MIN, _SCALE_MAX = 1.0, 4.0
+
+# Environment that already expresses a scale choice. If the user (or their
+# desktop session) set any of a group, LanEx leaves that whole group alone.
+_GDK_SCALE_VARS = ("GDK_SCALE", "GDK_DPI_SCALE")
+_QT_SCALE_VARS = ("QT_SCALE_FACTOR", "QT_SCREEN_SCALE_FACTORS")
+VIEWER_SCALE_VARS = _GDK_SCALE_VARS + _QT_SCALE_VARS + (
+    "QT_AUTO_SCREEN_SCALE_FACTOR", "QT_ENABLE_HIGHDPI_SCALING", "XCURSOR_SIZE")
+
+
+def _clamp_scale(value: float) -> float:
+    return round(min(max(value, _SCALE_MIN), _SCALE_MAX), 2)
+
+
+def parse_weston_scale(text: str) -> Optional[float]:
+    """Residual scale X11 apps need, from WSLg's ``weston.log`` text.
+
+    The RDP backend logs each monitor layout the Windows client sends::
+
+        rdpMonitor[0]: x:0, y:0, width:2880, height:1800, is_primary:1
+        rdpMonitor[0]: desktopScaleFactor:175, deviceScaleFactor:180
+        rdpMonitor[0]: scale:1, clientScale:1.00
+
+    Weston re-logs the layout it applied with ``desktopScaleFactor:0``, so the
+    last NON-zero factor per monitor is the Windows setting. The primary
+    monitor wins (X11 has one DPI for the whole screen). If the compositor
+    already magnifies (a .wslgconfig with WESTON_RDP_HI_DPI_SCALING), only the
+    remainder is returned, so apps are never scaled twice. None when the log
+    has no usable layout.
+    """
+    factor: Dict[int, int] = {}
+    compositor: Dict[int, float] = {}
+    primary: Optional[int] = None
+    for line in text.splitlines():
+        m = re.search(r"rdpMonitor\[(\d+)\]:.*is_primary:(\d)", line)
+        if m:
+            if m.group(2) == "1":
+                primary = int(m.group(1))
+            continue
+        m = re.search(r"rdpMonitor\[(\d+)\]:\s*desktopScaleFactor:(\d+)", line)
+        if m:
+            if int(m.group(2)) > 0:
+                factor[int(m.group(1))] = int(m.group(2))
+            continue
+        m = re.search(r"rdpMonitor\[(\d+)\]:\s*scale:(\d+),\s*client\s*scale\s*:\s*([\d.]+)",
+                      line, re.IGNORECASE)
+        if m:
+            try:
+                compositor[int(m.group(1))] = max(float(m.group(2)), float(m.group(3)))
+            except ValueError:
+                pass
+    idx = primary if primary in factor else (min(factor) if factor else None)
+    if idx is None:
+        return None
+    return _clamp_scale(factor[idx] / 100.0 / max(compositor.get(idx, 1.0), 1.0))
+
+
+def _windows_applied_dpi_scale() -> Optional[float]:
+    """Windows' sign-in display scale via ``reg.exe`` (WSL interop), or None.
+
+    Fallback for WSLg builds whose log lacks the monitor layout. AppliedDPI is
+    96 at 100 %, 144 at 150 %, 192 at 200 %."""
+    reg = shutil.which("reg.exe")
+    if not reg and os.path.exists("/mnt/c/Windows/System32/reg.exe"):
+        reg = "/mnt/c/Windows/System32/reg.exe"   # appendWindowsPath=false
+    if not reg:
+        return None
+    import subprocess
+    try:
+        r = subprocess.run(
+            [reg, "query", r"HKCU\Control Panel\Desktop\WindowMetrics", "/v", "AppliedDPI"],
+            capture_output=True, text=True, timeout=3)
+    except Exception:
+        return None
+    m = re.search(r"AppliedDPI\s+REG_DWORD\s+0x([0-9a-fA-F]+)", r.stdout or "")
+    if not m:
+        return None
+    dpi = int(m.group(1), 16)
+    return _clamp_scale(dpi / 96.0) if dpi > 0 else None
+
+
+def viewer_scale() -> float:
+    """How much desktop viewers must be enlarged to match the host's UI scale.
+
+    1.0 means leave them alone. ``LANEX_VIEWER_SCALE`` overrides everything
+    (``1`` turns scaling off; ``1.5`` forces 150 %). Otherwise only WSL is
+    measured: a native Linux desktop already exports its own scale settings
+    (GNOME/KDE set Xft.dpi, GDK_SCALE, QT_*), and those reach the viewers as-is.
+    Read at each launch, so moving to a monitor with a different scale applies
+    to the next viewer opened.
+    """
+    override = (os.environ.get("LANEX_VIEWER_SCALE") or "").strip().rstrip("%")
+    if override:
+        try:
+            value = float(override)
+        except ValueError:
+            _log.warning("ignoring LANEX_VIEWER_SCALE=%r (expected e.g. 1.5)", override)
+        else:
+            # "150" reads as a percentage, like the Windows setting.
+            return _clamp_scale(value / 100.0 if value >= 10 else value)
+    if not is_wsl():
+        return 1.0
+    scale: Optional[float] = None
+    try:
+        with open(_WESTON_LOG, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 512 * 1024))
+            scale = parse_weston_scale(fh.read().decode("utf-8", errors="replace"))
+    except OSError:
+        scale = None
+    if scale is None:
+        scale = _windows_applied_dpi_scale()
+    return scale or 1.0
+
+
+def viewer_scale_env(base: Optional[Dict[str, str]] = None,
+                     scale: Optional[float] = None) -> Dict[str, str]:
+    """Return *base* plus the toolkit variables that enlarge a viewer by *scale*.
+
+    * Qt 5/6 (KLayout, OpenROAD GUI): ``QT_SCALE_FACTOR`` takes fractions, so
+      175 % is exactly 175 %.
+    * GTK 3 (GTKWave): ``GDK_SCALE`` is integer only, so round it and correct
+      the text with ``GDK_DPI_SCALE`` (175 % = 2 x 0.875). Text lands at the
+      exact size; icons and padding at the nearest whole step.
+    * ``XCURSOR_SIZE`` so the pointer over a viewer is not a speck.
+
+    Tk (Magic, Netgen) has no such variable; see :func:`tk_scale_tcl`. GDS3D
+    draws with fixed X11 bitmap fonts and cannot be scaled. A group the base
+    env already sets is left untouched.
+    """
+    env: Dict[str, str] = dict(base) if base else {}
+    s = viewer_scale() if scale is None else scale
+    if s < 1.1:
+        return env
+    if not any(env.get(k) for k in _QT_SCALE_VARS):
+        env["QT_SCALE_FACTOR"] = f"{s:g}"
+    if not any(env.get(k) for k in _GDK_SCALE_VARS):
+        whole = max(1, int(s + 0.5))
+        env["GDK_SCALE"] = str(whole)
+        env["GDK_DPI_SCALE"] = f"{s / whole:.3g}"
+    env.setdefault("XCURSOR_SIZE", str(int(round(24 * s))))
     return env
+
+
+def tk_scale_tcl(scale: float) -> str:
+    """Tcl that enlarges a Tk app's fonts by *scale* (empty when no scaling).
+
+    Tk sizes its fonts from the X screen's reported DPI, which WSLg pins at 96,
+    and its default fonts are in pixels, so neither ``tk scaling`` alone nor
+    any environment variable helps. This rescales every named font in place
+    (widgets using them update live) and raises ``tk scaling`` for fonts made
+    later. Magic and Netgen run their command console (tkcon) in a second
+    interpreter of the same process, reached with ``tkcon master eval``.
+
+    ``tk scaling`` is process-wide, and Tk implements it by rewriting the
+    screen's millimetre size, so only the first interpreter can read the
+    original value: it changes the scaling once and hands that base to the
+    console, which only resizes its own fonts. Idempotent per interpreter.
+    """
+    if scale < 1.1:
+        return ""
+    s = f"{scale:g}"
+    fonts = (
+        "foreach _lx_f [font names] {\n"
+        "  catch {\n"
+        "    set _lx_z [font configure $_lx_f -size]\n"
+        "    if {$_lx_z < 0} {\n"
+        f"      font configure $_lx_f -size [expr {{int(round($_lx_z * {s}))}}]\n"
+        "    } elseif {$_lx_z > 0} {\n"
+        f"      font configure $_lx_f -size [expr {{-int(round($_lx_z * $::_lx_base * {s}))}}]\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    guarded = "if {![info exists ::lanex_tk_scaled]} {\nset ::lanex_tk_scaled 1\n" + fonts + "}\n"
+    return (
+        "# LanEx: enlarge this Tk app to match the display scale.\n"
+        "if {![info exists ::lanex_tk_scaled] && [info commands tk] ne \"\"} {\n"
+        "  set ::_lx_base [tk scaling]\n"
+        f"  catch {{tk scaling [expr {{$::_lx_base * {s}}}]}}\n"
+        "  catch {tkcon master eval [list set ::_lx_base $::_lx_base]}\n"
+        # ``tkcon master`` runs its arguments as one command, hence ``eval``.
+        "  catch {tkcon master eval {" + guarded + "}}\n"
+        + guarded
+        + "}\n"
+    )
 
 
 # Multi-arch DRI driver locations (Debian/Ubuntu multiarch, Fedora/RHEL lib64,
@@ -455,44 +660,168 @@ def dns_ok(host: str = _DNS_PROBE_HOST, timeout: float = 4.0) -> Optional[bool]:
 
 
 def wsl_dns_remediation() -> str:
-    """The exact, copy-pasteable fix for the broken WSL2 ``/etc/resolv.conf``."""
+    """Safe WSL DNS guidance which preserves the host's resolver strategy."""
     return (
-        "WSL2 DNS looks broken — downloads can't resolve github.com. WSL "
-        "sometimes generates a non-working /etc/resolv.conf. Fix it in a WSL "
-        "terminal, then retry:\n"
-        "    sudo rm -f /etc/resolv.conf\n"
-        "    sudo bash -c 'echo \"nameserver 8.8.8.8\" > /etc/resolv.conf'\n"
-        "To make it stick across reboots, add to /etc/wsl.conf:\n"
-        "    [network]\n"
-        "    generateResolvConf = false"
+        "DNS resolution failed inside WSL. Keep WSL's generated resolver and DNS "
+        "tunneling enabled so VPN and company DNS continue to work. Check the "
+        "Windows network/VPN and WSL networking settings, restart only the LanEx "
+        "environment, then retry. A static resolv.conf is a last-resort, diagnosed "
+        "repair and must not replace an existing resolver configuration."
     )
 
 
-# Substrings that mark a name-resolution / connectivity failure in tool output.
-_NET_FAILURE_MARKERS = (
-    "temporary failure in name resolution",
-    "could not resolve host",
-    "name or service not known",
-    "getaddrinfo failed",
-    "failed to resolve",
-    "nodename nor servname",
-    "no address associated with hostname",
-    "connectionerror",
-    "readtimeout",
-    "read timed out",
-    "connecttimeout",
-    "connection timed out",
-    "max retries exceeded",
-    "network is unreachable",
+_DNS_FAILURE_MARKERS = (
+    "temporary failure in name resolution", "could not resolve host",
+    "name or service not known", "getaddrinfo failed", "failed to resolve",
+    "nodename nor servname", "no address associated with hostname",
+)
+_ROUTE_FAILURE_MARKERS = (
+    "network is unreachable", "enetunreach", "no route to host",
+    "destination host unreachable",
+)
+_TLS_FAILURE_MARKERS = (
+    "certificate verify failed", "certificate verification failed",
+    "unable to get local issuer certificate", "self signed certificate",
+    "tls handshake", "ssl certificate problem", "x509:",
+)
+_TIMEOUT_MARKERS = (
+    "readtimeout", "read timed out", "connecttimeout", "connection timed out",
+    "operation timed out", "timed out", "timeout was reached",
+)
+_CONNECTION_MARKERS = (
+    "connectionerror", "connection refused", "connection reset",
+    "connection aborted", "max retries exceeded", "couldn't connect",
+    "failed to connect",
 )
 
 
-def looks_like_network_failure(text: str) -> bool:
-    """True when *text* (tool stdout/stderr) shows a DNS/connectivity failure."""
+def redact_network_diagnostics(text: str) -> str:
+    """Remove proxy/HTTP credentials before diagnostics reach logs or state."""
     if not text:
-        return False
-    low = text.lower()
-    return any(m in low for m in _NET_FAILURE_MARKERS)
+        return ""
+    clean = re.sub(
+        r"(?i)(https?://)([^\s/@:]+):([^\s/@]+)@",
+        r"\1[redacted]@",
+        str(text),
+    )
+    clean = re.sub(
+        r"(?im)\b(authorization|proxy-authorization)\s*:\s*\S+[^\r\n]*",
+        r"\1: [redacted]",
+        clean,
+    )
+    clean = re.sub(
+        r"(?i)([?&](?:access_token|auth|key|password|sig|token)=)[^&\s]+",
+        r"\1[redacted]",
+        clean,
+    )
+    return clean
+
+
+def _diagnostic_tail(text: str, *, max_lines: int = 20, max_chars: int = 4000) -> str:
+    lines = redact_network_diagnostics(text).splitlines()[-max_lines:]
+    return "\n".join(lines)[-max_chars:]
+
+
+def diagnose_network_failure(output: str = "", *,
+                             dns_result: Optional[bool] = None) -> Optional[dict]:
+    """Classify a failed network/package operation without collapsing it to DNS.
+
+    The result is JSON-safe and includes a bounded, credential-redacted log tail.
+    ``None`` means the supplied evidence does not describe a known failure.
+    """
+    tail = _diagnostic_tail(output)
+    low = tail.lower()
+    if dns_result is None:
+        dns_result = dns_ok()
+
+    category = ""
+    retryable = False
+    summary = ""
+    remediation = ""
+
+    # Local resource/package-manager failures outrank incidental network text.
+    if any(m in low for m in ("no space left on device", "enospc", "disk quota exceeded")):
+        category, summary = "no-space", "The target filesystem ran out of space."
+        remediation = "Free space on the reported filesystem, then retry; completed caches are retained."
+    elif any(m in low for m in ("permission denied", "operation not permitted", "eacces")):
+        category, summary = "permission", "The operation was denied by filesystem permissions."
+        remediation = "Repair ownership of the LanEx-owned path shown in the log, then retry."
+    elif any(m in low for m in ("could not get lock", "unable to acquire the dpkg frontend lock",
+                                "waiting for cache lock", "is another process using it")):
+        category, retryable = "apt-lock", True
+        summary = "Another package manager currently owns the apt/dpkg lock."
+        remediation = "Let the active package operation finish, then retry; do not delete apt lock files."
+    elif any(m in low for m in ("dpkg was interrupted", "you must manually run 'dpkg --configure -a'",
+                                "dpkg --configure -a")):
+        category, retryable = "apt-interrupted", True
+        summary = "A previous package operation left dpkg configuration incomplete."
+        remediation = "LanEx can resume dpkg configuration after confirming no package manager is active."
+    elif any(m in low for m in ("unable to locate package", "some index files failed to download",
+                                "does not have a release file")):
+        category, retryable = "apt-index", True
+        summary = "The apt package index is missing, stale, or unavailable."
+        remediation = "Refresh the package index with bounded retries, preserving downloaded package caches."
+    elif "407" in low or "proxy authentication required" in low:
+        category = "proxy-auth"
+        summary = "The configured proxy requires authentication."
+        remediation = "Provide an explicit HTTP(S) proxy URL or ask the administrator for shell proxy settings; PAC files are not shell proxy URLs."
+    elif "429" in low or "too many requests" in low or "rate limit" in low:
+        category, retryable = "rate-limit", True
+        summary = "The remote service rate-limited the request."
+        remediation = "Wait for the service's retry window, then retry without discarding completed downloads."
+    elif any(m in low for m in _TLS_FAILURE_MARKERS):
+        category = "tls"
+        summary = "TLS certificate verification failed."
+        remediation = "Check the system clock, CA certificates, and any inspecting proxy; TLS verification will not be disabled."
+    elif any(m in low for m in _ROUTE_FAILURE_MARKERS) and dns_result is True:
+        category, retryable = "route", True
+        summary = "DNS works, but the destination has no reachable network route."
+        remediation = "Check VPN, firewall, route, and IPv4/IPv6 connectivity, then retry."
+    elif any(m in low for m in _DNS_FAILURE_MARKERS) or (not low and dns_result is False):
+        category, retryable = "dns", True
+        summary = "The destination name could not be resolved."
+        remediation = wsl_dns_remediation() if is_wsl() else (
+            "Check the current DNS/VPN/proxy configuration, then retry; LanEx will not replace it."
+        )
+    elif any(m in low for m in _ROUTE_FAILURE_MARKERS):
+        category, retryable = "route", True
+        summary = "The destination has no reachable network route."
+        remediation = "Check VPN, firewall, route, and IPv4/IPv6 connectivity, then retry."
+    elif any(m in low for m in _TIMEOUT_MARKERS):
+        category, retryable = "timeout", True
+        summary = "The network operation exceeded its bounded timeout."
+        remediation = "Check slow or filtered connectivity and retry; completed caches are retained."
+    elif re.search(r"\b(?:http[^\r\n]*\s)?(?:401|403)\b", low):
+        category = "http-auth"
+        summary = "The remote HTTP service rejected authorization."
+        remediation = "Check repository or registry access; the endpoint itself was reachable."
+    elif re.search(r"\b(?:http[^\r\n]*\s)?(?:4\d\d|5\d\d)\b", low):
+        category, retryable = "http-status", bool(re.search(r"\b5\d\d\b", low))
+        summary = "The remote HTTP service returned an error response."
+        remediation = "Verify the requested URL and retry later for a server-side error."
+    elif any(m in low for m in _CONNECTION_MARKERS):
+        category, retryable = "connection", True
+        summary = "The connection could not be established or was interrupted."
+        remediation = "Check proxy, VPN, firewall, and destination availability, then retry."
+    else:
+        return None
+
+    return {
+        "category": category,
+        "retryable": retryable,
+        "summary": summary,
+        "remediation": remediation,
+        "dns_ok": dns_result,
+        "log_tail": tail,
+    }
+
+
+def looks_like_network_failure(text: str) -> bool:
+    """True when *text* shows a transport, TLS, proxy, or HTTP failure."""
+    diagnosis = diagnose_network_failure(text, dns_result=True)
+    return bool(diagnosis and diagnosis["category"] not in {
+        "no-space", "permission", "apt-lock", "apt-interrupted", "apt-index",
+    })
 
 
 def network_remediation(output: str = "") -> Optional[str]:
@@ -502,19 +831,11 @@ def network_remediation(output: str = "") -> Optional[str]:
     otherwise returns generic connectivity guidance. Returns ``None`` when there
     is no evidence of a network problem and DNS resolves fine.
     """
-    net_evident = looks_like_network_failure(output)
     resolves = dns_ok()
-    if resolves is True and not net_evident:
+    diagnosis = diagnose_network_failure(output, dns_result=resolves)
+    if diagnosis is None:
         return None
-    if is_wsl() and (resolves is False or net_evident):
-        return wsl_dns_remediation()
-    if resolves is False or net_evident:
-        return (
-            "The download couldn't reach the network (DNS/connectivity). Check "
-            "your internet connection, any proxy/VPN/firewall, then retry. "
-            "If you're behind a proxy, set HTTP_PROXY/HTTPS_PROXY before launching."
-        )
-    return None
+    return diagnosis["summary"] + " " + diagnosis["remediation"]
 
 
 def host_display_available() -> bool:
@@ -551,16 +872,88 @@ def wsl_windows_path(linux_path: str) -> Optional[str]:
         return None
 
 
+@functools.lru_cache(maxsize=1)
+def wsl_windows_home() -> Optional[str]:
+    """The Windows user's profile folder as a WSL path (``/mnt/c/Users/<name>``).
+
+    Lets the folder picker offer the user's own Windows files. Asks Windows for
+    ``%USERPROFILE%`` through interop (run from ``/mnt/c`` so cmd.exe doesn't warn
+    about a UNC cwd), then falls back to the only real profile under
+    ``/mnt/c/Users``. ``None`` off WSL or when neither works.
+    """
+    if not is_wsl():
+        return None
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["/mnt/c/Windows/System32/cmd.exe", "/c", "echo %USERPROFILE%"],
+            capture_output=True, text=True, timeout=5, cwd="/mnt/c",
+        )
+        win = (out.stdout or "").strip().splitlines()[-1].strip() if out.stdout else ""
+        if win and "%" not in win:
+            conv = subprocess.run(["wslpath", "-u", win], capture_output=True, text=True, timeout=5)
+            p = (conv.stdout or "").strip()
+            if p and Path(p).is_dir():
+                return p
+    except Exception:
+        pass
+    try:
+        skip = {"public", "default", "default user", "all users", "defaultapppool", "wdagutilityaccount"}
+        users = [d for d in Path("/mnt/c/Users").iterdir()
+                 if d.is_dir() and d.name.lower() not in skip]
+        if len(users) == 1:
+            return str(users[0])
+    except Exception:
+        pass
+    return None
+
+
+def projects_dir() -> Path:
+    """Where New project puts designs by default.
+
+    On the Windows appliance that is ``%USERPROFILE%/LanEx-Projects`` (seen from
+    WSL as ``/mnt/c/Users/<name>/LanEx-Projects``), so projects sit with the
+    user's own files and Explorer shows them like any other folder. Two cases
+    fall back to ``~/lanex-projects`` in the Linux home: a Windows profile path
+    with whitespace (LibreLane splits file lists on spaces) and no WSL at all.
+    """
+    win = wsl_windows_home()
+    if win and not any(c.isspace() for c in win):
+        return Path(win) / "LanEx-Projects"
+    return Path.home() / "lanex-projects"
+
+
+_WIN_PATH_RX = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+
+def to_host_path(path: str) -> str:
+    """Accept a Windows-style path where a Linux path is expected.
+
+    On WSL, drive paths (``C:/Users/me/chip``, either slash) and UNC paths
+    (``//wsl.localhost/lanex/home/...``, backslashed as Explorer shows them) are
+    translated with ``wslpath -u``, so people can paste what Explorer shows them. Anything else (and everything off WSL) is returned unchanged.
+    """
+    p = (path or "").strip().strip('"')
+    if not p or not is_wsl() or not _WIN_PATH_RX.match(p):
+        return p
+    try:
+        import subprocess
+        out = subprocess.run(["wslpath", "-u", p], capture_output=True, text=True, timeout=5)
+        conv = (out.stdout or "").strip()
+        return conv or p
+    except Exception:
+        return p
+
+
 def network_status() -> dict:
     """JSON-safe snapshot for the UI: WSL flag, DNS reachability, remediation."""
     resolves = dns_ok()
-    rem = None
-    if resolves is False:
-        rem = wsl_dns_remediation() if is_wsl() else network_remediation()
+    diagnosis = diagnose_network_failure("", dns_result=resolves)
     return {
         "wsl": is_wsl(),
         "dns_ok": resolves,
-        "remediation": rem,
+        "category": diagnosis["category"] if diagnosis else None,
+        "remediation": diagnosis["remediation"] if diagnosis else None,
     }
 
 

@@ -49,11 +49,13 @@ def test_network_remediation_on_failure(monkeypatch):
     assert platform_env.network_remediation("everything fine") is None
 
 
-def test_wsl_dns_remediation_mentions_resolv_conf(monkeypatch):
+def test_wsl_dns_remediation_preserves_modern_resolver(monkeypatch):
     monkeypatch.setattr(platform_env, "is_wsl", lambda: True)
     monkeypatch.setattr(platform_env, "dns_ok", lambda *a, **k: False)
     rem = platform_env.network_remediation("Could not resolve host")
-    assert rem and "/etc/resolv.conf" in rem and "nameserver 8.8.8.8" in rem
+    assert rem and "DNS tunneling" in rem
+    assert "nameserver 8.8.8.8" not in rem
+    assert "generateResolvConf = false" not in rem
 
 
 # ----------------------------------------------------------- #2 WSL win-only probe

@@ -1,0 +1,116 @@
+# Monthly check that every dependency Windows Setup pins can still be fetched
+# from every place Setup would look, with the pinned hash. Opens (or updates)
+# one issue when anything is missing or changed, so a vanished file is found
+# by us, not by a new user's failed install.
+#
+# What it fetches, and from where:
+#   * the Ubuntu WSL rootfs: our mirror release, releases.ubuntu.com,
+#     old-releases.ubuntu.com (SHA-256 from scripts/mirror_deps.py);
+#   * every PDK file in windows/setup/pdk-assets.json: our mirror release and
+#     the upstream ciel-releases asset (SHA-256 each), plus the version still
+#     being listed in ciel's manifest;
+#   * every Python package in windows/setup/requirements.lock: downloaded
+#     with pip --require-hashes (the exact files Setup installs);
+#   * the Ubuntu archive snapshot the appliance's apt uses (its InRelease,
+#     for every pocket);
+#   * the LibreLane image: the pinned tag still resolves to the pinned digest
+#     and the digest itself is pullable (manifest fetch, no layer download).
+#
+# About 5 GB of downloads per run. Needs no secrets beyond GITHUB_TOKEN.
+name: Dependency watch
+
+on:
+  schedule:
+    - cron: "17 5 3 * *"   # 05:17 UTC on the 3rd of every month
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rootfs and PDK files (every location, SHA-256)
+        id: files
+        continue-on-error: true
+        run: |
+          python3 scripts/mirror_deps.py check --work "$RUNNER_TEMP/dl" --report "$RUNNER_TEMP/files.md"
+
+      - name: Python packages (pip --require-hashes)
+        id: python
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python3 -m venv "$RUNNER_TEMP/v"
+          "$RUNNER_TEMP/v/bin/pip" download --disable-pip-version-check --require-hashes --no-deps \
+            --only-binary=:all: --python-version 3.12 --platform manylinux_2_39_x86_64 \
+            --platform manylinux_2_28_x86_64 --platform manylinux_2_17_x86_64 \
+            --platform manylinux2014_x86_64 --platform linux_x86_64 \
+            -r windows/setup/requirements.lock -d "$RUNNER_TEMP/wheels" 2>&1 | tee "$RUNNER_TEMP/pip.log"
+
+      - name: Ubuntu archive snapshot
+        id: apt
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          snap=$(sed -n 's/^APT_SNAPSHOT = "\(.*\)"/\1/p' scripts/build_windows_release.py)
+          test -n "$snap"
+          for suite in noble noble-updates noble-security noble-backports; do
+            curl -fsS --max-time 60 -o /dev/null "https://snapshot.ubuntu.com/ubuntu/${snap}/dists/${suite}/InRelease"
+            echo "ok $suite @ $snap"
+          done
+
+      - name: LibreLane image digest
+        id: image
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          ref=$(sed -n "s/^ *ImageReference = '\(.*\)'/\1/p" scripts/build_windows_release.py)
+          digest=$(sed -n "s/^ *ImageDigest = '\(.*\)'/\1/p" scripts/build_windows_release.py)
+          repo=${ref#ghcr.io/}; repo=${repo%:*}; tag=${ref##*:}
+          token=$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json'
+          got=$(curl -fsSI -H "Authorization: Bearer $token" -H "Accept: $accept" \
+            "https://ghcr.io/v2/${repo}/manifests/${tag}" | tr -d '\r' | sed -n 's/^docker-content-digest: //Ip')
+          echo "tag $tag -> $got (pinned $digest)"
+          curl -fsS -o /dev/null -H "Authorization: Bearer $token" -H "Accept: $accept" \
+            "https://ghcr.io/v2/${repo}/manifests/${digest}"
+          test "$got" = "$digest" || { echo "tag moved (Setup pulls by digest, so this is a warning unless the digest fetch above failed)"; exit 1; }
+
+      - name: Open or update the issue
+        if: >
+          steps.files.outcome == 'failure' || steps.python.outcome == 'failure' ||
+          steps.apt.outcome == 'failure' || steps.image.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="Pinned dependency missing or changed"
+          {
+            echo "The monthly [dependency watch](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) found a problem."
+            echo
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Rootfs and PDK files | ${{ steps.files.outcome }} |"
+            echo "| Python packages | ${{ steps.python.outcome }} |"
+            echo "| Ubuntu archive snapshot | ${{ steps.apt.outcome }} |"
+            echo "| LibreLane image digest | ${{ steps.image.outcome }} |"
+            echo
+            if [ -s "$RUNNER_TEMP/files.md" ]; then echo "### Files"; cat "$RUNNER_TEMP/files.md"; echo; fi
+            if [ -f "$RUNNER_TEMP/pip.log" ]; then echo "### pip (last lines)"; echo '```'; tail -n 20 "$RUNNER_TEMP/pip.log"; echo '```'; fi
+            echo
+            echo "Setup tries our mirror first, so a missing upstream file only breaks installs once the mirror copy is gone too. Fix by uploading the copies (scripts/mirror_deps.py upload) or by a deliberate dependency update."
+          } > body.md
+          existing=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md --label dependencies || \
+              gh issue create --title "$title" --body-file body.md
+          fi
+          exit 1

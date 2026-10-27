@@ -5,7 +5,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install-wsl.sh | bash
 #
-# Runs the sibling script when executed from a checkout, otherwise fetches the
+# Runs the exact sibling script when executed from a checkout, otherwise fetches the
 # current install.sh from the repo and runs it.
 set -u -o pipefail
 

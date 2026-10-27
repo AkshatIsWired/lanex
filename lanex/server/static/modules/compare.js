@@ -4,7 +4,7 @@
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
-import { gatherRunsScoped, designLabel } from "./runscope.js";
+import { gatherRunsScoped, designLabel } from "./context.js";
 
 // tag -> run row (carries run_dir + _design) so Compare can pass absolute
 // run_dirs to the backend — robust even when a picked run lives in another
@@ -40,8 +40,7 @@ export async function renderCompare() {
       "' data-rundir='" + fmt.escape(r.run_dir || "") + "'/> " +
       (multi ? "<span class='muted'>" + fmt.escape(designLabel(r._design)) + " · </span>" : "") +
       fmt.escape(r.tag) + (r.success ? " <svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M5 13l4 4L19 7'/></svg>" : " <svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg>") + "</label>").join("") +
-    "</div><button class='btn btn-primary' id='cmp-go'>Compare</button>" +
-    "<input id='cmp-search' class='inp' type='search' placeholder='filter metrics…' hidden /></div>" +
+    "</div><button class='btn btn-primary' id='cmp-go'>Compare</button></div>" +
     "<div id='cmp-out'></div>";
   root.querySelector("#cmp-go").addEventListener("click", () => doCompare(root));
 }
@@ -61,8 +60,6 @@ async function doCompare(root) {
   try { data = await api.compare(tags, runDirs); } catch (ex) {
     out.innerHTML = "<div class='cmp-error'>Compare failed: " + fmt.escape(ex.message || ex) + "</div>"; return;
   }
-  const search = root.querySelector("#cmp-search");
-  search.hidden = false;
 
   // Columns are keyed by the backend's per-run ``col`` (the unique run_dir), NOT
   // the tag: two different designs can each hold a run named "baseline", and a
@@ -122,10 +119,15 @@ async function doCompare(root) {
 
   out.innerHTML =
     "<div class='cmp-toolbar'><button class='btn btn-ghost' id='cmp-export-csv'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Export comparison CSV</button></div>" +
-    summaryHtml + kcHtml + cfgHtml +
+    // Summary, recipe and differences side by side when there is room.
+    "<div class='cmp-blocks'><section class='cmp-block'>" + summaryHtml + "</section>" +
+    "<section class='cmp-block'>" + kcHtml + "</section><section class='cmp-block'>" + cfgHtml + "</section></div>" +
     "<h3>Comparison charts</h3><div id='cmp-charts' class='cmp-charts'></div>" +
-    "<h3>Metrics <span class='muted'>(best highlighted)</span></h3>" +
+    // The filter belongs to the metrics table, so it sits on its heading.
+    "<div class='cmp-mhead'><h3>Metrics <span class='muted'>(best highlighted)</span></h3>" +
+    "<input id='cmp-search' class='inp' type='search' placeholder='Filter metrics' aria-label='Filter metrics'/></div>" +
     "<div id='cmp-metrics'>" + renderMetrics("") + "</div>";
+  const search = out.querySelector("#cmp-search");
   search.oninput = () => {
     document.getElementById("cmp-metrics").innerHTML = renderMetrics(search.value.trim());
   };
@@ -206,7 +208,18 @@ export function summaryCellHtml(row) {
   if (!row) return "<td>—</td>";
   const unit = row.unit ? " " + fmt.escape(row.unit) : "";
   const cls = row.status ? " class='" + (row.status === "pass" ? "cmp-num pass" : row.status === "fail" ? "cmp-num fail" : "cmp-num") + "'" : " class='cmp-num'";
-  return "<td" + cls + fmt.titleAttr(row.value) + ">" + fmt.escape(fmt.metric(row.value)) + unit + "</td>";
+  return "<td" + cls + fmt.titleAttr(row.value) + ">" + fmt.escape(shortMetric(row.value)) + unit + "</td>";
+}
+
+// fmt.metric() pads to 3 decimals, which turns a count of 64 into "64.000".
+// When the value has no more digits than that, show it as written (64, 66.4);
+// otherwise keep the rounded display (the exact value is in the title).
+function shortMetric(v) {
+  const r = fmt.metric(v);
+  if (typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 100 && Number(r) === v) {
+    return v.toLocaleString("en-US", { maximumFractionDigits: 3 });
+  }
+  return r;
 }
 
 // Curated key metrics to chart across runs (one small bar chart each). Only the
@@ -224,14 +237,21 @@ const _CHART_METRICS = [
 async function renderCompareCharts(host, data, cols) {
   if (!host) return;
   if (typeof window.echarts === "undefined") { host.innerHTML = "<p class='muted'>Charts need ECharts.</p>"; return; }
-  const { chartTheme } = await import("./theme-echarts.js");
+  const { runBarsOption, runBarsHeight } = await import("./barchart.js");
   const table = data.metric_table || {};
   const num = (v) => { const n = Number(v); return isFinite(n) ? n : null; };
   const labels = cols.map((c) => c.label);
   const present = _CHART_METRICS.filter(([k]) => table[k] &&
     cols.some((c) => num(table[k][c.col]) !== null));
   if (!present.length) { host.innerHTML = "<p class='muted'>No chartable metrics in common across these runs.</p>"; return; }
-  host.innerHTML = present.map(([k]) => "<div class='cmp-chart' data-k='" + fmt.escape(k) + "'></div>").join("");
+  // Each chart is a small card: the metric named in the page's own type, the
+  // runs as bars down the side in the same colours on every card.
+  host.innerHTML = present.map(([k, label]) => {
+    const um = /\(([^)]+)\)\s*$/.exec(label);
+    const name = um ? label.slice(0, um.index).trim() : label;
+    return "<figure class='cmp-fig'><figcaption><b>" + fmt.escape(name) + "</b>" + (um ? " <span>" + fmt.escape(um[1]) + "</span>" : "") +
+      "<code>" + fmt.escape(k) + "</code></figcaption><div class='cmp-chart' data-k='" + fmt.escape(k) + "' style='height:" + runBarsHeight(cols.length) + "px'></div></figure>";
+  }).join("");
   for (const [k, label] of present) {
     const el = host.querySelector(".cmp-chart[data-k='" + (window.CSS && CSS.escape ? CSS.escape(k) : k) + "']");
     if (!el) continue;
@@ -240,18 +260,12 @@ async function renderCompareCharts(host, data, cols) {
     const um = /\(([^)]+)\)\s*$/.exec(label);
     const unit = um ? um[1] : "";
     const name = um ? label.slice(0, um.index).trim() : label;
-    const chart = window.echarts.init(el, chartTheme(), { renderer: "canvas" });
+    const opt = runBarsOption({ labels, values: cols.map((c) => num(table[k][c.col])), unit });
+    if (!opt) continue;
+    const chart = window.echarts.init(el, null, { renderer: "canvas" });
     el.setAttribute("role", "img");
-    el.setAttribute("aria-label", name + " compared across the selected runs — the same values are in the comparison tables above.");
-    chart.setOption({
-      backgroundColor: "transparent",
-      title: { text: name, subtext: k, left: "center", textStyle: { fontSize: 13, fontWeight: 600 }, subtextStyle: { fontSize: 9 } },
-      tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : v) + (unit ? " " + unit : "") },
-      grid: { top: 48, bottom: 48, left: 56, right: 12 },
-      xAxis: { type: "category", data: labels, axisLabel: { interval: 0, rotate: labels.length > 2 ? 30 : 0, fontSize: 10 } },
-      yAxis: { type: "value", name: unit, nameTextStyle: { fontSize: 10 } },
-      series: [{ type: "bar", name, data: cols.map((c) => num(table[k][c.col])) }],
-    });
+    el.setAttribute("aria-label", name + " comparison across selected runs, matching the values in the comparison tables above.");
+    chart.setOption(opt);
   }
   window.addEventListener("resize", () => host.querySelectorAll(".cmp-chart").forEach((el) => {
     const inst = window.echarts.getInstanceByDom(el); if (inst) inst.resize();

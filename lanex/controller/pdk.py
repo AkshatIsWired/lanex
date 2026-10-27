@@ -144,19 +144,39 @@ def list_pdks() -> List[Dict[str, Any]]:
 
 
 def _list_scls_at(pdk_dir: Path) -> List[Tuple[str, str]]:
+    from .pdk_catalog import is_synthesis_scl
+
     out: List[Tuple[str, str]] = []
     libs = pdk_dir / "libs.ref"
     if not libs.is_dir():
         return out
+    variant = pdk_dir.name
     for scl in sorted(libs.iterdir()):
         if not scl.is_dir():
             continue
         label = scl.name
+        if not is_synthesis_scl(variant, label):
+            continue
+        # A library folder can exist without its timing views (a partial or
+        # skipped download). Only offer it when the liberty files are there.
+        if not _has_liberty(scl):
+            continue
         out.append((label, label))
     return out
 
 
+def _has_liberty(scl_dir: Path) -> bool:
+    try:
+        if any((scl_dir / "lib").glob("*.lib")):
+            return True
+        return next(scl_dir.rglob("*.lib"), None) is not None
+    except OSError:
+        return False
+
+
 def list_scls(pdk: str) -> List[Dict[str, Any]]:
+    from .pdk_catalog import is_synthesis_scl
+
     out: List[Dict[str, Any]] = []
     for root in _candidate_pdk_roots():
         scl_dir = root / pdk / "libs.ref"
@@ -165,8 +185,13 @@ def list_scls(pdk: str) -> List[Dict[str, Any]]:
         for scl in sorted(scl_dir.iterdir()):
             if not scl.is_dir():
                 continue
-            # Probe for the .lib that LibreLane expects.
-            lib_hits = list(scl.rglob("*.lib"))
+            if not is_synthesis_scl(pdk, scl.name):
+                continue
+            # Probe for the .lib that LibreLane expects; a library without one
+            # isn't really installed, so it isn't offered at all.
+            lib_hits = [True] if _has_liberty(scl) else []
+            if not lib_hits:
+                continue
             out.append(
                 to_json(
                     PDK(
@@ -310,6 +335,30 @@ def _scl_has_libs(scl_dir: Path) -> bool:
     return False
 
 
+def _scl_config_exists(root: Path, variant: str, scl: str) -> bool:
+    """Check for SCL configuration under libs.tech/librelane or legacy libs.tech/openlane."""
+    tech = root / variant / "libs.tech"
+    if not tech.is_dir():
+        tech = root / "libs.tech"
+    if not tech.is_dir():
+        return True
+    candidates = [
+        tech / "librelane" / scl / "config.tcl",
+        tech / "librelane" / scl / "config.json",
+        tech / "librelane" / scl / "config.yaml",
+        tech / "openlane" / scl / "config.tcl",
+        tech / "openlane" / scl / "config.json",
+        tech / "openlane" / scl / "config.yaml",
+    ]
+    if (tech / "openlane").is_dir() or (tech / "librelane").is_dir():
+        top_configs = [
+            tech / "librelane" / "config.tcl",
+            tech / "openlane" / "config.tcl",
+        ]
+        return any(c.is_file() for c in candidates) or any(c.is_file() for c in top_configs)
+    return True
+
+
 def _check_local_ready(variant: str, scl: str, roots: List[Path]) -> Dict[str, Any]:
     """Local mode: the Flow uses ``pdk_root`` directly (no ``ciel.fetch``), so a
     matching ``<root>/<variant>/libs.ref/<scl>`` with timing files is enough —
@@ -323,6 +372,8 @@ def _check_local_ready(variant: str, scl: str, roots: List[Path]) -> Dict[str, A
             tech_hits = list(scl_dir.rglob("*.lef")) + list(scl_dir.rglob("*.gds"))
             if not tech_hits:
                 missing.append(".lef/.gds technology files")
+            if not _scl_config_exists(root, variant, scl):
+                missing.append(f"flow configuration for '{scl}' (checked libs.tech/librelane and libs.tech/openlane)")
             return {
                 "ready": not missing,
                 "where": [str(scl_dir)],
@@ -395,8 +446,9 @@ def _check_container_ready(
         except Exception:
             present = False
         if present:
-            scl_dir = Path(ver.get_dir(home)) / variant / "libs.ref" / scl
-            if _scl_has_libs(scl_dir):
+            ver_dir = Path(ver.get_dir(home))
+            scl_dir = ver_dir / variant / "libs.ref" / scl
+            if _scl_has_libs(scl_dir) and _scl_config_exists(ver_dir, variant, scl):
                 return {
                     "ready": True,
                     "where": [str(scl_dir)],
@@ -473,3 +525,42 @@ def check_pdk_ready(
     if run_mode == "container":
         return _check_container_ready(variant, scl, family, roots)
     return _check_local_ready(variant, scl, roots)
+
+
+def check_pdk_library_ready(pdk: str, library: str, *,
+                            required_version: Optional[str] = None) -> Dict[str, Any]:
+    """Read-only exact-version presence check for any Ciel library.
+
+    Unlike :func:`check_pdk_ready`, this also handles IO, primitive and SRAM
+    libraries that are not standard-cell libraries and therefore need not carry
+    Liberty timing files.
+    """
+    family, variant = _resolve_family(pdk)
+    family, variant = family or pdk, variant or pdk
+    version = required_version or required_pdk_version(family)
+    if not version:
+        return {"ready": False, "required_version": None,
+                "missing": [f"no locked version for {family}"]}
+    try:
+        import ciel  # type: ignore
+    except Exception as exc:
+        return {"ready": False, "required_version": version, "missing": [str(exc)]}
+    checked: List[str] = []
+    for root in _candidate_pdk_roots():
+        try:
+            home = ciel.get_ciel_home(str(root))
+            ver = ciel.Version(name=version, pdk=family)
+            libdir = Path(ver.get_dir(home)) / variant / "libs.ref" / library
+            checked.append(str(libdir))
+            # A fetch that was cut off while unpacking leaves library folders
+            # that are not empty but not whole; install_pdk_sync marks the
+            # version until ciel has finished.
+            if Path(str(ver.get_dir(home)).rstrip("/") + ".lanex-incomplete").exists():
+                continue
+            if ver.is_installed(home) and libdir.is_dir() and any(libdir.rglob("*")):
+                return {"ready": True, "required_version": version,
+                        "where": [str(libdir)], "pdk_root": home, "missing": []}
+        except Exception:
+            continue
+    return {"ready": False, "required_version": version, "where": checked,
+            "missing": [f"{variant}/{library} is absent from locked version {version}"]}

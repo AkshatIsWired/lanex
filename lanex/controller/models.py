@@ -84,6 +84,9 @@ class VariableInfo:
     # Allowed values for Literal/Enum-typed variables; empty for free-form types.
     # Drives a real <select> in the config form instead of a text box.
     choices: List[str] = field(default_factory=list)
+    # What a value of it looks like, from the real type (``type`` above is a
+    # display string): bool, int, number, numbers, choice, list, path, dict, text.
+    kind: str = "text"
 
 
 @dataclass(frozen=True)
@@ -182,17 +185,6 @@ class DRCReport:
     module: str
     bbox_count: int
     violations: List[Violation]
-
-
-@dataclass(frozen=True)
-class AdvisoryCard:
-    """A plain-English explanation for a failed step or alert."""
-
-    title: str
-    what: str
-    why: str
-    remediations: List[str]  # ranked list of remediations
-    fix: List[Dict[str, str]] = field(default_factory=list)  # [{var: value}, ...]
 
 
 def _jsonable(o: Any) -> Any:
@@ -296,6 +288,5 @@ __all__ = [
     "PDK",
     "Violation",
     "DRCReport",
-    "AdvisoryCard",
     "to_json",
 ]

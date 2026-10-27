@@ -1,10 +1,22 @@
 {
   "name": "fifo",
   "title": "Synchronous FIFO",
-  "description": "A 16-deep, 8-bit synchronous FIFO with full/empty flags. Exercises memory inference, control logic, and timing closure.",
+  "description": "A 16-deep, 8-bit FIFO with full and empty flags. Exercises memory, control logic and timing closure.",
   "top": "fifo",
   "clock_port": "clk",
   "clock_period": 12.0,
-  "sources": ["src/fifo.v"],
-  "testbench": "verify/fifo_tb.v"
+  "sources": [
+    "src/fifo.v"
+  ],
+  "testbench": "verify/fifo_tb.v",
+  "order": 4,
+  "pdk": {
+    "gf180mcu*": {
+      "clock_period": 30.0,
+      "config": {
+        "FP_CORE_UTIL": 38,
+        "PL_TARGET_DENSITY_PCT": 50
+      }
+    }
+  }
 }

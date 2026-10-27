@@ -34,7 +34,8 @@ _MAX_HEADER_BYTES = 4 * 1024 * 1024
 _DEFAULT_SIGNAL_LIMIT = 64
 
 
-def vcd_signals(vcd_path: str | Path, limit: int = _DEFAULT_SIGNAL_LIMIT) -> List[Tuple[str, int]]:
+def vcd_signals(vcd_path: str | Path, limit: int = _DEFAULT_SIGNAL_LIMIT,
+                dedupe: bool = True) -> List[Tuple[str, int]]:
     """Return ``[(full_dotted_name, bit_width), …]`` from a VCD header.
 
     * Scope-aware: ``$scope module tb`` … ``$var wire 1 ! clk $end`` yields
@@ -91,7 +92,9 @@ def vcd_signals(vcd_path: str | Path, limit: int = _DEFAULT_SIGNAL_LIMIT) -> Lis
                     width = max(1, int(width_s))
                 except ValueError:
                     width = 1
-                if ident not in seen_ids and ref:
+                # dedupe=False keeps aliases (a port seen from both the bench
+                # and the design), so a caller can look any on-screen name up.
+                if (not dedupe or ident not in seen_ids) and ref:
                     seen_ids.add(ident)
                     full = ".".join(scopes + [ref]) if scopes else ref
                     out.append((full, width))

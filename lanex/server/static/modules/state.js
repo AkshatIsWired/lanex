@@ -12,6 +12,7 @@ export const state = {
   designSources: [],         // [{name, relpath, abspath, ext, size}, ...]
   designMemories: [],        // ditto for .mem/.hex/.bin
   selectedFiles: [],         // abspath[] checked
+  configSources: null,       // abspath[] the config's VERILOG_FILES resolves to; null = not manageable
   extrasFiles: [],           // full paths user added manually
   runs: [],
   selectedRunTag: null,

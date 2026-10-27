@@ -1,10 +1,25 @@
 {
   "name": "empty",
-  "title": "Empty (start from scratch)",
-  "description": "A minimal top module + config you fill in yourself. For users who already have a design in mind.",
+  "title": "Blank project",
+  "description": "A small starter module and its config. Write your own design in the RTL IDE.",
   "top": "top",
   "clock_port": "clk",
   "clock_period": 10.0,
-  "sources": ["src/top.v"],
-  "testbench": null
+  "sources": [
+    "src/top.v"
+  ],
+  "testbench": null,
+  "kind": "blank",
+  "config": {
+    "FP_SIZING": "absolute",
+    "DIE_AREA": [0, 0, 150, 150]
+  },
+  "pdk": {
+    "gf180mcu*": {
+      "clock_period": 20.0,
+      "config": {
+        "DIE_AREA": [0, 0, 300, 300]
+      }
+    }
+  }
 }

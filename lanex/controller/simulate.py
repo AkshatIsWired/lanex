@@ -50,6 +50,10 @@ from . import container_run, events, lint
 # (partial) VCD it already wrote is still loaded. Cancel/Stop bypasses it.
 DEFAULT_SIM_TIMEOUT = 120
 
+# Compiled simulators (Icarus .vvp, Verilator obj_dir) live here, inside the
+# project but out of the way, like cocotb's sim_build/.
+SIM_BUILD = "sim_build"
+
 
 def _verilator_shell(*, top: str, sources: Sequence[str], testbench: str,
                      defines: Optional[Dict[str, Any]], include_dirs: Optional[Sequence[str]],
@@ -58,10 +62,12 @@ def _verilator_shell(*, top: str, sources: Sequence[str], testbench: str,
 
     Uses ``--binary`` (Verilator 5 standalone executable) and ``--trace`` (VCD) /
     ``--trace-fst`` (FST). All paths are relative to the working dir (= design
-    dir / container mount)."""
+    dir / container mount). Build products go to ``sim_build/`` so the project
+    folder holds only the user's files (the waveform is still written where the
+    testbench's ``$dumpfile`` says, relative to the project)."""
     trace_flag = "--trace-fst" if trace == "fst" else "--trace"
     parts: List[str] = ["verilator", "--binary", trace_flag, "--trace-structs",
-                        "-Wno-fatal", "--Mdir", "obj_dir", "-o", out_name, "--top-module", top]
+                        "-Wno-fatal", "--Mdir", SIM_BUILD + "/obj_dir", "-o", out_name, "--top-module", top]
     for k, v in (defines or {}).items():
         parts.append(f"-D{k}={v}" if v not in (None, "") else f"-D{k}")
     for inc in (include_dirs or []):
@@ -70,7 +76,7 @@ def _verilator_shell(*, top: str, sources: Sequence[str], testbench: str,
     parts.append(str(testbench))
     build = " ".join(_shquote(p) for p in parts)
     # Build, then run the produced simulator (which dumps the VCD/FST).
-    return f"set -e; {build}; ./obj_dir/{out_name}"
+    return f"set -e; {build}; ./{SIM_BUILD}/obj_dir/{out_name}"
 
 
 def _iverilog_shell(*, top: str, sources: Sequence[str], testbench: str,
@@ -82,7 +88,8 @@ def _iverilog_shell(*, top: str, sources: Sequence[str], testbench: str,
     ``vvp`` then executes; the testbench's ``$dumpfile``/``$dumpvars`` writes the
     VCD (whatever name it chooses — :class:`SimJob` detects the produced file).
     The TB module is the elaboration top (``-s``)."""
-    parts: List[str] = ["iverilog", "-g2012", "-s", top, "-o", out_name]
+    out = f"{SIM_BUILD}/{out_name}"
+    parts: List[str] = ["iverilog", "-g2012", "-s", top, "-o", out]
     for k, v in (defines or {}).items():
         parts.append(f"-D{k}={v}" if v not in (None, "") else f"-D{k}")
     for inc in (include_dirs or []):
@@ -90,7 +97,7 @@ def _iverilog_shell(*, top: str, sources: Sequence[str], testbench: str,
     parts.extend(str(s) for s in sources)
     parts.append(str(testbench))
     build = " ".join(_shquote(p) for p in parts)
-    return f"set -e; {build}; vvp {out_name}"
+    return f"set -e; mkdir -p {SIM_BUILD}; {build}; vvp {out}"
 
 
 def _shquote(s: str) -> str:
@@ -296,7 +303,7 @@ class SimJob:
             if timeout and timeout > 0:
                 def _on_timeout() -> None:
                     self._timed_out.set()
-                    events.publish("log", {"message":
+                    events.publish("log", {"source": "sim", "message":
                         f"simulation exceeded {timeout}s and was stopped — a free-running "
                         "testbench clock with no $finish runs forever. Add $finish to the bench."})
                     self._kill()
@@ -307,13 +314,13 @@ class SimJob:
             for line in self._proc.stdout:
                 clean = container_run.strip_ansi(line.rstrip("\n"))
                 if clean:
-                    events.publish("log", {"message": clean})
+                    events.publish("log", {"source": "sim", "message": clean})
             rc = self._proc.wait()
         except FileNotFoundError as ex:
-            events.publish("log", {"message": f"simulation failed to launch: {ex}"})
+            events.publish("log", {"source": "sim", "message": f"simulation failed to launch: {ex}"})
             rc = 127
         except Exception as ex:  # pragma: no cover - environment dependent
-            events.publish("log", {"message": f"simulation error: {ex}"})
+            events.publish("log", {"source": "sim", "message": f"simulation error: {ex}"})
             rc = 1
         finally:
             if watchdog is not None:

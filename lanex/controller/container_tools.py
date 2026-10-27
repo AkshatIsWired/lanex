@@ -203,8 +203,22 @@ def _x11_flags(engine: str = "docker") -> List[str]:
     # Escape hatch (same as the native launch path): LIBRELANE_GUI_WSL_HW_GL=1 /
     # LANEX_HW_GL=1 skips the forcing for setups that DO have in-container GL
     # (e.g. a user who runs the engine with GPU passthrough themselves).
+    # QT_XCB_GL_INTEGRATION=none as on the native path (platform_env.wsl_gl_env):
+    # Qt then skips its GLX probe instead of mapping a window it can't present.
     if not platform_env.hw_gl_requested():
-        flags += ["-e", "LIBGL_ALWAYS_SOFTWARE=1", "-e", "GALLIUM_DRIVER=llvmpipe"]
+        flags += ["-e", "LIBGL_ALWAYS_SOFTWARE=1", "-e", "GALLIUM_DRIVER=llvmpipe",
+                  "-e", "QT_XCB_GL_INTEGRATION=none"]
+    # Only an X11 display is ever forwarded into the container, so say so:
+    # a Qt/GTK build that defaults to Wayland would otherwise probe for a
+    # compositor that is not there (on WSL, the [WARN: COPY MODE] class).
+    flags += ["-e", "QT_QPA_PLATFORM=xcb", "-e", "GDK_BACKEND=x11"]
+    # HiDPI: a container starts with none of the host's environment, so hand it
+    # the scale the viewer needs. That is the host desktop's own setting where
+    # one is exported (GNOME/KDE), or on WSL the measured Windows display scale
+    # (WSLg otherwise shows the GUI at half size on a 4K / 175 % laptop).
+    host_scale = {k: os.environ[k] for k in platform_env.VIEWER_SCALE_VARS if os.environ.get(k)}
+    for key, val in platform_env.viewer_scale_env(host_scale).items():
+        flags += ["-e", f"{key}={val}"]
     disp = os.environ.get("DISPLAY")
     if sys.platform.startswith("linux"):
         if disp:
@@ -245,7 +259,10 @@ def _tool_command(tool: str, *, gds: Optional[Path], pdk: Optional[str],
     into OpenROAD / set Netgen up."""
     if tool == "magic":
         cmd = ["magic"]
-        if pdk and pdk_root:
+        if script is not None:
+            # Display-scaling startup file; it sources the PDK magicrc itself.
+            cmd += ["-rcfile", str(script)]
+        elif pdk and pdk_root:
             # Same guard the klayout branch below gained in round 50: only pass
             # -rcfile when the rc actually exists (family-level naming variance
             # + a nonexistent path would error Magic out), resolved through the
@@ -289,9 +306,11 @@ def _tool_command(tool: str, *, gds: Optional[Path], pdk: Optional[str],
         # Interactive Netgen console (Tk). `-batch` ran no GUI and exited with no
         # script, so the window never appeared (issue #10). Pass a startup script
         # that sources the PDK's netgen setup (so LVS commands work) and stays
-        # interactive; fall back to a bare interactive console.
+        # interactive; fall back to a bare interactive console. netgen.tcl runs
+        # its arguments with `eval $argv`, so a bare path was evaluated as a
+        # command name and silently failed; `source <path>` actually runs it.
         if script is not None:
-            return ["netgen", str(script)]
+            return ["netgen", "source", str(script)]
         return ["netgen"]
     return [tool]
 
@@ -429,6 +448,17 @@ def _write_startup_script(tool: str, work_dir: Path, *, odb: Optional[Path],
     is valid inside the container). Returns the path, or None when no script is
     needed / it can't be written. Best-effort — never raises."""
     try:
+        from . import platform_env
+        if tool == "magic":
+            # Magic's Tk UI has no scale environment variable; on a HiDPI
+            # display it starts through a script that enlarges its fonts and
+            # then sources the PDK magicrc. No scaling needed = no script.
+            from .desktop import find_magicrc, magic_scaled_rcfile
+            magicrc = (find_magicrc(Path(pdk_root) / pdk / "libs.tech", pdk)
+                       if pdk and pdk_root else None)
+            sp = magic_scaled_rcfile(str(magicrc) if magicrc else None,
+                                     platform_env.viewer_scale(), work_dir)
+            return Path(sp) if sp else None
         if tool == "openroad":
             if odb is None:
                 return None
@@ -464,9 +494,19 @@ def _write_startup_script(tool: str, work_dir: Path, *, odb: Optional[Path],
                          f"liberty loaded ({Path(lib).name})", "read_liberty failed")
             if tf["sdc"] is not None:
                 _try(f"read_sdc {{{tf['sdc']}}}", f"constraints loaded ({tf['sdc'].name})", "read_sdc failed")
-            if tf["spef"] is not None and tf["libs"]:
+            # The run's SPEF is extracted from the FINAL layout; on an earlier
+            # stage's database (Layout tab: "open this stage") its nets and
+            # instances don't match, so timing there stays on estimates.
+            try:
+                final_db = odb.resolve().relative_to(work_dir.resolve()).parts[:1] == ("final",)
+            except ValueError:
+                final_db = False
+            if tf["spef"] is not None and tf["libs"] and final_db:
                 _try(f"read_spef -corner {_tcl_word(corner)} {{{tf['spef']}}}",
                      f"parasitics loaded ({tf['spef'].name})", "read_spef failed")
+            elif tf["spef"] is not None and tf["libs"]:
+                lines.append("puts \"LanEx: this is a stage before extraction, so timing uses wire estimates "
+                             "(the run's SPEF belongs to the final layout)\"\n")
             # ---- DRC / marker inventory ------------------------------------
             # Modern OpenROAD stores DRC results as marker categories INSIDE the
             # OpenDB (the old gui::load_drc tcl command no longer exists — the
@@ -529,14 +569,19 @@ def _write_startup_script(tool: str, work_dir: Path, *, odb: Optional[Path],
         if tool == "netgen":
             setup = _netgen_setup_file(pdk, pdk_root)
             sp = work_dir / ".gui_netgen.tcl"
-            lines = ["# Auto-generated by the LanEx — interactive Netgen.\n"]
+            lines = ["# Auto-generated by the LanEx — interactive Netgen.\n",
+                     platform_env.tk_scale_tcl(platform_env.viewer_scale())]
+            # The PDK setup file is lvs's third argument, not a script to
+            # source at startup (it reads the circuits lvs has just loaded and
+            # errors "No circuit has been declared" on its own). Keep its path
+            # in $setup so the printed command works as typed.
             if setup is not None:
-                lines.append(f"puts \"Sourcing PDK netgen setup: {setup}\"\n")
-                lines.append(f"source {{{setup}}}\n")
+                lines.append(f"set setup {{{setup}}}\n")
+                lines.append("puts \"LanEx: PDK LVS setup is in \\$setup: $setup\"\n")
             lines.append(
                 "puts \"LanEx: run LVS with  lvs "
                 "{<layout.spice> <top>} {<schematic.v> <top>} "
-                + (f"{{{setup}}} " if setup is not None else "$setup ")
+                + ("\\$setup " if setup is not None else "<pdk>_setup.tcl ")
                 + "comp.out\"\n"
             )
             sp.write_text("".join(lines), encoding="utf-8")
@@ -632,7 +677,9 @@ def open_in_container_tool(
         }
         if sys.platform != "win32":
             kwargs["start_new_session"] = True
-        subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool/engine only
+        proc = subprocess.Popen(argv, **kwargs)  # noqa: S603 - whitelisted tool/engine only
+        from . import activity
+        activity.track_viewer(proc, spec["label"])
         hint = None
         if tool == "openroad":
             hint = (f"OpenROAD GUI opening with the run loaded ({odb_p.name}). The console "
@@ -642,8 +689,8 @@ def open_in_container_tool(
                     "OpenROAD GUI opened, but this run has no final .odb to load "
                     "(it may not have reached routing). Use File ▸ Open in the GUI.")
         elif tool == "netgen":
-            hint = ("Netgen console opening. The PDK LVS setup is pre-sourced; run "
-                    "`lvs` with the run's layout + schematic netlists.")
+            hint = ("Netgen console opening. The PDK LVS setup file is in $setup; run "
+                    "`lvs` with the run's layout + schematic netlists and $setup.")
         elif tool == "klayout" and marker_dbs:
             hint = (f"{len(marker_dbs)} DRC/XOR marker database(s) loaded — open KLayout's "
                     "marker browser to step through violations.")

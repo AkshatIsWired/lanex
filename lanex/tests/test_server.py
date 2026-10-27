@@ -73,6 +73,8 @@ def test_health_ok(server):
     body = json.loads(resp.read())
     assert body["ok"] is True
     assert body["data"]["service"] == "lanex"
+    assert "instanceId" in body["data"]
+    assert "source" in body["data"]
 
 
 def test_about_endpoint(server):
@@ -562,3 +564,34 @@ def test_make_server_refuses_remote_bind_without_flag():
     from lanex.server.app import make_server
     with pytest.raises(RuntimeError):
         make_server(host="192.168.1.50", port=0)
+
+
+@pytest.mark.skipif(not hasattr(socket, "SO_REUSEADDR") or __import__("os").name == "nt",
+                    reason="TIME_WAIT reuse is the POSIX (WSL) behaviour")
+def test_restarted_server_gets_its_port_back_despite_time_wait():
+    # A server that died with clients connected leaves TIME_WAIT sockets on
+    # its port. The launcher restarts it; it must come back on the SAME port,
+    # or the open window (bound to that origin) can never reconnect.
+    from lanex.server.app import find_free_port
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(1)
+    cli = socket.create_connection(("127.0.0.1", port))
+    conn, _ = srv.accept()
+    conn.close()          # the server side closes first: its end goes to TIME_WAIT
+    srv.close()
+    time.sleep(0.1)
+    cli.close()
+    assert find_free_port(port) == port
+
+    # A port someone still listens on is still skipped.
+    busy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    busy.bind(("127.0.0.1", 0))
+    busy.listen(1)
+    try:
+        bport = busy.getsockname()[1]
+        assert find_free_port(bport) != bport
+    finally:
+        busy.close()

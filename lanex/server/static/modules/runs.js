@@ -4,7 +4,19 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { confirmDialog, alertDialog, checklistDialog, choiceDialog, promptDialog } from "./dialog.js";
 import { toast } from "./toast.js";
-import { gatherRunsScoped, normDir } from "./runscope.js";
+import { gatherRunsScoped, normDir, getRunScope, setRunScope, setRun, contextRun, contextDesign, onContext } from "./context.js";
+import { go } from "./nav.js";
+import * as FS from "./flowstages.js";
+
+// The last step of a stage in the Classic flow (matches setup.js's --to).
+function lastStepOfStage(stageId) {
+  const flow = (state.flows || []).find((f) => f.name === "Classic");
+  const ids = (flow && flow.steps) || [];
+  const st = FS.stagesOf(ids.map((id) => ({ id })));
+  let last = "";
+  st.forEach((s, i) => { if (s === stageId) last = ids[i]; });
+  return last;
+}
 import { icon } from "./icons.js";
 
 // Lightweight "make this run's design active" — needed before any run-scoped
@@ -17,11 +29,7 @@ async function focusDesign(designDir) {
   }
 }
 
-const SCOPE_KEY = "ll.runsScope";
-function getScope() {
-  try { return localStorage.getItem(SCOPE_KEY) === "all" ? "all" : "design"; } catch (_e) { return "design"; }
-}
-function setScope(s) { try { localStorage.setItem(SCOPE_KEY, s); } catch (_e) {} }
+const getScope = getRunScope;
 
 // The design dir a run belongs to: <design>/runs/<tag> → strip the last 2 parts.
 function designOfRun(run) {
@@ -36,28 +44,30 @@ let _filterText = "";
 let _filterStatus = "";
 let _filterPinned = false;
 // Runs ticked for batch delete, keyed "<designDir>\u0000<tag>" so the same tag
-// in two designs can't collide in the "All history" scope.
+// in two designs can't collide in the "All designs" scope.
 const _picked = new Set();
 function pickKey(designDir, tag) { return (designDir || "") + "\u0000" + tag; }
 
 function wireScope() {
   if (_scopeWired) return;
   _scopeWired = true;
-  document.querySelectorAll(".runs-scope").forEach((b) =>
+  document.querySelectorAll(".runs-scope[data-scope]").forEach((b) =>
     b.addEventListener("click", () => {
-      setScope(b.dataset.scope);
+      setRunScope(b.dataset.scope);
       renderRuns();
     }));
+  // The run the results pages show is marked here; it follows a pick anywhere.
+  onContext(() => paintViewing());
   const fi = document.getElementById("runs-filter");
-  if (fi) fi.addEventListener("input", () => { _filterText = fi.value.toLowerCase(); renderRuns(); });
+  if (fi) fi.addEventListener("input", () => { _filterText = fi.value.toLowerCase(); renderRuns({ cached: true }); });
   const sf = document.getElementById("runs-status-filter");
-  if (sf) sf.addEventListener("change", () => { _filterStatus = sf.value; renderRuns(); });
+  if (sf) sf.addEventListener("change", () => { _filterStatus = sf.value; renderRuns({ cached: true }); });
   const pf = document.getElementById("runs-pin-filter");
   if (pf) pf.addEventListener("click", () => {
     _filterPinned = !_filterPinned;
     pf.classList.toggle("runs-scope-active", _filterPinned);
     pf.setAttribute("aria-pressed", _filterPinned ? "true" : "false");
-    renderRuns();
+    renderRuns({ cached: true });
   });
   const bd = document.getElementById("runs-batch-delete");
   if (bd) bd.addEventListener("click", () => batchDelete());
@@ -82,19 +92,51 @@ function matchesFilter(run) {
   return hay.includes(_filterText);
 }
 
-// Run gathering (this-design vs all-history, de-dup by run_dir) is shared with
-// the per-tab pickers — see runscope.js.
+// Run gathering (this design vs all designs, de-dup by run_dir) is shared with
+// the run bar — see context.js.
 const gatherRuns = gatherRunsScoped;
 
-export async function renderRuns() {
+// The last list shown, so typing in the filter needs no server round trip and
+// a failed refresh can keep it on screen.
+let _shown = { key: "", runs: [] };
+let _renderSeq = 0;
+
+export async function renderRuns({ cached = false } = {}) {
   const root = document.getElementById("runs-list");
   if (!root) return;
   wireScope();
   const scope = getScope();
-  document.querySelectorAll(".runs-scope").forEach((b) =>
+  document.querySelectorAll(".runs-scope[data-scope]").forEach((b) =>
     b.classList.toggle("runs-scope-active", b.dataset.scope === scope));
-  let runs = [];
-  try { runs = await gatherRuns(scope); } catch (_e) { runs = []; }
+  const key = scope + "\0" + normDir(state.designDir);
+  const my = ++_renderSeq;
+  let runs;
+  if (cached && _shown.key === key) {
+    runs = _shown.runs;
+  } else {
+    try {
+      runs = await gatherRuns(scope, { strict: true });
+    } catch (_e) {
+      if (my !== _renderSeq) return;
+      // The list could not be refreshed (LanEx busy or asleep): keep the runs
+      // already on screen and say so, rather than "No runs yet".
+      if (_shown.key === key && root.children.length) { runsNote("Couldn't refresh the list. Trying again…"); setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000); return; }
+      runs = null;
+    }
+  }
+  // A newer render started while this one waited: it owns the list.
+  if (my !== _renderSeq) return;
+  if (runs === null) {
+    root.innerHTML = "";
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.innerHTML = "<span class='ico'>⏱</span><h3>Couldn't load your runs</h3><p>LanEx didn't answer in time. Trying again…</p>";
+    root.appendChild(li);
+    setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000);
+    return;
+  }
+  runsNote("");
+  _shown = { key, runs };
   // Keep state.runs scoped to the active design (other views rely on api.run()
   // which is active-dir-scoped); the "all" list is display-only here.
   if (scope !== "all") state.runs = runs;
@@ -118,9 +160,11 @@ export async function renderRuns() {
   }
   for (const run of shown) {
     const li = document.createElement("li");
-    // Pass/fail left border for at-a-glance scanning (status text + ✓/✗ glyph
-    // give a colour-blind-safe redundant cue).
+    // Pass/fail left border for at-a-glance scanning (the status word is the
+    // colour-blind-safe redundant cue).
     li.className = run.success ? "run-pass" : "run-fail";
+    li.dataset.tag = run.tag;
+    li.dataset.design = run._design || "";
     const designRow = scope === "all"
       ? "<div class='row2 muted'>" + icon("folder", { size: 13 }) + " " + fmt.escape(designLabel(run._design)) + "</div>"
       : "";
@@ -132,10 +176,11 @@ export async function renderRuns() {
         (run.pinned ? "true" : "false") + "' title='" + (run.pinned ? "Unpin" : "Pin") +
         " this run' aria-label='Pin run'>" + (run.pinned ? "<svg viewBox='0 0 24 24' width='14' height='14' fill='currentColor' stroke='currentColor' stroke-width='1' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z'/></svg>" : "<svg viewBox='0 0 24 24' width='14' height='14' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z'/></svg>") + "</button>" +
       "<span class='tag'>" + fmt.escape(run.tag) + "</span>" +
+      "<span class='run-viewing' title='Layout, Analytics and Verify show this run'>On the results pages</span>" +
       (run.success
-        ? "<span class='pill pill-pass'><span class='d'></span><span class='text'>✓ passed</span></span>"
-        : "<span class='pill pill-fail'><span class='d'></span><span class='text'>✗ failed</span></span>") +
-      (run.imported ? "<span class='pill pill-pending' title='Imported from elsewhere — a partial run'>imported</span>" : "") +
+        ? "<span class='pill pill-pass'><span class='text'>passed</span></span>"
+        : "<span class='pill pill-fail'><span class='text'>failed</span></span>") +
+      (run.imported ? "<span class='pill pill-pending' title='Imported from an external source (partial run)'>imported</span>" : "") +
       "</div>" +
       designRow +
       "<div class='row2'>" +
@@ -145,11 +190,11 @@ export async function renderRuns() {
       "</div>" +
       "<div class='run-note-row' data-note-row hidden></div>" +
       "<div class='row3 run-actions'>" +
-      "<button class='btn btn-ghost run-act' data-act='open'>Open</button>" +
+      "<button class='btn btn-ghost run-act' data-act='open' title='Show this run in Layout'>" + icon("grid", { size: 13 }) + " Open in Layout</button>" +
       "<button class='btn btn-ghost run-act' data-act='reproduce' title='Load this run's settings into Setup'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M21 12a9 9 0 1 1-3-6.7M21 4v4h-4'/></svg> Reproduce</button>" +
       "<button class='btn btn-ghost run-act' data-act='files'>" + icon("folder", { size: 13 }) + " Files</button>" +
       "<button class='btn btn-ghost run-act' data-act='note'>" + icon("file", { size: 13 }) + " Note</button>" +
-      "<button class='btn btn-ghost run-act' data-act='bundle' title='Download a .zip — pick what to include'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Bundle</button>" +
+      "<button class='btn btn-ghost run-act' data-act='bundle' title='Download a .zip bundle with selected deliverables'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Bundle</button>" +
       "<button class='btn btn-ghost run-act' data-act='export' title='Download a run report (CSV / Markdown / HTML)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Export</button>" +
       "<button class='btn btn-ghost run-act run-del' data-act='delete'>" + icon("trash", { size: 13 }) + " Delete</button>" +
       "</div>";
@@ -168,10 +213,34 @@ export async function renderRuns() {
       if (pick.checked) _picked.add(pkey); else _picked.delete(pkey);
       syncBatchButton();
     });
-    li.addEventListener("click", () => openRun(run.tag, designDir));
+    // A click picks the run for the results pages; it no longer leaves Runs.
+    li.addEventListener("click", () => setRun(run.tag, designDir));
     root.appendChild(li);
   }
   syncBatchButton();
+  paintViewing();
+}
+
+// A one-line status above the list (empty text hides it).
+function runsNote(text) {
+  const root = document.getElementById("runs-list");
+  if (!root) return;
+  let el = document.getElementById("runs-note");
+  if (!text) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement("p");
+    el.id = "runs-note";
+    el.className = "muted";
+    el.setAttribute("role", "status");
+    root.parentNode.insertBefore(el, root);
+  }
+  el.textContent = text;
+}
+
+function paintViewing() {
+  const run = contextRun(), design = normDir(contextDesign());
+  document.querySelectorAll("#runs-list > li[data-tag]").forEach((li) =>
+    li.classList.toggle("is-viewing", li.dataset.tag === run && normDir(li.dataset.design) === design));
 }
 
 // Batch delete every ticked run. Grouped by design dir so each run resolves
@@ -188,7 +257,7 @@ async function batchDelete() {
       byDesign.get(r._design).push(r.tag);
     }
   }
-  // The "All history" scope holds runs not in state.runs; fall back to keys.
+  // The "All designs" scope holds runs not in state.runs; fall back to keys.
   if (!items.length && _picked.size) {
     for (const key of _picked) {
       const sp = key.indexOf(" ");
@@ -210,9 +279,10 @@ async function batchDelete() {
     await focusDesign(designDir);
     for (const tag of tags) {
       try {
-        await api.deleteRun(tag);
-        if (state.selectedRunTag === tag) state.selectedRunTag = null;
-        done++;
+        if (await deleteGuarded(tag)) {
+          if (state.selectedRunTag === tag) state.selectedRunTag = null;
+          done++;
+        }
       } catch (_e) { failed++; }
     }
   }
@@ -265,9 +335,9 @@ const BUNDLE_PARTS = [
 ];
 async function bundleDownloadFlow(tag) {
   const picked = await checklistDialog({
-    title: "Download bundle — “" + tag + "”",
-    body: "Tick what to include in the .zip. The text/data parts are on by default; " +
-      "the binary deliverables (GDS, netlists, timing, images…) are large, so tick only what you need.",
+    title: "Download bundle: " + tag,
+    body: "Select components to include in the .zip archive. Text and report data are selected by default. " +
+      "Binary deliverables like GDS, netlists, timing models, and images are large, so select only what you need.",
     items: BUNDLE_PARTS,
     confirmText: "Download .zip",
   });
@@ -283,8 +353,8 @@ async function bundleDownloadFlow(tag) {
 // (history.export_run + /api/run-export) already exists; this is the UI for it.
 async function exportRunFlow(tag) {
   const fmt = await choiceDialog({
-    title: "Export run report — “" + tag + "”",
-    body: "Download a formatted report of this run. (For the raw metrics table use Analytics → Metrics CSV.)",
+    title: "Export run report: " + tag,
+    body: "Download a formatted report for this run. (For the raw metrics table, use Analytics > Metrics CSV.)",
     choices: [
       { label: "CSV", value: "csv" },
       { label: "Markdown", value: "md" },
@@ -308,7 +378,7 @@ async function reproduceRun(tag) {
     await alertDialog({
       title: "Can't reproduce this run",
       body: (ex && ex.message) ||
-        "This run has no saved settings — it predates reproduce support or was made outside the GUI.",
+        "No saved settings found for this run. It was created before reproduce support was available or generated outside the GUI.",
     });
     return;
   }
@@ -330,38 +400,45 @@ async function reproduceRun(tag) {
   for (const [k, v] of Object.entries(meta.overrides || {})) {
     state.varsValues[k] = (typeof v === "boolean") ? v : String(v);
   }
-  // From / To / Skip.
-  setVal("run-from", meta.frm);
-  setVal("run-to", meta.to);
-  setVal("run-skip", (meta.skip || []).join(", "));
+  // Where it stopped: the Run menu's "Run up to" stage, when --to was a stage's
+  // last step. (--from and --skip are no longer set from LanEx; see below.)
+  const stopSel = document.getElementById("run-stop-after");
+  if (stopSel) {
+    stopSel.value = "";
+    if (meta.to) for (const o of stopSel.options) if (o.value && lastStepOfStage(o.value) === meta.to) stopSel.value = o.value;
+    stopSel.dispatchEvent(new Event("change"));
+  }
   // Full-auto vs step-by-step.
   const modeVal = meta.mode === "semi" ? "semi" : "auto";
   document.querySelectorAll(".mode-btn").forEach((b) =>
     b.classList.toggle("mode-btn-active", b.dataset.mode === modeVal));
   // Run name.
   const rn = (meta.tag || tag) + "-repro";
-  setVal("run-name-input", rn); setVal("run-tag-input", rn);
+  setVal("run-name-input", rn);
   // Sources (best-effort — files may have moved/been deleted since the run).
   if (Array.isArray(meta.sources) && meta.sources.length) state.selectedFiles = meta.sources.slice();
   // Repaint the config panel + jump to Setup.
   try { const cfg = await import("./config.js"); cfg.renderConfig(); } catch (_e) { /* ignore */ }
-  document.querySelector('.side-tab[data-tab="setup"]')?.click();
+  go("setup");
   const summary = "Loaded " + Object.keys(meta.overrides || {}).length + " override(s), " +
     (meta.sources || []).length + " source(s), " + (meta.run_mode || "container") +
-    " mode, flow " + (meta.flow || "Classic") + ". Review the Setup tab, then press Run — " +
-    "nothing was started automatically.";
+    " mode, flow " + (meta.flow || "Classic") + ". Review your settings in Setup, then click Run flow when ready. " +
+    "Nothing has started yet." +
+    (meta.frm || (meta.skip || []).length ? " That run also used --from or --skip; LanEx runs the whole flow (or up to a stage) instead." : "");
   // E4.4 — offer the EXACT CLI command this run was launched with (persisted in
   // gui-run.json, not rebuilt), so a terminal user can reproduce it verbatim.
-  const cli = (meta.cli_command || "").trim();
+  // gui-run.json keeps the command per engine ({container, local, recommended}).
+  const cc = meta.cli_command;
+  const cli = String((cc && typeof cc === "object" ? (cc[cc.recommended] || cc.container || cc.local) : cc) || "").trim();
   const choices = cli ? [{ label: "Copy the run's CLI command", value: "copy" }] : [];
   const pick = await choiceDialog({
-    title: "Loaded “" + tag + "” into Setup",
+    title: "Loaded " + tag + " into Setup",
     body: summary + (cli ? "\n\nThat run's exact command:\n" + cli : ""),
     choices,
   });
   if (pick === "copy" && cli) {
     try { await navigator.clipboard.writeText(cli); toast.show("CLI command copied.", "success"); }
-    catch (_e) { toast.show("Copy failed — select the text in the Manual tab instead.", "warn"); }
+    catch (_e) { toast.show("Copy failed. Select and copy the command in the Manual tab.", "warn"); }
   }
 }
 
@@ -383,7 +460,7 @@ async function importRunFlow() {
   if (!state.designDir) {
     await alertDialog({
       title: "No active design",
-      body: "Set a design directory first — imported runs land in its runs/ folder.",
+      body: "Set a design directory first. Imported runs are saved into its runs directory.",
     });
     return;
   }
@@ -418,17 +495,38 @@ async function importRunFlow() {
 
 async function deleteRunFlow(tag) {
   const ok = await confirmDialog({
-    title: "Delete run “" + tag + "”?", danger: true, confirmText: "Delete run",
+    title: "Delete run " + tag + "?", danger: true, confirmText: "Delete run",
     body: "This permanently deletes run '" + tag + "' and all its files. Consider downloading a bundle first. This cannot be undone.",
   });
   if (!ok) return;
   try {
-    await api.deleteRun(tag);
+    if (!(await deleteGuarded(tag))) return;
     if (state.selectedRunTag === tag) state.selectedRunTag = null;
     await renderRuns();
     toast.show("Deleted run '" + tag + "'.", "success");
   } catch (ex) {
     await alertDialog({ title: "Delete failed", body: ex.message || String(ex) });
+  }
+}
+
+// Runs resumed from another one read that run's earlier steps from its folder:
+// the server refuses to delete it while they exist, and this asks once more.
+async function deleteGuarded(tag) {
+  try {
+    await api.deleteRun(tag);
+    return true;
+  } catch (ex) {
+    const kids = ex && ex.status === 409 && ex.body && ex.body.children;
+    if (!kids || !kids.length) throw ex;
+    const ok = await confirmDialog({
+      title: "Other runs were resumed from " + tag, danger: true, confirmText: "Delete it anyway",
+      body: kids.join(", ") + (kids.length === 1 ? " was" : " were") + " resumed from '" + tag + "' and " + (kids.length === 1 ? "reads" : "read") +
+        " its earlier steps from its folder. Deleted, " + (kids.length === 1 ? "that run" : "those runs") +
+        " keep their own results and final GDS, but their earlier steps, pictures and checks go with it.",
+    });
+    if (!ok) return false;
+    await api.deleteRun(tag, true);
+    return true;
   }
 }
 
@@ -462,7 +560,7 @@ function fmtBytes(n) {
 async function showFilesModal(tag) {
   const ov = filesOverlay();
   ov.hidden = false;
-  ov.querySelector("#files-title").textContent = "Files — " + tag;
+  ov.querySelector("#files-title").textContent = "Files: " + tag;
   const body = ov.querySelector("#files-body");
   body.textContent = "loading…";
   let r;
@@ -484,40 +582,13 @@ async function showFilesModal(tag) {
       );
     });
   body.innerHTML =
-    "<div class='muted' style='margin-bottom:8px'>" + rows.length + " files — click to open/download</div>" +
+    "<div class='muted' style='margin-bottom:8px'>" + rows.length + " files: click to open or download</div>" +
     rows.join("");
 }
 
 async function openRun(tag, designDir) {
-  // Opening a run from another design (All-history scope): make it the active
-  // design first, since /api/runs/<tag> and the run-scoped views resolve against
-  // the active design dir.
-  if (designDir && designDir !== state.designDir) {
-    try {
-      const res = await api.setDesignDir(designDir);
-      const { adoptDesignDir } = await import("./setup.js");
-      await adoptDesignDir(res.design_dir, { explicit: true });
-    } catch (_e) { /* fall through; open may still work if dirs coincide */ }
-  }
-  state.selectedRunTag = tag;
-  try {
-    const view = await api.run(tag);
-    state.pipeline = (view.summaries || []).map((line) => {
-      const id = line.split(":")[0] || "";
-      return { id, status: line.includes("ok") ? "done" : "failed" };
-    });
-    // Pull metrics for analytics tab (rendered on tab activation).
-    state.metrics = view.metrics?.values || {};
-    const modA = await import("./timingAdvisor.js");
-    modA.renderTimingAdvisor();
-    document.querySelector(".side-tab[data-tab='preview']")?.click();
-    const modP = await import("./preview.js");
-    modP.selectRun(tag);
-    const modV = await import("./violations.js");
-    modV.populateReportsList(view.design_dir || state.designDir, tag);
-  } catch (ex) {
-    console.error("openRun", ex);
-  }
+  await setRun(tag, designDir);
+  go("layout");
 }
 
 // (The old Runs-tab metric-diff UI was removed; run comparison now lives in the

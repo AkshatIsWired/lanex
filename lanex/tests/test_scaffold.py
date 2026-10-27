@@ -22,8 +22,75 @@ def test_list_templates_nonempty_and_shaped():
     assert {"counter", "fifo", "blinky", "multiplier", "empty"} <= names
     for t in tpls:
         assert t["title"] and "top" in t and "clock_port" in t
-    # `empty` sorts last.
-    assert tpls[-1]["name"] == "empty"
+    # The blank project leads; examples follow in their curated order.
+    assert tpls[0]["name"] == "empty" and tpls[0]["kind"] == "blank"
+    assert all(t["kind"] == "example" for t in tpls[1:])
+
+
+def test_blank_project_renames_its_starter_module(tmp_path: Path):
+    dest = tmp_path / "mychip"
+    res = scaffold.create_project(str(dest), "empty", top="alu", pdk="sky130A")
+    assert res["ok"] is True
+    assert (dest / "src" / "alu.v").is_file() and not (dest / "src" / "top.v").exists()
+    assert "module alu" in (dest / "src" / "alu.v").read_text()
+    assert json.loads((dest / "config.json").read_text())["DESIGN_NAME"] == "alu"
+
+
+def test_blank_systemverilog_project(tmp_path: Path):
+    dest = tmp_path / "svchip"
+    res = scaffold.create_project(str(dest), "empty", top="alu", pdk="sky130A", language="systemverilog")
+    assert res["ok"] is True
+    assert (dest / "src" / "alu.sv").is_file() and not (dest / "src" / "alu.v").exists()
+    assert "module alu" in (dest / "src" / "alu.sv").read_text()
+    assert json.loads((dest / "config.json").read_text())["VERILOG_FILES"] == ["dir::src/*.sv"]
+
+
+def test_blank_project_starts_with_a_fixed_die(tmp_path: Path):
+    # A handful of cells on a utilization-sized die (~33x44 um) fails detailed
+    # placement after CTS (DPL-0036); the starter gets room to place and route.
+    dest = tmp_path / "b"
+    scaffold.create_project(str(dest), "empty", top="top", pdk="sky130A")
+    cfg = json.loads((dest / "config.json").read_text())
+    assert cfg["FP_SIZING"] == "absolute" and cfg["DIE_AREA"] == [0, 0, 150, 150]
+    assert cfg["DESIGN_NAME"] == "top"
+
+
+def test_template_config_keys_are_real_variables():
+    from lanex.controller import introspect
+    known = {v["name"] for v in introspect.list_variables()}
+    if not known:
+        pytest.skip("librelane not importable in this environment")
+    for tdir in scaffold._templates_root().iterdir():
+        doc = scaffold._read_manifest(tdir) if tdir.is_dir() else None
+        for key in ((doc or {}).get("config") or {}):
+            assert key in known, f"{tdir.name}: {key} is not a real LibreLane variable"
+
+
+def test_language_leaves_examples_alone(tmp_path: Path):
+    dest = tmp_path / "ex"
+    scaffold.create_project(str(dest), "blinky", top="", pdk="sky130A", language="systemverilog")
+    assert (dest / "src" / "blinky.v").is_file()
+    assert json.loads((dest / "config.json").read_text())["VERILOG_FILES"] == ["dir::src/*.v"]
+
+
+def test_example_keeps_its_own_top_module(tmp_path: Path):
+    # An example's top is fixed by its Verilog; a different name would point
+    # DESIGN_NAME at a module that doesn't exist.
+    dest = tmp_path / "ex"
+    res = scaffold.create_project(str(dest), "blinky", top="something_else", pdk="sky130A")
+    assert json.loads((dest / "config.json").read_text())["DESIGN_NAME"] == "blinky"
+    assert res["top"] == "blinky"
+
+
+def test_spm_example_copies_its_tuned_config(tmp_path: Path):
+    if scaffold.spm_source() is None:
+        import pytest
+        pytest.skip("no SPM example available in this install")
+    dest = tmp_path / "spm"
+    res = scaffold.create_project(str(dest), "spm", top="", pdk="sky130A")
+    assert res["ok"] is True
+    assert (dest / "config.yaml").is_file() and not (dest / "config.json").exists()
+    assert (dest / "src" / "spm.v").is_file() and not (dest / "runs").exists()
 
 
 def test_create_project_writes_config_and_sources(tmp_path: Path):
