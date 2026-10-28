@@ -247,6 +247,9 @@ export async function adoptDesignDir(designDir, opts = {}) {
     const { maybeOfferAutoConfig } = await import("./autoconfig.js");
     maybeOfferAutoConfig(designDir);
   } catch (_e) { /* non-fatal */ }
+  // The person opened a project (not boot re-opening the last one). After the
+  // caller's own page change (the wizard goes to Setup when this returns).
+  if (explicit) setTimeout(() => document.dispatchEvent(new CustomEvent("g:project_opened", { detail: { dir: designDir } })), 0);
 }
 
 // A project whose folder is gone (moved, renamed or deleted): its card says
@@ -401,6 +404,24 @@ export function paintOnboardChecklist() {
   const first = list.querySelector('[data-step-act="project"]');
   if (first) first.textContent = state.designDir ? "View project" : "New project";
   first?.classList.toggle("btn-ghost", !!state.designDir);
+  // Live progress for the open project: a tick on what's done, the next step
+  // marked (the same progress the first-chip guide follows). The simulation
+  // tick is set by guide.js when a simulation of this project runs to the end.
+  const dd = state.designDir;
+  const done = {
+    design: !!dd,
+    rtl: !!dd && safeStorage.get("ll.simok." + dd, "") === "1",
+    pdk: !!dd && !!document.getElementById("pdk-readiness")?.classList.contains("pill-pass"),
+    run: !!dd && (state.runs || []).length > 0,
+  };
+  let next = null;
+  list.querySelectorAll("li[data-ck]").forEach((li) => {
+    const ok = !!done[li.dataset.ck];
+    li.classList.toggle("is-done", ok);
+    li.classList.remove("is-next");
+    if (!ok && !next) next = li;
+  });
+  next?.classList.add("is-next");
 }
 
 // ---------- the project's PDK ---------------------------------------------------
@@ -571,6 +592,7 @@ async function onPdkSelected(e) {
     state.selectedScl = sclSel.value || "";
     paintPdkAbout(sel.value);
     if (user) await saveTargetToConfig();
+    if (user) document.dispatchEvent(new CustomEvent("g:pdk_confirmed", { detail: { pdk: sel.value } }));
     import("./projectcard.js").then((m) => m.paintDesignRow()).catch(() => {});
     refreshPdkReadiness();
   } catch (ex) {
@@ -725,6 +747,7 @@ async function onRunClick({ show = false, fixed = false } = {}) {
     }
     state.previewedConfigHash = null;
     paintRunning(true);
+    document.dispatchEvent(new CustomEvent("g:run_started", { detail: { tag: res.tag || payload.tag || null } }));
     // Pressing Run shows the run on Flow, unless the user turned that off in
     // the Run menu (then the status line shows it, and this says so). Setup's
     // Run flow and the very first run always show it.

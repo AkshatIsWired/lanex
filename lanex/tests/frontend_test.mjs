@@ -1487,6 +1487,47 @@ check("setup: the picker follows and saves the config's PDK; a mismatch offers b
   assert.match(pf, /data-act='pdk-save'/);
 });
 
+// ------------------------------------------------ first-run guide
+const GS = await import(toUrl(resolve(MOD, "guide-steps.js")));
+check("guide: beats move on only on their own event, and only when it went well", () => {
+  assert.equal(GS.BEATS.length, 6);
+  assert.ok(GS.BEATS[0].done && !GS.BEATS[0].on, "the first beat (installed) is done already");
+  assert.equal(GS.advance(1, "g:project_opened", { dir: "/x" }), 2);
+  assert.equal(GS.advance(1, "g:sim_done", { verdict: "passed" }), 1, "an event for a later beat is ignored");
+  assert.equal(GS.advance(2, "g:sim_done", { verdict: "passed" }), 3);
+  assert.equal(GS.advance(2, "g:sim_done", { verdict: "ran" }), 3);
+  assert.equal(GS.advance(2, "g:sim_done", { verdict: "build" }), 2, "a sim that didn't build stays");
+  assert.equal(GS.advance(3, "g:pdk_confirmed", {}), 4);
+  assert.equal(GS.advance(4, "g:run_started", { tag: "t" }), 5);
+  assert.equal(GS.advance(5, "g:flow_done", { error: "boom" }), 5, "a failed run stays");
+  assert.equal(GS.advance(5, "g:flow_done", { cancelled: true }), 5, "a stopped run stays");
+  assert.equal(GS.advance(5, "g:flow_done", {}), 6);
+  assert.equal(GS.pillText(2), "FIRST CHIP 3/6");
+  assert.equal(GS.pillText(9), "FIRST CHIP 6/6");
+  assert.equal(GS.counter(1, 5), "02/05");
+  assert.equal(GS.TOUR.length, 5, "the tour has five stops");
+});
+check("guide: saved state is read defensively", () => {
+  assert.deepEqual(GS.normState(null), { active: false, beat: 1 });
+  assert.deepEqual(GS.normState("{bad json"), { active: false, beat: 1 });
+  assert.deepEqual(GS.normState('{"active":true,"beat":3,"project":"/p"}'), { active: true, beat: 3, project: "/p" });
+  assert.equal(GS.normState({ active: true, beat: 99 }).beat, 6);
+  assert.equal(GS.normState({ active: true, beat: -2 }).beat, 1);
+});
+check("guide: the finish card shows only numbers the run has", () => {
+  const rows = [
+    { label: "Die area", value: 2500, unit: "µm²", key: "design__die__area" },
+    { label: "Die size", value: "50.0 × 50.0", unit: "µm", key: "design__die__bbox" },
+    { label: "Cell count", value: 312, unit: "", key: "design__instance__count" },
+  ];
+  const f = GS.chipFacts(rows, 10);
+  assert.deepEqual(f.map((x) => x.label), ["Die size", "Clock", "Cells placed"]);
+  assert.equal(f[1].value, "10");
+  assert.match(f[1].unit, /100 MHz/);
+  assert.deepEqual(GS.chipFacts([], null), [], "no numbers, no facts");
+  assert.deepEqual(GS.chipFacts([rows[0]], "x").map((x) => x.label), ["Die area"]);
+});
+
 // ------------------------------------------------ provenance everywhere
 check("provenance: a report line by needle, first or last (Netgen's verdict)", () => {
   const t = "Number of devices: 3\nFinal result: no\nsub\nFinal result: Circuits match uniquely.\n";

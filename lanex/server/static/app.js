@@ -201,6 +201,8 @@ async function boot() {
     setStatus("ready");
     if (splash) splash.classList.add("hide");
     document.getElementById("app").style.display = "";
+    // First launch: the Press Start card; mid-guide: offer to carry on (guide.js).
+    import("./modules/guide.js").then((m) => m.setupGuide()).catch((e) => console.error("guide", e));
   } catch (err) {
     failUI(err);
   }
@@ -587,6 +589,10 @@ const RENDER = {
   cells: () => import("./modules/cells.js").then((m) => m.renderCells()),
 };
 document.addEventListener("g:tab_activated", (e) => {
-  const r = RENDER[e.detail?.tab];
-  if (r) Promise.resolve().then(r).catch((err) => console.error("render " + e.detail.tab, err));
+  const tab = e.detail?.tab;
+  const r = RENDER[tab];
+  // g:tab_rendered says the page has drawn (the guide waits for it).
+  const rendered = () => document.dispatchEvent(new CustomEvent("g:tab_rendered", { detail: { tab } }));
+  if (r) Promise.resolve().then(r).then(rendered).catch((err) => console.error("render " + tab, err));
+  else rendered();
 });

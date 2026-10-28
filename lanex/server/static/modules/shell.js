@@ -389,8 +389,17 @@ function sheet() {
     "<button class='sheet-tab' role='tab' data-pane='about'>About</button>" +
     "<button class='iconbtn' data-act='close' aria-label='Close help'>" +
     "<svg viewBox='0 0 24 24' width='16' height='16' fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button>" +
-    "</div><div class='sheet-body' id='help-sheet-body'></div>";
+    "</div>" +
+    // The guides (guide.js listens for g:guide).
+    "<div class='sheet-guides'><span class='sheet-guides-k'>New here?</span>" +
+    "<button class='btn btn-sm' data-guide='first-chip'>First-chip guide</button>" +
+    "<button class='btn btn-sm btn-ghost' data-guide='tour'>Take the tour</button></div>" +
+    "<div class='sheet-body' id='help-sheet-body'></div>";
   document.body.appendChild(el);
+  el.querySelectorAll("[data-guide]").forEach((b) => b.addEventListener("click", () => {
+    closeOpen();
+    document.dispatchEvent(new CustomEvent("g:guide", { detail: { action: b.dataset.guide } }));
+  }));
   el.querySelector("[data-act='close']").addEventListener("click", () => closeOpen());
   el.querySelectorAll(".sheet-tab").forEach((t) =>
     t.addEventListener("click", () => showPane(t.dataset.pane)));

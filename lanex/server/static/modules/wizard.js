@@ -69,7 +69,7 @@ export async function openWizard({ template = "" } = {}) {
 }
 
 function tplCard(t, cls) {
-  return "<button class='wiz-tpl " + cls + "' data-name='" + fmt.escape(t.name) + "'>" +
+  return "<button class='wiz-tpl " + cls + "' data-name='" + fmt.escape(t.name) + "' title='" + fmt.escape(t.description) + "'>" +
     "<span class='wiz-tpl-title'>" + fmt.escape(t.title) + "</span>" +
     "<span class='wiz-tpl-desc'>" + fmt.escape(t.description) + "</span>" +
     (t.has_testbench ? "<span class='wiz-tpl-tag'>Includes a testbench</span>" : "") +
@@ -331,8 +331,17 @@ async function doCreate(body, tpl) {
       if (tbRel) await ide.openInIde({ rel: tbRel });
       await ide.openInIde({ rel: "src/" + topName + ext });
     } else {
-      (await import("./nav.js")).go("setup", {}, { link: false });
-      toast.show("Created " + name + ". It's ready to run.", "success");
+      const { go } = await import("./nav.js");
+      go("setup", {}, { link: false });
+      // Say what comes next (the first-chip guide points at it itself).
+      if (document.body.classList.contains("guide-on")) toast.show("Created " + name + ".", "success");
+      else toast.show("Created " + name + ". It's ready to run.", "success", 10000, [
+        tpl.has_testbench ? { label: "Simulate first", run: () => go("ide") } : null,
+        { label: "Go to Run", run: () => {
+          go("setup", { section: "setup-preflight" }, { link: false });
+          setTimeout(() => document.getElementById("btn-run")?.focus({ preventScroll: true }), 400);
+        } },
+      ]);
     }
   } catch (ex) {
     err.textContent = ex.message || String(ex);

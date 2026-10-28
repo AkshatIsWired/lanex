@@ -1,0 +1,132 @@
+/* guide.css — the first-run guide and the tour (guide.js), over Driver.js's
+   own driver.css. MASK ROOM: a dark scrim, a hairline accent outline with
+   L-shaped reticle ticks at the corners, a die-coloured card with a mono
+   counter and verb-first buttons. */
+
+/* ---------- the pointer card (Driver.js popover) ---------- */
+.driver-popover.gd-pop {
+  font-family: var(--sans); color: var(--text);
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  min-width: 280px; max-width: 360px; padding: 16px 18px 14px;
+}
+.driver-popover.gd-pop .driver-popover-arrow { border: 6px solid var(--surface); }
+.driver-popover.gd-pop .driver-popover-arrow-side-left { border-color: transparent; border-left-color: var(--surface); }
+.driver-popover.gd-pop .driver-popover-arrow-side-right { border-color: transparent; border-right-color: var(--surface); }
+.driver-popover.gd-pop .driver-popover-arrow-side-top { border-color: transparent; border-top-color: var(--surface); }
+.driver-popover.gd-pop .driver-popover-arrow-side-bottom { border-color: transparent; border-bottom-color: var(--surface); }
+.gd-pop .gd-eyebrow, .gd-card .gd-eyebrow {
+  font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--met1); margin: 0 0 6px;
+}
+.driver-popover.gd-pop .driver-popover-title {
+  font-family: var(--sans); font-size: 18px; line-height: 1.25; font-weight: 700; color: var(--text-strong);
+  padding-right: 24px;
+}
+.driver-popover.gd-pop .driver-popover-description { font-size: 14px; line-height: 1.55; color: var(--text); margin-top: 6px; }
+.gd-pop .driver-popover-description p { margin: 0 0 8px; }
+.gd-pop .driver-popover-description p:last-child { margin-bottom: 0; }
+.gd-pop code, .gd-card code { font-family: var(--mono); font-size: 12.5px; color: var(--text-strong); }
+.driver-popover.gd-pop .driver-popover-close-btn { color: var(--text-muted); top: 6px; right: 6px; width: 28px; height: 28px; line-height: 28px; }
+.driver-popover.gd-pop .driver-popover-close-btn:hover,
+.driver-popover.gd-pop .driver-popover-close-btn:focus-visible { color: var(--text-strong); }
+.driver-popover.gd-pop .driver-popover-footer { margin-top: 14px; justify-content: flex-end; }
+.driver-popover.gd-pop .driver-popover-navigation-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+
+/* buttons shared by the pointer and the cards */
+.gd-btn {
+  font: 600 13px/1 var(--sans); color: var(--text-strong); cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  padding: 8px 12px; min-height: 32px;
+}
+.gd-btn:hover { background: var(--surface-3); }
+.gd-btn.is-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.gd-btn.is-primary:hover { background: var(--accent-2); }
+.gd-btn:focus-visible, .gd-choice:focus-visible, .gd-close:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ---------- the reticle around what the pointer points at ---------- */
+.gd-reticle { position: fixed; z-index: 10001; pointer-events: none; outline: 1px solid var(--met1); outline-offset: 0; }
+.gd-reticle[hidden] { display: none; }
+.gd-tick { position: absolute; width: 10px; height: 10px; border: 0 solid var(--met1); pointer-events: none; }
+.gd-tick.tl { top: -5px; left: -5px; border-top-width: 2px; border-left-width: 2px; }
+.gd-tick.tr { top: -5px; right: -5px; border-top-width: 2px; border-right-width: 2px; }
+.gd-tick.bl { bottom: -5px; left: -5px; border-bottom-width: 2px; border-left-width: 2px; }
+.gd-tick.br { bottom: -5px; right: -5px; border-bottom-width: 2px; border-right-width: 2px; }
+
+/* ---------- the cards: Press Start and the finish ---------- */
+.gd-scrim {
+  position: fixed; inset: 0; z-index: 9000; display: grid; place-items: center; padding: 16px;
+  background: rgba(4, 6, 10, 0.72);
+}
+.gd-card {
+  position: relative; width: min(560px, 100%); max-height: calc(100vh / var(--ll-zoom, 1) - 32px); overflow: auto;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  padding: 28px 30px 22px; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+.gd-card .gd-tick { width: 14px; height: 14px; }
+.gd-card .gd-tick.tl { top: -1px; left: -1px; }
+.gd-card .gd-tick.tr { top: -1px; right: -1px; }
+.gd-card .gd-tick.bl { bottom: -1px; left: -1px; }
+.gd-card .gd-tick.br { bottom: -1px; right: -1px; }
+.gd-title { margin: 0; font-size: 26px; line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; color: var(--text-strong); }
+.gd-lede { margin: 8px 0 0; font-size: 15px; line-height: 1.55; color: var(--text); }
+.gd-choices { display: grid; gap: 8px; margin-top: 20px; }
+.gd-choice {
+  display: grid; gap: 3px; text-align: left; cursor: pointer; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 12px 14px;
+  font: 400 13.5px/1.45 var(--sans);
+}
+.gd-choice b { font-size: 15px; font-weight: 600; color: var(--text-strong); }
+.gd-choice span { color: var(--text-muted); }
+.gd-choice:hover { border-color: var(--border-strong); background: var(--surface-3); }
+.gd-choice.is-primary { border-color: var(--met1); box-shadow: inset 2px 0 0 var(--met1); }
+.gd-foot { margin: 16px 0 0; font-size: 13px; color: var(--text-muted); }
+.gd-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 20px 0 0; background: var(--border); border: 1px solid var(--border); }
+.gd-fact { background: var(--bg-2); padding: 12px 14px; min-width: 0; }
+.gd-fact dt { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+.gd-fact dd { margin: 6px 0 0; color: var(--text-muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.gd-fact dd b { font-family: var(--mono); font-size: 18px; font-weight: 500; color: var(--text-strong); }
+.gd-next { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+.gd-close {
+  position: absolute; top: 12px; right: 12px; cursor: pointer; background: transparent; border: 0;
+  color: var(--text-muted); font: 500 12px var(--sans); padding: 6px 8px;
+}
+.gd-close:hover { color: var(--text-strong); }
+@media (max-width: 560px) { .gd-facts { grid-template-columns: 1fr; } .gd-card { padding: 22px 18px 18px; } }
+
+/* ---------- the pill in the top bar ---------- */
+.guide-pill {
+  display: inline-flex; align-items: stretch; flex: none; justify-self: end; margin: 0 10px; height: 30px; max-width: 100%;
+  border: 1px solid var(--met1); border-radius: var(--r-sm); background: var(--accent-soft); overflow: hidden;
+}
+.guide-pill[hidden] { display: none; }
+.guide-pill button { background: transparent; border: 0; color: var(--text-strong); cursor: pointer; }
+.gp-open { display: inline-flex; align-items: center; gap: 8px; padding: 0 10px; }
+.gp-n { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: var(--met1); }
+.gp-l { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.gp-x { display: inline-grid; place-items: center; width: 28px; border-left: 1px solid var(--met1) !important; color: var(--text-muted) !important; }
+.gp-open:hover, .gp-x:hover { background: var(--hover); }
+@media (max-width: 1500px) { .gp-l { display: none; } }
+
+/* ---------- the guides row in the Help sheet ---------- */
+.sheet-guides { display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-bottom: 1px solid var(--seal); flex-wrap: wrap; }
+.sheet-guides-k { font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); margin-right: 4px; }
+
+body.theme-light .gd-scrim { background: rgba(10, 16, 28, 0.55); }
+body.theme-light .gd-pop .gd-eyebrow, body.theme-light .gd-card .gd-eyebrow, body.theme-light .gp-n { color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .driver-popover.gd-pop, .gd-scrim, .gd-card { animation: none !important; transition: none !important; }
+}
+
+/* ---------- Setup's four-step strip, live (setup.js paintOnboardChecklist) ---------- */
+.steps-3 li.is-done .step-no { background: var(--pass-soft); border-color: var(--met3); color: transparent; position: relative; }
+.steps-3 li.is-done .step-no::after {
+  content: ""; position: absolute; left: 9px; top: 6px; width: 7px; height: 12px;
+  border: solid var(--met3); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.steps-3 li.is-done .step-text b::after { content: " · done"; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.08em; color: var(--met3); }
+.steps-3 li.is-next { border-color: var(--met1); box-shadow: inset 2px 0 0 var(--met1); }
+.steps-3 li.is-next .step-text b::after { content: " · next"; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.08em; color: var(--met1); }
+body.theme-light .steps-3 li.is-done .step-text b::after { color: var(--pass); }
+body.theme-light .steps-3 li.is-next .step-text b::after { color: var(--accent); }

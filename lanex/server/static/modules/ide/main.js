@@ -1693,6 +1693,7 @@ function finishSim(ev) {
   else note(buildErrors ? "The simulation didn't build: " + plural(buildErrors, "error") + " (see Problems)."
     : "Simulation finished with errors. Review the log below for details.", true);
   recordRtlStatus();
+  document.dispatchEvent(new CustomEvent("g:sim_done", { detail: { verdict: run.verdict, vcd: run.vcd, tb: run.tb } }));
 }
 
 const SS_ICON = {
