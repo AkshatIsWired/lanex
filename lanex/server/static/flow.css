@@ -34,6 +34,8 @@
 @keyframes fl-pulse { 0% { box-shadow: 0 0 0 0 var(--accent-glow); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 .fl-bar { height: 4px; margin-top: var(--s-4); background: var(--surface-2); border-radius: 2px; overflow: hidden; max-width: 760px; }
 .fl-bar > span { display: block; width: 100%; height: 100%; transform-origin: left center; background: linear-gradient(90deg, var(--accent), var(--met1)); transition: transform var(--dur-3) var(--ease-out); }
+.fl-h-slow { margin: 4px 0 0; font-size: 13px; }
+.fl-h-slow[hidden] { display: none; }
 .fl-elapsed { font-family: var(--mono); font-size: 26px; font-weight: 500; color: var(--met1); font-variant-numeric: tabular-nums; text-align: right; }
 
 /* A short window (a 1366 x 768 laptop): the head tightens so the panes keep

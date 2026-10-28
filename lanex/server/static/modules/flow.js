@@ -382,6 +382,7 @@ function paintLive(head, steps, stages) {
     head.innerHTML = "<div class='an-verdict fl-hero is-live'><div class='an-verdict-main'>" +
       "<div class='an-eyebrow'><span class='fl-live-dot'></span>Running · " + esc(F.tag) + "</div>" +
       "<h2 class='an-title fl-h-title'></h2><div class='fl-h-branch'></div><p class='an-lede fl-h-sub'></p>" +
+      "<p class='fl-h-slow muted' hidden>This step can take several minutes on bigger designs. The run is still going.</p>" +
       "<div class='fl-bar' role='progressbar' aria-label='Steps done' aria-valuemin='0' aria-valuemax='100'><span></span></div>" +
       "</div><div class='an-verdict-act'>" +
       "<span class='fl-elapsed' id='fl-elapsed'></span>" +
@@ -465,7 +466,8 @@ function failHtml(rx, stages) {
     (fixes ? "<div class='fl-split-b'><div class='fl-fixes-h'>What to change</div>" + fixes +
       "<p class='fl-fix-note'>Apply shows the change, where it is saved and where the new run starts. Nothing is written until you confirm.</p></div>" : "") +
     "</div><div class='an-verdict-act'>" +
-    (rx.at ? "<button class='btn btn-primary btn-sm' data-fl='at-error'>" + icon("file", { size: 13 }) + " Show it in the log</button>" : "") +
+    // The recommended fix is the primary action; the log is for reading.
+    (rx.at ? "<button class='btn " + (fixes ? "btn-ghost" : "btn-primary") + " btn-sm' data-fl='at-error'>" + icon("file", { size: 13 }) + " Show it in the log</button>" : "") +
     (layoutSrc ? "<button class='btn btn-ghost btn-sm' data-go='layout' data-go-source='" + esc(layoutSrc.source) + "' title='The last picture before it stopped'>" + icon("grid", { size: 13 }) + " Layout at " + esc(layoutSrc.label) + "</button>" : "") +
     "<button class='btn btn-ghost btn-sm' data-fl='run'>" + icon("play", { size: 13 }) + " Run again</button></div></div>";
 }
@@ -970,6 +972,9 @@ function wireOnce() {
     const t = id && (state.stepTiming || {})[id];
     const el = id && F.rows.get(id);
     if (el && t && t.start) el.lastChild.textContent = fmtDur((Date.now() - t.start) / 1000);
+    // A step past a minute gets a calm line, so a long one doesn't look stuck.
+    const slow = document.querySelector("#fl-head .fl-h-slow");
+    if (slow) slow.hidden = !(t && t.start && !t.end && Date.now() - t.start > 60000);
   }, 1000);
 }
 
