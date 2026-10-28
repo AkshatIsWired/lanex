@@ -922,13 +922,26 @@
               <button class="lx-tb" data-lx="full" title="Full screen" aria-label="Full screen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg></button>
             </div>
             <!-- Top right: what is on screen, and in 3D the controls that shape it. -->
-            <div class="lx-corner">
+            <div class="lx-corner" id="lx-corner">
               <div class="lx-badge" id="lx-badge"></div>
               <div class="lx-3dctl" id="lx-3dctl" hidden>
-                <label><span>Height</span><output id="lx-3d-zv">×4</output><input type="range" id="lx-3d-z" min="1" max="16" step="0.5" value="4" aria-label="Height exaggeration"/></label>
-                <label><span>Spread layers</span><input type="range" id="lx-3d-s" min="0" max="8" step="0.25" value="0" aria-label="Spread the layers apart"/></label>
-                <p class="lx-3d-how">Drag to turn · right-drag to move · scroll to zoom</p>
-                <button class="btn btn-ghost btn-sm" id="lx-3d-reset" title="Back to the starting angle (double-click also works)">Reset view</button>
+                <div class="lx-3d-row">
+                  <span class="lx-3d-k" id="lx-3d-schemek">Colours</span>
+                  <span class="lx-seg" id="lx-3d-scheme" role="group" aria-labelledby="lx-3d-schemek">
+                    <button data-scheme="lanex" aria-pressed="true" title="Each layer by its job, in LanEx's layer colours: metal 1 blue, 2 pink, 3 green, 4 amber, 5 orange; vias a light tint of the metal under them">LanEx</button>
+                    <button data-scheme="metallic" aria-pressed="false" title="Copper-to-gold metals and tungsten plugs over grey silicon">Metallic</button>
+                    <button data-scheme="pdk" aria-pressed="false" title="The colours in the PDK's own 3D layer file, close to the 2D view's">PDK</button>
+                  </span>
+                </div>
+                <label class="lx-slider"><span>Height</span><output id="lx-3d-zv" for="lx-3d-z">×2</output>
+                  <input type="range" id="lx-3d-z" min="1" max="16" step="0.25" value="2" aria-label="Height exaggeration" title="How much taller than real the stack is drawn. ×1 is true scale."/></label>
+                <label class="lx-slider"><span>Spread</span><output id="lx-3d-sv" for="lx-3d-s">60%</output>
+                  <input type="range" id="lx-3d-s" min="0" max="3" step="0.05" value="0.6" aria-label="Spread the layers apart" title="Opens a gap between the layers, as a share of the stack's height. Vias stretch to keep joining them. 0% is the real stack."/></label>
+                <div class="lx-3d-act">
+                  <button class="lx-chipbtn" id="lx-3d-spin" aria-pressed="false" title="Turn the chip slowly, for showing it off. Any drag, scroll or key stops it."><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg>Turntable</button>
+                  <button class="lx-chipbtn" id="lx-3d-reset" title="Back to the starting angle and this chip's starting height and spread. Double-click the view (or F) frames the chip without touching the sliders."><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>Reset</button>
+                </div>
+                <p class="lx-3d-how">Drag turns · right-drag moves · scroll zooms</p>
               </div>
             </div>
             <div class="lx-busy" id="lx-busy" hidden><span></span></div>

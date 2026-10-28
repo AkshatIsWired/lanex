@@ -22,7 +22,7 @@ import * as ctx from "./context.js";
 import { mountRunBar } from "./runbar.js";
 import { STAGES as FLOW_STAGES } from "./flowstages.js";
 import { LayoutCanvas, fmtUm, niceLength } from "./layoutcanvas.js";
-import { Layout3D } from "./layout3d.js";
+import { Layout3D, fmtHeight, fmtSpread } from "./layout3d.js";
 import { setRunFilesTag } from "./runfiles.js";
 import { toolRoutes, launchTool } from "./layouttools.js";
 
@@ -212,7 +212,7 @@ async function openSource(source, { keepView = true } = {}) {
   const stage = (S.src.stages || []).find((s) => s.source === source);
   const other = !stage && [...(S.src.steps || []), ...(S.src.variants || [])].find((s) => s.source === source);
   const notes = (info.notes || []).map(esc).join(" ");
-  setNote((stage ? esc(stage.blurb) : other ? "Step snapshot <code>" + esc(other.path) + "</code>." : "") +
+  setNote((stage ? "<b class='lx-note-k'>" + esc(stage.label) + "</b>" + esc(stage.blurb) : other ? "<b class='lx-note-k'>Snapshot</b>Step snapshot <code>" + esc(other.path) + "</code>." : "") +
     (info.kind === "def" ? " <span class='muted'>Cells are drawn as their LEF outlines and pins, as LibreLane's <code>OpenInKLayout</code> shows a DEF.</span>" : "") +
     (notes ? " <span class='muted'>" + notes + "</span>" : ""));
 }
@@ -564,8 +564,10 @@ function paintBadge() {
   if (!el || !S.info) return;
   const st = (S.src.stages || []).find((s) => s.source === S.source);
   const bb = S.info.bbox;
-  el.innerHTML = "<b>" + esc(st ? st.label : S.source) + "</b><span>" + esc(S.info.top) + " · " +
+  const other = !st && [...(S.src.steps || []), ...(S.src.variants || [])].find((s) => s.source === S.source);
+  el.innerHTML = "<b>" + esc(st ? st.label : other ? (other.step || other.label || "Snapshot") : S.source) + "</b><span>" + esc(S.info.top) + " · " +
     fmtUm(bb[2] - bb[0]) + " × " + fmtUm(bb[3] - bb[1]) + "</span>";
+  el.title = "";
 }
 
 function showMsg(html) {
@@ -680,9 +682,15 @@ function renderLayers() {
     ["wiring", "Wiring", "Only the metal layers, vias and pins: how signals travel"],
     ["devices", "Transistors", "Only diffusion, poly, wells and local interconnect: where the transistors are"],
   ];
+  // Which preset the visible set is, if any (shown pressed).
+  const same = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+  const matches = presets.map(([id]) => id).filter((id) => same(presetSet(id), S.vis));
+  const active = matches.includes(S._preset) ? S._preset : matches[0] || "";   // the one clicked, when two are the same set
+  // In 3D the swatches show the 3D colours; layers outside the stack say so.
+  const in3d = S.mode3d && S.three && S.three.layers.length ? S.three : null;
   host.innerHTML =
     "<div class='lx-presets' role='group' aria-label='Layer presets'>" +
-    presets.map(([id, l, t]) => "<button class='chip chip-clickable' data-preset='" + id + "' title='" + esc(t) + "'>" + l + "</button>").join("") +
+    presets.map(([id, l, t]) => "<button class='lx-preset' data-preset='" + id + "' aria-pressed='" + (id === active) + "' title='" + esc(t) + "'>" + l + "</button>").join("") +
     "</div>" +
     groups.map((g) => {
       const ls = layers.filter((L) => L.group === g.id);
@@ -690,14 +698,21 @@ function renderLayers() {
       return "<div class='lx-lgroup' data-group='" + g.id + "'>" +
         "<div class='lx-lgroup-h'><label class='lx-check'><input type='checkbox' data-gtoggle='" + g.id + "'" +
         (on === ls.length ? " checked" : "") + (on && on < ls.length ? " data-mixed='1'" : "") + "/><span>" + esc(g.label) + "</span></label>" +
-        "<span class='lx-n'>" + on + "/" + ls.length + "</span></div>" +
-        ls.map((L) =>
-          "<div class='lx-layer" + (S.vis.has(L.id) ? "" : " is-off") + "' data-lid='" + L.id + "' title='" + esc((L.about ? L.about + ". " : "") + "GDS layer " + L.src + ". Alt-click shows only this layer.") + "'>" +
-          "<label class='lx-check'><input type='checkbox' data-lid='" + L.id + "'" + (S.vis.has(L.id) ? " checked" : "") + "/>" +
-          "<i class='lx-sw' style='" + swatchStyle(L) + "'></i><span class='lx-ln'>" + esc(L.name) +
-          (L.purpose ? "<em>." + esc(L.purpose) + "</em>" : "") + "</span></label>" +
-          "<span class='lx-src'>" + esc(L.src) + "</span>" +
-          "<button class='lx-solo' data-solo='" + L.id + "' title='Show only this layer' aria-label='Show only " + esc(L.label) + "'>only</button></div>").join("") +
+        "<span class='lx-n'>" + on + "<i>/" + ls.length + "</i></span></div>" +
+        ls.map((L) => {
+          const c3 = in3d ? in3d.colorOf(L.id) : null;
+          const sw = c3 ? "background:" + c3 + ";border-color:" + c3 : swatchStyle(L);
+          // "drawing" is what nearly every layer is: name the purpose only when it isn't.
+          const purpose = L.purpose && !/^(drawing|drw)$/i.test(L.purpose) ? L.purpose : "";
+          return "<div class='lx-layer" + (S.vis.has(L.id) ? "" : " is-off") + (in3d && !c3 ? " is-flat" : "") + "' data-lid='" + L.id + "' title='" +
+            esc((L.about ? L.about[0].toUpperCase() + L.about.slice(1) + ". " : "") + L.label + ", GDS layer " + L.src + "." +
+              (in3d && !c3 ? " Not in this 3D view: outside the PDK's 3D stack, or nothing of it here." : "") + " Alt-click shows only this layer.") + "'>" +
+            "<label class='lx-check'><input type='checkbox' data-lid='" + L.id + "'" + (S.vis.has(L.id) ? " checked" : "") + "/>" +
+            "<i class='lx-sw" + (c3 ? " is-3d" : "") + "' style='" + sw + "'></i><span class='lx-ln'>" + esc(L.name) + "</span>" +
+            (purpose ? "<em class='lx-purpose'>" + esc(purpose) + "</em>" : "") + "</label>" +
+            "<span class='lx-src'>" + esc(L.src) + "</span>" +
+            "<button class='lx-solo' data-solo='" + L.id + "' title='Show only this layer' aria-label='Show only " + esc(L.label) + "'>only</button></div>";
+        }).join("") +
         "</div>";
     }).join("");
   host.querySelectorAll("[data-mixed]").forEach((cb) => { cb.indeterminate = true; });
@@ -734,14 +749,19 @@ function soloLayer(id) {
   restyle();
 }
 
-function applyPreset(p) {
+function presetSet(p) {
   const Ls = S.info.layers;
   const keepMisc = (L) => L.group === "misc" && /boundary/i.test(L.name) && L.visible;
   let pick;
   if (p === "wiring") pick = Ls.filter((L) => L.group === "metal" || (L.group === "pin" && L.visible) || keepMisc(L) || (L.group === "local" && /^li/i.test(L.name)));
   else if (p === "devices") pick = Ls.filter((L) => ["device", "local", "well"].includes(L.group) || keepMisc(L));
   else pick = Ls.filter((L) => L.visible);
-  S.vis = new Set(pick.map((L) => L.id));
+  return new Set(pick.map((L) => L.id));
+}
+
+function applyPreset(p) {
+  S.vis = presetSet(p);
+  S._preset = p;
   S._visTouched = p !== "all";
   renderLayers();
   restyle();
@@ -1030,18 +1050,22 @@ function toggle3d(on) {
   const want = on ?? !S.mode3d;
   if (want && !S.info) return;
   if (want && !S.three) {
-    S.three = new Layout3D($("lx-view"), { onKey: (k) => keyCmd(k) });
+    S.three = new Layout3D($("lx-view"), {
+      onKey: (k) => keyCmd(k),
+      onSpin: (on) => $("lx-3d-spin")?.setAttribute("aria-pressed", on ? "true" : "false"),
+      // The controls card covers the view's top right: frame the chip in
+      // the space left of it.
+      inset: () => { const c = $("lx-corner"); return c && !$("lx-3dctl").hidden ? c.offsetWidth + 24 : 0; },
+    });
     if (!S.three.ok) {
       toast.show("This browser can't draw WebGL, so the 3D view isn't available. GDS3D (below) shows the stack in 3D.", "warn");
       S.three.destroy(); S.three = null;
       return;
     }
     S.three.setBg(BG[S.bg] || BG.dark);
+    S.three.setScheme(pref("scheme", "lanex"));
     S.three.setVisible(S.vis);
-    const z = $("lx-3d-z"), sp = $("lx-3d-s");
-    z.addEventListener("input", () => { S.three.setZScale(+z.value); $("lx-3d-zv").textContent = "×" + z.value; });
-    sp.addEventListener("input", () => S.three.setSpread(+sp.value));
-    $("lx-3d-reset").addEventListener("click", () => S.three.reset());
+    wire3dControls();
   }
   S.mode3d = want;
   $("lx-view").classList.toggle("is-3d", want);
@@ -1052,6 +1076,7 @@ function toggle3d(on) {
   hideInspector();
   if (want) {
     S.three.show(true);
+    paint3dCtl();
     load3d();
     S.three.cv.focus({ preventScroll: true });
   } else {
@@ -1059,6 +1084,50 @@ function toggle3d(on) {
     S.canvas.over.focus({ preventScroll: true });
     paintBadge();
   }
+  renderLayers();   // the swatches follow the 3D colours while it's on
+}
+
+// The 3D card: colours, height, spread, turntable, reset.
+function wire3dControls() {
+  const z = $("lx-3d-z"), sp = $("lx-3d-s");
+  z.addEventListener("input", () => { S.three.auto = false; S.three.setZScale(+z.value); paint3dCtl(); });
+  sp.addEventListener("input", () => { S.three.auto = false; S.three.setSpread(+sp.value); paint3dCtl(); });
+  $("lx-3d-scheme").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-scheme]");
+    if (!b) return;
+    setPref("scheme", b.dataset.scheme);
+    S.three.setScheme(b.dataset.scheme);
+    paint3dCtl();
+    renderLayers();
+  });
+  $("lx-3d-spin").addEventListener("click", () => {
+    S.three.setSpin(!S.three.spin);
+    if (S.three.spin) S.three.cv.focus({ preventScroll: true });
+  });
+  $("lx-3d-reset").addEventListener("click", () => {
+    S.three.auto = true;
+    const d = S.three.defaults();
+    S.three.zScale = d.z; S.three.spread = d.spread;
+    paint3dCtl();
+    S.three.reset(true, { animate: true });
+    S.three.cv.focus({ preventScroll: true });
+  });
+}
+
+function paint3dCtl() {
+  const t = S.three;
+  if (!t) return;
+  const z = $("lx-3d-z"), sp = $("lx-3d-s");
+  const d = t.defaults();
+  z.max = String(Math.max(d.zMax, t.zScale));
+  z.value = String(t.zScale);
+  sp.value = String(t.spread);
+  $("lx-3d-zv").textContent = fmtHeight(t.zScale) + (t.zScale === 1 ? " true scale" : "");
+  $("lx-3d-sv").textContent = t.spread === 0 ? "0% real stack" : fmtSpread(t.spread);
+  // The filled part of each track.
+  for (const el of [z, sp]) el.style.setProperty("--p", ((+el.value - +el.min) / (+el.max - +el.min) * 100).toFixed(1) + "%");
+  document.querySelectorAll("#lx-3d-scheme [data-scheme]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.scheme === t.scheme ? "true" : "false"));
+  $("lx-3d-spin").setAttribute("aria-pressed", t.spin ? "true" : "false");
 }
 
 async function load3d() {
@@ -1068,31 +1137,44 @@ async function load3d() {
   const zoomed = (vb[2] - vb[0]) < (bb[2] - bb[0]) * 0.9 || (vb[3] - vb[1]) < (bb[3] - bb[1]) * 0.9;
   const box = zoomed ? vb.map((v) => +v.toFixed(4)) : null;
   const key = S.info.sid + "|" + (box ? box.join(",") : "all");
-  if (key === S.meshKey && S.three.layers.length) { S.three.show(true); paint3dBadge(); return; }
+  if (key === S.meshKey && (S.three.layers.length || S._meshBusy === key)) { S.three.show(true); paint3dBadge(); return; }
   S.meshKey = key;
+  S._meshBusy = key;
   setBusy(true);
   hideMsg();
+  // A big chip takes a few seconds to build: say so where the eye is.
+  const badge = $("lx-badge");
+  if (badge) {
+    const st = (S.src.stages || []).find((s) => s.source === S.source);
+    badge.innerHTML = "<b>" + esc(st ? st.label : "Snapshot") + "<i>3D</i></b><em class='lx-badge-wait'>Building the 3D model of " + (box ? "this area" : "the whole chip") + "…</em>";
+  }
   try {
     const r = await fetch("/api/layout/mesh?sid=" + encodeURIComponent(S.info.sid) + (box ? "&box=" + box.join(",") : ""));
     if (!r.ok) {
       let msg = "HTTP " + r.status;
       try { msg = (await r.json()).error || msg; } catch (_e) {}
       S.meshKey = "";
+      paintBadge();
       showMsg("<h3>3D isn't drawn for this view</h3><p>" + esc(msg) + "</p><button class='btn btn-ghost btn-sm' data-back2d>Back to 2D</button>");
       $("lx-msg").querySelector("[data-back2d]")?.addEventListener("click", () => { hideMsg(); toggle3d(false); });
       return;
     }
     const buf = await r.arrayBuffer();
     if (key !== S.meshKey) return;
-    const head = S.three.load(buf);
+    // A new chip rises out of the flat picture into the 3D view.
+    const head = S.three.load(buf, { animate: true });
     S.three.setVisible(S.vis);
     S._3dhead = head;
     paint3dBadge();
+    paint3dCtl();
+    renderLayers();
     if (!head.layers.length) showMsg("<h3>No layers to stack</h3><p>None of this view's layers are in the PDK's 3D stack.</p>");
   } catch (ex) {
     S.meshKey = "";
+    paintBadge();
     toast.show("3D failed: " + (ex.message || ex), "error");
   } finally {
+    if (S._meshBusy === key) S._meshBusy = "";
     setBusy(false);
   }
 }
@@ -1105,11 +1187,16 @@ function paint3dBadge() {
   // "gds3d:<file>" (a GDS3D process file, LanEx's own or GDS3D's), "d25:<file>"
   // (the PDK's KLayout 2.5D stack) or "generic".
   const real = h.stack && h.stack !== "generic";
-  el.innerHTML = "<b>3D · " + (h.clipped ? "this view" : "whole chip") + "</b><span>" + fmtUm(w) + " × " + fmtUm(hh) +
-    " · " + (real ? "real stack heights" : "generic heights") + "</span>";
-  el.title = real ? "Layer heights from " + (h.stack.startsWith("d25:") ? "the PDK's 2.5D stack " : "the process file ") +
-    h.stack.slice(h.stack.indexOf(":") + 1) :
-    "No layer-stack file for this PDK was found, so layers are evenly spaced in stacking order.";
+  const file = real ? h.stack.slice(h.stack.indexOf(":") + 1) : "";
+  const st = (S.src.stages || []).find((s) => s.source === S.source);
+  const left = (h.dropped || []).length;
+  el.innerHTML = "<b>" + esc(st ? st.label : "Snapshot") + "<i>3D · " + (h.clipped ? "this area" : "whole chip") + "</i></b>" +
+    "<span>" + esc(h.top || S.info.top) + " · " + fmtUm(w) + " × " + fmtUm(hh) + "</span>" +
+    "<em>" + (real ? "Real layer stack · " + esc(file.replace(/\.(txt|lyd25)$/i, "")) : "Generic heights: no stack file for this PDK") + "</em>" +
+    (left ? "<em class='lx-badge-warn'>" + left + (left === 1 ? " lower layer" : " lower layers") + " left out: too detailed for the whole chip. Zoom in to see " + (left === 1 ? "it" : "them") + ".</em>" : "");
+  el.title = (real ? "Layer heights and order from " + (h.stack.startsWith("d25:") ? "the PDK's 2.5D stack " : "the process file ") + file + "." :
+    "No layer-stack file for this PDK was found, so layers are evenly spaced in stacking order.") +
+    " Height and spread change only how the stack is drawn." + (left ? " Left out: " + h.dropped.join(", ") + "." : "");
 }
 
 // ------------------------------------------------------------------ toolbar
