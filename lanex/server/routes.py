@@ -1069,6 +1069,18 @@ def h_preflight(handler: Any) -> None:
             )
         tools_block = {"ok": not missing_tools, "mode": "local", "tools": tool_rows, "missing": missing_tools}
 
+    # 4) Memory: a heads-up (never a blocker) when free memory looks too small
+    #    for this design (its last run's biggest step, else a small-design rule).
+    try:
+        from ..controller import dse, runresources
+        _res = dse.system_resources()
+        resources_block = runresources.memory_check(
+            _res.get("available_gb"), _res.get("total_gb"),
+            runresources.last_run_peak_gb(design_dir) if design_ok else None)
+        resources_block["cores"] = runresources.usable_cores() or _res.get("cores")
+    except Exception:
+        resources_block = {"warn": False}
+
     _respond(
         handler,
         {
@@ -1078,6 +1090,7 @@ def h_preflight(handler: Any) -> None:
             "design": design_block,
             "pdk": pdk_block,
             "tools": tools_block,
+            "resources": resources_block,
         },
     )
 

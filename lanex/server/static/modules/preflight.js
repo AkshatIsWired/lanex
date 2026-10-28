@@ -143,7 +143,15 @@ export async function renderPreflight() {
     );
   }
 
-  if (pf.ready && empty) verdict("1 heads-up", "bad");
+  // Free memory looks too small for this design: a heads-up, never a blocker.
+  const mem = pf.resources || {};
+  if (mem.warn) {
+    html += row("warn", "Memory", (mem.available_gb ?? "?") + " GB free; this design needs about " + (mem.need_gb ?? "?") + " GB",
+      "<button class='btn btn-sm pf-act' data-act='mem'>What to do</button>");
+  }
+
+  const heads = (empty ? 1 : 0) + (mem.warn ? 1 : 0);
+  if (pf.ready && heads) verdict(heads + " heads-up" + (heads === 1 ? "" : "s"), "bad");
   else if (pf.ready) verdict("All set", "ok");
   else verdict(pf.blockers.length + (pf.blockers.length === 1 ? " thing" : " things") + " to fix", "bad");
 
@@ -165,6 +173,10 @@ export async function renderPreflight() {
         go("ide", { rel: b.dataset.rel });
       } else if (act === "new-file") {
         go("ide", { newFile: "module_v" });
+      } else if (act === "mem") {
+        import("./dialog.js").then((m) => m.alertDialog({ title: "Low memory", html: true,
+          body: "<p>" + fmt.escape(mem.message) + "</p><p>" + fmt.escape(mem.next_step) + "</p>" +
+            "<p><a href='" + fmt.escape(mem.link) + "' target='_blank' rel='noopener'>Microsoft's guide to WSL settings (.wslconfig)</a></p>" }));
       } else if (act === "pdk-save" || act === "pdk-follow") {
         import("./setup.js").then((m) => m.resolvePdkMismatch(p.mismatch, act === "pdk-save" ? "save" : "follow"));
       }
