@@ -944,6 +944,10 @@ await checkAsync("tools: full fixture renders 10 tools, 7 PDK cards, 14 GF180 li
     // Families: sky130, gf180mcu (default D first), ihp-sg13g2.
     assert.deepEqual(toolsModule.pdkFamilies(fullFixture.pdk_catalog).map((f) => f.family + ":" + f.keys.join(",")),
       ["sky130:sky130A,sky130B", "gf180mcu:gf180mcuD,gf180mcuA,gf180mcuB,gf180mcuC", "ihp-sg13g2:ihp-sg13g2"]);
+    // Two balanced columns: sky130 + ihp on the left, gf180mcu (4 variants) on the right.
+    assert.deepEqual(toolsModule.pdkColumns(toolsModule.pdkFamilies(fullFixture.pdk_catalog)).map((c) => c.map((f) => f.family)),
+      [["sky130", "ihp-sg13g2"], ["gf180mcu"]]);
+    assert.equal((pdkHtml.match(/class='tl-fam-col'/g) || []).length, 2, "the PDK store renders two columns");
 
     // 3. Render desktop viewers with container fallback
     await toolsModule.renderDesktopViewers(fullFixture);
