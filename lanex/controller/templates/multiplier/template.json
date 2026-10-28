@@ -15,6 +15,11 @@
     "PL_TARGET_DENSITY_PCT": 55
   },
   "pdk": {
+    "sky130*": {
+      "config": {
+        "MAX_FANOUT_CONSTRAINT": 6
+      }
+    },
     "gf180mcu*": {
       "clock_period": 40.0,
       "config": {

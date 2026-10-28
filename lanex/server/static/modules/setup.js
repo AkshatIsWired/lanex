@@ -169,6 +169,10 @@ export function setupSetup() {
   };
   document.addEventListener("g:flow_done", () => setTimeout(lastRun, 1500));
   document.addEventListener("g:runs_state", lastRun);
+  // The server refused a run, resume or sweep: the folder is gone (api.js).
+  document.addEventListener("g:design_missing", () => {
+    if (state.designDir && state.designMissing !== state.designDir) showMissingProject(state.designDir);
+  });
   document.getElementById("btn-set-design")?.addEventListener("click", onLoadDesign);
   document.getElementById("design-dir-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") onLoadDesign();
@@ -223,6 +227,13 @@ async function onLoadDesign() {
 // as opposed to boot re-opening the last one ({explicit:false}).
 export async function adoptDesignDir(designDir, opts = {}) {
   const explicit = opts.explicit !== false;
+  // Another project: the last one's runs are not this one's (Setup's strip
+  // ticked "Run the flow" on a new project that had never run).
+  if (state.designDir !== designDir) {
+    state.runs = [];
+    // Nor is the last run's result in the status bar and window title.
+    if (state.designDir) import("./runend.js").then((m) => m.clearRunResult()).catch(() => {});
+  }
   state.designDir = designDir;
   state.designExplicit = explicit;
   rememberDesign(designDir);
@@ -253,6 +264,7 @@ export async function adoptDesignDir(designDir, opts = {}) {
   await loadFilesFor(designDir);
   const { renderRuns } = await import("./runs.js");
   try { state.runs = await api.runs(designDir); } catch (_e) { state.runs = []; }
+  paintOnboardChecklist();
   // The results pages show what this project showed last time, else its
   // newest run (context.js).
   (await import("./context.js")).openProject(designDir);
@@ -278,6 +290,7 @@ export function showMissingProject(dir) {
   paintProjectBlock();
   paintMissing();
   paintRunButton();
+  paintOnboardChecklist();
   paintDesignPill(fmt.shortPath(dir));
 }
 
@@ -318,10 +331,12 @@ function paintMissing() {
     });
   }
   box.innerHTML = "<p class='proj-missing-h'>" + icon("alert", { size: 15 }) + "<b>Project folder not found</b></p>" +
-    "<p class='proj-missing-p'><code>" + fmt.escape(dir) + "</code></p>" +
+    "<p class='proj-missing-p'><code class='proj-missing-path'>" + fmt.escape(dir) + "</code></p>" +
     "<p class='muted proj-missing-p'>It may have been moved, renamed or deleted. Point LanEx at its new place, or take it off the list.</p>" +
     "<div class='picker-actions'><button class='btn btn-primary' data-miss='locate'>Locate…</button>" +
     "<button class='btn btn-ghost' data-miss='forget'>Remove from list</button></div>";
+  // The path as the person's OS shows it (the card's own path line does the same).
+  import("./shell.js").then((m) => { const c = box.querySelector(".proj-missing-path"); if (c) { c.textContent = m.displayPath(dir); c.title = dir; } }).catch(() => {});
   const sum = document.getElementById("design-summary");
   if (sum) sum.innerHTML = "";
 }
@@ -440,7 +455,8 @@ export function paintOnboardChecklist() {
   // Live progress for the open project: a tick on what's done, the next step
   // marked (the same progress the first-chip guide follows). The simulation
   // tick is set by guide.js when a simulation of this project runs to the end.
-  const dd = state.designDir;
+  // A project whose folder is gone has nothing done yet (its card says so).
+  const dd = state.designMissing ? null : state.designDir;
   const done = {
     design: !!dd,
     rtl: !!dd && safeStorage.get("ll.simok." + dd, "") === "1",
@@ -731,6 +747,17 @@ export function paintRunButton() {
   b.disabled = off;
 }
 
+// Errors the RTL IDE's last syntax check found in a project's design files (ide/main.js
+// recordRtlStatus keeps it per project), or 0 when it wasn't checked.
+export function lastLintErrors(designDir, store = safeStorage) {
+  if (!designDir) return 0;
+  let st = null;
+  try { st = JSON.parse(store.get("ll.rtl:" + designDir, "") || "null"); } catch (_e) { st = null; }
+  // Design files only: the flow never lints testbenches.
+  const n = st && st.lint && Number(st.lint.design_errors);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 async function onRunClick({ show = false, fixed = false } = {}) {
   if (!state.designDir) {
     toast.show("Pick a design folder first.", "warn");
@@ -739,6 +766,21 @@ async function onRunClick({ show = false, fixed = false } = {}) {
   if (state.designMissing) {
     toast.show("Project folder not found: " + state.designMissing + ". Locate it or remove it from the list on Setup.", "warn");
     return;
+  }
+  // The RTL IDE's last syntax check of this project found errors: LibreLane's
+  // first step (Verilator lint) stops on them, so say so before the run.
+  const rselNow = document.getElementById("run-resume-from");
+  const lintErrs = rselNow && rselNow.value ? 0 : lastLintErrors(state.designDir);
+  if (lintErrs > 0) {
+    const { choiceDialog } = await import("./dialog.js");
+    const pick = await choiceDialog({
+      title: "The RTL has " + lintErrs + (lintErrs === 1 ? " error" : " errors"),
+      body: "The last syntax check in the RTL IDE found " + (lintErrs === 1 ? "an error" : lintErrs + " errors") +
+        " in this project's design files. The flow's first step runs the same check (Verilator lint) and stops on it.",
+      choices: [{ label: "Show them", value: "show" }, { label: "Run anyway", value: "run", danger: true }],
+    });
+    if (pick === "show") { (await import("./nav.js")).go("ide"); return; }
+    if (pick !== "run") return;
   }
   // Preflight: catch missing tools / PDK before a long run fails half-way.
   try {
@@ -991,9 +1033,9 @@ export function paintRunning(running) {
     pill?.classList.add("pill-running");
     if (pill) pill.textContent = "running";
   } else {
-    if (b) b.disabled = !state.designDir;
+    if (b) b.disabled = !state.designDir || !!state.designMissing;
     if (c) { c.disabled = true; c.hidden = true; }   // Stop shows only while a run is live
-    if (g) { g.disabled = !state.designDir; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); paintRunLabel(); }
+    if (g) { g.disabled = !state.designDir || !!state.designMissing; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); paintRunLabel(); }
     pill?.classList.add("pill-pending");
     pill?.classList.remove("pill-running");
     if (pill) pill.textContent = "idle";

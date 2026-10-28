@@ -113,7 +113,11 @@ def build_lint_command(
     # --timescale: the default for files without a `timescale, which is what
     # the simulators assume too. Without it a testbench that has one and a
     # design file that doesn't (the usual case) raise TIMESCALEMOD.
-    flags: List[str] = ["verilator", "--lint-only", "-Wall", "-Wno-fatal", "--timescale", "1ns/1ps"]
+    # --Werror-LATCH / --Werror-MULTIDRIVEN: LibreLane's own lint step fails the run on these
+    # (LINTER_ERROR_ON_LATCH, on by default), so the check here calls them errors too
+    # instead of warnings that then stop the flow at Lint Errors Checker.
+    flags: List[str] = ["verilator", "--lint-only", "-Wall", "-Wno-fatal", "--timescale", "1ns/1ps",
+                        "--Werror-LATCH", "--Werror-MULTIDRIVEN"]
     if top:
         flags += ["--top-module", str(top)]
     for inc in (include_dirs or []):

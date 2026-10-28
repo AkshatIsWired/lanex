@@ -688,7 +688,15 @@ _CHECK_FIXES: Dict[str, List[Any]] = {
                 ("DIODE_ON_PORTS", lambda v: "in" if v in (None, "none") else None,
                  "Protection diodes on the top-level inputs, for violations on pins.")],
     "disc_pin": [("FP_CORE_UTIL", _minus(10, 20), "Usually congestion: a bigger core leaves room for every wire.")],
-    "slew": [("DESIGN_REPAIR_MAX_SLEW_PCT", _plus(10), "Design repair aims this much under the slew limit (%).")],
+    # Slew that fails only in the slow corners is usually a buffer driving many
+    # inputs (OpenSTA's checks.rpt: one fanoutNN/X and the pins it drives just
+    # over 0.75 ns). Design repair splits nets over MAX_FANOUT_CONSTRAINT, so a
+    # lower limit fixes them; a bigger slew margin alone did not (counter on
+    # sky130A: 11 violations at margin 20 and at 30, none at fanout 6).
+    "slew": [("MAX_FANOUT_CONSTRAINT", lambda v: None if v is None or v <= 4 else max(4, int(v) - 4),
+              "Fewer inputs per driver: design repair splits bigger nets with buffers, so each edge is faster, "
+              "in the slow corners too."),
+             ("DESIGN_REPAIR_MAX_SLEW_PCT", _plus(10), "Design repair aims this much under the slew limit (%).")],
     "cap": [("DESIGN_REPAIR_MAX_CAP_PCT", _plus(10), "Design repair aims this much under the capacitance limit (%).")],
 }
 _CHECK_OPEN = {

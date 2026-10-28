@@ -8,8 +8,8 @@
 // RTL-to-GDS run. Shares api.js + SSE; no bundler.
 import { api, sse, fmt } from "../api.js";
 import { Editor } from "./editor.js";
-import { parseVCD, formatTime, parseTimescale, valueAt } from "./vcd.js";
-import { explain, TESTBENCH_STYLE } from "./lintinfo.js";
+import { parseVCD, formatTime, parseTimescale, valueAt, plainTicks } from "./vcd.js";
+import { explain, explainMessage, TESTBENCH_STYLE } from "./lintinfo.js";
 import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
 import { applyZoom, currentZoom, isAutoZoom } from "../zoom.js";
@@ -1282,7 +1282,7 @@ const IC_WARN = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none' str
 const IC_CARET = "<svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 9l6 6 6-6'/></svg>";
 
 function diagRow(d) {
-  const why = d.code ? explain(d.code) : "";
+  const why = d.code ? explain(d.code) : d.severity === "error" ? explainMessage(d.msg) : "";
   return "<div class='pb-item pb-" + d.severity + "' role='button' tabindex='0' data-file='" + fmt.escape(d.file) +
     "' data-line='" + (d.line || 1) + "' data-col='" + (d.col || 1) + "'>" +
     "<span class='pb-ic'>" + (d.severity === "error" ? IC_ERR : IC_WARN) + "</span>" +
@@ -1811,7 +1811,7 @@ function simStatus(run) {
     "reported-fail": ["warn", "The testbench reported " + plural(r.fails || 0, "failure"), facts, "<button class='btn btn-sm' data-ss='first-fail'>Show the first one</button>" + wave],
     build: portMismatch(r)
       ? ["fail", "Didn't build: the testbench doesn't match the module's ports",
-        "The design's ports changed since " + (tbName || "the testbench") + " was written (" + plural(r.buildErrors || 0, "error") + " in Problems). LanEx can write it again for the current ports and keep yours as a backup.",
+        (tbName || "The testbench") + " connects ports the module doesn't have, or leaves some out (" + plural(r.buildErrors || 0, "error") + " in Problems). Fix the names, or LanEx can write it again for the current ports and keep yours as a backup.",
         "<button class='btn btn-primary btn-sm' data-ss='rewrite-tb'>Rewrite the testbench for these ports</button><button class='btn btn-ghost btn-sm' data-ss='first-error'>Show the first error</button>"]
       : ["fail", "Didn't build: " + plural(r.buildErrors || 0, "error"), "They're listed in Problems and underlined in the editor.", "<button class='btn btn-sm' data-ss='first-error'>Show the first error</button>"],
     failed: ["fail", "The simulator stopped with an error", "Exit code " + r.rc + ". The output below says why." + (secs ? " " + secs : ""), ""],
@@ -1938,7 +1938,9 @@ function recordRtlStatus() {
   const real = allDiags().filter((d) => !isNoise(d));
   const st = {
     lint: state.lintChecked ? { errors: real.filter((d) => d.severity === "error").length,
-      warnings: real.filter((d) => d.severity === "warning").length, at: state.lintAt } : prev.lint,
+      warnings: real.filter((d) => d.severity === "warning").length, at: state.lintAt,
+      // What the flow's own lint (design files only, never testbenches) will hit.
+      design_errors: real.filter((d) => d.severity === "error" && !isTestbenchFile(d.file)).length } : prev.lint,
     sim: state.simRun && state.simRun.verdict && state.simRun.verdict !== "running"
       ? { tb: state.simRun.tb, verdict: state.simRun.verdict, at: Date.now() } : prev.sim,
   };
@@ -2032,7 +2034,7 @@ async function loadWaveform(vcdRel, partial) {
     const shown = state.wave ? state.wave.rows.length : vcd.signals.length;
     const all = state.wave ? state.wave.vars.length : vcd.signals.length;
     note("Waveform: " + (shown === all ? shown + (shown === 1 ? " signal" : " signals") : shown + " of " + all + " signals shown") +
-      " over " + formatTime(vcd.end, vcd.tick) + ".");
+      " over " + formatTime(vcd.end, vcd.tick) + (plainTicks(vcd.tick) ? " time units (no `timescale)" : "") + ".");
   } catch (ex) {
     note("Could not load waveform: " + (ex.message || ex), true);
   }

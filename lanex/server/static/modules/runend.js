@@ -40,6 +40,25 @@ export function runStarted(tag) {
   paintRail();
 }
 
+// Another project opened: the last run's result belongs to the project it
+// ran in, so the status line, the run pill, the Flow tab's red mark and the
+// window title (which names the open project) go back to idle.
+export function clearRunResult() {
+  if (state.status && state.status.running) return;
+  _result = null;
+  clearTimeout(_resultTimer);
+  paintTitle();
+  paintRail(false);
+  const el = document.getElementById("overall-progress");
+  if (el) { el.textContent = ""; delete el.dataset.tone; delete el.dataset.go; el.title = ""; }
+  const pill = document.getElementById("run-pill");
+  if (pill) {
+    pill.classList.remove("pill-running", "pill-pass", "pill-warn", "pill-fail");
+    pill.classList.add("pill-pending");
+    pill.textContent = "idle";
+  }
+}
+
 // The flow reported progress: title, status line and ring follow.
 export function runProgress() {
   paintTitle();

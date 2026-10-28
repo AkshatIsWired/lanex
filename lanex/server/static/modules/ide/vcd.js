@@ -145,9 +145,15 @@ export function parseTimescale(ts) {
 // 87402 ticks of 1ps -> "87.402 ns". `step` (ticks) sets how many decimals are
 // worth showing, so ruler labels stay short.
 const UNITS = [["s", 0], ["ms", -3], ["us", -6], ["ns", -9], ["ps", -12], ["fs", -15]];
+// Icarus writes "$timescale 1s" when no source file sets a `timescale: those
+// ticks are plain simulation time units, not seconds (no real design uses 1 s).
+export function plainTicks(tick) {
+  return !!tick && tick.unit === "s" && tick.mult === 1;
+}
 export function formatTime(ticks, tick, step) {
   const t = tick || { mult: 1, exp: 0 };
   if (!ticks) return "0";
+  if (plainTicks(tick)) return String(Math.round(ticks * 1e6) / 1e6);
   // The largest unit in which the amount is at least 1.
   const ref = Math.abs(ticks) * t.mult;
   let pick = UNITS[UNITS.length - 1];

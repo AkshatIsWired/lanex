@@ -266,7 +266,7 @@ function model() {
   // Number each step as its run folder is numbered (NN-step-id), the number
   // Verify, the failure card and the folder use. A step with no folder yet gets
   // the number it will have if nothing more is skipped; a skipped step has no
-  // folder and no number.
+  // folder and no number (FS.stepNumbers is the same rule without folders).
   let next = 1;
   for (const s of steps) {
     const n = Number(s.n);
@@ -307,6 +307,9 @@ function shownStep(steps) {
   if (F.sel) return steps.find((x) => x.id === F.sel) || null;
   if (F.sel === "" || F.live) return null;
   if (F.rx && ["halted", "stopped", "incomplete"].includes(F.rx.kind)) {
+    // A checker that raised writes no log: show the tool step it read.
+    const at = F.rx.at && F.rx.at.step && steps.find((x) => x.id === F.rx.at.step);
+    if (at) return at;
     return steps.find((x) => x.status === "failed" || x.status === "stopped") || null;
   }
   return null;
@@ -490,7 +493,8 @@ function failHtml(rx, stages) {
   const where = (stg ? stg.label + " · " : "") + stepLabel(rx.step && rx.step.id) + (rx.step ? " (step " + rx.step.n + ")" : "");
   const title = c.title || (word + " at " + stepLabel(rx.step && rx.step.id));
   const plain = c.plain || "The tool reported the error below. The step's log has the lines around it.";
-  const ev = (rx.errors || []).slice(0, 3).join("\n") || (rx.at && rx.at.text) || "";
+  // A checker that raised names only a count; the card brings the tool's own lines.
+  const ev = ((c.evidence && c.evidence.length ? c.evidence : rx.errors) || []).slice(0, 3).join("\n") || (rx.at && rx.at.text) || "";
   const fixes = (c.fixes || []).length ? fixListHtml(c.fixes, { tag: F.tag, title }) : "";
   const layoutSrc = stageSource(rx.stage, true);
   return "<div class='an-verdict fl-hero fl-fail is-fail'><div class='an-verdict-main" + (fixes ? " fl-split" : "") + "'>" +
@@ -500,7 +504,8 @@ function failHtml(rx, stages) {
     (ev ? "<div class='fl-ev'><pre>" + esc(ev) + "</pre>" + (c.code ? "<span class='fl-code'>" + esc(c.code) + "</span>" : "") + "</div>" : "") +
     "</div>" +
     (fixes ? "<div class='fl-split-b'><div class='fl-fixes-h'>What to change</div>" + fixes +
-      "<p class='fl-fix-note'>Apply shows the change, where it is saved and where the new run starts. Nothing is written until you confirm.</p></div>" : "") +
+      ((c.fixes || []).some((f) => f.kind === "setting")
+        ? "<p class='fl-fix-note'>Apply shows the change, where it is saved and where the new run starts. Nothing is written until you confirm.</p>" : "") + "</div>" : "") +
     "</div><div class='an-verdict-act'>" +
     // The recommended fix is the primary action; the log is for reading.
     (rx.at ? "<button class='btn " + (fixes ? "btn-ghost" : "btn-primary") + " btn-sm' data-fl='at-error'>" + icon("file", { size: 13 }) + " Show it in the log</button>" : "") +
@@ -654,6 +659,9 @@ function paintSteps(steps, stages) {
   for (const s of steps) {
     const el = F.rows.get(s.id);
     if (!el) continue;
+    const no = el.querySelector(".fl-step-no");
+    const noTxt = s.no == null ? "–" : two(s.no);
+    if (no && no.textContent !== noTxt) no.textContent = noTxt;
     const cls = "fl-step is-" + s.status + (s.from ? " is-reused" : "") + (shown && shown.id === s.id ? " is-sel" : "");
     if (el.className !== cls) {
       el.className = cls; el.firstChild.className = "vf-mark is-" + (MARK[s.status] || "not_run");
@@ -784,7 +792,7 @@ function stepMetaHtml(s) {
   const src = (F.src && [...(F.src.stages || []), ...(F.src.steps || [])].find((x) => x.step === s.dir)) || null;
   const odb = s.dir && /^(OpenROAD|Odb)\./.test(s.id) && s.status === "done" && F.rs && F.rs.design_name ? s.dir + "/" + F.rs.design_name + ".odb" : "";
   return "<button class='fl-id' data-fl='copy-id' data-id='" + esc(s.id) + "' title='Copy the step ID'>" + esc(s.id) + " " + icon("file", { size: 11 }) + "</button>" +
-    "<span>" + esc(FS.stageLabel(s.stage)) + (s.no != null ? " · step " + s.no : " · skipped") + "</span>" +
+    "<span>" + esc(FS.stageLabel(s.stage)) + (s.no == null ? " · turned off" : " · step " + s.no) + "</span>" +
     (s.secs != null && s.status !== "running" ? "<span>" + fmtDur(s.secs) + (bs && bs.runtime_s ? " <span class='muted'>(was " + fmtDur(bs.runtime_s) + ")</span>" : "") + "</span>" : "") +
     (s.peak ? "<span>" + Math.round(s.peak) + " MiB peak</span>" : "") +
     "<span class='fl-insp-acts'>" +
@@ -993,7 +1001,9 @@ function wireOnce() {
     else if (act === "parent") ctx.setRun(a.dataset.tag);
     else if (act === "unpick") { F.sel = ""; F.tab = "log"; if (F.live) { F.follow = true; F.followed = ""; } paint(); }
     else if (act === "at-error") {
-      const st = F.rx && F.rx.step;
+      // The log with the first error: the stopped step's, or the tool step a
+      // checker read (Verilator.Lint behind Checker.LintErrors).
+      const st = F.rx && F.rx.at && F.rx.at.step ? { id: F.rx.at.step } : F.rx && F.rx.step;
       if (st) {
         F.sel = st.id; F.tab = "log"; F.logSrc = "";
         paint();

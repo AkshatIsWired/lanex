@@ -70,6 +70,14 @@ export function stepCounts(statuses) {
   return { done, total, skipped, current: Math.min(done + 1, Math.max(total, 1)) };
 }
 
+// The number each step shows, in the same meaning: turned-off steps get none
+// (null) and are not counted, so step N in the list is "Step N of M" in the
+// header and LibreLane's own NN-<step> folder in the run.
+export function stepNumbers(statuses) {
+  let n = 0;
+  return statuses.map((s) => (s === "skipped" ? null : ++n));
+}
+
 // Each step of an ordered list with its stage id (unlisted steps inherit).
 export function stagesOf(steps, key = (s) => s.id || s.dir) {
   let cur = STAGES[0].id;

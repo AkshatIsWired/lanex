@@ -1244,6 +1244,22 @@ def _hash_files(paths: Optional[List[str]]) -> Optional[str]:
     return h.hexdigest()
 
 
+MISSING_DESIGN_PREFIX = "Project folder not found: "
+
+
+def _missing_design_error(design_dir: str) -> Optional[str]:
+    """Refuse to start or resume a run of a project whose folder is gone.
+
+    The folder can be renamed, moved or deleted on disk while LanEx is open;
+    without this a run fails with "no config found" and a resume tries to read
+    steps from a run folder that no longer exists. The UI matches the prefix
+    to show the project as missing (Locate / Remove)."""
+    if design_dir and not os.path.isdir(design_dir):
+        return (MISSING_DESIGN_PREFIX + design_dir + ". It is not there any more (moved, renamed "
+                "or deleted). Nothing was started. Locate it or remove it from the list on Setup.")
+    return None
+
+
 def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None,
                            files: Optional[List[str]] = None) -> Optional[str]:
     """Refuse to launch a flow from a path LibreLane cannot handle.
@@ -1305,11 +1321,9 @@ def _design_refusal(handler: Any, design_dir: Optional[str]) -> Optional[str]:
     keeps the previous one active on the server, and a second window may have
     switched projects. Either way the run would land in a folder the person
     is not looking at."""
-    def _gone(d: str) -> str:
-        return (f"The project folder {d} is not there any more (moved, renamed or deleted). "
-                "Nothing was started. On Setup, Locate the folder or remove the project from the list.")
-    if design_dir and not Path(design_dir).is_dir():
-        return _gone(design_dir)
+    gone = _missing_design_error(design_dir or "")
+    if gone:
+        return gone
     headers = getattr(handler, "headers", None)
     raw = headers.get("X-LanEx-Design") if headers is not None else None
     if not raw:
@@ -1322,7 +1336,7 @@ def _design_refusal(handler: Any, design_dir: Optional[str]) -> Optional[str]:
     if not shown:
         return None
     if not Path(shown).expanduser().is_dir():
-        return _gone(shown)
+        return _missing_design_error(shown)
     if not design_dir:
         return None
     try:
@@ -4381,6 +4395,9 @@ def _fix_plan(body: Dict[str, Any]) -> Tuple[Any, int]:
     design_dir = _get_active_design_dir()
     if not design_dir:
         return "no active design dir", 400
+    gone = _missing_design_error(design_dir)
+    if gone:
+        return gone, 409
     sets = body.get("sets") or {}
     if not isinstance(sets, dict):
         return "sets must be an object", 400

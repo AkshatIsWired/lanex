@@ -288,6 +288,9 @@ check("vcd.js: times read in real units, exact to the dump's resolution", () => 
   assert.equal(formatTime(5, parseTimescale("10ns")), "50 ns");
   assert.equal(formatTime(120020, ps, 20), "120.02 ns");            // ruler label, decimals from the step
   assert.equal(formatTime(0, ps), "0");
+  // No `timescale (Icarus writes 1s): plain time units, never "2680 s".
+  assert.equal(formatTime(2680, parseTimescale("1s")), "2680");
+  assert.equal(formatTime(200, parseTimescale("1s"), 200), "200");
 });
 
 check("vcd.js: aliases stay addressable; values come from the shared stream", () => {
@@ -1364,6 +1367,34 @@ check("steps: one count meaning (turned-off steps out of the total, current = do
   assert.deepEqual(FS.stepCounts(st), { done: 76, total: 76, skipped: 4, current: 76 });
   const live = ["done", "done", "skipped", "running", "pending"];
   assert.deepEqual(FS.stepCounts(live), { done: 2, total: 4, skipped: 1, current: 3 });
+});
+
+{
+  const LI = await import(toUrl(resolve(MOD, "ide", "lintinfo.js")));
+  check("ide: plain hints for codeless syntax errors (missing ;, bad port)", () => {
+    assert.match(LI.explainMessage("syntax error, unexpected default, expecting ';'"), /semicolon .* line before/);
+    assert.match(LI.explainMessage("Pin not found: 'select'"), /port the module doesn't have/);
+    assert.equal(LI.explainMessage("something else entirely"), "");
+  });
+}
+{
+  const SU = await import(toUrl(resolve(MOD, "setup.js")));
+  check("run: the IDE's last syntax-check errors are read per project", () => {
+    const mem = { "ll.rtl:/p/a": JSON.stringify({ lint: { errors: 3, design_errors: 2, warnings: 1 } }), "ll.rtl:/p/b": JSON.stringify({ lint: { errors: 1, design_errors: 0 } }), "ll.rtl:/p/c": "{bad" };
+    const store = { get: (k, d) => (k in mem ? mem[k] : d) };
+    assert.equal(SU.lastLintErrors("/p/a", store), 2);
+    assert.equal(SU.lastLintErrors("/p/b", store), 0);
+    assert.equal(SU.lastLintErrors("/p/c", store), 0);
+    assert.equal(SU.lastLintErrors("/p/none", store), 0);
+    assert.equal(SU.lastLintErrors("", store), 0);
+  });
+}
+
+check("steps: list numbers skip turned-off steps (list N == header 'Step N' == NN- folder)", () => {
+  const live = ["done", "done", "skipped", "running", "pending"];
+  assert.deepEqual(FS.stepNumbers(live), [1, 2, null, 3, 4]);
+  // The running step's list number is the header's "Step N of M".
+  assert.equal(FS.stepNumbers(live)[3], FS.stepCounts(live).current);
 });
 
 // The run bar never guesses pass/fail for a verdict state it doesn't know.

@@ -26,6 +26,7 @@ export const LINT_INFO = {
   MULTITOP: "More than one module is never instantiated, so there are several tops.",
   PINCONNECTEMPTY: "A port is connected to nothing with .port(). Connect it or leave it out on purpose.",
   PINMISSING: "An instance doesn't connect one of the module's ports.",
+  PINNOTFOUND: "The instance connects a port the module doesn't have. Compare the port names with the module's.",
   PINNOCONNECT: "An output port of an instance isn't connected.",
   PROCASSINIT: "A signal has an initial value and is also assigned in an always block. Set it with a reset instead.",
   SELRANGE: "A bit select is outside the signal's range.",
@@ -58,4 +59,22 @@ export const TESTBENCH_STYLE = new Set([
 
 export function explain(code) {
   return LINT_INFO[code] || "";
+}
+
+// Syntax errors have no code; the parser names the token where it gave up,
+// which is often the line AFTER the mistake. A hint for the common ones.
+const MSG_INFO = [
+  [/expecting ';'|Syntax in assignment statement l-value/i,
+    "A semicolon is probably missing at the end of the line before this one."],
+  [/unexpected end of file|unexpected endmodule/i,
+    "A block isn't closed: look for a missing end, endcase or endmodule above."],
+  [/unexpected '\)'/i, "A bracket doesn't pair up: an extra ) here, or a missing ( or , before it."],
+  [/Pin not found|port .* is not a port of|is not a port/i,
+    "The instance connects a port the module doesn't have. Compare the port names with the module's."],
+  [/Cannot find file containing module|Unknown module type|module .* not found/i,
+    "A module is used but never defined. Check the name, or add the file that defines it."],
+];
+export function explainMessage(msg) {
+  const hit = MSG_INFO.find(([rx]) => rx.test(String(msg || "")));
+  return hit ? hit[1] : "";
 }

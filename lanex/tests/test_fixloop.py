@@ -500,3 +500,13 @@ def test_every_check_that_can_fail_lands_on_an_action(tmp_path, monkeypatch, cid
     p = problems.check_problems(tmp_path, {"checks": [{"id": cid, "name": cid, "status": "fail", "value": 3}]}, set())[0]
     assert p["fixes"], cid
     assert p["plain"], cid
+
+
+def test_slow_corner_slew_suggests_a_lower_fanout_limit_first(tmp_path, monkeypatch):
+    # Seen on the counter template (sky130A): 11 slew violations in the ss
+    # corners stayed at DESIGN_REPAIR_MAX_SLEW_PCT 30 and went to 0 at
+    # MAX_FANOUT_CONSTRAINT 6.
+    monkeypatch.setattr(problems, "_cfg", lambda run_dir: {"MAX_FANOUT_CONSTRAINT": 10, "DESIGN_REPAIR_MAX_SLEW_PCT": 20})
+    p = problems.check_problems(tmp_path, {"checks": [{"id": "slew", "name": "Max slew", "status": "warn", "value": 11}]}, set())[0]
+    sets = [(f["var"], f["to"]) for f in p["fixes"] if f["kind"] == "setting"]
+    assert sets == [("MAX_FANOUT_CONSTRAINT", "6"), ("DESIGN_REPAIR_MAX_SLEW_PCT", "30")]
