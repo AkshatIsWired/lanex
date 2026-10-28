@@ -930,9 +930,17 @@ await checkAsync("tools: full fixture renders 10 tools, 7 PDK cards, 14 GF180 li
     }
     // gf180mcuD discloses 14 total libraries (12 published + 2 unavailable)
     assert.ok(pdkHtml.includes("Libraries (14)"), "gf180mcuD must disclose 14 total libraries");
-    assert.ok(pdkHtml.includes("gf180mcu_ocd_ip_sram"), "unavailable lib 1 missing");
-    assert.ok(pdkHtml.includes("gf180mcu_re_efuse"), "unavailable lib 2 missing");
-    assert.ok(pdkHtml.includes("(Not published for this release)"), "reason text missing");
+    // The picker itself opens in a dialog; its list comes from libraryListHtml.
+    const libHtml = toolsModule.libraryListHtml("gf180mcuD", fullFixture.pdk_catalog.gf180mcuD);
+    assert.ok(libHtml.includes("gf180mcu_ocd_ip_sram"), "unavailable lib 1 missing");
+    assert.ok(libHtml.includes("gf180mcu_re_efuse"), "unavailable lib 2 missing");
+    assert.ok(libHtml.includes("(Not published for this release)"), "reason text missing");
+    assert.equal((libHtml.match(/<label/g) || []).length, 14, "the picker lists all 14 libraries");
+    assert.equal((libHtml.match(/ checked/g) || []).length, 2, "only the starter set is pre-checked");
+    assert.equal((libHtml.match(/disabled/g) || []).length, 2, "unpublished libraries are disabled");
+    // Families: sky130, gf180mcu (default D first), ihp-sg13g2.
+    assert.deepEqual(toolsModule.pdkFamilies(fullFixture.pdk_catalog).map((f) => f.family + ":" + f.keys.join(",")),
+      ["sky130:sky130A,sky130B", "gf180mcu:gf180mcuD,gf180mcuA,gf180mcuB,gf180mcuC", "ihp-sg13g2:ihp-sg13g2"]);
 
     // 3. Render desktop viewers with container fallback
     await toolsModule.renderDesktopViewers(fullFixture);
@@ -1000,6 +1008,109 @@ check("tools: PDK family fallback knows IHP", () => {
   assert.equal(toolsModule.pdkFamily({}, "sg13g2"), "ihp-sg13g2");
   assert.equal(toolsModule.pdkFamily({}, "gf180mcuD"), "gf180mcu");
   assert.equal(toolsModule.pdkFamily({ x: { family: "fam" } }, "x"), "fam");
+});
+
+// ------------------------------------------------ tools: the verdict band's facts
+const toolsHealthy = () => ({
+  platform: "linux",
+  container: { available: true, ready: true, engine: "docker", version: "Docker version 29.8.1, build 4a63305", min_version: "25.0.5", version_ok: true,
+    image: "ghcr.io/librelane/librelane:3.0.4@sha256:eab07a50", image_present: true, image_approx_mb: 3000, image_custom: false,
+    image_tested_digest: "sha256:eab07a50", librelane_version: "3.0.4", docker: { present: true, usable: true }, podman: { present: false } },
+  pdk: { ciel_installed: true, installed_pdks: ["sky130A"], versions: { sky130A: { installed: "8afc", pinned: "8afc" } } },
+  pdk_catalog: { sky130A: { family: "sky130", default_variant: true }, gf180mcuD: { family: "gf180mcu", default_variant: true } },
+  tools: [
+    { key: "yosys", label: "Yosys", installed: false, in_container: true, install_recipe: ["apt", "yosys"] },
+    { key: "openroad", label: "OpenROAD", installed: false, in_container: true, container_only: true },
+    { key: "iverilog", label: "Icarus Verilog", installed: true },
+    { key: "graphviz", label: "Graphviz", installed: true },
+    { key: "gtkwave", label: "GTKWave", installed: true },
+  ],
+});
+
+check("tools: a healthy system has nothing to fix and reads 'Ready to run'", () => {
+  const items = toolsModule.attentionItems(toolsHealthy(), { desktop: { gds3d: { available: true } } });
+  assert.deepEqual(items, [], "a healthy container setup lists nothing");
+  const r = toolsModule.readiness(items);
+  assert.equal(r.tone, "pass");
+  assert.equal(r.title, "Ready to run");
+});
+
+check("tools: problems carry their fix; image and PDK drift are told apart", () => {
+  const info = toolsHealthy();
+  Object.assign(info.container, { ready: false, image_present: false, daemon_msg: "Cannot connect to the Docker daemon" });
+  info.container.docker.usable = false;
+  info.pdk.versions.sky130A.installed = "0000";
+  info.tools.find((t) => t.key === "graphviz").installed = false;
+  const items = toolsModule.attentionItems(info, { desktop: { gds3d: { available: false } } });
+  const by = Object.fromEntries(items.map((x) => [x.key, x]));
+  assert.equal(by.engine.tone, "fail");
+  assert.equal(by.engine.fix.id, "btn-start-docker", "a stopped Linux daemon is fixed by Start Docker daemon");
+  assert.equal(by.engine.title, "Docker is installed but not running");
+  assert.equal(by.image.tone, "fail");
+  assert.equal(by.image.fix, null, "the image can't download before the engine runs");
+  assert.equal(by["pdk-sky130A"].tone, "warn");
+  assert.deepEqual(by["pdk-sky130A"].fix, { label: "Update sky130A", id: "tl-pdk-sky130A", sel: ".pdk-install-btn" });
+  assert.equal(by["helper-graphviz"].tone, "info", "a missing helper is optional, not a problem");
+  assert.equal(by.gds3d.tone, "info");
+  const r = toolsModule.readiness(items);
+  assert.equal(r.tone, "fail");
+  assert.equal(r.title, "2 problems to fix");
+  // With the engine running, the image becomes the one fix, and it is a button.
+  Object.assign(info.container, { ready: true });
+  const img = toolsModule.attentionItems(info).find((x) => x.key === "image");
+  assert.equal(img.fix.id, "btn-pull-image");
+  assert.match(img.detail, /~2\.9 GB/);
+});
+
+check("tools: the Local tools engine judges native tools, not the image", () => {
+  const info = toolsHealthy();
+  Object.assign(info.container, { ready: false, available: false });
+  const items = toolsModule.attentionItems(info, { runMode: "local" });
+  const by = Object.fromEntries(items.map((x) => [x.key, x]));
+  assert.equal(by.engine.tone, "warn", "no engine is not a blocker with Local tools");
+  assert.equal(by["local-yosys"].tone, "fail");
+  assert.equal(by["local-yosys"].fix.sel, ".install-btn");
+  assert.equal(by["local-openroad"].fix, null, "OpenROAD has no system package to install");
+  assert.ok(!items.some((x) => x.key === "local-iverilog"), "helpers are not counted as the local toolchain");
+  // Container mode: the same missing native tools are not problems at all.
+  assert.ok(!toolsModule.attentionItems(toolsHealthy()).some((x) => x.key.startsWith("local-")));
+});
+
+check("tools: no PDK at all offers the default variant; ciel missing is a problem", () => {
+  const info = toolsHealthy();
+  info.pdk = { ciel_installed: false, installed_pdks: [], versions: {} };
+  const by = Object.fromEntries(toolsModule.attentionItems(info).map((x) => [x.key, x]));
+  assert.equal(by.ciel.fix.id, "install-ciel-btn");
+  assert.equal(by["pdk-none"].fix.label, "Install sky130A");
+  // A PDK already installing is not "no PDK".
+  const busy = toolsModule.attentionItems(info, { installJobs: { "pdk:sky130A": true } });
+  assert.ok(!busy.some((x) => x.key === "pdk-none"));
+  assert.equal(toolsModule.readiness(busy.filter((x) => x.key !== "ciel")).tone, "busy");
+});
+
+check("tools: engine fixes follow the platform", () => {
+  assert.deepEqual(toolsModule.engineFixes({ ready: true }), []);
+  assert.deepEqual(toolsModule.engineFixes({ available: true, platform: "darwin", docker: { present: true }, podman: { present: true } }).map((f) => f.id),
+    ["btn-start-docker", "btn-start-podman"]);
+  assert.deepEqual(toolsModule.engineFixes({ available: true, platform: "linux", docker: { present: true, group_fixable: true, usable: false }, podman: {} }).map((f) => f.id),
+    ["btn-enable-docker", "btn-start-docker", "btn-install-podman"]);
+  assert.deepEqual(toolsModule.engineFixes({ available: false }).map((f) => f.id), ["btn-install-docker", "btn-install-podman"]);
+});
+
+check("tools: a plain PDK Install downloads the starter libraries, never unpublished ones", () => {
+  const p = { libraries: ["a", "b", "c"], default_libraries: ["a", "x"], unavailable_libraries: { c: "Not published" } };
+  assert.deepEqual(toolsModule.libsForInstall(p), ["a"]);
+  assert.deepEqual(toolsModule.libsForInstall(p, new Set(["b", "c"])), ["b"], "the user's pick, minus unpublished");
+  assert.equal(toolsModule.libsForInstall({}), null, "no list: ciel picks its defaults");
+});
+
+check("tools: a card says what it is for and what uses it, actions only when needed", () => {
+  const html = toolsModule.cardHtml({ id: "tl-helper-gtkwave", name: "GTKWave", status: "ready", state: "Installed",
+    what: "Waveform viewer.", use: "RTL IDE › Open in GTKWave", ver: "3.3.116", menu: ["<button class='tl-menu-item is-danger'>Remove GTKWave</button>"] });
+  assert.match(html, /id='tl-helper-gtkwave' data-status='ready'/);
+  assert.match(html, /Used by<\/span> RTL IDE › Open in GTKWave/);
+  assert.ok(!/btn-primary/.test(html), "a healthy card has no primary button");
+  assert.ok(html.indexOf("Remove GTKWave") > html.indexOf("tl-menu"), "Remove sits in the More menu");
 });
 
 check("jumpnav: an unscrolled page never highlights its last section", () => {
