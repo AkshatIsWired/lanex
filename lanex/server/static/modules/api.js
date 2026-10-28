@@ -47,6 +47,12 @@ async function _fetch(path, init) {
     const err = new Error(body.error || "HTTP " + resp.status);
     err.status = resp.status;
     err.body = body;
+    // A run, resume or sweep refused because the project folder is gone
+    // (moved, renamed or deleted while LanEx was open): Setup shows it as
+    // missing and turns Run off (setup.js).
+    if (resp.status === 404 && /^Project folder not found: /.test(err.message)) {
+      try { document.dispatchEvent(new CustomEvent("g:design_missing", { detail: { message: err.message } })); } catch (_e) {}
+    }
     throw err;
   }
   const data = body.data !== undefined ? body.data : body;

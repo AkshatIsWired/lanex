@@ -1231,6 +1231,22 @@ def _hash_files(paths: Optional[List[str]]) -> Optional[str]:
     return h.hexdigest()
 
 
+MISSING_DESIGN_PREFIX = "Project folder not found: "
+
+
+def _missing_design_error(design_dir: str) -> Optional[str]:
+    """Refuse to start or resume a run of a project whose folder is gone.
+
+    The folder can be renamed, moved or deleted on disk while LanEx is open;
+    without this a run fails with "no config found" and a resume tries to read
+    steps from a run folder that no longer exists. The UI matches the prefix
+    to show the project as missing (Locate / Remove)."""
+    if design_dir and not os.path.isdir(design_dir):
+        return (MISSING_DESIGN_PREFIX + design_dir + ". It may have been moved, renamed or deleted. "
+                "Locate it or remove it from the list on Setup.")
+    return None
+
+
 def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None,
                            files: Optional[List[str]] = None) -> Optional[str]:
     """Refuse to launch a flow from a path LibreLane cannot handle.
@@ -1292,6 +1308,9 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
     design_dir = _get_active_design_dir()
     if not design_dir:
         return "no active design dir", 400
+    gone = _missing_design_error(design_dir)
+    if gone:
+        return gone, 404
     ws_err = _whitespace_path_error(design_dir)
     if ws_err:
         return ws_err, 400
@@ -3320,6 +3339,10 @@ def h_dse_start(handler: Any) -> None:
     if not design_dir:
         _respond(handler, "no active design dir", 400)
         return
+    gone = _missing_design_error(design_dir)
+    if gone:
+        _respond(handler, gone, 404)
+        return
     ws_err = _whitespace_path_error(design_dir)
     if ws_err:
         _respond(handler, ws_err, 400)
@@ -4244,6 +4267,9 @@ def _fix_plan(body: Dict[str, Any]) -> Tuple[Any, int]:
     design_dir = _get_active_design_dir()
     if not design_dir:
         return "no active design dir", 400
+    gone = _missing_design_error(design_dir)
+    if gone:
+        return gone, 404
     sets = body.get("sets") or {}
     if not isinstance(sets, dict):
         return "sets must be an object", 400

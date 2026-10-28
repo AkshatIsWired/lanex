@@ -169,6 +169,10 @@ export function setupSetup() {
   };
   document.addEventListener("g:flow_done", () => setTimeout(lastRun, 1500));
   document.addEventListener("g:runs_state", lastRun);
+  // The server refused a run, resume or sweep: the folder is gone (api.js).
+  document.addEventListener("g:design_missing", () => {
+    if (state.designDir && state.designMissing !== state.designDir) showMissingProject(state.designDir);
+  });
   document.getElementById("btn-set-design")?.addEventListener("click", onLoadDesign);
   document.getElementById("design-dir-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") onLoadDesign();
