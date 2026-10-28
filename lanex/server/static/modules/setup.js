@@ -290,6 +290,7 @@ export function showMissingProject(dir) {
   paintProjectBlock();
   paintMissing();
   paintRunButton();
+  paintOnboardChecklist();
   paintDesignPill(fmt.shortPath(dir));
 }
 
@@ -330,10 +331,12 @@ function paintMissing() {
     });
   }
   box.innerHTML = "<p class='proj-missing-h'>" + icon("alert", { size: 15 }) + "<b>Project folder not found</b></p>" +
-    "<p class='proj-missing-p'><code>" + fmt.escape(dir) + "</code></p>" +
+    "<p class='proj-missing-p'><code class='proj-missing-path'>" + fmt.escape(dir) + "</code></p>" +
     "<p class='muted proj-missing-p'>It may have been moved, renamed or deleted. Point LanEx at its new place, or take it off the list.</p>" +
     "<div class='picker-actions'><button class='btn btn-primary' data-miss='locate'>Locate…</button>" +
     "<button class='btn btn-ghost' data-miss='forget'>Remove from list</button></div>";
+  // The path as the person's OS shows it (the card's own path line does the same).
+  import("./shell.js").then((m) => { const c = box.querySelector(".proj-missing-path"); if (c) { c.textContent = m.displayPath(dir); c.title = dir; } }).catch(() => {});
   const sum = document.getElementById("design-summary");
   if (sum) sum.innerHTML = "";
 }
@@ -449,7 +452,8 @@ export function paintOnboardChecklist() {
   // Live progress for the open project: a tick on what's done, the next step
   // marked (the same progress the first-chip guide follows). The simulation
   // tick is set by guide.js when a simulation of this project runs to the end.
-  const dd = state.designDir;
+  // A project whose folder is gone has nothing done yet (its card says so).
+  const dd = state.designMissing ? null : state.designDir;
   const done = {
     design: !!dd,
     rtl: !!dd && safeStorage.get("ll.simok." + dd, "") === "1",
