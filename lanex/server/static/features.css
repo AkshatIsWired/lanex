@@ -422,6 +422,9 @@
 /* Wide dialog variant — the folder browser (fs-modal) keeps `hidden` toggling
    (fs.js), so it lives as a persistent element, not a dialog.js instance. */
 .dlg-backdrop[hidden] { display: none; }
+/* The folder picker is opened from other modals (New project, Open design):
+   it must sit above them, or "Put it here" is hidden behind the wizard. */
+#fs-modal { z-index: calc(var(--z-modal) + 10); }
 .dlg-wide { width: min(720px, calc(94vw / var(--ll-zoom, 1))); height: calc(70vh / var(--ll-zoom, 1)); display: flex; flex-direction: column; }
 .dlg-wide .dlg-body { flex: 1; min-height: 0; display: flex; flex-direction: column;
   gap: var(--s-3); overflow: hidden; }
