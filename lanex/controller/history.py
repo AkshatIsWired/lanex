@@ -817,7 +817,11 @@ def design_summary(run_dir: str | Path, metrics: Optional[Dict[str, Any]] = None
     add("Cell count", g("design__instance__count"), "", "design__instance__count")
     add("Sequential cells", g("design__instance__count__class:sequential_cell"), "",
         "design__instance__count__class:sequential_cell")
-    add("Cell area", g("design__instance__area"), "µm²", "design__instance__area")
+    # design__instance__area counts fill, tap and decap cells too (it equals the
+    # core area once fill is in); Runs and Analytics show the std-cell area.
+    add("Std cells", g("design__instance__count__stdcell"), "", "design__instance__count__stdcell")
+    add("Std-cell area", g("design__instance__area__stdcell"), "µm²", "design__instance__area__stdcell")
+    add("Cell area (with fill)", g("design__instance__area"), "µm²", "design__instance__area")
     io = _io_pins(run_dir)
     if io.get("pins") is not None:
         add("I/O pins", io["pins"], "", "")

@@ -18,6 +18,7 @@ import { holdFocus } from "./dialog.js";
 import { state, safeStorage } from "./state.js";
 import { contextRun, contextRuns, contextBaseline, contextDesign, setRun, loadRuns } from "./context.js";
 import { parseQuery, rank, oneLine, pushRecent, PREFIXES, whenLocal } from "./palettemodel.js";
+import { help as pageHelp } from "./help.js";
 
 const RECENT_KEY = "ll.paletteRecent";
 let _el = null;
@@ -156,8 +157,22 @@ function files() {
   }));
 }
 
+// Each page's guide (help.js) is searchable by everything it says, so "?sweep"
+// or "?baseline" finds the Runs guide, not only glossary terms. The guides of
+// pages that moved (DSE into Runs, Manual into the Console) are left out.
+function pageGuides() {
+  const strip = (s) => String(s || "").replace(/<[^>]+>/g, "");
+  return Object.entries(pageHelp.catalog || {}).filter(([k]) => k !== "dse" && k !== "manual").map(([k, def]) => ({
+    id: "g:" + k, group: "help", title: def.title + " guide", where: "Help", icon: icon("book"),
+    sub: oneLine(strip(def.goal)),
+    keys: [strip(def.goal), ...(def.how || []).map(strip), ...(def.pitfalls || []).map(strip),
+      ...(def.samples || []).map((x) => x.key + " " + x.sample)],
+    run: () => pageHelp.open(k),
+  }));
+}
+
 function help() {
-  return Object.entries(_glossary || {}).map(([term, text]) => ({
+  return pageGuides().concat(Object.entries(_glossary || {}).map(([term, text]) => ({
     id: "h:" + term, group: "help", title: term, where: "Glossary", icon: icon("book"),
     sub: oneLine(text), keys: [String(text || "")],
     run: async () => {
@@ -169,7 +184,7 @@ function help() {
         if (q) { q.value = term; q.dispatchEvent(new Event("input", { bubbles: true })); }
       });
     },
-  }));
+  })));
 }
 
 function recentPlaceItems() {

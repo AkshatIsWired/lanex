@@ -76,7 +76,8 @@ export function runSummary({ tag, design, rx, vf, rs, name = (id) => id }) {
   if (rx.kind === "stopped") return { ok: false, tone: "warn", title: who + ": you stopped it", body: "" };
   const c = rx.card || {};
   const at = rx.step ? (rx.step.id ? name(rx.step.id) : rx.step.dir) : "";
-  return { ok: false, tone: "fail", title: who + " stopped" + (at ? " at " + at : ""),
+  // A step raised: that is a failure, not a stop ("you stopped it" above).
+  return { ok: false, tone: "fail", title: who + " failed" + (at ? " at " + at : ""),
     short: c.title || "", body: c.title ? c.title + (c.plain ? ". " + c.plain.split(". ")[0].replace(/\.$/, "") + "." : "") : ((rx.errors || [])[0] || "") };
 }
 

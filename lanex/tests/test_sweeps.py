@@ -93,6 +93,24 @@ def test_stop_when_one_is_good_enough():
     assert job.status()["queued"] == []
 
 
+def test_a_finished_run_with_a_timing_warning_does_not_stop_the_sweep():
+    # sweep-clk-4 on spm: the flow finished ("clean" to runexplain) with setup
+    # -0.03 ns at the slow corner, which LibreLane only warns about. "Stop at
+    # the first run that is clean (timing met...)" must not stop there.
+    job = dse.DseJob()
+    ran = []
+
+    def start_one(tag, ov):
+        ran.append(tag)
+        return {"ok": True, "kind": "clean", "verdict": "warning" if tag == "a" else "passed",
+                "good": tag != "a"}
+
+    job.start(start_one=start_one, overrides_list=[{}, {}, {}], tags=["a", "b", "c"], stop_when_good=True)
+    _drain(job)
+    assert ran == ["a", "b"]
+    assert job.done == ["a", "b"]        # a warning point is done, not failed
+
+
 def test_point_outcome_of_a_halted_folder(tmp_path):
     # A run folder whose only step started but never finished, with an error log.
     run = tmp_path / "runs" / "sweep-util-65"

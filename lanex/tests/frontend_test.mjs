@@ -1500,7 +1500,7 @@ check("run report card: one summary for the toast, the title and the notificatio
   assert.equal(clean.body, "setup +0.31 ns · 57 × 68.2 µm · 1 min 1 s", "the numbers, not just 'done'");
   const halted = RC.runSummary({ tag: "t", rx: { kind: "halted", step: { id: "OpenROAD.GlobalPlacement" },
     card: { title: "Placement ran out of room", plain: "The cells need 207 % of the core area, so they can't all be placed. The die is fixed." } }, rs });
-  assert.match(halted.title, /stopped at OpenROAD\.GlobalPlacement/);
+  assert.match(halted.title, /failed at OpenROAD\.GlobalPlacement/);
   assert.match(halted.body, /^Placement ran out of room\. The cells need 207 %/);
   assert.equal(RC.runSummary({ tag: "t", rx: { kind: "stopped" }, rs }).tone, "warn");
   // Every number on the card keeps its exact value one hover away.
@@ -1802,7 +1802,9 @@ check("console: the Journal as a script runs only commands, the rest are comment
   ]);
   const live = s.split("\n").filter((l) => l && !l.startsWith("#"));
   assert.deepEqual(live, ["set -euo pipefail", "cd /d", "export LIBRELANE_IMAGE_OVERRIDE=img@sha256:1",
-    "librelane --dockerized config.yaml --run-tag a1", "librelane --dockerized config.yaml --run-tag a2"]);
+    "librelane --dockerized config.yaml --run-tag a1-repro", "librelane --dockerized config.yaml --run-tag a2-repro"]);
+  // A replay must not write into the runs it replays (LibreLane appends to an existing tag).
+  assert.equal(CNM.retag("librelane c --run-tag a1 -i runs/a1/s.json"), "librelane c --run-tag a1-repro -i runs/a1/s.json");
   assert.match(s, /#   FP_CORE_UTIL 50 -> 60/);
   assert.deepEqual(CNM.configDiffLines({ set: { FP_CORE_UTIL: 60 }, remove: ["X"] }, { before: { FP_CORE_UTIL: 50 } }),
     ["FP_CORE_UTIL 50 -> 60", "X removed (back to its default)"]);

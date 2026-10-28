@@ -298,7 +298,8 @@ def _source_path(run_dir: Path, source: str) -> Tuple[Optional[Path], str]:
 # --------------------------------------------------------------------------- layer naming
 _GROUPS = [
     ("metal", "Metal and vias"),
-    ("local", "Local interconnect"),
+    # gf180 (Contact) and IHP (Cont) have contacts here but no local interconnect.
+    ("local", "Contacts and local interconnect"),
     ("device", "Transistor layers"),
     ("well", "Wells and implants"),
     ("pin", "Pins and labels"),

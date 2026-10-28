@@ -122,6 +122,21 @@ def _check(rep: dict, cid: str) -> dict:
     return next(c for c in rep["checks"] if c["id"] == cid)
 
 
+def test_klayout_drc_without_a_pdk_deck_is_skipped_not_missing(tmp_path: Path):
+    # gf180mcu sets no KLAYOUT_DRC_RUNSET: LibreLane skips KLayout.DRC and Magic
+    # is the run's DRC. That is a PDK fact, not missing data.
+    m = {k: v for k, v in _CLEAN.items() if k != "klayout__drc_error__count"}
+    run = _cfg_run(tmp_path, m, {"PDK": "gf180mcuD", "KLAYOUT_DRC_RUNSET": None})
+    rep = verify.verify_report(run)
+    kl = _check(rep, "klayout_drc")
+    assert kl["status"] == "skipped"
+    assert "gf180mcuD" in kl["detail"] and "KLAYOUT_DRC_RUNSET" in kl["detail"]
+    assert rep["verdict"]["state"] == "ready"
+    # sky130 sets a deck: a missing value there stays "not checked".
+    run2 = _cfg_run(tmp_path / "s", m, {"PDK": "sky130A", "KLAYOUT_DRC_RUNSET": "/pdk/sky130A_mr.drc"})
+    assert _check(verify.verify_report(run2), "klayout_drc")["status"] == "not_run"
+
+
 def test_setup_violation_only_in_unchecked_corner_is_warning(tmp_path: Path):
     """LibreLane errors on setup violations only in TIMING_VIOLATION_CORNERS;
     other corners just warn (steps/checker.py TimingViolations)."""

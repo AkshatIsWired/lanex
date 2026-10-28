@@ -276,6 +276,7 @@ async function paintCommand() {
   else if (!rep.recorded) h += "<p class='cn-muted'>" + esc(tag) + " has no recorded command: it was not started from LanEx. Its resolved config is still in the run folder.</p>" + factsHtml(rep);
   else {
     h += cmdRow(rep.command, "rec") +
+      (rep.repro_tag ? "<p class='cn-muted'>Reruns as <code>" + esc(rep.repro_tag) + "</code>: LibreLane adds to a run folder whose tag exists, so the recorded tag would write into " + esc(tag) + ".</p>" : "") +
       (rep.cwd && state.designDir && rep.cwd.replace(/\/+$/, "") !== state.designDir.replace(/\/+$/, "")
         ? "<p class='cn-warn'>Recorded in " + esc(rep.cwd) + ", not this project's folder (the project was copied or moved). Run it from the project folder instead; paths inside the command are relative to it.</p>" : "") +
       factsHtml(rep) +

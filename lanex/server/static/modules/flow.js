@@ -263,6 +263,16 @@ function model() {
       steps[i].secs = disk.get(steps[i].id)?.runtime_s ?? null;
     }
   }
+  // Number each step as its run folder is numbered (NN-step-id), the number
+  // Verify, the failure card and the folder use. A step with no folder yet gets
+  // the number it will have if nothing more is skipped; a skipped step has no
+  // folder and no number.
+  let next = 1;
+  for (const s of steps) {
+    const n = Number(s.n);
+    if (s.n != null && Number.isFinite(n)) { s.no = n; next = n + 1; }
+    else s.no = s.status === "skipped" ? null : next++;
+  }
   // Metrics as of the end of each step (the server sends what changed).
   let acc = {};
   for (const s of steps) { if (s.changed) acc = { ...acc, ...s.changed }; s.metrics = acc; }
@@ -368,12 +378,17 @@ function headHtml(steps, stages) {
   }
   const at = rx.step ? (stepLabel(rx.step.id) + " (step " + rx.step.n + ")") : "";
   const title = rx.kind === "stopped" ? "You stopped this run" : "This run ended before the last step";
+  // Resume picks up at the stage the run was in: its earlier stages are reused.
+  const rstage = rx.step ? FS.stagesOf([{ id: rx.step.id }])[0] : null;
+  const canResume = rstage && FS.STAGES.findIndex((s) => s.id === rstage) > 0;
   const sub = rx.kind === "stopped"
-    ? "It stopped at " + at + ". Everything before it is kept; run again whenever you're ready."
-    : "Its folder ends at " + at + " with no error: LanEx may have been closed while it ran. Run it again to finish.";
+    ? "It stopped at " + at + ". Everything before it is kept: resume to reuse it, or run again from the start."
+    : "Its folder ends at " + at + " with no error: LanEx may have been closed while it ran. Resume or run it again to finish.";
   return "<div class='an-verdict fl-hero is-warn'><div class='an-verdict-main'><div class='an-eyebrow'>Run " + esc(F.tag) + "</div>" +
     "<h2 class='an-title'>" + esc(title) + "</h2><p class='an-lede'>" + esc(sub) + "</p></div>" +
-    "<div class='an-verdict-act'><button class='btn btn-ghost' data-fl='run'>" + icon("play", { size: 14 }) + " Run again</button></div></div>";
+    "<div class='an-verdict-act'>" +
+    (canResume ? "<button class='btn btn-primary' data-fl='resume-from' data-stage='" + esc(rstage) + "'>" + icon("play", { size: 14 }) + " Resume from " + esc(FS.stageLabel(rstage)) + "</button>" : "") +
+    "<button class='btn btn-ghost' data-fl='run'>" + icon("play", { size: 14 }) + " Run again</button></div></div>";
 }
 
 // The live head is built once per run and then only its text changes, so
@@ -397,6 +412,9 @@ function paintLive(head, steps, stages) {
   const done = nc.done;
   const total = nc.total || 1;
   const pct = Math.min(100, Math.round((done / total) * 100));
+  // "Step N of M" counts this run's own steps, as its folders (01-…) and the
+  // status bar do; a resumed run's reused steps are not its own.
+  const own = FS.stepCounts(steps.filter((s) => !s.from).map((s) => s.status));
   const started = steps.filter((s) => s.status !== "pending");
   const lastStarted = started.length ? started[started.length - 1].i : -1;
   const next = steps.slice(lastStarted + 1).find((s) => s.status === "pending") || null;
@@ -414,7 +432,7 @@ function paintLive(head, steps, stages) {
     : paused ? "Paused <span class='fl-sep'>›</span> next: " + esc(stepLabel(paused.id))
     : esc(ending ? "Finishing the run…" : prep || "Starting the run…");
   const sub = cur
-    ? "Step " + nc.current + " of " + total + (cur.status === "pending" ? " · starting" : "") +
+    ? "Step " + own.current + " of " + own.total + (cur.status === "pending" ? " · starting" : "") +
       (left != null ? " · about " + fmtDur(left) + " left" : "") +
       (stg && stg.bsecs ? " · " + stg.label + " took " + fmtDur(stg.bsecs) + " last time" : "")
     : paused ? "Step by step: " + done + " of " + total + " done. Next step runs it."
@@ -586,7 +604,7 @@ function keyNumber(st) {
       return bb.length === 4 && bb.every(Number.isFinite) ? "die " + fmtUm(bb[2] - bb[0]) + " × " + fmtUm(bb[3] - bb[1]) + " µm" : "";
     }
     case "pdn": {
-      // The run's own net names (VPWR/VGND on sky130, VDD/VSS on gf180/IHP).
+      // The run's own net names (VPWR/VGND on sky130 and IHP, VDD/VSS on gf180).
       const pn = (F.rs && F.rs.power_nets) || {};
       const nets = [...(pn.vdd || []), ...(pn.gnd || [])];
       return st.status === "done" ? (nets.length ? nets.join(" / ") + " rails" : "power rails") : "";
@@ -641,6 +659,8 @@ function paintSteps(steps, stages) {
       el.className = cls; el.firstChild.className = "vf-mark is-" + (MARK[s.status] || "not_run");
       el.title = s.from ? "From " + s.from + ": this run started after it" : "";
     }
+    const no = stepNo(s), noEl = el.querySelector(".fl-step-no");
+    if (noEl && noEl.textContent !== no) noEl.textContent = no;
     const time = s.from ? "reused" : s.status === "skipped" ? "skipped" : s.status === "not_run" || s.status === "pending" ? "" : s.secs != null ? fmtDur(s.secs) : "";
     if (el.lastChild.textContent !== time) el.lastChild.textContent = time;
   }
@@ -670,7 +690,7 @@ function paintSteps(steps, stages) {
   const now = $("fl-now");
   const off = !!running && !F.follow;
   now.hidden = !off;
-  if (off) setHTML(now, icon("chevron", { size: 12 }) + " Now: " + esc(two(running.i + 1) + " · " + stepLabel(running.id)));
+  if (off) setHTML(now, icon("chevron", { size: 12 }) + " Now: " + esc(stepNo(running) + " · " + stepLabel(running.id)));
   // A link to a step or stage (revealInFlow), once its row is there.
   const r = F.reveal;
   const target = r && (r.step ? F.rows.get(r.step) : F.heads.get(r.stage));
@@ -680,11 +700,14 @@ function paintSteps(steps, stages) {
   }
 }
 
+// The step's run-folder number ("–" for a step the run skipped).
+function stepNo(s) { return s.no != null ? two(s.no) : "–"; }
+
 function rowHtml(s) {
   const tool = s.id.split(".")[0];
   return "<button class='fl-step' data-step='" + esc(s.id) + "'>" +
     "<span class='vf-mark'></span>" +
-    "<span class='fl-step-no'>" + two(s.i + 1) + "</span>" +
+    "<span class='fl-step-no'>" + stepNo(s) + "</span>" +
     "<span class='fl-step-name'>" + esc(stepLabel(s.id)) + "</span>" +
     "<span class='fl-step-tool' style='--tool:" + (TOOL[tool] || "var(--text-muted)") + "'>" + esc(TOOL_LABEL[tool] || tool) + "</span>" +
     "<span class='fl-step-time'></span></button>";
@@ -761,7 +784,7 @@ function stepMetaHtml(s) {
   const src = (F.src && [...(F.src.stages || []), ...(F.src.steps || [])].find((x) => x.step === s.dir)) || null;
   const odb = s.dir && /^(OpenROAD|Odb)\./.test(s.id) && s.status === "done" && F.rs && F.rs.design_name ? s.dir + "/" + F.rs.design_name + ".odb" : "";
   return "<button class='fl-id' data-fl='copy-id' data-id='" + esc(s.id) + "' title='Copy the step ID'>" + esc(s.id) + " " + icon("file", { size: 11 }) + "</button>" +
-    "<span>" + esc(FS.stageLabel(s.stage)) + " · step " + (s.i + 1) + "</span>" +
+    "<span>" + esc(FS.stageLabel(s.stage)) + (s.no != null ? " · step " + s.no : " · skipped") + "</span>" +
     (s.secs != null && s.status !== "running" ? "<span>" + fmtDur(s.secs) + (bs && bs.runtime_s ? " <span class='muted'>(was " + fmtDur(bs.runtime_s) + ")</span>" : "") + "</span>" : "") +
     (s.peak ? "<span>" + Math.round(s.peak) + " MiB peak</span>" : "") +
     "<span class='fl-insp-acts'>" +
@@ -962,6 +985,11 @@ function wireOnce() {
     if (act === "run") document.getElementById("btn-run-global")?.click();
     else if (act === "stop") api.cancelRun().catch(() => {});
     else if (act === "resume") api.resumeRun().catch(() => {});
+    else if (act === "resume-from") {
+      import("./setup.js").then((m) => m.resumeFrom(a.dataset.stage))
+        .then((why) => { if (why) toast.show(why, "warn", 9000); })
+        .catch((e) => toast.show("Couldn't resume: " + (e.message || e), "error"));
+    }
     else if (act === "parent") ctx.setRun(a.dataset.tag);
     else if (act === "unpick") { F.sel = ""; F.tab = "log"; if (F.live) { F.follow = true; F.followed = ""; } paint(); }
     else if (act === "at-error") {

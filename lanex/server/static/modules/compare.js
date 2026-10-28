@@ -5,6 +5,15 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
 import { gatherRunsScoped, designLabel } from "./context.js";
+import { icon } from "./icons.js";
+
+// The run's verdict as the Runs page reads it: a run that finished with a
+// timing warning is not a failure.
+function verdictMark(r) {
+  const st = (r.verdict && r.verdict.state) || (r.success ? "passed" : "failed");
+  const [name, color] = { passed: ["check", "var(--pass)"], warning: ["alert", "var(--warn)"], failed: ["x", "var(--fail)"] }[st] || ["minus", "var(--text-muted)"];
+  return "<span title='" + fmt.escape((r.verdict && r.verdict.label) || st) + "' style='color:" + color + "'>" + icon(name, { size: 12 }) + "</span>";
+}
 
 // tag -> run row (carries run_dir + _design) so Compare can pass absolute
 // run_dirs to the backend — robust even when a picked run lives in another
@@ -44,7 +53,7 @@ export async function renderCompare() {
       "<label class='cmp-check'><input type='checkbox' value='" + fmt.escape(r.tag) +
       "' data-rundir='" + fmt.escape(r.run_dir || "") + "'/> " +
       (multi ? "<span class='muted'>" + fmt.escape(designLabel(r._design)) + " · </span>" : "") +
-      fmt.escape(r.tag) + (r.success ? " <svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M5 13l4 4L19 7'/></svg>" : " <svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg>") + "</label>").join("") +
+      fmt.escape(r.tag) + " " + verdictMark(r) + "</label>").join("") +
     "</div><button class='btn btn-primary' id='cmp-go'>Compare</button></div>" +
     "<div id='cmp-out'></div>";
   root.querySelector("#cmp-go").addEventListener("click", () => doCompare(root));

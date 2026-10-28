@@ -365,7 +365,10 @@ function paintLastRun(facts) {
   if (!el) return;
   const last = facts && facts.last_run;
   if (!facts || !facts.runs || !last) { el.innerHTML = "No runs yet."; return; }
-  el.innerHTML = "Last run " + (last.finished ? "finished" : "didn't finish") + " " + fmt.escape(ago(last.at)) +
+  // The newest folder of a run still going has no final/ yet: that is not
+  // "didn't finish".
+  const going = state.status && state.status.running;
+  el.innerHTML = (going ? "A run is going now" : "Last run " + (last.finished ? "finished" : "didn't finish") + " " + fmt.escape(ago(last.at))) +
     " · <button type='button' class='linklike' data-open='runs'>" +
     (facts.runs === 1 ? "View it" : "View all " + facts.runs + " runs") + "</button>";
 }
@@ -501,11 +504,22 @@ function paintPdkSrc() {
 
 const cfgFor = () => (_cfgPdk && _cfgPdk.dir === state.designDir ? _cfgPdk : null);
 
+// LibreLane's CLI default for -p/--pdk (librelane/flows/cli.py).
+const LIBRELANE_DEFAULT_PDK = "sky130A";
+
 // Point the picker at the PDK the open project's config names. A PDK that
 // isn't installed is still shown (and said), so the picker never pretends.
 export async function syncPdkFromConfig() {
   const c = await readConfigPdk();
   const sel = document.getElementById("pdk-select");
+  if (c && !c.pdk && sel && hasOpt(sel, LIBRELANE_DEFAULT_PDK)) {
+    // A config that names no PDK builds for LibreLane's default (sky130A, the
+    // -p default), as a terminal run of the folder would. Keeping the picker
+    // from the project opened before built spm on sky130B after a sky130B
+    // project: a project's target must not depend on what was open before.
+    if (sel.value !== LIBRELANE_DEFAULT_PDK) { sel.value = LIBRELANE_DEFAULT_PDK; await onPdkSelected(); }
+    return;
+  }
   if (!c || !c.pdk || !sel) return;
   const installed = (state.pdks || []).some((p) => p.name === c.pdk);
   if (!hasOpt(sel, c.pdk)) addOpt(sel, c.pdk, c.pdk + " (not installed)");
@@ -928,6 +942,21 @@ async function fillResume() {
   const changed = (d.settings || []).map((x) => x.var).concat((d.files || []).map((f) => f.path));
   if (note) note.textContent = "Reuses " + tag + "'s results up to that stage." + (changed.length ? " Changed since: " + changed.slice(0, 3).join(", ") + "." : "");
   paintRunLabel();
+}
+
+// Resume the run on the results pages from a stage, through the Run menu's own
+// "Resume from" path (so the server plans it the same way). Returns why it
+// can't, or "" once the run is asked to start.
+export async function resumeFrom(stage) {
+  await fillResume();
+  const sel = document.getElementById("run-resume-from");
+  const opt = sel && [...sel.options].find((o) => o.dataset.stage === stage);
+  if (!opt) return "LanEx can't resume this run from " + FS.stageLabel(stage) + ".";
+  if (opt.disabled) return opt.textContent.replace(/^\d+\.\s*/, "");
+  sel.value = opt.value;
+  paintRunLabel();
+  document.getElementById("btn-run-global")?.click();
+  return "";
 }
 
 // "Run", "Run to Placement" or "Resume from Placement": the button says what

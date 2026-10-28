@@ -60,6 +60,8 @@ _PYTHON = {"python", "python3"}
 # (pull_image, the flow runner) builds argv directly and never goes through this
 # validator, so narrowing here costs no functionality.
 _CONTAINER_RO = {"version", "info", "images", "ps", "pull", "logs", "inspect"}
+# ciel/volare: read-only subcommands (and bare help/version).
+_PDK_RO = {"", "ls", "ls-remote", "ls-pdks", "output", "path", "--version", "--help", "-h"}
 # ``docker image <sub>`` — only the read-only sub-subcommands.
 _CONTAINER_IMAGE_RO = {"inspect", "ls", "history"}
 # Never allow these even if someone adds them above — privilege escalation /
@@ -118,6 +120,19 @@ def validate(command: str) -> Dict[str, Any]:
             return {"ok": False, "error": f"'{prog} {sub}' isn't allowed from the GUI console — "
                     "only read-only/status commands are (version, info, images, ps, pull, logs, "
                     "inspect). Run other container commands in your own terminal."}
+    if prog in ("ciel", "volare"):
+        # The PDK store LanEx runs from: only the read-only subcommands here.
+        # `ciel rm`/`prune` delete PDK versions and `enable` switches the one
+        # every run uses; those belong in Tools or your own terminal.
+        sub = argv[1].lower() if len(argv) >= 2 else ""
+        if sub not in _PDK_RO:
+            return {"ok": False, "error": f"'{prog} {sub}' isn't allowed from the GUI console: it changes the "
+                    "PDK store LanEx runs from. Only " + ", ".join(sorted(s for s in _PDK_RO if s)) +
+                    " are. Install or remove PDKs in Tools, or use your own terminal."}
+    if prog == "yosys" and any(t.lstrip().startswith("!") for t in argv[1:]):
+        # A yosys script line starting with "!" runs a shell command.
+        return {"ok": False, "error": "yosys '!' runs a shell command, which isn't allowed here. "
+                "Run it in your own terminal."}
     return {"ok": True, "argv": argv, "base": prog}
 
 
@@ -440,6 +455,22 @@ def _comment(v: Any) -> str:
     return "".join(ch if (ch.isprintable() and ch not in "\r\n") else "?" for ch in str(v))
 
 
+def _repro_tag(command: Optional[str]) -> Optional[str]:
+    import re
+    m = re.search(r"(?:^|\s)--run-tag[ =](\S+)", command or "")
+    return (m.group(1).strip("'\"") + "-repro") if m else None
+
+
+def retag(command: Optional[str]) -> Optional[str]:
+    """*command* with its ``--run-tag T`` changed to ``T-repro``: a rerun that
+    leaves the run it reproduces alone. Unchanged when it names no tag."""
+    import re
+    if not command:
+        return command
+    return re.sub(r"((?:^|\s)--run-tag[ =])(['\"]?)([^\s'\"]+)\2",
+                  lambda m: m.group(1) + m.group(2) + m.group(3) + "-repro" + m.group(2), command, count=1)
+
+
 def reproduce_info(meta: Dict[str, Any], resolved: Optional[Dict[str, Any]],
                    run_dir: str) -> Dict[str, Any]:
     """What a run recorded about how it was started (``gui-run.json``) and what
@@ -461,8 +492,13 @@ def reproduce_info(meta: Dict[str, Any], resolved: Optional[Dict[str, Any]],
         "tag": meta.get("tag") or Path(run_dir).name,
         "run_dir": str(run_dir),
         "mode": mode,
-        "command": line,
-        "commands": {k: _safe_librelane_line(cmd.get(k)) for k in ("container", "local")
+        # LibreLane appends to a run folder whose tag already exists ("Using
+        # existing run"), so the recorded command, pasted as is, would write
+        # into the original run. The command to rerun names a new tag.
+        "command": retag(line),
+        "recorded_command": line,
+        "repro_tag": _repro_tag(line),
+        "commands": {k: retag(_safe_librelane_line(cmd.get(k))) for k in ("container", "local")
                      if _safe_librelane_line(cmd.get(k))},
         "cwd": cmd.get("cwd") or None,
         "config_file": meta.get("config_file") or None,
