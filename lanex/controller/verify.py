@@ -1308,12 +1308,67 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
     return out
 
 
+_DRC_METRICS = (("magic_drc", "magic__drc_error__count", _magic_drc),
+                ("klayout_drc", "klayout__drc_error__count", _klayout_drc))
+
+
+def _drc_disagreements(run: "_Run", details: Optional[Dict[str, Any]] = None,
+                       *, clean_only: bool = False) -> Dict[str, Dict[str, Any]]:
+    """DRC report files that contradict the metric LibreLane judged the run on
+    ("0 errors" next to markers, or the reverse: an edited report, or one left
+    from an earlier run). ``clean_only`` looks only where the metric says 0
+    (the case that would otherwise read "clean"), so a run list stays cheap."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for key, mkey, fn in _DRC_METRICS:
+        mval = _finite(run.metrics.get(mkey))
+        if mval is None or (clean_only and mval != 0):
+            continue
+        if details is not None:
+            d = details.get(key)
+        else:
+            try:
+                d = fn(run)
+            except Exception:
+                d = None
+        if not isinstance(d, dict):
+            continue
+        rep_n = d.get("marker_total") if d.get("marker_total") is not None else d.get("total")
+        if isinstance(rep_n, (int, float)) and (mval == 0) != (rep_n == 0):
+            out[key] = {"metric_key": mkey, "metric": mval,
+                        "metric_file": ("final/metrics.json" if (run.dir / "final" / "metrics.json").is_file()
+                                        else "metrics.json"),
+                        "report": rep_n, "report_file": d.get("markers") or d.get("report")}
+    return out
+
+
+def _with_drc_flag(run: "_Run", out: Dict[str, Any], dis: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Carry a DRC report/metric disagreement on the verdict. The state stays
+    LibreLane's (the metric); consumers add a "report disagrees" flag."""
+    if dis and out.get("state") not in ("running",):
+        out["drc_disagree"] = {
+            "markers": int(sum(d["report"] for d in dis.values() if d["metric"] == 0)),
+            "checks": sorted(dis),
+            "detail": {k: {"metric": d["metric"], "report": d["report"], "report_file": d["report_file"]}
+                       for k, d in dis.items()},
+        }
+    return out
+
+
 def run_verdict(run_dir: str | Path, *, live: bool = False) -> Dict[str, Any]:
-    """:func:`run_verdict_from` for one run folder (no report files parsed)."""
+    """:func:`run_verdict_from` for one run folder. Only the DRC marker
+    databases of a run whose DRC metric reads 0 are parsed (for the
+    report-disagrees flag)."""
     run = _Run(Path(run_dir).resolve())
     checks = _checks(run)
     flow = _flow_state(run)
-    return run_verdict_from(run, checks, flow, _verdict(checks, flow), live=live)
+    out = run_verdict_from(run, checks, flow, _verdict(checks, flow), live=live)
+    if live:
+        return out
+    try:
+        dis = _drc_disagreements(run, clean_only=True)
+    except Exception:
+        dis = {}
+    return _with_drc_flag(run, out, dis)
 
 
 def verify_report(run_dir: str | Path) -> Dict[str, Any]:
@@ -1349,20 +1404,15 @@ def verify_report(run_dir: str | Path) -> Dict[str, Any]:
     # on ("0 errors" next to markers, or the reverse: an edited report, or one
     # left from an earlier run) is said, with both sources. The check keeps
     # the metric's verdict: it is what LibreLane decided on.
-    for key, mkey in (("magic_drc", "magic__drc_error__count"), ("klayout_drc", "klayout__drc_error__count")):
-        d = details.get(key)
-        mval = _finite(run.metrics.get(mkey))
-        if not isinstance(d, dict) or mval is None:
-            continue
-        rep_n = d.get("marker_total") if d.get("marker_total") is not None else d.get("total")
-        if isinstance(rep_n, (int, float)) and (mval == 0) != (rep_n == 0):
-            d["disagree"] = {"metric_key": mkey, "metric": mval,
-                             "metric_file": "final/metrics.json" if (run.dir / "final" / "metrics.json").is_file() else "metrics.json",
-                             "report": rep_n, "report_file": d.get("markers") or d.get("report")}
-            if by.get(key):
-                by[key]["note"] = ((by[key].get("note") or "") + " The report file lists " + str(int(rep_n)) +
-                                   (" marker" if rep_n == 1 else " markers") + " but the metric says " +
-                                   str(int(mval)) + ": they disagree.").strip()
+    dis_all = _drc_disagreements(run, details)
+    for key, dis in dis_all.items():
+        d = details[key]
+        rep_n, mval = dis["report"], dis["metric"]
+        d["disagree"] = dis
+        if by.get(key):
+            by[key]["note"] = ((by[key].get("note") or "") + " The report file lists " + str(int(rep_n)) +
+                               (" marker" if rep_n == 1 else " markers") + " but the metric says " +
+                               str(int(mval)) + ": they disagree.").strip()
     ir_m = {k: run.metrics.get(k) for k in ("ir__drop__worst", "ir__drop__avg", "ir__voltage__worst")
             if run.metrics.get(k) is not None}
     if ir_m:
@@ -1385,5 +1435,6 @@ def verify_report(run_dir: str | Path) -> Dict[str, Any]:
         "verdict": verdict,
         # The five-state verdict the run lists use (same source, so Verify and
         # Runs can never disagree). "running" is decided by the caller.
-        "run_verdict": run_verdict_from(run, checks, flow, verdict),
+        "run_verdict": _with_drc_flag(run, run_verdict_from(run, checks, flow, verdict),
+                                      {k: d for k, d in dis_all.items() if d["metric"] == 0}),
     }

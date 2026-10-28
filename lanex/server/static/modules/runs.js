@@ -414,6 +414,13 @@ function cellHtml(c, r, base) {
   if (c.id === "checks") {
     const k = checksOf(r);
     if (!k) return "<td class='rn-c-checks is-num muted'></td>";
+    // LibreLane's metric says clean; a DRC report listing markers anyway is
+    // flagged (verdict.drc_disagree), with Verify's DRC section one click away.
+    const dd = r.verdict && r.verdict.drc_disagree;
+    if (!k.total && dd && dd.markers) {
+      return "<td class='rn-c-checks is-num'><span class='rn-clean'>clean</span> <button class='rn-drcflag' data-act='drc' style='color:var(--warn);background:none;border:0;padding:0;cursor:pointer;font:inherit' title='" +
+        esc("The DRC report files list " + dd.markers + " markers but LibreLane's metric says 0. Open Verify's Design rules.") + "'>· report: " + dd.markers + "</button></td>";
+    }
     if (!k.total) return "<td class='rn-c-checks is-num'><span class='rn-clean'>clean</span></td>";
     const parts = [k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "ant " + k.ant : ""].filter(Boolean);
     return "<td class='rn-c-checks is-num'><span class='rn-bad'>" + esc(parts.join(" · ")) + "</span></td>";
@@ -561,6 +568,8 @@ function wireTable(table, runs) {
       return;
     }
     if (act === "expand") { toggleOpen(r); return; }
+    // The DRC "report disagrees" flag: this run, in Verify's Design rules.
+    if (act === "drc") { e.stopPropagation(); Promise.resolve(setRun(r.tag, r._design)).then(() => go("verify", { section: "vf-drc" })); return; }
     setRun(r.tag, r._design);
   };
   table.ondblclick = (e) => { const r = rowOf(e.target, runs); if (r && !e.target.closest(".rn-card, .rn-pick, [data-act]")) toggleOpen(r); };

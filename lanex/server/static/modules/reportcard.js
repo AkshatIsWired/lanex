@@ -110,7 +110,11 @@ export function reportCardHtml(c) {
     "<div class='fl-split-a'><div class='an-eyebrow'>Run " + esc(c.tag) + (c.base ? " <span class='fl-vs'>compared with " + esc(c.base) + "</span>" : "") + "</div>" +
     "<h2 class='an-title'>" + esc(failed ? "The layout is done, but " + (v.short || "checks failed") : v.title) + "</h2>" +
     (c.branch || "") +
-    "<p class='an-lede'>" + esc(v.sub || "") + "</p>" + (failed ? failedHtml(c) : "") +
+    "<p class='an-lede'>" + esc(v.sub || "") + "</p>" +
+    // DRC report vs metric (V.drcDisagree): the verdict is the metric's; the way to the reports.
+    (v.drc ? "<p class='fl-drcflag'><button class='btn btn-ghost btn-xs' data-go='verify' data-go-section='vf-drc'>" +
+      icon("alert", { size: 12 }) + " DRC " + esc(v.drc.short) + ": see Verify's Design rules</button></p>" : "") +
+    (failed ? failedHtml(c) : "") +
     "<details class='fl-covers'><summary>What “clean” covers</summary><p>Clean means every check LibreLane runs on the layout passed: " +
       "design rules in Magic and KLayout, layout against netlist (LVS), the two GDS writers against each other (XOR), antenna rules, " +
       "and timing in every corner it checks. It does not cover simulating the finished netlist with its real delays (gate-level " +

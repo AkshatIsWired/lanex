@@ -235,6 +235,25 @@ export function worstStatus(checks) {
 // (Verify, Flow, the toast and the notification): rule 10 of the spec.
 // "Clean" means LibreLane's checks passed, never "tape-out ready": gate-level
 // simulation, a shuttle's precheck and the foundry's decks are not covered.
+// Step counts from Verify's flow_state, in FS.stepCounts' meaning: the total
+// is the flow's steps minus those the config turns off, so a run that ended
+// early reads "34 of 76", the same as Flow, not "34 of 35" (its folders).
+export function stepTotals(f) {
+  if (!f || !(f.steps_planned || f.steps_total)) return null;
+  return { done: f.steps_done || 0, total: f.steps_planned || f.steps_total };
+}
+
+// A run whose DRC metric says 0 while the marker report lists markers
+// (run_verdict.drc_disagree). The verdict stays LibreLane's (the metric);
+// pages add this flag next to "clean". -> {markers, text, short} or null.
+export function drcDisagree(rv) {
+  const d = rv && rv.drc_disagree;
+  if (!d || !d.markers) return null;
+  const m = d.markers + (d.markers === 1 ? " marker" : " markers");
+  return { markers: d.markers, short: "report lists " + m,
+    text: "The DRC report files list " + m + " but LibreLane's metric says 0" };
+}
+
 export function verdictCopy(rep) {
   const v = rep.verdict, f = rep.flow_state || {};
   const by = new Map((rep.checks || []).map((c) => [c.id, c]));
@@ -288,7 +307,10 @@ export function verdictCopy(rep) {
         " Nothing failed, but these have to pass before the layout can go to a foundry." };
   }
   const w = v.warning_ids.length;
-  if (!w) return { tone: "pass", title: "Clean", short: "clean", sub: "Every check LibreLane makes on this layout passed." };
+  // A DRC report that disagrees with the metric is said, verdict unchanged.
+  const dd = drcDisagree(rv);
+  const ddSub = dd ? " " + dd.text + ": check the Design rules section." : "";
+  if (!w) return { tone: "pass", title: "Clean", short: "clean", drc: dd, sub: "Every check LibreLane makes on this layout passed." + ddSub };
   // LibreLane passed the run, but some checks only warn here (setup outside
   // TIMING_VIOLATION_CORNERS, for one): never call that plain "clean".
   const warned = names(v.warning_ids);
@@ -296,7 +318,7 @@ export function verdictCopy(rep) {
   const n = w + (w === 1 ? " warning" : " warnings");
   return { tone: "warn", title: "Clean, with " + n, short: "clean, " + n, warned,
     sub: "Every check that fails a run passed. " + warned.join(", ") + (w === 1 ? " warns" : " warn") +
-      " instead of failing it" + (gates.length ? " (" + gates.join("; ") + ")" : "") + ": worth a look before tape-out." };
+      " instead of failing it" + (gates.length ? " (" + gates.join("; ") + ")" : "") + ": worth a look before tape-out." + ddSub, drc: dd };
 }
 
 export function isNum(v) { return typeof v === "number" && Number.isFinite(v); }

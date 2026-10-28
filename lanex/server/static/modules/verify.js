@@ -389,7 +389,7 @@ function pillar(p) {
   const cs = p.checks.map((id) => by.get(id)).filter(Boolean);
   const st = V.worstStatus(cs.filter((c) => c.gate !== "info"));
   const d = _rep.details || {};
-  let hero = "", rows = [];
+  let hero = "", rows = [], drcFlag = "";
   if (p.id === "timing") {
     const s = by.get("setup"), h = by.get("hold");
     const corners = (d.timing && d.timing.source === "signoff" && d.timing.corners) || [];
@@ -406,6 +406,11 @@ function pillar(p) {
     const vals = [mg, kl, rt].filter((c) => c && V.isNum(c.value)).map((c) => c.value);
     hero = vals.length ? "<span class='vf-hero-v'>" + esc(n(vals.reduce((a, b) => a + b, 0))) + "</span><span class='an-u'>errors</span>" : "<span class='vf-hero-v'>—</span>";
     rows = [["Magic", mg ? valueText(mg) : "—", mg], ["KLayout", kl ? valueText(kl) : "—", kl], ["Router", rt ? valueText(rt) : "—", rt]];
+    // The metric is what LibreLane judged on; a report that lists markers
+    // anyway is flagged here, not hidden in the DRC section.
+    const dd = V.drcDisagree(_rep.run_verdict);
+    if (dd) rows.push(["Report files", dd.markers + (dd.markers === 1 ? " marker" : " markers") + ": they disagree, check", { status: "warn" }, ""]);
+    if (dd) drcFlag = " · " + dd.short;
   } else if (p.id === "lvs") {
     const lv = by.get("lvs"), x = by.get("xor"), dp = by.get("disc_pin");
     const res = d.lvs && d.lvs.result;
@@ -426,7 +431,7 @@ function pillar(p) {
       ["Worst IR drop", worstIr ? worstIr.pct + " % of supply" : "—", null,
         worstIr ? mprov("design_powergrid__drop__worst__net:" + worstIr.net, "Show the worst drop on " + worstIr.net + " in this run's metrics.json") : ""]];
   }
-  const stLabel = { pass: "Clean", partial: "Clean so far", fail: "Failing", warn: "Warnings", not_run: "Not checked", skipped: "Turned off" }[st] || "";
+  const stLabel = ({ pass: "Clean", partial: "Clean so far", fail: "Failing", warn: "Warnings", not_run: "Not checked", skipped: "Turned off" }[st] || "") + drcFlag;
   // A card that jumps to its section; its title is the keyboard target, so
   // the source buttons inside can be real buttons too.
   return "<div class='vf-pillar is-" + esc(st) + "' data-vf-jump='" + p.jump + "'>" +
