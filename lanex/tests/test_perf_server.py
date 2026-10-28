@@ -466,6 +466,51 @@ def test_pdk_size_cached_by_mtime_and_on_disk(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "_dir_size_disk_loaded", [False])
     assert tools._dir_size_mb(tree) == 3 and len(walks) == n
     # The tree changed (its mtime moved): measured again.
-    time.sleep(0.02)
+    time.sleep(0.05)
     (tree / "b.lib").write_bytes(b"y" * (2 * 1024 * 1024))
     assert tools._dir_size_mb(tree) == 5 and len(walks) > n
+
+
+# --------------------------------------------------------------- cell library
+
+def test_liberty_compact_form_matches_the_parse_tree(tmp_path, monkeypatch):
+    from lanex.controller import celllib
+    from lanex.tests.test_cells_tab import LIB
+    monkeypatch.setenv("LANEX_HOME", str(tmp_path / "home"))
+    lib_txt = LIB.replace('cell_leakage_power : 0.002;',
+                          'leakage_power () { when : "A&B"; value : 0.004; }\n'
+                          '    leakage_power () { when : "!A"; value : 0.001; }')
+    p = tmp_path / "a.lib"
+    p.write_text(lib_txt)
+    celllib._CACHE.clear()
+    lib = celllib._liberty(p)
+    # Same arcs and leakage states as the full parse tree gives.
+    header, spans = celllib._split_cells(lib_txt)
+    for name, a, b in spans:
+        node = next(x for x in celllib._parse_liberty_block(lib_txt[a:b]) if x.get("g") == "cell")
+        assert lib["arcs"][name] == celllib._arcs(node)
+        assert lib["cells"][name] == celllib._cell_summary(name, node)
+    assert lib["leaks"]["t__nand2_1"] == [{"when": "A&B", "value": 0.004}, {"when": "!A", "value": 0.001}]
+    # A restarted server reads it from disk, not the Liberty file.
+    celllib._CACHE.clear()
+    monkeypatch.setattr(Path, "read_text", lambda *a, **k: pytest.fail("Liberty re-read"))
+    assert celllib._liberty(p) == lib
+
+
+def test_parsed_library_cache_is_bounded(tmp_path, monkeypatch):
+    from lanex.controller import celllib
+    from lanex.tests.test_cells_tab import LIB
+    monkeypatch.setenv("LANEX_HOME", str(tmp_path / "home"))
+    celllib._CACHE.clear()
+    paths = []
+    for i in range(5):
+        p = tmp_path / f"l{i}.lib"
+        p.write_text(LIB)
+        paths.append(p)
+        celllib._liberty(p)
+    kept = [k for k in celllib._CACHE if k[0] == "lib"]
+    assert kept == [("lib", str(paths[3])), ("lib", str(paths[4]))]
+    celllib._liberty(paths[3])                 # most recently used moves last
+    celllib._liberty(paths[0])
+    assert [k for k in celllib._CACHE if k[0] == "lib"] == [("lib", str(paths[3])), ("lib", str(paths[0]))]
+    celllib._CACHE.clear()

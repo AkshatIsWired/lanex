@@ -38,6 +38,8 @@ Report shape (real sky130 output)::
 from __future__ import annotations
 
 import re
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -205,6 +207,32 @@ def _histogram(slacks: List[float], bins: int = 12) -> Dict[str, Any]:
     return {"bins": labels, "counts": counts, "edges": edges}
 
 
+# Parsed reports by file, re-read when the file's mtime or size moves: a big
+# design's max.rpt is megabytes and the Verify and Analytics pages ask for it
+# again on every visit. A few files at most (the newest ones asked for).
+_REPORT_CACHE: "OrderedDict[str, Tuple[Tuple[int, int], List[Dict[str, Any]]]]" = OrderedDict()
+_REPORT_CACHE_MAX = 6
+_REPORT_LOCK = threading.Lock()
+
+
+def _parsed_report(report: Path) -> List[Dict[str, Any]]:
+    """``parse_report_checks`` of *report*, cached (never mutate the list)."""
+    st = report.stat()
+    key, stamp = str(report), (st.st_mtime_ns, st.st_size)
+    with _REPORT_LOCK:
+        hit = _REPORT_CACHE.get(key)
+        if hit and hit[0] == stamp:
+            _REPORT_CACHE.move_to_end(key)
+            return hit[1]
+    parsed = parse_report_checks(report.read_text(encoding="utf-8", errors="replace"))
+    with _REPORT_LOCK:
+        _REPORT_CACHE[key] = (stamp, parsed)
+        _REPORT_CACHE.move_to_end(key)
+        while len(_REPORT_CACHE) > _REPORT_CACHE_MAX:
+            _REPORT_CACHE.popitem(last=False)
+    return parsed
+
+
 def timing_paths(run_dir: str | Path, *, kind: str = "setup", limit: int = 100) -> Dict[str, Any]:
     """Structured timing paths for the worst-paths table + slack histogram.
 
@@ -225,16 +253,13 @@ def timing_paths(run_dir: str | Path, *, kind: str = "setup", limit: int = 100) 
     sources: List[str] = []
     for report, corner_hint in reports:
         try:
-            text = report.read_text(encoding="utf-8", errors="replace")
+            parsed = _parsed_report(report)
         except Exception as ex:
             if len(reports) == 1:
                 return {"ok": False, "kind": kind, "error": str(ex)}
             continue
-        parsed = parse_report_checks(text)
         if corner_hint:
-            for p in parsed:
-                if not p.get("corner"):
-                    p["corner"] = corner_hint
+            parsed = [p if p.get("corner") else dict(p, corner=corner_hint) for p in parsed]
         paths.extend(parsed)
         try:
             sources.append(str(report.relative_to(run_dir)))

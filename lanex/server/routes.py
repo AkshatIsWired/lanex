@@ -2076,15 +2076,15 @@ _CONTENT_TYPE_MAP = {
 
 
 def _read_view_file(path: Path) -> Optional[Dict[str, Any]]:
+    """``{path, content_type}`` of a servable file. The transport streams it
+    (a final GDS or a long log is tens of MB, never read into memory)."""
     if not path.is_file():
         return None
     ext = path.suffix.lower()
     content_type = _CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
-    try:
-        blob = path.read_bytes()
-        return {"blob": blob, "content_type": content_type}
-    except Exception:
+    if not os.access(path, os.R_OK):
         return None
+    return {"path": str(path), "content_type": content_type}
 
 
 def _resolve_run_dir(tag: Optional[str]) -> Optional[Path]:
@@ -3196,7 +3196,8 @@ def h_timing_paths(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, timing.timing_paths(run_dir, kind=kind, limit=limit))
+        _respond(handler, history.cached_run_result(
+            f"timing:{kind}:{limit}", run_dir, lambda: timing.timing_paths(run_dir, kind=kind, limit=limit)))
     except Exception as ex:
         _log.exception("timing_paths failed")
         _respond(handler, str(ex), 500)
@@ -3885,8 +3886,10 @@ def h_waveform(handler: Any) -> None:
         _respond(handler, "not found", 404)
         return
     try:
-        handler._send_bytes(target.read_bytes(), 200, "application/octet-stream")
+        handler._send_file(str(target), "application/octet-stream")
     except Exception as ex:
+        if handler._is_conn_error(ex):
+            raise
         _respond(handler, str(ex), 500)
 
 
