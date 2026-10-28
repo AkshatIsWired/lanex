@@ -155,13 +155,41 @@ def run_info(run_dir: Path) -> Dict[str, Any]:
     gui = _read(run_dir / "gui-run.json")
     resolved = history._read_config(run_dir) or {}
     meta = resolved.get("meta") if isinstance(resolved.get("meta"), dict) else {}
+    overrides = dict(gui.get("overrides") or {})
+    # A sweep point's values are -c overrides too, recorded in the design's
+    # sweep list (.gui-dse-sweeps.json), not in the run's gui-run.json.
+    sweep = _sweep_of(run_dir)
+    if sweep:
+        for ax in sweep.get("axes") or []:
+            var = ax.get("var") if isinstance(ax, dict) else None
+            if var and var not in overrides and var in resolved:
+                overrides[var] = resolved[var]
     return {
         "gui": gui, "resolved": resolved,
         "flow": gui.get("flow") or meta.get("flow") or "Classic",
         "pdk": gui.get("pdk") or resolved.get("PDK"),
         "scl": gui.get("scl") or resolved.get("STD_CELL_LIBRARY"),
-        "overrides": dict(gui.get("overrides") or {}),
+        "overrides": overrides,
+        "sweep": (sweep or {}).get("id"),
     }
+
+
+def _sweep_of(run_dir: Path) -> Optional[Dict[str, Any]]:
+    """The sweep that made this run (from ``<design>/.gui-dse-sweeps.json``)."""
+    doc = _read(run_dir.parent.parent / ".gui-dse-sweeps.json")
+    for s in (doc.get("sweeps") or []) if isinstance(doc, dict) else []:
+        if isinstance(s, dict) and run_dir.name in (s.get("tags") or []):
+            return s
+    return None
+
+
+# Overrides that only pick the PDK/library (every GUI run passes them): not a
+# sign that the run's settings differ from the config file.
+_PLUMBING = {"PDK", "STD_CELL_LIBRARY", "DESIGN_DIR"}
+
+
+def had_run_overrides(info: Dict[str, Any]) -> bool:
+    return any(k not in _PLUMBING for k in (info.get("overrides") or {}))
 
 
 def config_entry(data: Dict[str, Any], var: str, pdk: Optional[str], scl: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -184,11 +212,19 @@ def origin(var: str, info: Dict[str, Any], cfg: Dict[str, Any], vinfo: Optional[
     """Where the old run's value of *var* came from: ``run`` (set for that run
     only), ``config`` (the file, and which section), ``pdk`` or ``default``."""
     used = info["resolved"].get(var)
+    tag = info["gui"].get("tag") or info.get("tag") or "that run"
     if var in info["overrides"]:
-        return {"layer": "run", "label": "set for " + info["gui"].get("tag", "that run") + " only", "value": used}
+        how = ("set by sweep " + str(info["sweep"]) + " for " + tag + " only (-c)") if info.get("sweep") \
+            else ("set for " + tag + " only (-c)")
+        return {"layer": "run", "label": how, "value": used}
     e = config_entry(cfg, var, info["pdk"], info["scl"])
     if e is not None:
         where = cfg_name + (", " + e["label"] if e["scope"] else "")
+        if used is not None and same(e["value"], used) is False:
+            # The file says something else now: the run got its value another
+            # way (a -c override LanEx didn't record) or the file changed since.
+            return {"layer": "run", "label": "not from " + cfg_name + " (it now says " + show(e["value"]) +
+                    "): set for that run, or the file changed since", "value": used}
         return {"layer": "config", "label": where, "scope": e["scope"], "value": used}
     dflt = (vinfo or {}).get("default")
     if (vinfo or {}).get("pdk") or (dflt not in (None, "") and same(dflt, used) is False):
@@ -384,7 +420,10 @@ def plan(design_dir: str | Path, tag: str, sets: Optional[Dict[str, Any]] = None
         vi = known.get(var)
         to = coerce(raw, dict(vi or {}, name=var))
         o = origin(var, info, cfg, vi, cfg_name)
-        where = save if save in ("config", "run") else ("run" if o["layer"] == "run" else "config")
+        # A run that had its own overrides (-c, a sweep point) saves its fix
+        # the same way by default; saving to the config stays one click away.
+        where = save if save in ("config", "run") else (
+            "run" if o["layer"] == "run" or had_run_overrides(info) else "config")
         if where == "config" and not cfg_info.get("editable"):
             where = "run"
         entry = config_entry(cfg, var, info["pdk"], info["scl"]) if where == "config" else None

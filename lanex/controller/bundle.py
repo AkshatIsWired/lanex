@@ -676,7 +676,7 @@ def import_bundle(src: "str | Path | BinaryIO", design_dir: str | Path) -> Dict[
     if not (dest / "final" / "metrics.json").is_file():
         warnings.append("no metrics.json in this bundle — Analytics will be empty.")
     if not any(dest.glob("gds/*")) and not any((dest / "final").glob("**/*.gds*")):
-        warnings.append("no GDS in this bundle — the Preview layout will be empty.")
+        warnings.append("no GDS in this bundle — the Layout tab will have nothing to draw.")
     if (dest / "SKIPPED.json").is_file():
         warnings.append("the source bundle omitted some large files (see SKIPPED.json).")
     return {"tag": tag, "warnings": warnings}

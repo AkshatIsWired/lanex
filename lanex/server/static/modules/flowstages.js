@@ -19,7 +19,7 @@ export const STAGES = [
     blurb: "The die and the core area, the rows the cells will sit in, and the tap and end-cap cells.",
     steps: "floorplan dumprcvalues checkmacroantennaproperties setpowerconnections manualmacroplacement macroplacement cutrows tapendcapinsertion" },
   { id: "pdn", label: "Power grid",
-    blurb: "The power distribution network: the VPWR / VGND straps and rails every cell connects to.",
+    blurb: "The power distribution network: the power and ground straps and rails every cell connects to (VPWR / VGND on sky130, VDD / VSS on gf180 and IHP).",
     steps: "addpdnobstructions generatepdn removepdnobstructions" },
   { id: "placement", label: "Placement",
     blurb: "The pins on the die edge, then every standard cell on a legal row site. Wires come later.",
@@ -54,6 +54,21 @@ export function listedStage(idOrDir) {
 
 export function stage(id) { return BY_ID[id] || null; }
 export function stageLabel(id) { return (BY_ID[id] || {}).label || id || ""; }
+
+// One step-count meaning for every place that shows one (Flow's header and
+// Steps list, the status bar, the window title, run summaries): steps the
+// run's config turned off ("skipped") are not part of the total; a step
+// reused from the parent run is done. -> {done, total, skipped, current}
+// where current is the 1-based number of the step running now.
+export function stepCounts(statuses) {
+  let done = 0, skipped = 0;
+  for (const s of statuses) {
+    if (s === "skipped") skipped++;
+    else if (s === "done") done++;
+  }
+  const total = statuses.length - skipped;
+  return { done, total, skipped, current: Math.min(done + 1, Math.max(total, 1)) };
+}
 
 // Each step of an ordered list with its stage id (unlisted steps inherit).
 export function stagesOf(steps, key = (s) => s.id || s.dir) {

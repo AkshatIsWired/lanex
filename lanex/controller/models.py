@@ -135,6 +135,14 @@ class RunSummary:
     pinned: bool = False
     origin: Dict[str, Any] = field(default_factory=dict)
     note: str = ""
+    # Steps taken from the run this one was resumed from (counted in
+    # step_count and steps_done).
+    steps_reused: int = 0
+    # {state: passed|warning|failed|stopped|running|incomplete, label, stage?, ...}:
+    # Verify's verdict (controller/verify.run_verdict).
+    verdict: Optional[Dict[str, Any]] = None
+    # Tag of the run this one was resumed from, if any.
+    branched_from: Optional[str] = None
 
 
 @dataclass(frozen=True)

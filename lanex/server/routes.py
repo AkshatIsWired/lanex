@@ -350,10 +350,20 @@ def h_runs(handler: Any) -> None:
         _respond(handler, [])
         return
     try:
-        _respond(handler, history.list_runs(design_dir))
+        _respond(handler, history.mark_live(history.list_runs(design_dir), _live_run_dir()))
     except Exception as ex:
         _log.exception("list_runs failed")
         _respond(handler, str(ex), 500)
+
+
+def _live_run_dir() -> Optional[str]:
+    """The run folder of the flow running right now, or None."""
+    try:
+        from ..server.app import get_runner
+        r = get_runner()
+        return r.run_dir if r.running else None
+    except Exception:
+        return None
 
 
 def h_run_step_log(handler: Any) -> None:
@@ -2944,7 +2954,12 @@ def h_verify(handler: Any) -> None:
         _respond(handler, "no run to verify", 404)
         return
     try:
-        _respond(handler, verify_mod.verify_report(run_dir))
+        rep = verify_mod.verify_report(run_dir)
+        rv = rep.get("run_verdict")
+        if rv is not None:
+            rep["run_verdict"] = history.mark_live([{"run_dir": rep.get("run_dir"), "verdict": rv}],
+                                                   _live_run_dir())[0]["verdict"]
+        _respond(handler, rep)
     except Exception as ex:
         _log.exception("verify_report failed")
         _respond(handler, str(ex), 500)

@@ -389,8 +389,10 @@ function paintLive(head, steps, stages) {
       (state.paused ? "<button class='btn btn-primary' data-fl='resume'>" + icon("play", { size: 14 }) + " Next step</button>" : "") +
       "<button class='btn btn-warn' data-fl='stop'>" + icon("stop", { size: 13 }) + " Stop</button></div></div>";
   }
-  const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
-  const total = steps.length || 1;
+  // FS.stepCounts: the same done/total the status bar and title use.
+  const nc = FS.stepCounts(steps.map((s) => s.status));
+  const done = nc.done;
+  const total = nc.total || 1;
   const pct = Math.min(100, Math.round((done / total) * 100));
   const started = steps.filter((s) => s.status !== "pending");
   const lastStarted = started.length ? started[started.length - 1].i : -1;
@@ -409,7 +411,7 @@ function paintLive(head, steps, stages) {
     : paused ? "Paused <span class='fl-sep'>›</span> next: " + esc(stepLabel(paused.id))
     : esc(ending ? "Finishing the run…" : prep || "Starting the run…");
   const sub = cur
-    ? "Step " + (cur.i + 1) + " of " + total + (cur.status === "pending" ? " · starting" : "") +
+    ? "Step " + nc.current + " of " + total + (cur.status === "pending" ? " · starting" : "") +
       (left != null ? " · about " + fmtDur(left) + " left" : "") +
       (stg && stg.bsecs ? " · " + stg.label + " took " + fmtDur(stg.bsecs) + " last time" : "")
     : paused ? "Step by step: " + done + " of " + total + " done. Next step runs it."
@@ -567,7 +569,12 @@ function keyNumber(st) {
       const bb = String(m["design__die__bbox"] || "").split(/\s+/).map(Number);
       return bb.length === 4 && bb.every(Number.isFinite) ? "die " + fmtUm(bb[2] - bb[0]) + " × " + fmtUm(bb[3] - bb[1]) + " µm" : "";
     }
-    case "pdn": return st.status === "done" ? "VPWR / VGND rails" : "";
+    case "pdn": {
+      // The run's own net names (VPWR/VGND on sky130, VDD/VSS on gf180/IHP).
+      const pn = (F.rs && F.rs.power_nets) || {};
+      const nets = [...(pn.vdd || []), ...(pn.gnd || [])];
+      return st.status === "done" ? (nets.length ? nets.join(" / ") + " rails" : "power rails") : "";
+    }
     case "placement": return n("design__instance__utilization") != null ? "core " + Math.round(n("design__instance__utilization") * 100) + " % full" : "";
     case "cts": return n("clock__skew__worst_setup") != null ? "clock skew " + Math.abs(n("clock__skew__worst_setup") * 1000).toFixed(0) + " ps" : "";
     case "routing": return n("route__wirelength") != null ? fmtWire(n("route__wirelength")) + " of wire" + (n("route__drc_errors") ? " · " + int(n("route__drc_errors")) + " route DRC" : "") : "";
@@ -630,9 +637,12 @@ function paintSteps(steps, stages) {
     const m = el.querySelector(".fl-grp-meta");
     if (m.textContent !== meta) m.textContent = meta;
   }
-  const ran = steps.filter((s) => s.status === "done").length;
+  const nc = FS.stepCounts(steps.map((s) => s.status));
+  const reused = steps.filter((s) => s.from && s.status === "done").length;
   const running = F.live ? steps.find((s) => s.status === "running") : null;
-  setHTML($("fl-steps-h"), "<b>Steps</b><span class='fl-pane-sub'>" + ran + " of " + steps.length + " done</span>" +
+  setHTML($("fl-steps-h"), "<b>Steps</b><span class='fl-pane-sub' title='Steps turned off in the config are not counted'>" +
+    nc.done + " of " + nc.total + " done" + (reused ? " (" + reused + " reused)" : "") +
+    (nc.skipped ? " · " + nc.skipped + " turned off" : "") + "</span>" +
     (F.live ? "<label class='lv-tog fl-follow' title='Keep the running step in view'><input type='checkbox' data-fl='follow'" + (F.follow ? " checked" : "") + "/> Follow</label>" : ""));
   // Keep the running step in view, as the old timeline did, unless the user
   // scrolled the list themselves: then a chip offers the way back.

@@ -95,7 +95,13 @@ function settleBaseline() {
   if (C.picked && (C.baseline === "" || ok(C.baseline))) return;   // the user's choice stands
   C.picked = false;
   const idx = same.findIndex((r) => r.tag === C.run);
-  const prev = same.slice(idx + 1).find((r) => r.success);
+  const cur = same[idx];
+  // A resumed (fix) run is compared with the run it was resumed from: that
+  // is the "before" of the fix, whatever else passed in between.
+  const parent = cur && cur.branched_from && same.find((r) => r.tag === cur.branched_from);
+  if (parent && ok(parent.tag)) { C.baseline = parent.tag; return; }
+  const passed = (r) => (r.verdict && r.verdict.state ? r.verdict.state === "passed" : r.success);
+  const prev = same.slice(idx + 1).find(passed);
   C.baseline = prev ? prev.tag : "";
 }
 

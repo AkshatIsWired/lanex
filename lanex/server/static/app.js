@@ -23,7 +23,6 @@ import { renderLogs } from "./modules/logs.js";
 import { help } from "./modules/help.js";
 import { toast } from "./modules/toast.js";
 import { setupWizard } from "./modules/wizard.js";
-import { setupLearn } from "./modules/learn.js";
 import { icon } from "./modules/icons.js";
 import { setupFullscreen } from "./modules/fullscreen.js";
 import { setupTooltips } from "./modules/tooltip.js";
@@ -94,7 +93,6 @@ async function boot() {
     setupShell();
     setupHotkeys();
     setupWizard();
-    setupLearn();
     setupFullscreen();
     setupTooltips();
     import("./modules/problems.js").then((m) => m.wireProblemCount()).catch(() => {});

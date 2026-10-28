@@ -813,6 +813,7 @@ def _klayout_drc(run: _Run) -> Optional[Dict[str, Any]]:
     if js is None and rdb is None:
         return None
     summary = _rdb_summary(rdb) or {"ok": False, "categories": []}
+    rdb_summary = summary
     counts = _read_json(js) if js else None
     if isinstance(counts, dict):
         # The JSON is the per-rule count LibreLane totals into the metric.
@@ -824,6 +825,11 @@ def _klayout_drc(run: _Run) -> Optional[Dict[str, Any]]:
         summary = {"ok": True, "rules": len(counts), "total": sum(v for v in counts.values()
                                                                  if isinstance(v, (int, float))),
                    "categories": rules[:_MAX_CATEGORIES], "more": max(0, len(rules) - _MAX_CATEGORIES)}
+        # The marker database is read too: its count can disagree with the
+        # per-rule JSON (an edited or stale report), and that must show.
+        if rdb_summary.get("ok") and rdb_summary.get("total") is not None:
+            summary["marker_total"] = rdb_summary["total"]
+            summary["marker_categories"] = rdb_summary.get("categories", [])
     summary["report"] = _rel(run.dir, js or rdb)
     summary["markers"] = _rel(run.dir, rdb)
     return summary
@@ -1159,6 +1165,127 @@ def _verdict(checks: List[Dict[str, Any]], flow: Dict[str, Any]) -> Dict[str, An
     }
 
 
+def _stage_of(step_id: Optional[str]) -> Optional[str]:
+    if not step_id:
+        return None
+    try:
+        from . import flowstages
+        return flowstages.listed_stage(step_id) or ("signoff" if step_id.startswith("Checker.") else None)
+    except Exception:
+        return None
+
+
+def _corner_words(corner: Optional[str]) -> str:
+    """``max_ss_100C_1v60`` -> ``the slow corner (max_ss_100C_1v60)``."""
+    if not corner:
+        return "one corner"
+    c = corner.lower()
+    kind = ("slow" if "_ss_" in c or c.startswith("ss") else "fast" if "_ff_" in c or c.startswith("ff")
+            else "typical" if "_tt_" in c or c.startswith("tt") else "")
+    return (f"the {kind} corner ({corner})" if kind else f"corner {corner}")
+
+
+def _timing_miss(run: "_Run") -> Optional[Dict[str, Any]]:
+    """The worst negative setup or hold slack STA reported in any corner, or
+    None. A run with negative slack is never called clean, even when
+    LibreLane only warns because the corner is outside
+    ``TIMING_VIOLATION_CORNERS``: the chip would miss its clock there."""
+    worst: Optional[Dict[str, Any]] = None
+    for kind in ("setup", "hold"):
+        base = f"timing__{kind}__ws"
+        vals = {c: _finite(v) for c, v in _by_corner(run.metrics, base).items()}
+        if not vals and _finite(run.metrics.get(base)) is not None:
+            vals = {None: _finite(run.metrics.get(base))}
+        for c, v in vals.items():
+            if v is not None and v < 0 and (worst is None or v < worst["ws"]):
+                worst = {"kind": kind, "ws": v, "corner": c}
+    return worst
+
+
+_STATE_BY_GROUP = {"rtl": "synthesis", "synth": "synthesis", "pnr": "routing",
+                   "timing": "signoff", "physical": "signoff"}
+
+
+def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, Any],
+                     v: Dict[str, Any], *, live: bool = False) -> Dict[str, Any]:
+    """The one run verdict every page shows (Runs, run bar, Analytics, Verify,
+    Compare, the default baseline): ``{state, label, stage?}`` plus counts.
+
+    It is Verify's verdict, mapped onto five states:
+    ``passed`` (Verify "ready"), ``failed`` (a check blocks the run, or a step
+    raised), ``stopped`` (the user stopped it, or LanEx closed mid-run),
+    ``running`` (the live run) and ``incomplete`` (nothing failed, but a core
+    check has no result: LVS or DRC turned off, a partial -T run)."""
+    outcome = (run.gui.get("outcome") or {}) if isinstance(run.gui.get("outcome"), dict) else {}
+    stop = flow.get("stopped_step") or None
+    out: Dict[str, Any] = {"checks_total": v["total"], "counts": v["counts"],
+                           "warnings": len(v["warning_ids"]), "blockers": len(v["blocker_ids"])}
+    if live:
+        last = flow.get("last_step") or {}
+        out.update(state="running", label="Running" + (f", step {last['n']}" if last.get("n") else ""))
+        st = _stage_of(last.get("id") or last.get("dir")) if last else None
+        if st:
+            out["stage"] = st
+        return out
+    if outcome.get("result") == "cancelled":
+        out.update(state="stopped", label=f"Stopped at step {stop['n']}" if stop else "Stopped")
+        st = _stage_of(stop.get("id") or stop.get("dir")) if stop else None
+        if st:
+            out["stage"] = st
+        return out
+    if v["state"] == "blocked":
+        k = len(v["blocker_ids"])
+        first = next(c for c in checks if c["status"] == _FAIL)
+        out.update(state="failed", label=f"{k} check{'s' if k != 1 else ''} failed")
+        out["stage"] = (_stage_of(first.get("step_id") or (first.get("checker") or {}).get("id"))
+                        or _STATE_BY_GROUP.get(first["group"]))
+        return out
+    if v["state"] == "stopped":
+        # A step began and never finished. LibreLane raised (error.log, or the
+        # GUI noted an error) -> failed; otherwise the run was cut off (LanEx or
+        # the PC closed mid-run): stopped, not a failure of the design.
+        raised = bool(flow.get("error_log")) or outcome.get("result") == "error"
+        n = stop["n"] if stop else None
+        out.update(state="failed" if raised else "stopped",
+                   label=(("Failed" if raised else "Stopped") + (f" at step {n}" if n else "")))
+        st = _stage_of(stop.get("id") or stop.get("dir")) if stop else None
+        if st:
+            out["stage"] = st
+        return out
+    if v["state"] == "incomplete" and not run.completed and not flow.get("partial"):
+        # No final/ and nothing raised: the flow ended early (cut off between
+        # two steps). Not a design failure, but not a finished run either.
+        last = flow.get("last_step") or {}
+        out.update(state="stopped", label="Stopped" + (f" after step {last['n']}" if last.get("n") else ""))
+        st = _stage_of(last.get("id") or last.get("dir")) if last else None
+        if st:
+            out["stage"] = st
+        return out
+    miss = _timing_miss(run)
+    if miss:
+        # LibreLane passed the run (it only enforces the corners in
+        # TIMING_VIOLATION_CORNERS), so LanEx does not call it failed; but the
+        # design misses its clock there, so never "clean" either: warning.
+        out.update(state="warning", stage="signoff", timing_miss={**miss, "where": _corner_words(miss["corner"])},
+                   label=f"Finished: timing misses in {_corner_words(miss['corner']).split(' (')[0]}"
+                         f" ({miss['kind']} {miss['ws']:.2f} ns)")
+        return out
+    if v["state"] == "incomplete":
+        out.update(state="incomplete", label="Not enough to call it")
+        return out
+    w = len(v["warning_ids"])
+    out.update(state="passed", label="Clean" + (f", {w} warning{'s' if w != 1 else ''}" if w else ""))
+    return out
+
+
+def run_verdict(run_dir: str | Path, *, live: bool = False) -> Dict[str, Any]:
+    """:func:`run_verdict_from` for one run folder (no report files parsed)."""
+    run = _Run(Path(run_dir).resolve())
+    checks = _checks(run)
+    flow = _flow_state(run)
+    return run_verdict_from(run, checks, flow, _verdict(checks, flow), live=live)
+
+
 def verify_report(run_dir: str | Path) -> Dict[str, Any]:
     """The signoff picture of one run, organised by flow stage.
 
@@ -1168,6 +1295,7 @@ def verify_report(run_dir: str | Path) -> Dict[str, Any]:
     run = _Run(Path(run_dir).resolve())
     checks = _checks(run)
     flow = _flow_state(run)
+    verdict = _verdict(checks, flow)
     by = {c["id"]: c for c in checks}
     groups = []
     for g in _GROUPS:
@@ -1187,6 +1315,24 @@ def verify_report(run_dir: str | Path) -> Dict[str, Any]:
             details[key] = fn(run)
         except Exception:
             details[key] = None
+    # A DRC report file that contradicts the metric LibreLane judged the run
+    # on ("0 errors" next to markers, or the reverse: an edited report, or one
+    # left from an earlier run) is said, with both sources. The check keeps
+    # the metric's verdict: it is what LibreLane decided on.
+    for key, mkey in (("magic_drc", "magic__drc_error__count"), ("klayout_drc", "klayout__drc_error__count")):
+        d = details.get(key)
+        mval = _finite(run.metrics.get(mkey))
+        if not isinstance(d, dict) or mval is None:
+            continue
+        rep_n = d.get("marker_total") if d.get("marker_total") is not None else d.get("total")
+        if isinstance(rep_n, (int, float)) and (mval == 0) != (rep_n == 0):
+            d["disagree"] = {"metric_key": mkey, "metric": mval,
+                             "metric_file": "final/metrics.json" if (run.dir / "final" / "metrics.json").is_file() else "metrics.json",
+                             "report": rep_n, "report_file": d.get("markers") or d.get("report")}
+            if by.get(key):
+                by[key]["note"] = ((by[key].get("note") or "") + " The report file lists " + str(int(rep_n)) +
+                                   (" marker" if rep_n == 1 else " markers") + " but the metric says " +
+                                   str(int(mval)) + ": they disagree.").strip()
     ir_m = {k: run.metrics.get(k) for k in ("ir__drop__worst", "ir__drop__avg", "ir__voltage__worst")
             if run.metrics.get(k) is not None}
     if ir_m:
@@ -1206,5 +1352,8 @@ def verify_report(run_dir: str | Path) -> Dict[str, Any]:
         "groups": groups,
         "stages": stages,
         "details": details,
-        "verdict": _verdict(checks, flow),
+        "verdict": verdict,
+        # The five-state verdict the run lists use (same source, so Verify and
+        # Runs can never disagree). "running" is decided by the caller.
+        "run_verdict": run_verdict_from(run, checks, flow, verdict),
     }
