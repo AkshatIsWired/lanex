@@ -586,7 +586,7 @@ function keyNumber(st) {
       return bb.length === 4 && bb.every(Number.isFinite) ? "die " + fmtUm(bb[2] - bb[0]) + " × " + fmtUm(bb[3] - bb[1]) + " µm" : "";
     }
     case "pdn": {
-      // The run's own net names (VPWR/VGND on sky130, VDD/VSS on gf180/IHP).
+      // The run's own net names (VPWR/VGND on sky130 and IHP, VDD/VSS on gf180).
       const pn = (F.rs && F.rs.power_nets) || {};
       const nets = [...(pn.vdd || []), ...(pn.gnd || [])];
       return st.status === "done" ? (nets.length ? nets.join(" / ") + " rails" : "power rails") : "";
