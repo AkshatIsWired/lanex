@@ -12,6 +12,7 @@ import { api, fmt } from "./api.js";
 import { icon } from "./icons.js";
 import * as FS from "./flowstages.js";
 import * as ctx from "./context.js";
+import { state } from "./state.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const _cache = new Map();          // tag -> { p: Promise, at }
@@ -76,12 +77,21 @@ export function fixListHtml(fixes, { tag, title } = {}) {
 }
 
 // A setting fix as one button that opens the sheet ("Slow the clock 1.5 → 2.4").
+// A setting's unit (LibreLane's variable catalogue: ns, %, µm…), or "".
+function unitOf(name) {
+  const v = (state.variables || []).find((x) => x.name === name);
+  const u = v && v.units ? String(v.units).trim() : "";
+  return u ? (u === "%" ? "%" : " " + u) : "";
+}
+
 export function fixChipHtml(f, { tag, title, primary = false } = {}) {
   if (f.kind !== "setting") return "";
+  const u = unitOf(f.var);
+  const withU = (x) => (x == null || x === "" ? "unset" : String(x) + (u && /^-?[\d.]+$/.test(String(x)) ? u : ""));
   return "<button class='px-chip" + (primary ? " is-primary" : "") + "' data-fix-tag='" + esc(tag) + "' data-fix-var='" + esc(f.var) +
     "' data-fix-to='" + esc(f.to) + "' data-fix-title='" + esc(title || "") + "' data-fix-why='" + esc(f.why || "") +
-    "' title='" + esc(f.var + ": " + (f.from || "unset") + " → " + f.to + ". " + (f.why || "") + " (" + resumeText(f.resume) + ")") + "'>" +
-    "<b>" + esc(f.label || f.var) + "</b><span class='px-chip-v'>" + esc(f.from || "unset") + " → " + esc(f.to) + "</span></button>";
+    "' title='" + esc(f.var + ": " + withU(f.from) + " → " + withU(f.to) + ". " + (f.why || "") + " (" + resumeText(f.resume) + ")") + "'>" +
+    "<b>" + esc(f.label || f.var) + "</b><span class='px-chip-v'>" + esc(withU(f.from)) + " → " + esc(withU(f.to)) + "</span></button>";
 }
 
 const ns = (v) => (typeof v === "number" ? (v < 0 ? "−" : "+") + Math.abs(v).toFixed(2) + " ns" : "");

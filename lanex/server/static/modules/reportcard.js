@@ -93,7 +93,7 @@ export function reportCardHtml(c) {
     kpi("Setup slack", n(m, "timing__setup__ws"), b && n(b, "timing__setup__ws"), { unit: "ns", signed: true, better: 1, tip: "Worst setup slack in any corner, after routing. Positive: the design meets its clock." }),
     kpi("Hold slack", n(m, "timing__hold__ws"), b && n(b, "timing__hold__ws"), { unit: "ns", signed: true, better: 1, tip: "Worst hold slack in any corner." }),
     dieKpi(m, b),
-    kpi("Power", n(m, "power__total"), b && n(b, "power__total"), { power: true, better: -1, tip: "Total power OpenROAD estimated (internal, switching and leakage)." }),
+    kpi("Power", n(m, "power__total"), b && n(b, "power__total"), { power: true, better: -1, tip: "Total power OpenSTA estimated in the OpenROAD.STAPostPNR step (internal, switching and leakage), with default switching activity." }),
     kpi("Wire", n(m, "route__wirelength"), b && n(b, "route__wirelength"), { wire: true, better: -1, tip: "Total routed wire length." }),
     kpi("Run time", secs || null, bsecs || null, { time: true, better: -1, tip: "The sum of every step's time" +
       (c.steps.some((s) => s.from) ? ", without the steps it reused from the run it was resumed from." : ".") }),
