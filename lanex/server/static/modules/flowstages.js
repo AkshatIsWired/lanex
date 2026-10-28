@@ -55,6 +55,21 @@ export function listedStage(idOrDir) {
 export function stage(id) { return BY_ID[id] || null; }
 export function stageLabel(id) { return (BY_ID[id] || {}).label || id || ""; }
 
+// One step-count meaning for every place that shows one (Flow's header and
+// Steps list, the status bar, the window title, run summaries): steps the
+// run's config turned off ("skipped") are not part of the total; a step
+// reused from the parent run is done. -> {done, total, skipped, current}
+// where current is the 1-based number of the step running now.
+export function stepCounts(statuses) {
+  let done = 0, skipped = 0;
+  for (const s of statuses) {
+    if (s === "skipped") skipped++;
+    else if (s === "done") done++;
+  }
+  const total = statuses.length - skipped;
+  return { done, total, skipped, current: Math.min(done + 1, Math.max(total, 1)) };
+}
+
 // Each step of an ordered list with its stage id (unlisted steps inherit).
 export function stagesOf(steps, key = (s) => s.id || s.dir) {
   let cur = STAGES[0].id;

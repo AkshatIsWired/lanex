@@ -1189,6 +1189,26 @@ check("layout: one Layout tab; Preview is gone everywhere", () => {
 // ---------- P0 glue: one context, links, stages, keys --------------------------------
 const FS = await import(toUrl(resolve(MOD, "flowstages.js")));
 
+check("steps: one count meaning (turned-off steps out of the total, current = done + 1)", () => {
+  const st = [...Array(76).fill("done"), "skipped", "skipped", "skipped", "skipped"];
+  assert.deepEqual(FS.stepCounts(st), { done: 76, total: 76, skipped: 4, current: 76 });
+  const live = ["done", "done", "skipped", "running", "pending"];
+  assert.deepEqual(FS.stepCounts(live), { done: 2, total: 4, skipped: 1, current: 3 });
+});
+
+// The run bar never guesses pass/fail for a verdict state it doesn't know.
+{
+  {
+    const RB = await import(toUrl(resolve(MOD, "runbar.js")));
+    check("run bar: verdict states map to words; unknown state is amber", () => {
+      assert.equal(RB.verdictWord({ verdict: { state: "warning", label: "x" } }).cls, "warn");
+      assert.equal(RB.verdictWord({ verdict: { state: "stopped" } }).cls, "warn");
+      assert.equal(RB.verdictWord({ verdict: { state: "brand-new", label: "Odd" } }).cls, "warn");
+      assert.equal(RB.verdictWord({ success: true }).cls, "pass");
+    });
+  }
+}
+
 check("stages: seven, in flow order, one name for each on every page", () => {
   assert.deepEqual(FS.STAGES.map((s) => s.label),
     ["Synthesis", "Floorplan", "Power grid", "Placement", "Clock tree", "Routing", "Sign-off"]);

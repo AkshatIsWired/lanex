@@ -50,10 +50,10 @@ export function runProgress() {
 function current() {
   const ids = (state.pipeline || []).map((p) => p.id);
   const st = state.stepStatuses || {};
-  const done = ids.filter((id) => st[id] === "done" || st[id] === "skipped").length;
+  const n = FS.stepCounts(ids.map((id) => st[id]));
   const cur = [...ids].reverse().find((id) => st[id] === "running");
   const stage = cur ? FS.stagesOf(ids.map((id) => ({ id })))[ids.indexOf(cur)] : null;
-  return { ids, done, total: ids.length, cur, stage };
+  return { ids, done: n.done, total: n.total, cur, stage };
 }
 
 function paintTitle() {
