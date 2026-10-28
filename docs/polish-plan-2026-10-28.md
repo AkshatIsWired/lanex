@@ -202,3 +202,5 @@ after a server restart without a reload, the server forgets the active project.
 
 Tests after the pass: frontend 133 checks; pytest only the 8 known environment
 failures.
+Test build: pre-release `windows-test-2026-10-29` (built from 35ffae7, SHA-256
+`285f9e83…4600bab95`); app changes only, installer unchanged, not VM-checked.
