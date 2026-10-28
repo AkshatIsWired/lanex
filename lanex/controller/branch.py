@@ -341,12 +341,8 @@ def progress(lineage: List[Dict[str, Any]], step_ids: List[str]) -> Dict[str, An
 # ------------------------------------------------------------------ the plan
 
 def _new_tag(runs_dir: Path, parent: str) -> str:
-    import time
-    base = time.strftime("glui-%Y%m%d-%H%M%S")
-    tag, n = base, 2
-    while (runs_dir / tag).exists():
-        tag, n = f"{base}-{n}", n + 1
-    return tag
+    from .platform_env import new_run_tag
+    return new_run_tag(runs_dir)
 
 
 def plan(design_dir: str | Path, tag: str, sets: Optional[Dict[str, Any]] = None, *,

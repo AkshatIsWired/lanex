@@ -13,7 +13,10 @@ async function _fetch(path, init) {
   init = init || {};
   const headers = Object.assign({
     "Content-Type": "application/json",
-    "X-Requested-With": "XMLHttpRequest"
+    "X-Requested-With": "XMLHttpRequest",
+    // The browser's UTC offset (minutes east): the distro's clock is UTC, and
+    // run names should read in the person's own time.
+    "X-LanEx-UTC-Offset": String(-new Date().getTimezoneOffset())
   }, init.headers || {});
   // Per-call AbortController + timeout (init.timeout overrides; timeout: 0
   // disables the abort entirely; init.signal still honoured).

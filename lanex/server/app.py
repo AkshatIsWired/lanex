@@ -326,6 +326,10 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
 
         path = self.path.split("?", 1)[0]
         _note_page_activity(path)
+        if self.headers.get("X-LanEx-UTC-Offset") is not None:
+            # The browser's time zone, for run names in local time.
+            from ..controller.platform_env import note_client_utc_offset
+            note_client_utc_offset(self.headers.get("X-LanEx-UTC-Offset"))
 
         # Rate limit install endpoints
         if "/install" in path:

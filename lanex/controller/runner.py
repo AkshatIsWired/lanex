@@ -606,7 +606,7 @@ class FlowRunner:
                 return
             result = "cancelled" if done.get("cancelled") else ("error" if done.get("error") else "ok")
             meta["outcome"] = {"result": result, "error": done.get("error") or None,
-                               "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+                               "ended_at": platform_env.local_now().isoformat(timespec="seconds")}
             platform_env.atomic_write_text(path, _json.dumps(_safe_jsonable(meta), indent=2) + "\n")
         except Exception:  # pragma: no cover - fs/permission dependent
             _log.debug("could not note the run outcome", exc_info=True)
@@ -631,7 +631,8 @@ class FlowRunner:
             meta = dict(self._gui_meta)
             meta.setdefault("tag", run_dir.name)
             meta["run_dir"] = str(run_dir)
-            meta["written_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            from . import platform_env as _pe
+            meta["written_at"] = _pe.local_now().isoformat(timespec="seconds")
             # Stamp the toolchain identity (LanEx/LibreLane versions + container
             # image) so an export or reproduce can prove which tools produced
             # these numbers — the "would I get the same manually?" contract.
@@ -955,7 +956,8 @@ class FlowRunner:
                 raise ValueError("no config file to run")
             # We set --run-tag ourselves so the run dir is known up front.
             if not tag:
-                tag = time.strftime("glui-%Y%m%d-%H%M%S")
+                from .platform_env import new_run_tag
+                tag = new_run_tag(design_dir / "runs")
             self._run_dir = str(design_dir / "runs" / tag)
 
             step_ids: List[str] = []
@@ -1117,7 +1119,8 @@ class FlowRunner:
             if not config_files:
                 raise ValueError("no config file to run")
             if not tag:
-                tag = time.strftime("glui-%Y%m%d-%H%M%S")
+                from .platform_env import new_run_tag
+                tag = new_run_tag(design_dir / "runs")
             self._run_dir = str(design_dir / "runs" / tag)
 
             step_ids: List[str] = []
