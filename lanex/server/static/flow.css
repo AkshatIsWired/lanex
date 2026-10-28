@@ -28,10 +28,17 @@
 .fl-sep { color: var(--text-disabled); font-weight: 400; margin: 0 4px; }
 .fl-vs { margin-left: 10px; color: var(--text-muted); letter-spacing: 0.08em; }
 .fl-live-dot {
-  display: inline-block; width: 8px; height: 8px; margin-right: 8px; vertical-align: 1px;
-  background: var(--accent); box-shadow: 0 0 0 0 var(--accent-glow); animation: fl-pulse 1.4s ease-out infinite;
+  position: relative; isolation: isolate; display: inline-block; width: 8px; height: 8px; margin-right: 8px; vertical-align: 1px;
 }
-@keyframes fl-pulse { 0% { box-shadow: 0 0 0 0 var(--accent-glow); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+/* The dot (::before) and the glow that grows out from under it (::after): a
+   scaled, fading square on its own layer. Transform and opacity run on the
+   compositor; the animated box-shadow restyled and repainted every frame. */
+.fl-live-dot::before { content: ""; position: absolute; inset: 0; z-index: 1; background: var(--accent); }
+.fl-live-dot::after {
+  content: ""; position: absolute; inset: 0; background: var(--accent-glow); opacity: 0;
+  will-change: transform, opacity; animation: fl-pulse 1.4s ease-out infinite;
+}
+@keyframes fl-pulse { 0% { transform: scale(1); opacity: 1; } 70% { transform: scale(2.75); opacity: 0; } 100% { transform: scale(1); opacity: 0; } }
 .fl-bar { height: 4px; margin-top: var(--s-4); background: var(--surface-2); border-radius: 2px; overflow: hidden; max-width: 760px; }
 .fl-bar > span { display: block; width: 100%; height: 100%; transform-origin: left center; background: linear-gradient(90deg, var(--accent), var(--met1)); transition: transform var(--dur-3) var(--ease-out); }
 .fl-h-slow { margin: 4px 0 0; font-size: 13px; }
@@ -171,7 +178,7 @@ button.fl-tile:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(-
   position: absolute; top: 6px; left: 8px; font-size: 12px; color: var(--met1);
   background: color-mix(in srgb, var(--bg) 70%, transparent); padding: 1px 5px; border-radius: 2px;
 }
-.fl-tile.is-running .fl-pic-n { color: var(--met1); animation: fl-breathe 1.6s ease-in-out infinite; }
+.fl-tile.is-running .fl-pic-n { color: var(--met1); animation: fl-breathe 1.6s ease-in-out infinite; will-change: opacity; }
 @keyframes fl-breathe { 50% { opacity: 0.45; } }
 .fl-tile-txt { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 10px; min-width: 0; }
 .fl-tile-h { display: flex; align-items: center; gap: 7px; min-width: 0; }
@@ -181,8 +188,8 @@ li.fl-tile .fl-tile-sub { color: var(--text-muted); }
 .fl-tile-time { display: flex; flex-wrap: wrap; gap: 0 8px; font-family: var(--mono); font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .fl-was { color: var(--text-disabled); }
 .fl-was.is-slow { color: var(--warn); }
-.vf-mark.is-run { background: var(--accent); animation: fl-breathe 1.2s ease-in-out infinite; border-radius: 2px; }
-@media (prefers-reduced-motion: reduce) { .fl-live-dot, .fl-tile.is-running .fl-pic-n, .vf-mark.is-run { animation: none; } }
+.vf-mark.is-run { background: var(--accent); animation: fl-breathe 1.2s ease-in-out infinite; border-radius: 2px; will-change: opacity; }
+@media (prefers-reduced-motion: reduce) { .fl-live-dot, .fl-live-dot::after, .fl-tile.is-running .fl-pic-n, .vf-mark.is-run { animation: none; } }
 
 /* ---------- body: every step | the output, two panes of one height ---------- */
 .fl-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--fl-gap); }
