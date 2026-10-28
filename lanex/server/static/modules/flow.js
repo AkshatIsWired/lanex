@@ -263,6 +263,16 @@ function model() {
       steps[i].secs = disk.get(steps[i].id)?.runtime_s ?? null;
     }
   }
+  // Number each step as its run folder is numbered (NN-step-id), the number
+  // Verify, the failure card and the folder use. A step with no folder yet gets
+  // the number it will have if nothing more is skipped; a skipped step has no
+  // folder and no number.
+  let next = 1;
+  for (const s of steps) {
+    const n = Number(s.n);
+    if (s.n != null && Number.isFinite(n)) { s.no = n; next = n + 1; }
+    else s.no = s.status === "skipped" ? null : next++;
+  }
   // Metrics as of the end of each step (the server sends what changed).
   let acc = {};
   for (const s of steps) { if (s.changed) acc = { ...acc, ...s.changed }; s.metrics = acc; }
@@ -641,6 +651,8 @@ function paintSteps(steps, stages) {
       el.className = cls; el.firstChild.className = "vf-mark is-" + (MARK[s.status] || "not_run");
       el.title = s.from ? "From " + s.from + ": this run started after it" : "";
     }
+    const no = stepNo(s), noEl = el.querySelector(".fl-step-no");
+    if (noEl && noEl.textContent !== no) noEl.textContent = no;
     const time = s.from ? "reused" : s.status === "skipped" ? "skipped" : s.status === "not_run" || s.status === "pending" ? "" : s.secs != null ? fmtDur(s.secs) : "";
     if (el.lastChild.textContent !== time) el.lastChild.textContent = time;
   }
@@ -670,7 +682,7 @@ function paintSteps(steps, stages) {
   const now = $("fl-now");
   const off = !!running && !F.follow;
   now.hidden = !off;
-  if (off) setHTML(now, icon("chevron", { size: 12 }) + " Now: " + esc(two(running.i + 1) + " · " + stepLabel(running.id)));
+  if (off) setHTML(now, icon("chevron", { size: 12 }) + " Now: " + esc(stepNo(running) + " · " + stepLabel(running.id)));
   // A link to a step or stage (revealInFlow), once its row is there.
   const r = F.reveal;
   const target = r && (r.step ? F.rows.get(r.step) : F.heads.get(r.stage));
@@ -680,11 +692,14 @@ function paintSteps(steps, stages) {
   }
 }
 
+// The step's run-folder number ("–" for a step the run skipped).
+function stepNo(s) { return s.no != null ? two(s.no) : "–"; }
+
 function rowHtml(s) {
   const tool = s.id.split(".")[0];
   return "<button class='fl-step' data-step='" + esc(s.id) + "'>" +
     "<span class='vf-mark'></span>" +
-    "<span class='fl-step-no'>" + two(s.i + 1) + "</span>" +
+    "<span class='fl-step-no'>" + stepNo(s) + "</span>" +
     "<span class='fl-step-name'>" + esc(stepLabel(s.id)) + "</span>" +
     "<span class='fl-step-tool' style='--tool:" + (TOOL[tool] || "var(--text-muted)") + "'>" + esc(TOOL_LABEL[tool] || tool) + "</span>" +
     "<span class='fl-step-time'></span></button>";
@@ -761,7 +776,7 @@ function stepMetaHtml(s) {
   const src = (F.src && [...(F.src.stages || []), ...(F.src.steps || [])].find((x) => x.step === s.dir)) || null;
   const odb = s.dir && /^(OpenROAD|Odb)\./.test(s.id) && s.status === "done" && F.rs && F.rs.design_name ? s.dir + "/" + F.rs.design_name + ".odb" : "";
   return "<button class='fl-id' data-fl='copy-id' data-id='" + esc(s.id) + "' title='Copy the step ID'>" + esc(s.id) + " " + icon("file", { size: 11 }) + "</button>" +
-    "<span>" + esc(FS.stageLabel(s.stage)) + " · step " + (s.i + 1) + "</span>" +
+    "<span>" + esc(FS.stageLabel(s.stage)) + (s.no != null ? " · step " + s.no : " · skipped") + "</span>" +
     (s.secs != null && s.status !== "running" ? "<span>" + fmtDur(s.secs) + (bs && bs.runtime_s ? " <span class='muted'>(was " + fmtDur(bs.runtime_s) + ")</span>" : "") + "</span>" : "") +
     (s.peak ? "<span>" + Math.round(s.peak) + " MiB peak</span>" : "") +
     "<span class='fl-insp-acts'>" +
