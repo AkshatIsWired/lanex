@@ -365,7 +365,10 @@ function paintLastRun(facts) {
   if (!el) return;
   const last = facts && facts.last_run;
   if (!facts || !facts.runs || !last) { el.innerHTML = "No runs yet."; return; }
-  el.innerHTML = "Last run " + (last.finished ? "finished" : "didn't finish") + " " + fmt.escape(ago(last.at)) +
+  // The newest folder of a run still going has no final/ yet: that is not
+  // "didn't finish".
+  const going = state.status && state.status.running;
+  el.innerHTML = (going ? "A run is going now" : "Last run " + (last.finished ? "finished" : "didn't finish") + " " + fmt.escape(ago(last.at))) +
     " · <button type='button' class='linklike' data-open='runs'>" +
     (facts.runs === 1 ? "View it" : "View all " + facts.runs + " runs") + "</button>";
 }
