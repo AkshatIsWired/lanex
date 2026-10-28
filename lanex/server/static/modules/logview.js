@@ -177,7 +177,11 @@ export class LogView {
     const eb = this.$("[data-lv=err]"), wb = this.$("[data-lv=warn]");
     eb.hidden = !e; wb.hidden = !w;
     eb.textContent = e + (e === 1 ? " error" : " errors");
-    wb.textContent = w + (w === 1 ? " warning" : " warnings");
+    // Lines of this log marked WARNING (a tool can print one warning on
+    // several lines, or repeat it); the run's warning count elsewhere is
+    // LibreLane's warning.log, one entry per warning, so the words differ.
+    wb.textContent = w + (w === 1 ? " warning line" : " warning lines");
+    wb.title = "Next warning. Counts the lines of this log marked as a warning; the run's warning count (from warning.log) lists each warning once.";
     const n = this.lines.length, shown = this.view.length;
     const lines = (k) => k.toLocaleString("en-US") + (k === 1 ? " line" : " lines");
     this.$(".lv-count").textContent = shown === n ? lines(this._n || n) : shown.toLocaleString("en-US") + " of " + lines(this._n || n);
