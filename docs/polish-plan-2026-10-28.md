@@ -113,8 +113,6 @@ raw run files, a code review of the whole diff) and fixed in four more rounds.
 - Tests: frontend 110 checks; pytest 1151 passed, the 8 known environment failures.
 
 Open after this pass:
-- The folder picker over the New project wizard (fix in progress at the end of the pass;
-  check it).
 - Sweeps recorded before this pass keep a `created_at` without a UTC offset.
 - LibreLane's own log timestamps are UTC (its text, not LanEx's).
 - Resume is not blocked while a project folder is missing.
