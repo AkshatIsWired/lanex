@@ -995,6 +995,13 @@ check("tools: Copy diagnostics carries versions, digest, PDKs, PDK_ROOT and host
   assert.ok(toolsModule.diagnosticsText(info).includes("CUSTOM image in use"));
 });
 
+check("tools: PDK family fallback knows IHP", () => {
+  assert.equal(toolsModule.pdkFamily({}, "ihp-sg13g2"), "ihp-sg13g2");
+  assert.equal(toolsModule.pdkFamily({}, "sg13g2"), "ihp-sg13g2");
+  assert.equal(toolsModule.pdkFamily({}, "gf180mcuD"), "gf180mcu");
+  assert.equal(toolsModule.pdkFamily({ x: { family: "fam" } }, "x"), "fam");
+});
+
 check("jumpnav: an unscrolled page never highlights its last section", () => {
   const src = readFileSync(resolve(MOD, "jumpnav.js"), "utf8");
   assert.match(src, /root\.scrollTop > 0 && root\.scrollTop \+ root\.clientHeight >= root\.scrollHeight - 2/,

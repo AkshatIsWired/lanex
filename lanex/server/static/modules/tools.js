@@ -1179,7 +1179,7 @@ export function renderPdkStore(info) {
     btn.addEventListener("click", async () => {
       const pdk = btn.dataset.pdk;
       closeMenus();
-      const family = (catalog[pdk] && catalog[pdk].family) || (pdk.startsWith("sky130") ? "sky130" : pdk.startsWith("gf180mcu") ? "gf180mcu" : pdk);
+      const family = pdkFamily(catalog, pdk);
       const siblings = [...installed].filter((x) => pdkFamily(catalog, x) === family);
       if (!(await confirmDialog({ title: "Remove the " + family + " PDK", danger: true, confirmText: "Remove " + family,
         body: "Removes every installed version of the " + family + " family from disk: " + (siblings.join(", ") || pdk) +
@@ -1195,12 +1195,12 @@ export function renderPdkStore(info) {
           if (state.tools?.pdk) {
             const removedFamily = result.family || family;
             state.tools.pdk.installed_pdks = (state.tools.pdk.installed_pdks || []).filter((x) => {
-              const xFam = (catalog[x] && catalog[x].family) || (x.startsWith("sky130") ? "sky130" : x.startsWith("gf180mcu") ? "gf180mcu" : x);
+              const xFam = pdkFamily(catalog, x);
               return xFam !== removedFamily;
             });
             if (state.tools.pdk.installed_sizes_mb) {
               for (const k of Object.keys(state.tools.pdk.installed_sizes_mb)) {
-                const kFam = (catalog[k] && catalog[k].family) || (k.startsWith("sky130") ? "sky130" : k.startsWith("gf180mcu") ? "gf180mcu" : k);
+                const kFam = pdkFamily(catalog, k);
                 if (kFam === removedFamily) delete state.tools.pdk.installed_sizes_mb[k];
               }
             }
