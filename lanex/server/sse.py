@@ -132,7 +132,10 @@ class ISSEHandler:
             self.request_handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.request_handler.send_header("Cache-Control", "no-store")
             self.request_handler.send_header("X-Accel-Buffering", "no")
-            self.request_handler.send_header("Connection", "keep-alive")
+            # The stream has no length: it ends when the connection does, so
+            # the (HTTP/1.1, otherwise kept-alive) connection is not reused.
+            self.request_handler.send_header("Connection", "close")
+            self.request_handler.close_connection = True
             self.request_handler.end_headers()
         except Exception:
             return

@@ -72,6 +72,8 @@ IMPLICATIONS: Dict[str, str] = {
     "test_projectfiles": "New project files (modules, testbenches, SDC, pin order) are valid for LibreLane (pin files pass its own parser, every port matched once) and point the config at themselves.",
     "test_project_shell": "Projects land in a space-free folder, Windows paths are accepted, and only LanEx's own project folders can be deleted.",
     "test_server": "HTTP routing, CSRF, and traversal confinement hold (no arbitrary file read).",
+    "test_perf_server": "The fast paths (pruned folder walks, cached run summaries and tool probes, bounded library cache) give exactly the answers the slow ones gave.",
+    "test_perf_transport": "Kept-alive connections, gzip and 304s never garble or stall an answer: every answer type leaves the connection usable or closes it.",
     "test_tools": "Tool/engine detection is accurate and its probes can't hang the UI.",
     "test_fsbrowser": "The file browser stays confined to allowed roots (no path traversal).",
     "test_presence": "Closing the last LanEx window quits LanEx, but a window that only went quiet (sleep, Wi-Fi, a frozen background tab) keeps it running: its heartbeat counts until it says goodbye.",
