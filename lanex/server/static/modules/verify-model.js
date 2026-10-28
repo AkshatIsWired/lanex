@@ -106,7 +106,7 @@ export const HELP = {
     fix: ["Set RUN_EQY to true in your config to run it."],
   },
   pdn: {
-    what: "OpenROAD checks that every cell's power and ground pins reach the power grid (VPWR/VGND on sky130, VDD/VSS on gf180 and IHP).",
+    what: "OpenROAD checks that every cell's power and ground pins reach the power grid (VPWR/VGND on sky130 and IHP, VDD/VSS on gf180).",
     why: "A cell with no power doesn't work. LibreLane's own note: you may ignore this if LVS passes, because LVS checks power connections too.",
     fix: ["Check the power-grid settings (PDN_VPITCH, PDN_HPITCH, PDN_CFG) suit your die size; a very small die can leave cells between straps.",
       "Macros need PDN_CONNECT_MACROS_TO_GRID (on by default) and the right power pin names."],
