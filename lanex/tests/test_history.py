@@ -144,6 +144,7 @@ def _make_final(root: Path, tag: str = "RUN_FINAL"):
         "design__instance__utilization": 0.572805,
         "design__instance__count": 1489,
         "design__instance__area": 8051.47,
+        "design__instance__area__stdcell": 4547.1,
         "power__total": 0.00153,
         "route__wirelength": 6216,
         "timing__setup__ws": float("inf"),
@@ -175,6 +176,9 @@ def test_design_summary_has_key_stats(tmp_path: Path):
     assert by_label["Die size"]["value"] == "101.16 × 111.88"
     assert by_label["Utilization"]["value"] == 57.3        # ratio -> percent
     assert by_label["Cell count"]["value"] == 1489
+    # The std-cell area is its own row; the instance area includes fill.
+    assert by_label["Std-cell area"]["value"] == 4547.1
+    assert by_label["Cell area (with fill)"]["value"] == 8051.47
     assert by_label["I/O pins"]["value"] == 36             # buses expanded
     assert by_label["I/O ports"]["value"] == 5
     # Status flags: clean LVS passes, non-zero DRC fails.

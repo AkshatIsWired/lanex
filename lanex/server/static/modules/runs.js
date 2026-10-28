@@ -441,7 +441,9 @@ function cellHtml(c, r, base) {
     }
   }
   const neg = (c.id === "wns" || c.id === "tns" || c.id === "hold") && v < 0 ? " is-neg" : "";
-  return "<td class='rn-c-" + c.id + " is-num" + cls + neg + "' title='" + esc(c.label + ": " + v + (c.unit ? " " + c.unit : "") + delta) + "'>" + esc(c.f ? c.f(v) : v) + "</td>";
+  // The tooltip has more digits than the cell, not all sixteen of the float.
+  const exact = c.id === "runtime" ? fmtDur(v) : String(Number(v.toPrecision(6))) + (c.unit ? " " + c.unit : "");
+  return "<td class='rn-c-" + c.id + " is-num" + cls + neg + "' title='" + esc(c.label + ": " + exact + delta) + "'>" + esc(c.f ? c.f(v) : v) + "</td>";
 }
 const short = (s) => { s = String(s ?? "—"); return s.length > 14 ? s.slice(0, 13) + "…" : s; };
 
