@@ -1,4 +1,9 @@
-// tools.js — the Tools tab: show EDA tool status, install buttons.
+// tools.js — the Tools tab: the component manager. One dense row per component
+// (flow engine, LibreLane image, PDKs, viewers, helpers, the local toolchain):
+// status chip | what it is | installed vs tested version | size | one action,
+// with destructive actions behind a "More" menu. Shell-only installs depend on
+// this page to install, update, repair and remove everything, so every action
+// the old cards had is still here.
 
 import { api, fmt } from "./api.js";
 import { state } from "./state.js";
@@ -12,6 +17,8 @@ import { confirmDialog } from "./dialog.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 
+const esc = (s) => fmt.escape(s == null ? "" : String(s));
+
 export function normalizeUnavailableLibraries(value) {
   if (Array.isArray(value)) {
     return Object.fromEntries(
@@ -22,6 +29,17 @@ export function normalizeUnavailableLibraries(value) {
   return {};
 }
 
+// PDK family of a catalog key. The catalog says it; the fallback knows the
+// three families LibreLane ships hashes for.
+export function pdkFamily(catalog, key) {
+  const fam = catalog && catalog[key] && catalog[key].family;
+  if (fam) return fam;
+  if (key.startsWith("sky130")) return "sky130";
+  if (key.startsWith("gf180mcu")) return "gf180mcu";
+  if (key.startsWith("ihp") || key.includes("sg13g2")) return "ihp-sg13g2";
+  return key;
+}
+
 async function loadPdkRoot() {
   const input = document.getElementById("pdk-root-input");
   if (!input) return;
@@ -29,29 +47,100 @@ async function loadPdkRoot() {
     const rootInfo = await api.getPdkRoot();
     if (rootInfo && rootInfo.ok && rootInfo.pdk_root) {
       input.value = rootInfo.pdk_root;
+      _pdkRoot = rootInfo.pdk_root;
     }
   } catch (ex) {
     console.warn("Failed to load PDK root:", ex);
   }
 }
+let _pdkRoot = "";
 
+// ------------------------------------------------------------------ rows
+// One component row. `r`: { id, name, purpose, warn, status, chip, have, want,
+// size, action (html), menu ([{html}]), sub (html under the row), inst }.
+const CHIP = {
+  ready: "Ready", update: "Update available", missing: "Missing", broken: "Broken",
+  custom: "Custom", off: "Not installed", busy: "Working", image: "In image",
+};
+const PROBLEM = new Set(["missing", "broken", "custom"]);
+
+export function rowHtml(r) {
+  const st = r.status || "off";
+  const chip = r.chip || CHIP[st] || st;
+  const menu = (r.menu || []).filter(Boolean);
+  return (
+    "<div class='tl-row" + (PROBLEM.has(st) ? " is-problem" : "") + "' id='" + esc(r.id) + "' data-status='" + st + "'" +
+      " data-inst='" + (r.inst ? "1" : "0") + "'>" +
+      "<span class='tl-chip is-" + st + "'><span class='d'></span>" + esc(chip) + "</span>" +
+      "<div class='tl-what'><div class='tl-name' data-name='" + esc(r.label || '') + "'>" + r.name + "</div>" +
+        "<div class='tl-purpose' title='" + esc(r.purposeTitle || "") + "'>" + (r.purpose || "") + "</div>" +
+        (r.warn ? "<div class='tl-warn'>" + icon("alert", { size: 12 }) + " " + r.warn + "</div>" : "") +
+      "</div>" +
+      "<div class='tl-ver'>" + verHtml(r.have, r.want, r.wantLabel) + "</div>" +
+      "<div class='tl-size'>" + esc(r.size || "") + "</div>" +
+      "<div class='tl-acts'>" + (r.action || "<span class='tl-act tl-act-none'></span>") +
+        (menu.length
+          ? "<details class='tl-more'><summary class='tl-more-btn' title='More actions' aria-label='More actions'>" +
+              "<svg viewBox='0 0 24 24' width='16' height='16' fill='currentColor' aria-hidden='true'><circle cx='5' cy='12' r='1.6'/><circle cx='12' cy='12' r='1.6'/><circle cx='19' cy='12' r='1.6'/></svg>" +
+            "</summary><div class='tl-menu'>" + menu.join("") + "</div></details>"
+          : "<span class='tl-more-gap'></span>") +
+      "</div>" +
+      (r.sub ? "<div class='tl-sub'>" + r.sub + "</div>" : "") +
+    "</div>"
+  );
+}
+
+function verHtml(have, want, wantLabel = 'tested') {
+  if (!have && !want) return "<span class='muted'>—</span>";
+  return (have ? "<span class='tl-have' title='" + esc(have) + "'>" + esc(have) + "</span>" : "<span class='muted'>not installed</span>") +
+    (want ? "<span class='tl-want' title='" + (wantLabel === 'tested' ? 'The version this LanEx release was tested with' : 'The oldest version LibreLane supports') + "'>" + esc(wantLabel) + " " + esc(want) + "</span>" : "");
+}
+
+// Every action button is the same size; the label says what it does.
+function act(label, cls, attrs = "", { primary = false, title = "" } = {}) {
+  return "<button class='btn btn-sm tl-act " + (primary ? "btn-primary " : "btn-ghost ") + cls + "' " + attrs +
+    (title ? " title='" + esc(title) + "'" : "") + ">" + esc(label) + "</button>";
+}
+function menuItem(label, cls, attrs = "", { danger = false } = {}) {
+  return "<button class='tl-menu-item" + (danger ? " is-danger" : "") + " " + cls + "' " + attrs + ">" + esc(label) + "</button>";
+}
+const checkAct = () => act("Check", "tl-check", "", { title: "Probe this component again" });
+
+// "Verilator 5.020 2024-01-01 rev (Debian…)" -> "5.020"
+export function shortVersion(v) {
+  if (!v) return "";
+  const m = String(v).match(/\d+\.\d+(?:\.\d+)?/);
+  return m ? m[0] : String(v).slice(0, 24);
+}
+const shortHash = (h) => (h ? String(h).replace(/^sha256:/, "").slice(0, 8) : "");
+
+function sizeStr(mb, { approx = false } = {}) {
+  if (mb == null) return "";
+  const s = mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : Math.round(mb) + " MB";
+  return (approx ? "~" : "") + s;
+}
+
+// ------------------------------------------------------------------ render
 export async function renderTools(fresh) {
   const root = document.getElementById("tools-grid");
   if (!root) return;
   wireJump(document.getElementById("sec-tools"));   // static section-jump nav (§6.6)
+  wireStatic();
 
   // Fetch/populate PDK root independently so a separate section cannot leave it blank
   loadPdkRoot();
 
   let info;
   try {
-    // fresh=true (the Recheck button) bypasses the server's 8s status caches —
+    // fresh=true (Check / Check all) bypasses the server's 8s status caches —
     // a probe cached moments before the user fixed the engine reads as broken.
     info = await api.tools(fresh);
     state.tools = info;
   } catch (ex) {
     // Only API probe failures display "Tool probe failed" and use host-only fallback
     renderDesktopViewers(null);
+    const sum = document.getElementById("tools-summary");
+    if (sum) sum.innerHTML = "<div class='tl-sum is-fail'><strong>Tool probe failed</strong><span>" + esc(ex.message) + "</span></div>";
     root.innerHTML =
       "<div class='empty'><span class='ico'>" + icon('alert',{size:40}) + "</span><h3>Tool probe failed</h3><p>" + fmt.escape(ex.message) + "</p></div>";
     return;
@@ -62,18 +151,20 @@ export async function renderTools(fresh) {
   } catch (ex) {
     console.error("Tools page render error:", ex);
   }
+  revealItem();
 }
 
 let _desktopViewersSeq = 0;
 
-// Desktop layout viewers (KLayout / Magic): status only. Both ship in the
-// LibreLane container image; the Layout tab launches whichever are installed on
-// the run's GDS. The 3D viewer GDS3D lives in the Recommended extra tools group.
+// Desktop layout viewers (KLayout / Magic / OpenROAD GUI) as rows. Both KLayout
+// and Magic ship in the LibreLane container image; the Layout tab launches
+// whichever is installed on the run's GDS. GDS3D's row is painted with the
+// helpers' install logic (renderRecommendedTools) into #viewer-gds3d.
 //
-// The badge must report BOTH ways a viewer can be usable. `api.desktopTools()`
+// The status must report BOTH ways a viewer can be usable. `api.desktopTools()`
 // only probes HOST binaries, so a container-only KLayout/Magic — the normal
 // appliance setup, where the Layout tab happily launches them from the image —
-// read "not found" while plainly working. So fall back to the same
+// would read missing while plainly working. So fall back to the same
 // `in_container` + image-pulled facts the tool grid uses (`info` from
 // `api.tools()`; null when that probe failed, host-only then).
 export async function renderDesktopViewers(info) {
@@ -87,27 +178,47 @@ export async function renderDesktopViewers(info) {
   const cont = (info && info.container) || {};
   const contReady = !!(cont.ready && cont.image_present);
   const byToolKey = Object.fromEntries(((info && info.tools) || []).map((t) => [t.key, t]));
-  const badge = (key) => {
-    if (byKey[key] && byKey[key].available)
-      return "<span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span>";
-    const t = byToolKey[key];
-    if (t && t.in_container && contReady)
-      return "<span class='pill pill-pass' title='Included in the LibreLane container image. The Layout tab launches it directly.'><span class='d'></span><span class='text'>in container image</span></span>";
-    return "<span class='pill pill-warn'><span class='d'></span><span class='text'>not found</span></span>";
+  const row = (key, name, purpose) => {
+    const host = byKey[key] && byKey[key].available;
+    const t = byToolKey[key] || {};
+    const inImage = !host && t.in_container && contReady;
+    let status, have, action;
+    if (host || t.installed) {
+      status = "ready"; have = shortVersion(t.version) || "installed on this system";
+      action = inImage || (t.in_container && contReady) ? openAct(key, name) : checkAct();
+    } else if (inImage) {
+      status = "image"; have = "in container image";
+      action = openAct(key, name);
+    } else {
+      status = "missing"; have = "";
+      action = (t.install_recipe && !t.container_only)
+        ? act("Install", "install-btn", "data-key='" + key + "'", { primary: true })
+        : checkAct();
+    }
+    return rowHtml({
+      id: "tl-viewer-" + key, name, purpose, status, have, inst: status !== "missing",
+      size: t.approx_mb ? sizeStr(t.approx_mb, { approx: true }) : "", action,
+      purposeTitle: inImage ? "Included in the LibreLane container image. The Layout tab launches it directly." : "",
+    });
   };
   root.innerHTML =
-    "<div class='card'><div class='card-body'>" +
-    "<div class='tool-row'><strong>KLayout</strong> " + badge("klayout") +
-    " <span class='hint'>2D layout: bundled in the container image, or installable from klayout.de.</span></div>" +
-    "<div class='tool-row'><strong>Magic</strong> " + badge("magic") +
-    " <span class='hint'>2D layout and DRC: bundled in the container image, launched with the PDK's <code>.magicrc</code> for correct layer rendering.</span></div>" +
-    "</div></div>";
+    row("klayout", "KLayout", "2D layout viewer. The Layout tab opens a run's GDS in it.") +
+    row("magic", "Magic", "2D layout and DRC, opened with the PDK's <code>.magicrc</code> so layers draw correctly.") +
+    row("openroad", "OpenROAD GUI", "Placement, routing and timing views of a run's database.");
+  wireRowActions(root);
+  root.querySelectorAll(".ct-open").forEach((b) => wireOpen(b));
 }
 
-// Recommended extra tools: the optional power-ups (iverilog, graphviz,
-// gtkwave, gds3d). Native installs use the shared escalating installer — if a system
-// package needs sudo, the user is prompted for a password in the launch
-// terminal (handled globally by app.js's installer_info banner).
+function openAct(key, name) {
+  return CONTAINER_LAUNCHABLE.has(key)
+    ? act("Open", "ct-open", "data-key='" + key + "'", { title: "Open the version-matched " + name + " from the LibreLane image" })
+    : checkAct();
+}
+
+// Helpers (iverilog, graphviz, gtkwave) and the GDS3D viewer. Native installs
+// use the shared escalating installer — if a system package needs sudo, the
+// user is prompted for a password in the launch terminal (handled globally by
+// app.js's installer_info banner).
 async function renderRecommendedTools(info) {
   if (typeof document === "undefined" || !document) return;
   const root = document.getElementById("recommended-tools");
@@ -120,86 +231,97 @@ async function renderRecommendedTools(info) {
   if (typeof document === "undefined" || !document) return;
   const gds3d = desktop.gds3d;
 
-  const probeCard = (t) => {
+  const PURPOSE = {
+    iverilog: "Runs your testbenches in the RTL IDE (Icarus Verilog).",
+    graphviz: "Draws the synthesis schematics in Reports.",
+    gtkwave: "Waveform viewer; the IDE's 'Open in GTKWave' hands it the VCD/FST.",
+  };
+  const probeRow = (t) => {
     if (!t) return "";
-    const action = t.installed
-      ? "<div style='display:flex;gap:var(--s-2);align-items:center'><span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span>" +
-        "<button class='rec-uninstall' data-key='" + t.key + "' style='font-size:10px;padding:2px 6px;background:transparent;border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text-muted);cursor:pointer'>Remove</button></div>"
-      : (Array.isArray(t.install_recipe) || t.install_recipe
-          ? "<button class='btn btn-primary rec-install' data-key='" + t.key + "'>Install</button>"
-          : "<span class='muted' style='font-size:var(--t-xs)'>" + fmt.escape(t.install_recipe || "manual install") + "</span>");
-    return (
-      "<div class='tool-card " + (t.installed ? "installed-installed" : "installed-missing") + "' style='flex:0 0 auto;width:320px'>" +
-      "<div class='row1'><span class='name'>" + fmt.escape(t.label) + "</span>" +
-      (t.installed ? "<span class='dot-installed' title='installed'></span>" : "<span class='dot-missing' title='missing'></span>") +
-      "</div>" +
-      "<div class='what'>" + fmt.escape(t.what || "") + "</div>" +
-      (t.installed && t.version
-        ? "<div class='meta muted' style='font-size:var(--t-xs)' title='reported by the tool'>" + fmt.escape(t.version) + "</div>"
-        : "") +
-      "<div class='meta' style='margin-top:var(--s-2)'>" + action + "</div>" +
-      "</div>"
-    );
+    const busy = !!state.installJobs[t.key];
+    const canInstall = Array.isArray(t.install_recipe) || !!t.install_recipe;
+    let status, action;
+    if (busy) { status = "busy"; action = act("Installing…", "", "disabled"); }
+    else if (t.installed) { status = "ready"; action = checkAct(); }
+    else {
+      status = "off";
+      action = canInstall
+        ? act("Install", "rec-install", "data-key='" + t.key + "'", { primary: true })
+        : "<span class='tl-act tl-act-none' title='" + esc(t.install_recipe || "manual install") + "'>Manual install</span>";
+    }
+    return rowHtml({
+      id: "tl-helper-" + t.key, name: esc(t.label), purpose: esc(PURPOSE[t.key] || t.what || ""),
+      purposeTitle: t.what || "", status, inst: t.installed,
+      have: t.installed ? shortVersion(t.version) || "installed" : "",
+      size: t.approx_mb ? sizeStr(t.approx_mb, { approx: true }) : "",
+      action,
+      menu: t.installed ? [menuItem("Remove " + t.label, "rec-uninstall", "data-key='" + t.key + "' data-label='" + esc(t.label) + "'", { danger: true })] : [],
+    });
   };
 
-  const gds3dCard =
-    "<div class='tool-card " + (gds3d && gds3d.available ? "installed-installed" : "installed-missing") + "' style='flex:0 0 auto;width:320px'>" +
-    "<div class='row1'><span class='name'>GDS3D</span>" +
-    (gds3d && gds3d.available ? "<span class='dot-installed' title='installed'></span>" : "<span class='dot-missing' title='missing'></span>") +
-    "</div>" +
-    "<div class='what'>3D layer-stack viewer (OpenGL). Open-source, built from source once. Open a run's GDS from the <strong>Layout</strong> tab → '3D (desktop viewer)'.</div>" +
-    "<div class='meta' style='margin-top:var(--s-2)'>" +
-    (gds3d && gds3d.available
-      ? "<div style='display:flex;gap:var(--s-2);align-items:center'><span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span>" +
-        "<button class='btn btn-ghost' id='btn-remove-gds3d' style='font-size:11px;padding:2px 8px'>Remove</button></div>"
-      : "<button class='btn btn-primary' id='btn-install-gds3d'>Build &amp; install GDS3D</button>") +
-    "</div>" +
-    "<details style='margin-top:var(--s-2);font-size:12px'><summary style='cursor:pointer;color:var(--text-muted)'>Manual build (if the one-click build can't run)</summary>" +
-    "<p class='hint'>GDS3D has no pre-packaged distribution; the OpenGL binary is compiled once locally. <strong>Build &amp; install handles this automatically</strong>. The manual commands below are provided for environments without standard package managers or root access.</p>" +
-    "<pre class='code'>sudo apt-get install -y git build-essential libx11-dev libxmu-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev freeglut3-dev\n" +
-    "git clone https://github.com/trilomix/GDS3D\n" +
-    "cd GDS3D/linux &amp;&amp; make\n" +
-    "sudo cp GDS3D /usr/local/bin/gds3d</pre>" +
-    "<p class='hint'>Fedora/RHEL: <code>sudo dnf install -y libX11-devel mesa-libGL-devel mesa-libGLU-devel freeglut-devel gcc-c++ make git</code>. Arch: <code>sudo pacman -S --needed libx11 mesa glu freeglut base-devel git</code>. macOS: the repository's <code>mac/</code> directory has no Makefile; the automated install uses the prebuilt <code>mac/GDS3D.app</code> (Intel binary; Apple Silicon needs Rosetta 2: <code>softwareupdate --install-rosetta</code>). Windows: download the prebuilt binary from the GDS3D site, then reopen this tab.</p>" +
-    "</details></div>";
+  root.innerHTML = probeRow(byKey.iverilog) + probeRow(byKey.graphviz) + probeRow(byKey.gtkwave);
 
-  root.innerHTML =
-    "<div style='display:flex;flex-wrap:wrap;gap:var(--s-4)'>" +
-    probeCard(byKey.iverilog) +
-    probeCard(byKey.graphviz) +
-    probeCard(byKey.gtkwave) +
-    gds3dCard +
-    "</div>";
+  const g = document.getElementById("viewer-gds3d");
+  if (g) {
+    const have = !!(gds3d && gds3d.available);
+    g.innerHTML = rowHtml({
+      id: "tl-viewer-gds3d", name: "GDS3D", inst: have,
+      purpose: "3D view of the layer stack. Built from source once (a few minutes); open it from Layout.",
+      status: have ? "ready" : "off", have: have ? "installed" : "",
+      action: have ? checkAct() : act("Install", "", "id='btn-install-gds3d'", { primary: true, title: "Builds GDS3D from source. Progress is in the Logs panel." }),
+      menu: have ? [menuItem("Remove GDS3D", "", "id='btn-remove-gds3d'", { danger: true })] : [],
+      sub: have ? "" :
+        "<details class='tl-manual'><summary>Manual build (if the one-click build can't run)</summary>" +
+        "<p class='hint'>GDS3D has no pre-packaged distribution; the OpenGL binary is compiled once locally. <strong>Install handles this automatically</strong>. These commands are for systems without a standard package manager or root access.</p>" +
+        "<pre class='code'>sudo apt-get install -y git build-essential libx11-dev libxmu-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev freeglut3-dev\n" +
+        "git clone https://github.com/trilomix/GDS3D\n" +
+        "cd GDS3D/linux &amp;&amp; make\n" +
+        "sudo cp GDS3D /usr/local/bin/gds3d</pre>" +
+        "<p class='hint'>Fedora/RHEL: <code>sudo dnf install -y libX11-devel mesa-libGL-devel mesa-libGLU-devel freeglut-devel gcc-c++ make git</code>. Arch: <code>sudo pacman -S --needed libx11 mesa glu freeglut base-devel git</code>. macOS: the automated install uses the prebuilt <code>mac/GDS3D.app</code> (Intel binary; Apple Silicon needs Rosetta 2). Windows: download the prebuilt binary from the GDS3D site, then reopen this tab.</p>" +
+        "</details>",
+    });
+    wireRowActions(g);
+  }
+  wireRowActions(root);
 
   root.querySelectorAll(".rec-install").forEach((b) =>
-    b.addEventListener("click", async () => { await installByKey(b.dataset.key); renderTools(); }));
+    b.addEventListener("click", async () => {
+      state.installJobs[b.dataset.key] = true;
+      b.disabled = true; b.textContent = "Installing…";
+      await installByKey(b.dataset.key);
+      renderTools();
+    }));
   root.querySelectorAll(".rec-uninstall").forEach((b) =>
     b.addEventListener("click", async () => {
       const key = b.dataset.key;
-      if (!(await confirmDialog({ title: "Remove " + key, danger: true, confirmText: "Remove",
-        body: "Remove " + key + "?" }))) return;
+      const label = b.dataset.label || key;
+      closeMenus();
+      if (!(await confirmDialog({ title: "Remove " + label, danger: true, confirmText: "Remove",
+        body: "Removes the " + label + " package from the LanEx Linux environment (your password may be asked in the terminal). " +
+          "Your projects and run results are kept. Install it again from this row any time." }))) return;
       try {
         const r = await api.uninstallTool(key);
-        toast.show(r.ok ? key + " removed" : key + " remove failed", r.ok ? "info" : "error");
-      } catch (ex) { toast.show(key + " remove error: " + (ex.message || ex), "error"); }
+        toast.show(r.ok ? label + " removed" : label + " remove failed", r.ok ? "info" : "error");
+      } catch (ex) { toast.show(label + " remove error: " + (ex.message || ex), "error"); }
       renderTools();
     }));
-  root.querySelector("#btn-install-gds3d")?.addEventListener("click", async (e) => {
+  document.getElementById("btn-install-gds3d")?.addEventListener("click", async (e) => {
     const btn = e.currentTarget;
-    btn.disabled = true; btn.textContent = "Building GDS3D… (see Install logs)";
+    btn.disabled = true; btn.textContent = "Building…";
     try {
       const r = await api.installTool("gds3d");
-      if (r && r.in_progress) toast.show("GDS3D compilation already in progress. Check Install logs.", "info");
+      if (r && r.in_progress) toast.show("GDS3D compilation already in progress. Check the Logs panel.", "info");
       else if (r && r.ok === false) toast.show(r.guidance || r.error || "Build could not start. Follow the manual build steps instead.", "warn");
-      else toast.show("GDS3D build started. Progress is reported in Install logs.", "success");
+      else toast.show("GDS3D build started. Progress is in the Logs panel.", "success");
     } catch (ex) {
       toast.show("Could not start GDS3D build: " + (ex.message || ex), "error");
     }
-    btn.disabled = false; btn.textContent = "Build & install GDS3D";
+    btn.disabled = false; btn.textContent = "Install";
   });
-  root.querySelector("#btn-remove-gds3d")?.addEventListener("click", async () => {
+  document.getElementById("btn-remove-gds3d")?.addEventListener("click", async () => {
+    closeMenus();
     if (!(await confirmDialog({ title: "Remove GDS3D", danger: true, confirmText: "Remove",
-      body: "Remove the GDS3D binary? You can rebuild it any time from this tab." }))) return;
+      body: "Removes the GDS3D binary and its build folder. Your projects and run results are kept. You can rebuild it any time from this row." }))) return;
     try {
       const r = await api.uninstallTool("gds3d");
       if (r && r.ok && r.already_absent) {
@@ -221,33 +343,222 @@ async function renderRecommendedTools(info) {
   });
 }
 
-// Wire PDK_ROOT save button once
-if (typeof document !== "undefined") {
-  document.addEventListener("DOMContentLoaded", () => {
-    document.getElementById("btn-save-pdk-root")?.addEventListener("click", async () => {
-      const val = document.getElementById("pdk-root-input").value.trim();
-      if (!val) return;
-      try {
-        const res = await api.setPdkRoot(val);
-        if (res.ok) {
-          toast.show("PDK Directory updated to " + res.pdk_root, "success");
-          renderTools();
-        } else {
-          toast.show("Failed to update PDK directory", "error");
-        }
-      } catch (ex) {
-        toast.show("Error: " + ex.message, "error");
+// ------------------------------------------------------------------ page chrome
+// Header buttons, filters, PDK_ROOT save: wired once.
+let _staticWired = false;
+function wireStatic() {
+  if (_staticWired || typeof document === "undefined" || !document.querySelector) return;
+  const sec = document.getElementById("sec-tools");
+  if (!sec || !sec.querySelector) return;
+  _staticWired = true;
+  document.getElementById("tl-recheck")?.addEventListener("click", () => {
+    showSkeletonSummary();
+    renderTools(true);
+  });
+  document.getElementById("tl-copy-diag")?.addEventListener("click", copyDiagnostics);
+  sec.querySelectorAll("[data-tl-filter]").forEach((b) =>
+    b.addEventListener("click", () => setFilter(b.dataset.tlFilter)));
+  document.getElementById("btn-save-pdk-root")?.addEventListener("click", async () => {
+    const val = document.getElementById("pdk-root-input").value.trim();
+    if (!val) return;
+    try {
+      const res = await api.setPdkRoot(val);
+      if (res.ok) {
+        toast.show("PDK folder set to " + res.pdk_root, "success");
+        renderTools();
+      } else {
+        toast.show("Could not change the PDK folder", "error");
       }
+    } catch (ex) {
+      toast.show("Error: " + ex.message, "error");
+    }
+  });
+  // One open "More" menu at a time; a click elsewhere closes it.
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest || !e.target.closest(".tl-more")) closeMenus();
+  });
+  sec.addEventListener("toggle", (e) => {
+    const d = e.target;
+    if (d.classList && d.classList.contains("tl-more") && d.open)
+      sec.querySelectorAll(".tl-more[open]").forEach((o) => { if (o !== d) o.open = false; });
+  }, true);
+}
+
+function closeMenus() {
+  if (typeof document === "undefined" || !document.querySelectorAll) return;
+  document.querySelectorAll("#sec-tools .tl-more[open]").forEach((d) => { d.open = false; });
+}
+
+function showSkeletonSummary() {
+  const sum = document.getElementById("tools-summary");
+  if (sum) sum.innerHTML = "<div class='tl-sum is-loading'><span class='spinner-sm'></span><strong>Checking components…</strong></div>";
+}
+
+let _filter = "all";
+function setFilter(f) {
+  _filter = f || "all";
+  const sec = document.getElementById("sec-tools");
+  if (!sec || !sec.querySelectorAll) return;
+  sec.querySelectorAll("[data-tl-filter]").forEach((b) => {
+    const on = b.dataset.tlFilter === _filter;
+    b.classList.toggle("is-on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  const list = document.getElementById("tl-list");
+  if (!list) return;
+  list.dataset.filter = _filter;
+  const keep = (row) => {
+    if (_filter === "installed") return row.dataset.inst === "1";
+    if (_filter === "updates") return row.dataset.status === "update";
+    if (_filter === "problems") return row.classList.contains("is-problem");
+    return true;
+  };
+  list.querySelectorAll(".tl-group").forEach((g) => {
+    let any = false;
+    g.querySelectorAll(".tl-row:not(.tl-skel)").forEach((row) => {
+      const k = keep(row);
+      row.classList.toggle("is-filtered", !k);
+      any = any || k;
     });
+    g.classList.toggle("is-filtered", _filter !== "all" && !any);
+    if (_filter !== "all" && any && g.tagName === "DETAILS") g.open = true;
+  });
+  const empty = document.getElementById("tl-filter-empty");
+  if (empty) {
+    const shown = list.querySelectorAll(".tl-row:not(.tl-skel):not(.is-filtered)").length;
+    empty.hidden = _filter === "all" || shown > 0;
+    empty.textContent = _filter === "updates" ? "No updates. Everything is on the version LanEx was tested with."
+      : _filter === "problems" ? "No problems. Every component LanEx needs is ready."
+      : "Nothing installed yet.";
+  }
+}
+
+// Summary strip: counts the rows that matter. The local toolchain only counts
+// when the Local tools engine is selected (with Container, the image has it).
+function paintSummary() {
+  const sum = document.getElementById("tools-summary");
+  const list = document.getElementById("tl-list");
+  if (!sum || !list || !list.querySelectorAll) return;
+  const rows = Array.from(list.querySelectorAll(".tl-row:not(.tl-skel)"))
+    .filter((r) => state.runMode === "local" || !r.closest("#local-tools-card"));
+  const counted = rows.filter((r) => r.dataset.status !== "off");
+  const problems = rows.filter((r) => r.classList.contains("is-problem"));
+  const updates = rows.filter((r) => r.dataset.status === "update");
+  const busy = rows.filter((r) => r.dataset.status === "busy");
+  const ready = counted.filter((r) => ["ready", "image"].includes(r.dataset.status));
+  let tone, title, sub = "", jump = "";
+  if (problems.length) {
+    tone = "fail";
+    title = problems.length + (problems.length === 1 ? " component needs" : " components need") + " attention";
+    sub = problems.map((r) => (r.querySelector(".tl-name")?.dataset.name || r.querySelector(".tl-name")?.textContent) || "").filter(Boolean).slice(0, 4).join(", ");
+    jump = "<button class='btn btn-sm btn-primary' data-tl-jump='" + esc(problems[0].id) + "'>Show</button>";
+  } else if (updates.length) {
+    tone = "warn";
+    title = updates.length + (updates.length === 1 ? " update" : " updates") + " available";
+    sub = "LanEx never updates on its own. Updates install the version this release was tested with.";
+    jump = "<button class='btn btn-sm btn-ghost' data-tl-jump='" + esc(updates[0].id) + "'>Show</button>";
+  } else {
+    tone = "pass";
+    title = "All " + ready.length + " components ready";
+    sub = "Installed on the versions this LanEx release was tested with.";
+  }
+  if (busy.length) sub = busy.length + " installing. Progress is in the Logs panel. " + sub;
+  sum.innerHTML =
+    "<div class='tl-sum is-" + tone + "'>" +
+      "<span class='tl-sum-dot'></span>" +
+      "<div class='tl-sum-text'><strong>" + esc(title) + "</strong>" + (sub ? "<span>" + esc(sub) + "</span>" : "") + "</div>" +
+      jump +
+    "</div>";
+  sum.querySelector("[data-tl-jump]")?.addEventListener("click", (e) => {
+    const id = e.currentTarget.dataset.tlJump;
+    if (problems.length) setFilter("problems");
+    else if (updates.length) setFilter("updates");
+    revealRow(id);
+  });
+  // Filter counts
+  const n = { all: rows.length, installed: rows.filter((r) => r.dataset.inst === "1").length, updates: updates.length, problems: problems.length };
+  document.querySelectorAll("#sec-tools [data-tl-filter]").forEach((b) => {
+    const c = b.querySelector(".tl-count");
+    if (c) c.textContent = String(n[b.dataset.tlFilter] ?? "");
   });
 }
 
-function sizeStr(mb, { approx = false } = {}) {
-  if (mb == null) return "";
-  const s = mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : Math.round(mb) + " MB";
-  return (approx ? "~" : "") + s;
+function revealRow(id) {
+  const row = id && document.getElementById(id);
+  if (!row) return false;
+  const det = row.closest("details.tl-group");
+  if (det) det.open = true;
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.classList.add("is-flash");
+  setTimeout(() => row.classList.remove("is-flash"), 1600);
+  return true;
 }
 
+// go("tools", {item}) — item is a component key ("docker", "image", "sky130A",
+// "klayout", "iverilog", "gds3d", "yosys"…) or a row id.
+let _pendingItem = null;
+export function focusTools(params = {}) {
+  _pendingItem = params.item || null;
+  return renderTools(params.fresh).then(() => revealItem());
+}
+function revealItem() {
+  if (!_pendingItem) return;
+  const k = String(_pendingItem);
+  const ids = [k, "tl-" + k, "tl-pdk-" + k, "tl-viewer-" + k, "tl-helper-" + k, "tl-local-" + k,
+    k === "docker" || k === "podman" || k === "engine" ? "tl-engine" : "", k === "image" || k === "librelane-image" ? "tl-image" : ""];
+  for (const id of ids) if (id && revealRow(id)) { _pendingItem = null; return; }
+}
+
+// "Copy diagnostics": one plain-text block for a bug report.
+export function diagnosticsText(info, { pdkRoot = "", runMode = "", ua = "" } = {}) {
+  const i = info || {};
+  const c = i.container || {};
+  const p = i.pdk || {};
+  const h = i.host || {};
+  const L = [];
+  L.push("LanEx tool diagnostics");
+  L.push("Platform: " + (c.platform || i.platform || "?") + (h.os ? " | " + h.os : "") + (h.kernel ? " | kernel " + h.kernel : "") + (h.wsl ? " | WSL " + h.wsl : ""));
+  if (h.python) L.push("Python: " + h.python);
+  if (runMode) L.push("Run engine: " + runMode);
+  L.push("Container engine: " + (c.engine || "none") + " | ready " + !!c.ready + (c.version ? " | " + c.version : "") + (c.min_version ? " | min " + c.min_version : ""));
+  if (c.daemon_msg) L.push("Engine message: " + c.daemon_msg);
+  L.push("Image: " + (c.image || "?") + " | present " + !!c.image_present + (c.image_size_mb ? " | " + sizeStr(c.image_size_mb) : ""));
+  if (c.image_tested_digest) L.push("Tested image digest: " + c.image_tested_digest + (c.image_custom ? " (CUSTOM image in use)" : ""));
+  if (c.librelane_version) L.push("LibreLane: " + c.librelane_version);
+  L.push("PDK_ROOT: " + (pdkRoot || "?"));
+  L.push("ciel: " + (p.ciel_installed ? "installed" : "missing"));
+  const vers = p.versions || {};
+  for (const k of p.installed_pdks || []) {
+    const v = vers[k] || {};
+    L.push("PDK " + k + ": " + (v.installed || "version unknown") + (v.pinned ? " | pinned " + v.pinned : "") +
+      (p.installed_sizes_mb && p.installed_sizes_mb[k] != null ? " | " + sizeStr(p.installed_sizes_mb[k]) : ""));
+  }
+  for (const t of i.tools || []) {
+    L.push("Tool " + t.key + ": " + (t.installed ? (t.version || "installed") + " @ " + (t.path || "?") : "not installed") +
+      (t.in_container ? " | in image" : "") + (t.windows_only ? " | WINDOWS BUILD ON PATH" : ""));
+  }
+  if (ua) L.push("Browser: " + ua);
+  return L.join("\n");
+}
+
+async function copyDiagnostics() {
+  const text = diagnosticsText(state.tools, {
+    pdkRoot: _pdkRoot || document.getElementById("pdk-root-input")?.value || "",
+    runMode: state.runMode || "", ua: navigator.userAgent,
+  });
+  try {
+    await navigator.clipboard.writeText(text);
+    toast.show("Diagnostics copied. Paste them into your bug report.", "success");
+  } catch (_e) {
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); toast.show("Diagnostics copied.", "success"); }
+    catch (_e2) { toast.show("Could not copy. Diagnostics are in the Logs panel.", "warn"); renderLogs.append({ payload: { message: text } }); }
+    ta.remove();
+  }
+}
+
+// ------------------------------------------------------------------ image pull
 // Live image-pull state. The pull runs in a background thread on the server and
 // streams `docker pull` stdout over SSE. Over a pipe, docker prints ONE line per
 // layer state change (not byte-by-byte), so a single multi-GB layer downloads
@@ -269,22 +580,20 @@ function _pullLayerLabel() {
 
 function pullProgressHtml() {
   return (
-    "<div id='runtime-pull' style='width:100%;margin-top:var(--s-2)'>" +
-    "<div style='display:flex;align-items:center;gap:var(--s-2)'>" +
+    "<div id='runtime-pull' class='tl-pull'>" +
+    "<div class='tl-pull-head'>" +
     "<span class='spinner-sm'></span>" +
-    "<strong>Pulling image…</strong>" +
+    "<strong>Downloading the LibreLane image</strong>" +
     "<span class='muted' id='runtime-pull-elapsed'>" + _pullElapsed() + "s</span>" +
     "<span class='muted' id='runtime-pull-layers' style='margin-left:auto'>" + _pullLayerLabel() + "</span>" +
-    "</div>" +
-    "<div id='runtime-pull-note' class='hint' style='margin-top:4px'></div>" +
-    "<pre class='code' id='runtime-pull-line' style='margin-top:var(--s-2);max-height:120px;overflow:auto;white-space:pre-wrap'>" +
-    fmt.escape(_pull.last || "starting…") +
-    "</pre>" +
-    "<div style='display:flex;align-items:center;gap:var(--s-3)'>" +
-    "<p class='hint' style='margin:0;flex:1'>Approximately 3 GB, downloaded once. Large layers stream sequentially; the timer indicates active download progress.</p>" +
-    "<button class='btn btn-ghost' id='runtime-pull-cancel' style='font-size:11px;padding:2px 8px' " +
+    "<button class='btn btn-sm btn-ghost tl-act' id='runtime-pull-cancel' " +
     "title='Stops the download. Already-fetched layers stay cached, so a retry resumes.'>Cancel</button>" +
     "</div>" +
+    "<div id='runtime-pull-note' class='hint'></div>" +
+    "<pre class='code' id='runtime-pull-line'>" +
+    fmt.escape(_pull.last || "starting…") +
+    "</pre>" +
+    "<p class='hint'>About 3 GB, downloaded once. Large layers arrive one at a time, so the line above can sit still for a while; the timer shows it is still going.</p>" +
     "</div>"
   );
 }
@@ -300,7 +609,7 @@ function _pullTicker() {
     if (note) {
       const idle = Math.round((Date.now() - _pull.lastAt) / 1000);
       note.textContent = idle >= 6 && !_pull.done
-        ? "Still downloading: a large layer has been streaming for " + idle + "s without per-layer progress events. This is expected behavior."
+        ? "Still downloading: a large layer has been streaming for " + idle + "s without a progress line. This is normal."
         : "";
     }
   }, 1000);
@@ -365,78 +674,94 @@ export function finishPull(rc) {
   clearInterval(_pull.timer);
   if (wasCancelled) { renderTools(); return; }   // the cancel click already toasted
   if (rc === 0) toast.show("Image download complete. Container mode is ready.", "success");
-  else toast.show("Image pull failed (rc=" + rc + "). See Live Logs.", "error");
+  else toast.show("Image download failed (exit " + rc + "). The Logs panel has the details; Download again resumes.", "error");
   renderTools();   // re-probe → image_present / daemon state refresh
 }
 
-// Footer listing both engines with one-click Install / Remove, so a user can
-// e.g. drop Docker and switch to Podman at will.
-function enginesFooterHtml(c) {
+// ------------------------------------------------------------------ flow engine
+// Two rows (engine, image) plus, under them, whatever the user must act on:
+// the remedy card when the engine isn't usable, the live pull while
+// downloading. Both engines keep one-click Install / Remove (in the menu), so a
+// user can e.g. drop Docker and switch to Podman at will.
+function engineRowsHtml(c) {
   const d = c.docker || {}, p = c.podman || {};
-  // The chosen engine is usable even when reached via `sg` group activation,
-  // so reflect that instead of the bare daemon-permission probe.
-  const dUsable = d.usable || (c.ready && c.engine === "docker");
-  const pUsable = p.usable || (c.ready && c.engine === "podman");
-  const chip = (name, present, usable, viaSg) => {
-    const cls = present ? (usable ? "pill-pass" : "pill-warn") : "pill-pending";
-    const txt = present
-      ? (usable ? (viaSg ? name + " (via group)" : name) : name + " (not usable)")
-      : name + " (absent)";
-    return "<span class='pill " + cls + "' style='font-size:10px'><span class='d'></span><span class='text'>" + txt + "</span></span>";
-  };
-  const eBtn = (engine, present) =>
-    present
-      ? "<button class='btn btn-ghost engine-remove' data-engine='" + engine + "' style='font-size:11px;padding:2px 8px'>Remove " + engine + "</button>"
-      : "<button class='btn btn-ghost engine-install' data-engine='" + engine + "' style='font-size:11px;padding:2px 8px'>Install " + engine + "</button>";
-  return (
-    "<div class='meta' style='margin-top:var(--s-3);display:flex;gap:var(--s-2);align-items:center;flex-wrap:wrap'>" +
-    "<span class='muted' style='font-size:var(--t-xs)'>Engines:</span>" +
-    chip("Docker", d.present, dUsable, c.sg_wrap && c.engine === "docker") +
-    chip("Podman", p.present, pUsable, false) +
-    eBtn("docker", d.present) + eBtn("podman", p.present) +
-    "</div>"
-  );
+  const verBad = c.version && c.min_version && c.version_ok === false;
+  const engName = c.engine === "podman" ? "Podman" : c.engine === "docker" ? "Docker" : (d.present ? "Docker" : p.present ? "Podman" : "Docker or Podman");
+  const engKey = c.engine || (d.present ? "docker" : p.present ? "podman" : "");
+  let status, chip = "", action, warn = "";
+  const menu0 = [];
+  if (c.ready) {
+    status = verBad ? "update" : "ready";
+    action = checkAct();
+    if (verBad) warn = esc(engName + " " + shortVersion(c.version) + " is older than LibreLane's recommended " + c.min_version + ". Update it with your package manager.");
+    if (c.sg_wrap) chip = "Ready (via group)";
+  } else if (c.available) {
+    status = "broken"; chip = "Not running";
+    action = act("Repair", "tl-repair", "", { primary: true, title: "Run the first fix listed below" });
+    menu0.push(menuItem("Check again", "", "id='btn-runtime-recheck'"));
+  } else {
+    status = "missing";
+    action = act("Install", "engine-install", "data-engine='docker'", { primary: true, title: "Installs Docker with the system package manager, then downloads the image" });
+  }
+  const menu = menu0;
+  const engItem = (key, present, label) => present
+    ? menuItem("Remove " + label, "engine-remove", "data-engine='" + key + "'", { danger: true })
+    : menuItem("Install " + label, "engine-install", "data-engine='" + key + "'");
+  if (c.available || c.ready) { menu.push(engItem("docker", d.present, "Docker")); menu.push(engItem("podman", p.present, "Podman")); }
+  else menu.push(engItem("podman", p.present, "Podman instead"));
+  const engine = rowHtml({
+    id: "tl-engine", name: esc(engName), status, chip, inst: !!(c.available || c.ready),
+    purpose: "Runs the LibreLane image, which holds every EDA tool the flow uses.",
+    warn, have: shortVersion(c.version), want: c.min_version ? c.min_version + "+" : "", wantLabel: "needs", size: "",
+    action, menu,
+  });
+
+  // The image row.
+  const imgTag = (String(c.image || "").split("@")[0].split(":").pop()) || "";
+  const dig = (String(c.image || "").split("@")[1]) || "";
+  let iStatus, iChip = "", iAction, iWarn = "";
+  if (_pull.active || c.pulling) {
+    iStatus = "busy"; iChip = "Downloading";
+    iAction = act("Downloading…", "", "disabled");
+  } else if (c.image_present) {
+    iStatus = c.image_custom ? "custom" : "ready";
+    iAction = checkAct();
+    if (c.image_custom) iWarn = "Not the image this LanEx release was tested with" + (c.image_tested_digest ? " (" + esc(shortHash(c.image_tested_digest)) + ")" : "") + ". Results may differ.";
+  } else {
+    iStatus = "missing";
+    iAction = c.ready
+      ? act("Download", "", "id='btn-pull-image'", { primary: true, title: "One download gives you every EDA tool, version-matched" })
+      : act("Download", "", "disabled title='Needs a working container engine first'");
+  }
+  const image = rowHtml({
+    id: "tl-image", name: "LibreLane image", status: iStatus, chip: iChip, inst: !!c.image_present,
+    purpose: "Yosys, OpenROAD, Magic, KLayout, Netgen and the rest, version-matched to LibreLane" + (imgTag ? " " + esc(imgTag) : "") + ".",
+    purposeTitle: c.image || "",
+    warn: iWarn,
+    have: c.image_present ? (imgTag + (dig ? " · " + shortHash(dig) : "")) : "",
+    want: c.image_tested_digest ? shortHash(c.image_tested_digest) : "",
+    size: c.image_present ? sizeStr(c.image_size_mb) : sizeStr(c.image_approx_mb, { approx: true }),
+    action: iAction,
+  });
+  return engine + image;
 }
 
 function paintRuntimeCard(container) {
+  const rows = document.getElementById("tl-engine-rows");
   const root = document.getElementById("runtime-card");
-  if (!root) return;
   const c = container || {};
   const d = c.docker || {}, p = c.podman || {};
-  const verBad = c.version && c.min_version && c.version_ok === false;
+  // The server reports an in-flight pull (c.pulling) so a reloaded page
+  // re-attaches to it instead of offering a second Download button.
+  if (c.ready && c.pulling && !_pull.active) resumePullUI();
+  if (rows) {
+    rows.innerHTML = engineRowsHtml(c);
+    wireRowActions(rows);
+  }
+  if (!root) return;
 
   if (c.ready) {
-    // A usable engine exists (Docker, Podman, or Docker via group activation).
-    const engineLabel = c.sg_wrap ? "Docker (group permissions active)" : c.engine;
-    const imgSize = c.image_present
-      ? sizeStr(c.image_size_mb)
-      : sizeStr(c.image_approx_mb, { approx: true });
-    // The server reports an in-flight pull (c.pulling) so a reloaded page
-    // re-attaches to it instead of offering a second Pull button.
-    if (c.pulling && !_pull.active) resumePullUI();
-    let pullArea;
-    if (_pull.active) pullArea = pullProgressHtml();
-    else if (c.image_present)
-      pullArea = "<span class='pill pill-pass'><span class='d'></span><span class='text'>image pulled</span></span>";
-    else
-      pullArea = "<span class='pill pill-warn'><span class='d'></span><span class='text'>image not pulled</span></span>" +
-        "<button class='btn btn-primary' id='btn-pull-image' title='Recommended: one download gives you every EDA tool, version-matched'>Pull image (recommended)</button>";
-    root.innerHTML =
-      "<div class='tool-card installed-installed'>" +
-      "<div class='row1'><span class='name'>✓ " + fmt.escape(engineLabel) + " ready</span>" +
-      "<span class='dot-installed' title='ready'></span></div>" +
-      "<div class='what'>All EDA tools are available via the LibreLane image (version-matched). No native tool installation required. Keep the <strong>Container</strong> run engine selected.</div>" +
-      (verBad
-        ? "<div class='hint' style='color:var(--warn)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l10 18H2zM12 10v5M12 18h.01'/></svg> " + fmt.escape(c.engine) + " " + fmt.escape(c.version) +
-          " is older than LibreLane's recommended " + fmt.escape(c.min_version) + "; upgrading is recommended.</div>"
-        : (c.version ? "<div class='hint'>" + fmt.escape(c.version) + "</div>" : "")) +
-      "<div class='meta' style='display:flex;align-items:center;gap:var(--s-2);flex-wrap:wrap'>" +
-      "<span style='font-family:monospace;font-size:var(--t-xs)'>" + fmt.escape(c.image || "") + "</span>" +
-      (imgSize ? "<span class='muted' style='font-size:var(--t-xs)'>" + imgSize + "</span>" : "") +
-      pullArea +
-      "</div>" +
-      enginesFooterHtml(c) +
-      "</div>";
+    root.innerHTML = _pull.active ? pullProgressHtml() : "";
   } else if (c.available) {
     // A binary is installed but nothing is usable yet. The right remedy is
     // platform-shaped: on macOS the daemon only exists while Docker Desktop
@@ -447,54 +772,52 @@ function paintRuntimeCard(container) {
     let actions = "";
     if (mac) {
       if (d.present || d.app_present)
-        actions += "<button class='btn btn-primary' id='btn-start-docker'>Start Docker Desktop</button>";
+        actions += "<button class='btn btn-sm btn-primary' id='btn-start-docker'>Start Docker Desktop</button>";
       if (p.present)
-        actions += "<button class='btn btn-primary' id='btn-start-podman'>Start podman machine</button>";
+        actions += "<button class='btn btn-sm btn-primary' id='btn-start-podman'>Start podman machine</button>";
     } else {
       if (canEnable)
-        actions += "<button class='btn btn-primary' id='btn-enable-docker'>Enable Docker for my user (no logout)</button>";
+        actions += "<button class='btn btn-sm btn-primary' id='btn-enable-docker'>Enable Docker for my user (no logout)</button>";
       if (d.present && !d.usable)
-        actions += "<button class='btn btn-primary' id='btn-start-docker'>Start Docker daemon</button>";
+        actions += "<button class='btn btn-sm btn-primary' id='btn-start-docker'>Start Docker daemon</button>";
     }
     if (!p.present)
-      actions += "<button class='btn btn-primary' id='btn-install-podman'>Install &amp; use Podman</button>";
-    actions += "<button class='btn btn-ghost' id='btn-runtime-recheck'>Recheck</button>";
+      actions += "<button class='btn btn-sm btn-ghost' id='btn-install-podman'>Install &amp; use Podman</button>";
     let hint;
     if (mac)
-      hint = "<p class='hint'><strong>Recommended:</strong> click <em>Start Docker Desktop</em>. On macOS, the Docker daemon runs while Docker Desktop is active. For Podman, <em>Start podman machine</em> boots its Linux virtual machine.</p>";
+      hint = "On macOS the Docker daemon only runs while Docker Desktop is open. <em>Start podman machine</em> boots Podman's Linux VM instead.";
     else if (canEnable)
-      hint = "<p class='hint'><strong>Recommended:</strong> click <em>Enable Docker for my user</em> to add your user to the <code>docker</code> group, applying permissions immediately. Or switch to rootless Podman.</p>";
+      hint = "<em>Enable Docker for my user</em> adds you to the <code>docker</code> group and applies it now, no logout. Or switch to rootless Podman.";
     else
-      hint = "<p class='hint'><strong>Recommended:</strong> click <em>Start Docker daemon</em> (runs <code>sudo systemctl enable --now docker</code>, prompting for credentials if required), or install rootless <strong>Podman</strong>.</p>";
+      hint = "<em>Start Docker daemon</em> runs <code>sudo systemctl enable --now docker</code> (your password may be asked in the terminal). Or install rootless Podman.";
     root.innerHTML =
-      "<div class='tool-card installed-missing'>" +
-      "<div class='row1'><span class='name'>Container engine installed but not currently active</span>" +
-      "<span class='dot-missing' title='not usable'></span></div>" +
-      "<div class='what'>An engine is installed but not reachable yet:</div>" +
-      "<pre class='code' style='white-space:pre-wrap'>" + fmt.escape(c.daemon_msg || "engine not reachable") + "</pre>" +
-      hint +
-      "<div class='meta' style='display:flex;gap:var(--s-2);flex-wrap:wrap;align-items:center'>" +
-      actions +
-      "</div>" +
-      enginesFooterHtml(c) +
+      "<div class='tl-fix'>" +
+      "<div class='tl-fix-h'>" + icon("alert", { size: 14 }) + " Container engine installed but not currently active</div>" +
+      "<pre class='code'>" + fmt.escape(c.daemon_msg || "engine not reachable") + "</pre>" +
+      "<p class='hint'>" + hint + "</p>" +
+      "<div class='tl-fix-acts'>" + actions + "</div>" +
       "</div>";
   } else {
     root.innerHTML =
-      "<div class='tool-card installed-missing'>" +
-      "<div class='row1'><span class='name'>No container engine found</span>" +
-      "<span class='dot-missing' title='missing'></span></div>" +
-      "<div class='what'>Install <strong>Podman</strong> (recommended: rootless, runs immediately) or <strong>Docker</strong>. One install gives you every EDA tool through the LibreLane image, on every platform LibreLane supports. The image is " +
-      sizeStr(c.image_approx_mb || 3000, { approx: true }) + ".</div>" +
-      "<div class='meta' style='display:flex;gap:var(--s-2);flex-wrap:wrap;align-items:center'>" +
-      "<button class='btn btn-primary' id='btn-install-podman'>Install Podman</button>" +
-      "<button class='btn btn-primary' id='btn-install-docker'>Install Docker</button>" +
-      "<a class='btn btn-ghost' href='https://podman.io/get-started' target='_blank' rel='noopener'>Podman docs ↗</a>" +
-      "<a class='btn btn-ghost' href='https://docs.docker.com/get-docker/' target='_blank' rel='noopener'>Docker docs ↗</a>" +
-      "</div>" +
-      "<p class='hint'>Prefer native tools? Switch the top-bar engine to <strong>Local tools</strong> and use <em>Advanced: local toolchain</em> below.</p>" +
-      "</div>";
+      "<div class='tl-fix'>" +
+      "<div class='tl-fix-h'>No container engine found</div>" +
+      "<p class='hint'>Install <strong>Docker</strong> or <strong>Podman</strong> (rootless). One engine plus the " +
+      sizeStr(c.image_approx_mb || 3000, { approx: true }) + " LibreLane image gives you every EDA tool, on every platform LibreLane supports. " +
+      "Prefer native tools? Switch the top-bar engine to <strong>Local tools</strong> and use the <em>Local toolchain</em> group below.</p>" +
+      "<div class='tl-fix-acts'>" +
+      "<button class='btn btn-sm btn-primary' id='btn-install-docker'>Install Docker</button>" +
+      "<button class='btn btn-sm btn-ghost' id='btn-install-podman'>Install Podman</button>" +
+      "<a class='btn btn-sm btn-ghost' href='https://docs.docker.com/get-docker/' target='_blank' rel='noopener'>Docker docs ↗</a>" +
+      "<a class='btn btn-sm btn-ghost' href='https://podman.io/get-started' target='_blank' rel='noopener'>Podman docs ↗</a>" +
+      "</div></div>";
   }
-  document.getElementById("btn-runtime-recheck")?.addEventListener("click", () => renderTools(true));
+  document.getElementById("btn-runtime-recheck")?.addEventListener("click", () => { closeMenus(); renderTools(true); });
+  // Repair = the first fix the remedy card recommends (Start / Enable / Install Podman).
+  rows?.querySelector(".tl-repair")?.addEventListener("click", () => {
+    const fix = root.querySelector(".tl-fix-acts .btn-primary") || root.querySelector(".tl-fix-acts .btn");
+    if (fix) fix.click();
+    else root.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
   document.getElementById("btn-enable-docker")?.addEventListener("click", async () => {
     const b = document.getElementById("btn-enable-docker");
     if (b) { b.disabled = true; b.textContent = "enabling…"; }
@@ -514,22 +837,22 @@ function paintRuntimeCard(container) {
       if (res.ok) {
         startPullUI();
         if (res.in_progress)
-          toast.show("Image pull in progress. Re-attaching to download stream.", "info");
+          toast.show("Image download in progress. Re-attached to it.", "info");
         else
           renderLogs.append({ payload: { message: "→ pulling container image " + (res.image || "") } });
       } else {
-        toast.show(res.reason || "Could not start image pull", "error");
+        toast.show(res.reason || "Could not start the image download", "error");
         if (res.guidance) renderLogs.append({ payload: { message: "ℹ " + res.guidance } });
       }
     } catch (ex) {
-      toast.show("Pull failed: " + ex.message, "error");
+      toast.show("Download failed: " + ex.message, "error");
     }
   });
   document.getElementById("runtime-pull-cancel")?.addEventListener("click", async () => {
     _pull.cancelledByUser = true;
     try {
       const r = await api.cancelInstall("container:image");
-      toast.show(r && r.ok ? "Image pull cancelled. Downloaded layers remain cached." : "Nothing to cancel.", "info");
+      toast.show(r && r.ok ? "Image download cancelled. Downloaded layers stay cached." : "Nothing to cancel.", "info");
     } catch (ex) {
       toast.show("Cancel failed: " + (ex.message || ex), "error");
     }
@@ -541,10 +864,11 @@ function paintRuntimeCard(container) {
   document.getElementById("btn-install-podman")?.addEventListener("click", () => installEngine("podman"));
   document.getElementById("btn-start-docker")?.addEventListener("click", () => startEngineAction("docker"));
   document.getElementById("btn-start-podman")?.addEventListener("click", () => startEngineAction("podman"));
-  root.querySelectorAll(".engine-install").forEach((b) =>
-    b.addEventListener("click", () => installEngine(b.dataset.engine)));
-  root.querySelectorAll(".engine-remove").forEach((b) =>
-    b.addEventListener("click", () => removeEngine(b.dataset.engine)));
+  const scope = rows || root;
+  scope.querySelectorAll(".engine-install").forEach((b) =>
+    b.addEventListener("click", () => { closeMenus(); installEngine(b.dataset.engine); }));
+  scope.querySelectorAll(".engine-remove").forEach((b) =>
+    b.addEventListener("click", () => { closeMenus(); removeEngine(b.dataset.engine); }));
 }
 
 // Start an installed-but-unreachable engine (Docker Desktop / podman machine /
@@ -554,7 +878,7 @@ function paintRuntimeCard(container) {
 async function startEngineAction(engine) {
   const b = document.getElementById("btn-start-" + engine);
   if (b) { b.disabled = true; b.textContent = "starting…"; }
-  toast.show("Starting " + engine + ". Progress is reported in Install logs.", "info");
+  toast.show("Starting " + engine + ". Progress is in the Logs panel.", "info");
   try {
     const r = await api.startEngine(engine);
     if (r.status === "started" || r.in_progress) return;
@@ -568,7 +892,7 @@ async function startEngineAction(engine) {
 
 async function installEngine(key) {
   document.querySelectorAll("[id^=btn-install-], .engine-install").forEach((b) => { b.disabled = true; });
-  toast.show("Installing " + key + " via package manager; watch Live Logs.", "info");
+  toast.show("Installing " + key + " with the package manager. Progress is in the Logs panel.", "info");
   try {
     const result = await api.installTool(key);
     if (result.status === "started") {
@@ -588,31 +912,38 @@ async function installEngine(key) {
 }
 
 async function removeEngine(key) {
-  if (!(await confirmDialog({ title: "Remove " + key, danger: true, confirmText: "Remove",
-    body: "Remove " + key + "? You can switch to the other engine." }))) return;
-  toast.show("Removing " + key + "…", "info");
+  const name = key === "docker" ? "Docker" : key === "podman" ? "Podman" : key;
+  if (!(await confirmDialog({ title: "Remove " + name, danger: true, confirmText: "Remove " + name,
+    body: "Removes the " + name + " package from the LanEx Linux environment (apt remove; your password may be asked in the terminal). " +
+      "Kept: the downloaded image data, your projects, run results and PDKs. " +
+      "Container runs stop working until an engine is installed again (Install Docker or Podman from this row's menu)." }))) return;
+  toast.show("Removing " + name + "…", "info");
   try {
     const r = await api.uninstallTool(key);
     if (r.ok) {
-      toast.show(key + " removed via " + (r.method || "?"), "info");
+      toast.show(name + " removed via " + (r.method || "?"), "info");
       renderLogs.append({ payload: { message: "✓ " + key + " removed" } });
     } else {
-      toast.show(key + " removal failed: " + (r.reason || ""), "error");
+      toast.show(name + " removal failed: " + (r.reason || ""), "error");
       renderLogs.append({ payload: { message: "✗ " + key + " removal: " + (r.reason || ""), level: "ERROR" } });
     }
   } catch (ex) {
-    toast.show(key + " removal error: " + ex.message, "error");
+    toast.show(name + " removal error: " + ex.message, "error");
   }
   renderTools();
 }
 
-// Tools shown in the dedicated "Recommended extra tools" group, so we skip them
-// in the Advanced local-toolchain grid to avoid duplicate cards.
+// ------------------------------------------------------------------ local toolchain
+// Tools shown in the Helpers group, so we skip them in the local-toolchain
+// list to avoid duplicate rows.
 const RECOMMENDED_KEYS = new Set(["iverilog", "graphviz", "gtkwave"]);
 
 // Tools the container image can open as an interactive window/console with no
 // run context (matches controller/container_tools._CONTAINER_TOOLS).
 const CONTAINER_LAUNCHABLE = new Set(["magic", "klayout", "openroad", "netgen"]);
+
+// LanEx's own interpreter: never offered for removal from here.
+const NO_REMOVE = new Set(["python", "pip"]);
 
 export function paintLocalToolsGrid(info) {
   const root = document.getElementById("tools-grid");
@@ -623,150 +954,174 @@ export function paintLocalToolsGrid(info) {
   // can't deliver.
   const cont = (info && info.container) || {};
   const contReady = !!(cont.ready && cont.image_present);
+  const local = state.runMode === "local";
   for (const t of (info.tools || [])) {
     if (RECOMMENDED_KEYS.has(t.key)) continue;
     const inCont = !!(t.in_container && contReady);
+    const busy = !!state.installJobs[t.key];
+    let status, chip = "", warn = "";
+    if (busy) status = "busy";
+    else if (t.windows_only && !t.installed) {
+      status = "broken"; chip = "Windows build";
+      warn = "A Windows build is on the WSL PATH, but the Linux flow can't use it. Install the Linux build inside WSL, or use the container image.";
+    } else if (t.installed) status = "ready";
+    else if (inCont) status = "image";
+    else status = local ? "missing" : "off";
     const card = document.createElement("div");
-    card.className = "tool-card " + ((t.installed || inCont) ? "installed-installed" : "installed-missing");
+    card.className = "tl-row-host";
     card.dataset.key = t.key;
     const openBtn = inCont && CONTAINER_LAUNCHABLE.has(t.key)
-      ? "<button class='btn btn-ghost ct-open' data-key='" + t.key + "' " +
-        "title='Open the version-matched " + fmt.escape(t.label) + " from the LibreLane image'>Open (container)</button>"
+      ? act("Open", "ct-open", "data-key='" + t.key + "'", { title: "Open the version-matched " + t.label + " from the LibreLane image" })
       : "";
-    const installBtn = !t.installed
-      ? buttonHtml(t, { inContainer: inCont })
-      : buttonUninstallHtml(t);
-    card.innerHTML =
-      "<div class='row1'>" +
-      "<span class='name'>" + fmt.escape(t.label) + "</span>" +
-      (inCont
-        ? "<span class='pill pill-pass' style='margin-left:auto;margin-right:var(--s-2);font-size:10px' title='Ships in the pulled LibreLane image; usable without host installation'><span class='d'></span><span class='text'>in container</span></span>"
-        : "") +
-      (t.installed
-        ? "<span class='dot-installed' title='installed locally'></span>"
-        : (inCont ? "<span class='dot-installed' title='available via the container image'></span>"
-                  : "<span class='dot-missing' title='missing'></span>")) +
-      "</div>" +
-      "<div class='what'>" + fmt.escape(t.what || "") + "</div>" +
-      (t.windows_only
-        ? "<div class='hint' style='color:var(--warn,#d29922)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l10 18H2zM12 10v5M12 18h.01'/></svg> A Windows build was found on the WSL PATH but can't be used by the Linux flow. Install the Linux build inside WSL (button below) or use the container image.</div>"
-        : "") +
-      "<div class='meta'>" +
-      (t.installed
-        ? "Path: <span style='font-family:monospace'>" + fmt.escape(t.path || "—") + "</span>"
-        : (inCont
-            ? "<span class='pill pill-warn'><span class='d'></span><span class='text'>not installed locally</span></span>"
-            : "<span class='pill pill-fail'><span class='d'></span><span class='text'>missing</span></span>")) +
-      (t.approx_mb ? " <span class='muted' style='font-size:var(--t-xs)' title='approximate installed size'>" + sizeStr(t.approx_mb, { approx: true }) + "</span>" : "") +
-      "</div>" +
-      // Surface the probed version (no hard-coded compat matrix — just the fact,
-      // so a user can sanity-check against LibreLane's expectations themselves).
-      (t.installed && t.version
-        ? "<div class='meta muted' style='font-size:var(--t-xs)' title='reported by the tool'>" + fmt.escape(t.version) + "</div>"
-        : "") +
-      (openBtn ? "<div class='meta' style='margin-top:var(--s-2)'>" + openBtn + "</div>" : "") +
-      installBtn;
+    let action;
+    if (busy) action = act("Installing…", "", "disabled");
+    else if (!t.installed) action = buttonHtml(t, { inContainer: inCont }) || openBtn;
+    else action = openBtn || checkAct();
+    const menu = [];
+    if (!t.installed && openBtn && action !== openBtn) menu.push(menuItem("Open from the image", "ct-open", "data-key='" + t.key + "'"));
+    if (t.installed && !NO_REMOVE.has(t.key)) menu.push(menuItem("Uninstall " + t.label, "uninstall-btn", "data-key='" + t.key + "' data-label='" + esc(t.label) + "'", { danger: true }));
+    card.innerHTML = rowHtml({
+      id: "tl-local-" + t.key, name: esc(t.label), status, chip, warn, inst: !!t.installed,
+      purpose: esc(t.what || ""), purposeTitle: t.installed ? "Path: " + (t.path || "—") : (t.container_only ? (t.install_recipe || "") : ""),
+      have: t.installed ? shortVersion(t.version) || "installed" : (inCont ? "in container image" : ""),
+      size: t.approx_mb ? sizeStr(t.approx_mb, { approx: true }) : "",
+      action, menu,
+    });
     root.appendChild(card);
   }
-  root.querySelectorAll(".ct-open").forEach((b) =>
-    b.addEventListener("click", async () => {
-      const key = b.dataset.key;
-      b.disabled = true;
-      try {
-        const r = await api.containerToolOpen(key);
-        if (r && r.ok) toast.show(r.hint || (key + " opening from the container image… (first window can take a few seconds)"), "success");
-        else toast.show((r && r.error) || (key + " could not be launched"), r && r.need === "image" ? "warn" : "error");
-      } catch (ex) {
-        toast.show(key + " launch error: " + (ex.message || ex), "error");
-      }
-      b.disabled = false;
-    }));
+  wireRowActions(root);
+  root.querySelectorAll(".ct-open").forEach((b) => wireOpen(b));
 }
 
+function wireOpen(b) {
+  b.addEventListener("click", async () => {
+    const key = b.dataset.key;
+    closeMenus();
+    b.disabled = true;
+    try {
+      const r = await api.containerToolOpen(key);
+      if (r && r.ok) toast.show(r.hint || (key + " opening from the container image… (first window can take a few seconds)"), "success");
+      else toast.show((r && r.error) || (key + " could not be launched"), r && r.need === "image" ? "warn" : "error");
+    } catch (ex) {
+      toast.show(key + " launch error: " + (ex.message || ex), "error");
+    }
+    b.disabled = false;
+  });
+}
+
+// Shared per-row wiring: Check re-probes everything (the backend has no
+// per-component self-test; one fresh probe is a few seconds).
+function wireRowActions(scope) {
+  if (!scope || !scope.querySelectorAll) return;
+  scope.querySelectorAll(".tl-check").forEach((b) => {
+    if (b._tlWired) return;
+    b._tlWired = true;
+    b.addEventListener("click", () => {
+      b.disabled = true; b.textContent = "Checking…";
+      renderTools(true);
+    });
+  });
+}
+
+// ------------------------------------------------------------------ PDKs
 export function renderPdkStore(info) {
   const drop = document.getElementById("pdk-store-row");
   if (!drop) return;
   const pdkInfo = (info && info.pdk) || {};
   const installed = new Set(pdkInfo.installed_pdks || []);
   const catalog = (info && info.pdk_catalog) || {};
+  const versions = pdkInfo.versions || {};
   const cielMissing = !pdkInfo.ciel_installed;
-  drop.innerHTML =
-    "<div class='picker-row' style='flex-wrap:wrap'>" +
-    (cielMissing
-      ? "<span class='pill pill-fail'><span class='d'></span><span class='text'>ciel missing</span></span>" +
-        "<button class='btn btn-ghost' id='install-ciel-btn'>Install ciel</button>"
-      : "<span class='pill pill-pass'><span class='d'></span><span class='text'>ciel ready</span></span>") +
-    "<span class='hint' style='margin-left:var(--s-3)'>PDK archives are large. Open <em>Libraries</em> to download only the cell libraries required for your design.</span>" +
-    "</div>" +
-    "<div style='display:flex;flex-wrap:wrap;gap:var(--s-4);margin-top:var(--s-3)'>" +
-    Object.entries(catalog).map(([key, p]) => {
-      const isInstalled = installed.has(key);
-      const recBadge = (p.default_variant || p.recommended)
-        ? "<span class='pill pill-info' style='font-size:10px'><span class='d'>" + icon('star',{size:11}) + "</span><span class='text'>Default variant</span></span>"
-        : "";
+  const noneInstalled = installed.size === 0;
+  const cielTool = ((info && info.tools) || []).find((t) => t.key === "ciel") || {};
 
-      // Library list comes from the backend (ciel's authoritative metadata).
-      // Libraries in `default_libraries` are pre-checked; the rest are opt-in.
-      let libsHtml = "";
-      if (!state.installJobs["pdk:" + key]) {
-        const unavailableReasons = normalizeUnavailableLibraries(p.unavailable_libraries);
-        const unavailable = new Set(Object.keys(unavailableReasons));
-        const allLibs = [...new Set([
-          ...(Array.isArray(p.libraries) ? p.libraries : []),
-          ...Object.keys(unavailableReasons),
-        ])];
-        const defLibs = new Set(Array.isArray(p.default_libraries) ? p.default_libraries : []);
-        if (allLibs.length > 0) {
-          const cbHtml = allLibs.map((id) => {
-            const req = defLibs.has(id);
-            const isUnavail = unavailable.has(id);
-            if (isUnavail) {
-              const reason = unavailableReasons[id] || "Not published for this release";
-              return `<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);opacity:0.6"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" disabled> ${fmt.escape(id)} <span style="font-size:10px">(${fmt.escape(reason)})</span></label>`;
-            }
-            return `<label style="display:flex;align-items:center;gap:4px;font-size:11px"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" ${req ? "checked" : ""}> ${fmt.escape(id)}${req ? " <span style=\"color:var(--text-muted);font-size:10px\">(starter)</span>" : ""}</label>`;
-          }).join("");
-          libsHtml = `<details style="margin-bottom:var(--s-2);font-size:12px"><summary style="cursor:pointer;color:var(--text-muted);margin-bottom:4px;user-select:none">Libraries (${allLibs.length})</summary>
-            <div style="display:flex;gap:8px;margin-bottom:4px">
-              <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}:not(:disabled)').forEach(cb => cb.checked = cb.defaultChecked)">Starter set</button>
-              <button class="btn btn-sm" onclick="document.querySelectorAll('.lib-cb-${key}:not(:disabled)').forEach(cb => cb.checked = true)">All supported</button>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:2px;max-height:150px;overflow-y:auto;background:var(--bg-2);padding:4px;border-radius:4px">${cbHtml}</div></details>`;
-        }
+  const ciel = rowHtml({
+    id: "tl-pdk-ciel", name: "ciel", inst: !cielMissing,
+    purpose: "The PDK manager. Downloads the exact PDK version LibreLane asks for.",
+    status: cielMissing ? "missing" : "ready",
+    have: cielMissing ? "" : shortVersion(cielTool.version) || "installed",
+    size: cielTool.approx_mb ? sizeStr(cielTool.approx_mb, { approx: true }) : "",
+    action: cielMissing ? act("Install", "", "id='install-ciel-btn'", { primary: true }) : checkAct(),
+  });
+
+  const rows = Object.entries(catalog).map(([key, p]) => {
+    const isInstalled = installed.has(key);
+    const busy = !!state.installJobs["pdk:" + key];
+    const v = versions[key] || {};
+    const differs = isInstalled && v.installed && v.pinned && v.installed !== v.pinned;
+
+    // Library list comes from the backend (ciel's authoritative metadata).
+    // Libraries in `default_libraries` are pre-checked; the rest are opt-in.
+    let libsHtml = "";
+    if (!busy) {
+      const unavailableReasons = normalizeUnavailableLibraries(p.unavailable_libraries);
+      const unavailable = new Set(Object.keys(unavailableReasons));
+      const allLibs = [...new Set([
+        ...(Array.isArray(p.libraries) ? p.libraries : []),
+        ...Object.keys(unavailableReasons),
+      ])];
+      const defLibs = new Set(Array.isArray(p.default_libraries) ? p.default_libraries : []);
+      if (allLibs.length > 0) {
+        const cbHtml = allLibs.map((id) => {
+          const req = defLibs.has(id);
+          if (unavailable.has(id)) {
+            const reason = unavailableReasons[id] || "Not published for this release";
+            return `<label class="tl-lib is-off"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" disabled> ${fmt.escape(id)} <span>(${fmt.escape(reason)})</span></label>`;
+          }
+          return `<label class="tl-lib"><input type="checkbox" class="lib-cb-${key}" value="${fmt.escape(id)}" ${req ? "checked" : ""}> ${fmt.escape(id)}${req ? " <span>(starter)</span>" : ""}</label>`;
+        }).join("");
+        libsHtml = `<details class="tl-libs"><summary>Libraries (${allLibs.length})</summary>
+          <div class="tl-libs-bar">
+            <button class="btn btn-sm btn-ghost" data-lib-set="starter" data-pdk="${key}">Starter set</button>
+            <button class="btn btn-sm btn-ghost" data-lib-set="all" data-pdk="${key}">All supported</button>
+            ${(isInstalled && !p.note) ? `<button class="btn btn-sm btn-primary pdk-install-btn" data-pdk="${key}" title="Download the checked libraries">Install checked</button>` : ""}
+          </div>
+          <div class="tl-libs-list">${cbHtml}</div></details>`;
       }
+    }
 
-      const measured = (pdkInfo.installed_sizes_mb || {})[key];
-      const sizeFact = isInstalled && measured != null
-        ? sizeStr(measured) + " on disk"
-        : (p.approx_gb != null ? "~" + p.approx_gb + " GB download" : "");
-      const facts = [p.foundry, p.node, sizeFact].filter(Boolean).map(fmt.escape).join(" · ");
-      return (
-        "<div class='tool-card' style='flex:0 0 auto;width:320px;padding:var(--s-4);position:relative'>" +
-        "<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--s-2)'>" +
-        "<strong>" + fmt.escape(p.label || key) + "</strong>" +
-        recBadge +
-        "</div>" +
-        "<div style='font-size:var(--t-xs);color:var(--text-muted);margin-bottom:var(--s-2)'>" +
-        facts +
-        "</div>" +
-        "<div class='what' style='margin-bottom:var(--s-2)'>" + fmt.escape(p.description || "") + "</div>" +
-        libsHtml +
-        "<div class='meta' style='display:flex;align-items:center;gap:var(--s-2);flex-wrap:wrap'>" +
-        (state.installJobs["pdk:" + key]
-          ? "<button class='btn btn-primary' disabled style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3)'>installing…</button>" +
-            "<button class='btn btn-warn pdk-cancel-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3);margin-left:var(--s-1)'>Cancel</button>"
-          : isInstalled
-            ? "<span class='pill pill-pass' style='font-size:10px;margin-right:var(--s-2)'><span class='d'></span><span class='text'>installed</span></span>" +
-              "<button class='btn btn-warn pdk-uninstall-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3)' title='Uninstall " + key + "'>Delete</button>" +
-              "<button class='btn btn-primary pdk-install-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3);margin-left:var(--s-1)' title='Install additional libraries'>Update</button>"
-            : p.note
-              ? "<span class='muted' style='font-size:10px'>" + fmt.escape(p.note) + "</span>"
-              : "<button class='btn btn-primary pdk-install-btn' data-pdk='" + key + "' style='font-size:var(--t-sm);padding:var(--s-1) var(--s-3)'>Install</button>") +
-        "</div>" +
-        "</div>"
-      );
-    }).join("") +
-    "</div>";
+    const measured = (pdkInfo.installed_sizes_mb || {})[key];
+    const size = isInstalled && measured != null ? sizeStr(measured)
+      : (p.approx_gb != null ? "~" + p.approx_gb + " GB" : "");
+    let status, chip = "", action, warn = "";
+    if (busy) {
+      status = "busy"; chip = "Installing";
+      action = act("Cancel", "pdk-cancel-btn", "data-pdk='" + key + "'");
+    } else if (isInstalled) {
+      status = differs ? "custom" : "ready";
+      if (differs) {
+        chip = "Custom";
+        warn = "This is not the version LibreLane " + esc((info.container && info.container.librelane_version) || "") +
+          " pins. Container runs download the pinned one; Update installs it now.";
+        action = act("Update", "pdk-install-btn", "data-pdk='" + key + "'", { primary: true, title: "Install the pinned version" });
+      } else action = checkAct();
+    } else if (p.note) {
+      status = "off";
+      action = "<span class='tl-act tl-act-none' title='" + esc(p.note) + "'>Not available</span>";
+    } else {
+      status = noneInstalled && (p.default_variant || p.recommended) ? "missing" : "off";
+      action = act("Install", "pdk-install-btn", "data-pdk='" + key + "'", { primary: status === "missing" || !!p.recommended });
+    }
+    const facts = [p.foundry, p.node].filter(Boolean).map(esc).join(" · ");
+    return rowHtml({
+      id: "tl-pdk-" + key, inst: isInstalled, label: p.label || key,
+      name: esc(p.label || key) + ((p.default_variant || p.recommended) ? " <span class='tl-tag' title='The variant LanEx uses by default for this PDK'>default</span>" : ""),
+      purpose: esc(p.description || "") || facts, purposeTitle: [p.foundry, p.node].filter(Boolean).join(' · '),
+      status, chip, warn,
+      have: isInstalled ? (v.installed ? shortHash(v.installed) : "installed") : "",
+      want: v.pinned ? shortHash(v.pinned) : "",
+      size, action,
+      menu: isInstalled && !busy ? [menuItem("Remove " + (p.label || key), "pdk-uninstall-btn", "data-pdk='" + key + "'", { danger: true })] : [],
+      sub: libsHtml,
+    });
+  });
+  drop.innerHTML = ciel + rows.join("");
+  wireRowActions(drop);
+
+  drop.querySelectorAll("[data-lib-set]").forEach((b) => b.addEventListener("click", () => {
+    const all = b.dataset.libSet === "all";
+    drop.querySelectorAll(".lib-cb-" + b.dataset.pdk + ":not(:disabled)").forEach((cb) => { cb.checked = all ? true : cb.defaultChecked; });
+  }));
 
   // Wire PDK install buttons
   drop.querySelectorAll(".pdk-install-btn").forEach(btn => {
@@ -786,7 +1141,7 @@ export function renderPdkStore(info) {
           if (result.in_progress) {
             toast.show(`PDK ${pdk} is already downloading.`, "info");
           } else {
-            toast.show(`PDK ${pdk} installation started... Check logs.`, "info");
+            toast.show(`PDK ${pdk} installation started. Progress is in the Logs panel.`, "info");
             renderLogs.append({ payload: { message: "→ PDK " + pdk + " installation started in background." } });
           }
         } else {
@@ -823,9 +1178,13 @@ export function renderPdkStore(info) {
   drop.querySelectorAll(".pdk-uninstall-btn").forEach(btn => {
     btn.addEventListener("click", async () => {
       const pdk = btn.dataset.pdk;
+      closeMenus();
       const family = (catalog[pdk] && catalog[pdk].family) || (pdk.startsWith("sky130") ? "sky130" : pdk.startsWith("gf180mcu") ? "gf180mcu" : pdk);
-      if (!(await confirmDialog({ title: "Uninstall PDK Family", danger: true, confirmText: "Uninstall",
-        body: "Uninstalling " + pdk + " will remove the " + family + " family and all installed variants of this PDK from disk. Continue?" }))) return;
+      const siblings = [...installed].filter((x) => pdkFamily(catalog, x) === family);
+      if (!(await confirmDialog({ title: "Remove the " + family + " PDK", danger: true, confirmText: "Remove " + family,
+        body: "Removes every installed version of the " + family + " family from disk: " + (siblings.join(", ") || pdk) +
+          (_pdkRoot ? " (in " + _pdkRoot + ")" : "") + ". " +
+          "Kept: your projects and run results. Designs that use " + family + " can't run until you install it again." }))) return;
       btn.textContent = "…";
       try {
         const result = await api.uninstallPdk(pdk);
@@ -911,10 +1270,12 @@ export async function paint(info) {
 
   wireInstallButtons();
   wireUninstallButtons();
-}
-
-function buttonUninstallHtml(t) {
-  return "<div class='tool-installed-row'><span class='pill pill-pass'><span class='d'></span><span class='text'>installed</span></span><button class='uninstall-btn' data-key='" + t.key + "' title='Uninstall " + t.key + "' aria-label='Uninstall " + t.key + "'>" + icon("x", { size: 11 }) + "</button></div>";
+  try {
+    paintSummary();
+    setFilter(_filter);
+  } catch (ex) {
+    console.error("Tools summary render failure:", ex);
+  }
 }
 
 let _lastToolInfo = null;
@@ -944,44 +1305,48 @@ function buttonHtml(t, { inContainer = false } = {}) {
   // there only ever fails. Point at the container image instead (the supported,
   // cross-platform path), with conda/Nix as the advanced fallback.
   if (t.container_only) {
-    if (inContainer) {
-      return "<div class='muted' style='font-size:var(--t-xs);line-height:1.4'>" +
-        "No host package required; this tool runs from the container image. " +
-        "<span title='" + fmt.escape(t.install_recipe || "") + "'>(advanced local install: conda/Nix)</span></div>";
-    }
-    return "<div class='muted' style='font-size:var(--t-xs);line-height:1.4'>" +
-      "No host package available; run via the <strong>container image</strong>: switch the top-bar engine to " +
-      "<em>Container</em> and click <em>Pull image</em>. " +
-      "<span title='" + fmt.escape(t.install_recipe || "") + "'>(advanced: conda/Nix)</span></div>";
+    if (inContainer) return "";
+    return "<span class='tl-act tl-act-none' title='No host package. Run it from the container image (Container engine + LibreLane image), or install with conda/Nix: " +
+      esc(t.install_recipe || "") + "'>Image only</span>";
   }
   if (Array.isArray(t.install_recipe) || t.install_recipe) {
     // When the container copy already covers the tool, the native install is an
     // extra, not a requirement — label it so.
-    return "<button class='install-btn' data-key='" + t.key + "'>" +
-      (inContainer ? "Install locally" : "Install") + "</button>";
+    return act(inContainer ? "Install locally" : "Install", "install-btn", "data-key='" + t.key + "'", { primary: !inContainer });
   }
-  return "<span class='muted'>" + fmt.escape(t.install_recipe || "manual install") + "</span>";
+  return "<span class='tl-act tl-act-none' title='" + esc(t.install_recipe || "manual install") + "'>Manual install</span>";
 }
 
 function wireInstallButtons() {
   document.querySelectorAll(".install-btn").forEach((btn) => {
-    btn.addEventListener("click", () => installByKey(btn.dataset.key));
+    if (btn._tlWired) return;
+    btn._tlWired = true;
+    btn.addEventListener("click", () => {
+      state.installJobs[btn.dataset.key] = true;
+      btn.disabled = true; btn.textContent = "Installing…";
+      installByKey(btn.dataset.key);
+    });
   });
 }
 
 function wireUninstallButtons() {
   document.querySelectorAll(".uninstall-btn").forEach((btn) => {
+    if (btn._tlWired) return;
+    btn._tlWired = true;
     btn.addEventListener("click", async () => {
       const key = btn.dataset.key;
-      if (!(await confirmDialog({ title: "Uninstall " + key, danger: true, confirmText: "Uninstall",
-        body: "Uninstall " + key + "?" }))) return;
+      const label = btn.dataset.label || key;
+      closeMenus();
+      if (!(await confirmDialog({ title: "Uninstall " + label, danger: true, confirmText: "Uninstall",
+        body: "Removes the locally installed " + label + " (the copy in the LibreLane image is not touched). " +
+          "Your projects and run results are kept." }))) return;
       btn.textContent = "…";
       try {
         const result = await api.uninstallTool(key);
         if (result.ok) {
           toast.show(`${key} uninstalled`, "info");
           renderLogs.append({ payload: { message: "✓ " + key + " uninstalled via " + (result.method || "?") } });
-          // Optimistic: flip the card to "missing" immediately so the Tools tab
+          // Optimistic: flip the row to "missing" immediately so the Tools tab
           // reflects the change without waiting on the re-probe.
           const tool = (state.tools?.tools || []).find((t) => t.key === key);
           if (tool) { tool.installed = false; tool.path = ""; tool.version = ""; }
@@ -1043,6 +1408,7 @@ function handleInstallOutcome(key, result) {
 // toolchain, then re-probe so the tab reflects the new state.
 export async function onInstallerResult(ev) {
   const key = ev.key || "tool";
+  delete state.installJobs[key];
   if (key.indexOf("engine:") === 0) {
     // Outcome of a Start-engine action — not an install, so word it right.
     const eng = ev.engine || key.slice(7);
@@ -1066,7 +1432,7 @@ export async function onInstallerResult(ev) {
 
 // Once a container engine is usable, chain straight into the image pull so a
 // single click sets up the whole toolchain. If the engine isn't reachable yet
-// (e.g. Docker needs a group/login), the runtime card shows the next fix.
+// (e.g. Docker needs a group/login), the engine row shows the next fix.
 async function chainImagePull() {
   try {
     const info = await api.tools();
@@ -1089,16 +1455,19 @@ async function installByKey(key) {
   try {
     const result = await api.installTool(key);
     if (result.status === "started") {
-      toast.show(`${key} install started. Progress is reported in Install logs; this tab updates upon completion.`, "info");
+      toast.show(`${key} install started. Progress is in the Logs panel; this row updates when it finishes.`, "info");
       return;
     }
+    delete state.installJobs[key];
     handleInstallOutcome(key, result);
   } catch (ex) {
+    delete state.installJobs[key];
     const body = ex.body;
     if (body && body.kind === "manual") {
       showInstallModal(key, body.recipe || "(no recipe in this build)");
       return;
     }
+    toast.show(key + " install error: " + ex.message, "error");
     renderLogs.append({
       payload: { message: "✗ " + key + " install error: " + ex.message, level: "ERROR" },
     });

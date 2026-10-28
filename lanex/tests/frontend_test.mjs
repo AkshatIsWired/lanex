@@ -955,6 +955,52 @@ await checkAsync("tools: full fixture renders 10 tools, 7 PDK cards, 14 GF180 li
   }
 });
 
+check("tools: component rows say status, versions and keep Remove out of the main button", () => {
+  const html = toolsModule.rowHtml({
+    id: "tl-pdk-sky130A", name: "sky130A", status: "custom", have: "0000000d", want: "8afc8346",
+    action: "<button class='tl-act'>Update</button>", menu: ["<button class='tl-menu-item is-danger'>Remove sky130A</button>"],
+  });
+  assert.match(html, /class='tl-row is-problem' id='tl-pdk-sky130A' data-status='custom'/);
+  assert.match(html, /tl-chip is-custom'><span class='d'><\/span>Custom/);
+  assert.match(html, /tested 8afc8346/);
+  // Remove lives in the overflow menu, never beside the status.
+  const acts = html.slice(html.indexOf("tl-acts"));
+  assert.ok(acts.indexOf("Update") < acts.indexOf("tl-more"), "the main action comes first");
+  assert.ok(acts.indexOf("Remove") > acts.indexOf("tl-menu"), "Remove sits inside the menu");
+  assert.match(toolsModule.rowHtml({ id: "x", name: "n", status: "off" }), /data-status='off'/);
+  assert.ok(!/is-problem/.test(toolsModule.rowHtml({ id: "x", name: "n", status: "off" })), "an optional tool that isn't installed is not a problem");
+  assert.equal(toolsModule.shortVersion("Verilator 5.020 2024-01-01 rev (Debian 5.020-1)"), "5.020");
+  assert.equal(toolsModule.shortVersion("Docker version 29.8.1, build 4a63305"), "29.8.1");
+  assert.equal(toolsModule.shortVersion(""), "");
+});
+
+check("tools: Copy diagnostics carries versions, digest, PDKs, PDK_ROOT and host facts", () => {
+  const info = {
+    platform: "linux",
+    host: { kernel: "6.6.87.2-microsoft-standard-WSL2", os: "Ubuntu 24.04.4 LTS", python: "3.12.3", wsl: "yes" },
+    container: { engine: "docker", ready: true, version: "Docker version 29.8.1", image: "ghcr.io/librelane/librelane:3.0.4@sha256:eab0", image_present: true,
+      image_tested_digest: "sha256:eab0", image_custom: false, librelane_version: "3.0.4" },
+    pdk: { ciel_installed: true, installed_pdks: ["sky130A"], installed_sizes_mb: { sky130A: 7866 },
+      versions: { sky130A: { installed: "8afc", pinned: "8afc" } } },
+    tools: [{ key: "yosys", installed: false, in_container: true }, { key: "verilator", installed: true, version: "Verilator 5.020", path: "/usr/bin/verilator" }],
+  };
+  const t = toolsModule.diagnosticsText(info, { pdkRoot: "/home/lanex/.ciel", runMode: "container" });
+  for (const s of ["kernel 6.6.87.2-microsoft-standard-WSL2", "Ubuntu 24.04.4 LTS", "Docker version 29.8.1",
+    "librelane:3.0.4@sha256:eab0", "Tested image digest: sha256:eab0", "PDK_ROOT: /home/lanex/.ciel",
+    "PDK sky130A: 8afc | pinned 8afc", "Tool yosys: not installed | in image", "Tool verilator: Verilator 5.020 @ /usr/bin/verilator"]) {
+    assert.ok(t.includes(s), "diagnostics missing: " + s);
+  }
+  assert.ok(!t.includes("CUSTOM"), "the tested image is not flagged custom");
+  info.container.image_custom = true;
+  assert.ok(toolsModule.diagnosticsText(info).includes("CUSTOM image in use"));
+});
+
+check("jumpnav: an unscrolled page never highlights its last section", () => {
+  const src = readFileSync(resolve(MOD, "jumpnav.js"), "utf8");
+  assert.match(src, /root\.scrollTop > 0 && root\.scrollTop \+ root\.clientHeight >= root\.scrollHeight - 2/,
+    "the at-the-bottom rule must require a real scroll (Tools/DSE lit 'Viewers' on load)");
+});
+
 // ------------------------------------------------ Analytics: the tool's numbers, shown honestly
 const AM = await import(toUrl(resolve(MOD, "analytics-model.js")));
 

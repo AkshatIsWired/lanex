@@ -68,6 +68,11 @@ const FOCUS = {
     if (p.check) await m.revealCheck(p.check);
     else await m.revealProblems();
   },
+  tools: async (p) => {
+    if (!p.item) return;
+    const m = await import("./tools.js");
+    await m.focusTools(p);
+  },
 };
 
 export function tabLabel(tab) {
@@ -135,7 +140,7 @@ function show(entry, { fresh }) {
   // row): that is held in view like a section while the page fills in.
   if (fresh && (p.section || p.setting)) {
     done.then((id) => revealSection(entry.tab, p.section || id));
-  } else if (changed && !(fresh && (p.cell || p.check || p.rel || p.setting || p.step || p.stage || p.box || p.filter))) {
+  } else if (changed && !(fresh && (p.cell || p.check || p.rel || p.setting || p.step || p.stage || p.box || p.filter || p.item))) {
     restoreScroll(!fresh && _entryScroll[entry.id] != null ? _entryScroll[entry.id] : (_scroll[entry.tab] || 0));
   }
 }
