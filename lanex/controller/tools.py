@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -425,6 +426,50 @@ def _version_string(blob: str) -> str:
     return (blob or "").splitlines()[0].strip()[:120] if blob else ""
 
 
+def _same_venv_script(path: str) -> bool:
+    """True when *path* is a console script run by this very interpreter
+    (``#!<this venv>/bin/python``), so its package version is readable here."""
+    try:
+        with open(path, "rb") as f:
+            first = f.readline(512)
+    except OSError:
+        return False
+    if not first.startswith(b"#!"):
+        return False
+    interp = first[2:].strip().split(b" ", 1)[0].decode("utf-8", "replace")
+    exe = sys.executable or ""
+    return bool(interp and exe) and os.path.dirname(os.path.abspath(interp)) == \
+        os.path.dirname(os.path.abspath(exe))
+
+
+def _fast_version(argv0: str, version_flag: List[str]) -> Optional[str]:
+    """The exact text a version probe would print, without starting a process,
+    where that is knowable: this interpreter's ``--version`` and LibreLane's
+    ``--bare-version`` (it prints ``importlib.metadata.version("librelane")``
+    of the interpreter in its shebang). None: run the probe."""
+    if version_flag == ["--version"] and sys.executable and argv0 == sys.executable:
+        return "Python " + sys.version.split()[0]
+    if version_flag == ["--bare-version"] and os.path.basename(argv0) == "librelane" \
+            and _same_venv_script(argv0):
+        v = _module_version("librelane")
+        return v or None
+    return None
+
+
+def _which(candidate: str, path: Optional[str] = None) -> Optional[str]:
+    if path is None:
+        return shutil.which(candidate)
+    return shutil.which(candidate, path=path) if path else None
+
+
+def _windows_path() -> str:
+    """The Windows-drive folders (``/mnt/<drive>/...``) on ``$PATH``."""
+    from . import platform_env
+    raw = os.environ.get("PATH", "")
+    return os.pathsep.join(d for d in raw.split(os.pathsep)
+                           if d and platform_env.is_windows_mount_path(d))
+
+
 def _probe(binaries: List[str], version_flag: List[str]) -> Dict[str, Any]:
     """Return ``{installed, path, version, error}``.
 
@@ -446,8 +491,19 @@ def _probe(binaries: List[str], version_flag: List[str]) -> Dict[str, Any]:
             if not cp.is_file():
                 continue
             argv = [str(cp)] + (version_flag or [])
+        elif wsl:
+            # Linux folders first: a miss on each of the ~50 Windows folders
+            # WSL appends to PATH is a round trip to Windows. They are looked
+            # at only when no Linux build exists, to explain a Windows one.
+            found = _which(candidate, platform_env.linux_only_path())
+            if not found:
+                hit = _which(candidate, _windows_path())
+                if hit and win_only_path is None:
+                    win_only_path = hit
+                continue
+            argv = [found] + (version_flag or [])
         else:
-            found = shutil.which(candidate)
+            found = _which(candidate)
             if not found:
                 continue
             argv = [found] + (version_flag or [])
@@ -457,6 +513,9 @@ def _probe(binaries: List[str], version_flag: List[str]) -> Dict[str, Any]:
             if win_only_path is None:
                 win_only_path = argv[0]
             continue
+        fast = _fast_version(argv[0], version_flag or [])
+        if fast is not None:
+            return {"installed": True, "path": argv[0], "version": _version_string(fast), "error": ""}
         rc, out, err = _shell_exec(argv, timeout=4.0)
         if rc == 0:
             return {
@@ -558,8 +617,44 @@ def _recipe_for(tool: Dict[str, Any]) -> str:
 # tens of seconds and made /api/tools appear hung. Sizes barely change, so
 # cache per path and give the walk a deadline — an unfinished walk returns
 # None (the UI simply omits the size) rather than a made-up partial number.
-_DIR_SIZE_TTL_S = 600.0
-_dir_size_cache: Dict[str, Tuple[float, Optional[int]]] = {}
+# A measured size is kept (also on disk, in LANEX_HOME/cache/pdk-sizes.json)
+# for as long as the tree's real folder and its mtime stay the same: ciel
+# enables another version by pointing the variant at another folder.
+_dir_size_cache: Dict[str, Tuple[Any, Optional[int]]] = {}
+_dir_size_disk_loaded = [False]
+_dir_size_lock = threading.Lock()
+
+
+def _dir_size_file() -> Optional[Path]:
+    try:
+        from . import platform_env
+        return platform_env.home() / "cache" / "pdk-sizes.json"
+    except Exception:
+        return None
+
+
+def _dir_size_key(path: Path) -> Tuple[str, Any]:
+    real = os.path.realpath(str(path))
+    try:
+        mt = os.stat(real).st_mtime_ns
+    except OSError:
+        mt = None
+    return real, mt
+
+
+def _dir_size_remember(real: str, mt: Any, size: int) -> None:
+    with _dir_size_lock:
+        _dir_size_cache[real] = (mt, size)
+        snapshot = {k: [m, s] for k, (m, s) in _dir_size_cache.items() if s is not None}
+    f = _dir_size_file()
+    if f is None:
+        return
+    try:
+        from . import platform_env
+        f.parent.mkdir(parents=True, exist_ok=True)
+        platform_env.atomic_write_text(f, json.dumps(snapshot))
+    except Exception:
+        pass
 
 
 def _dir_size_mb(path: Path, *, deadline_s: float = 3.0) -> Optional[int]:
@@ -568,18 +663,28 @@ def _dir_size_mb(path: Path, *, deadline_s: float = 3.0) -> Optional[int]:
     Used for *installed* PDKs so we show a measured number instead of guessing.
     Walks with ``os.scandir`` and silently skips unreadable entries.
     """
-    key = str(path)
-    hit = _dir_size_cache.get(key)
-    now = time.time()
-    if hit and (now - hit[0]) < _DIR_SIZE_TTL_S and hit[1] is not None:
+    real, mt = _dir_size_key(path)
+    with _dir_size_lock:
+        if not _dir_size_disk_loaded[0]:
+            _dir_size_disk_loaded[0] = True
+            f = _dir_size_file()
+            try:
+                doc = json.loads(f.read_text(encoding="utf-8")) if f and f.is_file() else {}
+                for k, v in (doc.items() if isinstance(doc, dict) else []):
+                    if isinstance(v, list) and len(v) == 2 and isinstance(v[1], int):
+                        _dir_size_cache.setdefault(k, (v[0], v[1]))
+            except Exception:
+                pass
+        hit = _dir_size_cache.get(real)
+    if hit and mt is not None and hit[0] == mt and hit[1] is not None:
         return hit[1]
+    now = time.time()
     stop_at = now + deadline_s
     try:
         total = 0
         stack = [str(path)]
         while stack:
             if time.time() > stop_at:
-                _dir_size_cache[key] = (now, None)
                 return None
             d = stack.pop()
             try:
@@ -597,7 +702,8 @@ def _dir_size_mb(path: Path, *, deadline_s: float = 3.0) -> Optional[int]:
             except OSError:
                 continue
         result = int(total / (1024 * 1024))
-        _dir_size_cache[key] = (now, result)
+        if mt is not None:
+            _dir_size_remember(real, mt, result)
         return result
     except Exception:
         return None
@@ -824,88 +930,207 @@ def container_engine() -> Dict[str, Any]:
     }
 
 
-# Full probe = a dozen version subprocesses + engine probes + PDK sizing; the
-# SPA calls /api/tools on tab open and preflight polls too. 8s of freshness is
-# plenty (installs take minutes and re-query long after expiry) and turns
-# repeat calls into dict lookups instead of multi-second re-probes.
-_CHECK_TOOLS_TTL_S = 8.0
-_check_tools_cache: List[Tuple[float, Dict[str, Any]]] = []
+# The tool probe (a dozen version subprocesses, engine probes, PDK sizing) is
+# the slowest thing LanEx asks the host, and its answer only changes when
+# something is installed, removed or pulled, or Docker is started or stopped.
+# So it is kept for the whole session: installs, uninstalls, pulls and the
+# Tools tab's Recheck clear it (``_check_tools_cache.clear()``), and an answer
+# older than ``_CHECK_TOOLS_TTL_S`` is still returned at once while a fresh one
+# is probed in the background (a daemon started by hand shows up on the next
+# call). Only the very first call of a session waits, for the probes run in
+# parallel.
+_CHECK_TOOLS_TTL_S = 15.0
+
+
+class _InvalidatingCache(list):
+    """A one-entry list cache whose ``clear()`` also tells a probe that was
+    already running not to store its (now possibly stale) answer."""
+
+    gen = 0
+
+    def clear(self) -> None:  # noqa: D102
+        self.gen += 1
+        super().clear()
+
+
+_check_tools_cache: "_InvalidatingCache" = _InvalidatingCache()
+_container_cache: Dict[str, Any] = {"gen": -1, "t": 0.0, "v": None}
+_probe_lock = threading.Lock()          # one full probe at a time (single flight)
+_container_lock = threading.Lock()
+_refreshing = {"tools": False, "container": False}
+_refresh_lock = threading.Lock()
+
+
+def _background(kind: str, fn: Any) -> None:
+    """Run *fn* on a daemon thread unless a refresh of *kind* is running."""
+    with _refresh_lock:
+        if _refreshing[kind]:
+            return
+        _refreshing[kind] = True
+
+    def run() -> None:
+        try:
+            fn()
+        except Exception:
+            pass
+        finally:
+            with _refresh_lock:
+                _refreshing[kind] = False
+
+    threading.Thread(target=run, name=f"lanex-{kind}-refresh", daemon=True).start()
+
+
+def container_status(*, force: bool = False) -> Dict[str, Any]:
+    """:func:`container_engine` plus the image provenance: the ``container``
+    block of :func:`check_tools`, cached the same way. Preflight in container
+    mode needs only this, so it does not wait for the host tool probes."""
+    if not force:
+        c = _container_cache
+        if c["v"] is not None and c["gen"] == _check_tools_cache.gen:
+            if (time.time() - c["t"]) >= _CHECK_TOOLS_TTL_S:
+                _background("container", lambda: container_status(force=True))
+            return c["v"]
+    with _container_lock:
+        c = _container_cache
+        if not force and c["v"] is not None and c["gen"] == _check_tools_cache.gen:
+            return c["v"]
+        gen = _check_tools_cache.gen
+        cont = dict(container_engine())
+        try:
+            from . import container_run
+
+            cont.update(container_run.image_provenance())
+        except Exception:
+            pass
+        if gen == _check_tools_cache.gen:
+            _container_cache.update(gen=gen, t=time.time(), v=cont)
+        return cont
 
 
 def check_tools(*, force: bool = False) -> Dict[str, Any]:
-    """Probe every tool and return a JSON-safe dict (TTL-cached).
+    """Probe every tool and return a JSON-safe dict (session-cached, see above).
 
     Each tool gets: ``key, label, installed, path, version, what,
-    category, install_recipe``. ``force=True`` bypasses the cache (used right
-    after an install/uninstall mutates the very state this reports).
+    category, install_recipe``. ``force=True`` probes now (used right after an
+    install/uninstall mutates the very state this reports, and by Recheck).
     """
     if not force and _check_tools_cache:
         ts, cached = _check_tools_cache[0]
-        if (time.time() - ts) < _CHECK_TOOLS_TTL_S:
-            return cached
-    out = []
-    for t in EDA_TOOLS:
-        info = _probe(t["binary"], t["version_flag"])
-        info = _module_probe_fallback(t["key"], info)
-        out.append(
-            {
-                "key": t["key"],
-                "label": t["label"],
-                "what": t.get("what", ""),
-                "category": t.get("category", "eda"),
-                "installed": info["installed"],
-                "path": info["path"],
-                "version": info["version"],
-                "error": info["error"],
-                "install_recipe": _recipe_for(t),
-                "platform": _platform_key(),
-                "approx_mb": _APPROX_TOOL_MB.get(t["key"]),
-                # No host package — get it via the container image (Pull image).
-                "container_only": bool(t.get("container_only", False)),
-                # Ships inside the LibreLane container image, so once the image
-                # is pulled the tool is usable with zero native install.
-                "in_container": bool(t.get("in_image", False)),
-                # A Windows build was found on the WSL PATH but isn't usable by the
-                # Linux flow (so it's reported missing, with this flag for the UI).
-                "windows_only": bool(info.get("windows_only", False)),
-            }
-        )
+        if (time.time() - ts) >= _CHECK_TOOLS_TTL_S:
+            _background("tools", _refresh_check_tools)
+        return cached
+    with _probe_lock:
+        if not force and _check_tools_cache:
+            return _check_tools_cache[0][1]
+        gen = _check_tools_cache.gen
+        result = _check_tools_uncached()
+        if gen == _check_tools_cache.gen:   # nothing invalidated it meanwhile
+            list.clear(_check_tools_cache)   # replace, not invalidate
+            _check_tools_cache.append((time.time(), result))
+        return result
 
-    # Installed PDKs: a variant is "installed" when it has been enabled into the
-    # PDK root (i.e. ``$PDK_ROOT/<variant>/libs.ref`` exists). This is exactly
-    # what LibreLane resolves at run time, and what the catalog keys against.
-    ciel_probe = _module_probe_fallback("ciel", _probe(["ciel"], ["--version"]))
-    catalog = build_pdk_catalog()
-    installed_pdks: List[str] = []
-    installed_sizes_mb: Dict[str, int] = {}
-    for root in _pdk_roots():
-        for variant in catalog:
-            vdir = root / variant
-            if (vdir / "libs.ref").is_dir() and variant not in installed_pdks:
-                installed_pdks.append(variant)
-                size = _dir_size_mb(vdir)
-                if size is not None:
-                    installed_sizes_mb[variant] = size
+
+def _refresh_check_tools() -> None:
+    with _probe_lock:
+        gen = _check_tools_cache.gen
+        result = _check_tools_uncached()
+        if gen == _check_tools_cache.gen:
+            list.clear(_check_tools_cache)          # replace, not invalidate
+            _check_tools_cache.append((time.time(), result))
+
+
+def warm_check_tools() -> None:
+    """Fill the tool cache in the background if it is empty (preflight in
+    container mode calls this so the Tools tab opens on a ready answer)."""
+    if not _check_tools_cache:
+        _background("tools", lambda: check_tools())
+
+
+def _tool_row(t: Dict[str, Any]) -> Dict[str, Any]:
+    info = _probe(t["binary"], t["version_flag"])
+    info = _module_probe_fallback(t["key"], info)
+    return {
+        "key": t["key"],
+        "label": t["label"],
+        "what": t.get("what", ""),
+        "category": t.get("category", "eda"),
+        "installed": info["installed"],
+        "path": info["path"],
+        "version": info["version"],
+        "error": info["error"],
+        "install_recipe": _recipe_for(t),
+        "platform": _platform_key(),
+        "approx_mb": _APPROX_TOOL_MB.get(t["key"]),
+        # No host package — get it via the container image (Pull image).
+        "container_only": bool(t.get("container_only", False)),
+        # Ships inside the LibreLane container image, so once the image
+        # is pulled the tool is usable with zero native install.
+        "in_container": bool(t.get("in_image", False)),
+        # A Windows build was found on the WSL PATH but isn't usable by the
+        # Linux flow (so it's reported missing, with this flag for the UI).
+        "windows_only": bool(info.get("windows_only", False)),
+        # Kept for the PDK block below (not sent).
+        "_info": info,
+    }
+
+
+def _check_tools_uncached() -> Dict[str, Any]:
+    """Every probe, in parallel: version subprocesses, the container engine
+    (``docker info`` etc.) and PDK sizing do not wait for one another."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="lanex-probe") as pool:
+        cont_f = pool.submit(lambda: container_status(force=True))
+        catalog_f = pool.submit(build_pdk_catalog)
+        rows_f = [pool.submit(_tool_row, t) for t in EDA_TOOLS]
+        catalog = catalog_f.result()
+        # Installed PDKs: a variant is "installed" when it has been enabled into
+        # the PDK root (i.e. ``$PDK_ROOT/<variant>/libs.ref`` exists). This is
+        # exactly what LibreLane resolves at run time, and what the catalog
+        # keys against.
+        installed_pdks: List[str] = []
+        vdirs: List[Tuple[str, Path]] = []
+        for root in _pdk_roots():
+            for variant in catalog:
+                vdir = root / variant
+                if (vdir / "libs.ref").is_dir() and variant not in installed_pdks:
+                    installed_pdks.append(variant)
+                    vdirs.append((variant, vdir))
+        size_f = [(v, pool.submit(_dir_size_mb, vdir)) for v, vdir in vdirs]
+        versions_f = pool.submit(pdk_versions, installed_pdks, catalog)
+        rows = [f.result() for f in rows_f]
+        installed_sizes_mb: Dict[str, int] = {}
+        for v, f in size_f:
+            size = f.result()
+            if size is not None:
+                installed_sizes_mb[v] = size
+        versions = versions_f.result()
+        cont = dict(cont_f.result())
+
+    out = []
+    ciel_info: Optional[Dict[str, Any]] = None
+    for row in rows:
+        info = row.pop("_info")
+        if row["key"] == "ciel":
+            ciel_info = info
+        out.append(row)
+    # The PDK block's "is ciel installed" is the ciel row's own probe (it was
+    # probed a second time, identically, before).
+    if ciel_info is None:
+        ciel_info = _module_probe_fallback("ciel", _probe(["ciel"], ["--version"]))
     pdk_out = {
         "ready": bool(installed_pdks),
         "installed_pdks": installed_pdks,
         "installed_sizes_mb": installed_sizes_mb,
-        "ciel_installed": ciel_probe["installed"],
+        "ciel_installed": ciel_info["installed"],
         "remediation": (
             "Install ciel (the PDK manager), then install a PDK below."
-            if not ciel_probe["installed"]
+            if not ciel_info["installed"]
             else ("Pick a PDK below and click Install." if not installed_pdks else "")
         ),
     }
-    pdk_out["versions"] = pdk_versions(installed_pdks, catalog)
-    cont = dict(container_engine())
-    try:
-        from . import container_run
-
-        cont.update(container_run.image_provenance())
-    except Exception:
-        pass
-    result = {
+    pdk_out["versions"] = versions
+    return {
         "platform": _platform_key(),
         "tools": out,
         "pdk": pdk_out,
@@ -913,9 +1138,6 @@ def check_tools(*, force: bool = False) -> Dict[str, Any]:
         "container": cont,
         "host": host_facts(),
     }
-    _check_tools_cache.clear()
-    _check_tools_cache.append((time.time(), result))
-    return result
 
 
 def pdk_versions(installed: List[str], catalog: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, str]]:

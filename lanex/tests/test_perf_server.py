@@ -340,3 +340,132 @@ def test_disk_cache_round_trips_fast_signatures(tmp_path, probe, monkeypatch):
     ent = history._SUMMARY_CACHE[first[0]["run_dir"]]
     assert ent[2] is not None and isinstance(ent[2], tuple)
     assert history.list_runs(d) == first
+
+
+# --------------------------------------------------------------- tool probe
+
+from lanex.controller import tools  # noqa: E402
+
+
+def test_fast_versions_match_the_probe_output():
+    import shutil
+    import sys
+    rc, out, err = tools._shell_exec([sys.executable, "--version"])
+    assert tools._fast_version(sys.executable, ["--version"]) == (out or err)
+    ll = shutil.which("librelane")
+    if ll and tools._same_venv_script(ll):
+        rc, out, err = tools._shell_exec([ll, "--bare-version"], timeout=30)
+        assert rc == 0 and tools._fast_version(ll, ["--bare-version"]) == out
+    # Anything else still runs the probe.
+    assert tools._fast_version("/usr/bin/yosys", ["--version"]) is None
+    assert tools._fast_version(sys.executable, ["-V"]) is None
+
+
+def test_check_tools_is_session_cached_with_background_refresh(monkeypatch):
+    calls = []
+
+    def fake():
+        calls.append(1)
+        return {"n": len(calls)}
+
+    monkeypatch.setattr(tools, "_check_tools_uncached", fake)
+    tools._check_tools_cache.clear()
+    try:
+        first = tools.check_tools()
+        assert first == {"n": 1} and tools.check_tools() is first
+        # Old answer: returned at once, a fresh one is probed in the background.
+        ts, v = tools._check_tools_cache[0]
+        tools._check_tools_cache[0] = (ts - 3600, v)
+        assert tools.check_tools() is first
+        for _ in range(200):
+            if tools._check_tools_cache and tools._check_tools_cache[0][1] == {"n": 2}:
+                break
+            time.sleep(0.01)
+        assert tools.check_tools() == {"n": 2}
+        # Recheck probes now; an install (clear) forgets the answer.
+        assert tools.check_tools(force=True) == {"n": 3}
+        tools._check_tools_cache.clear()
+        assert tools.check_tools() == {"n": 4}
+    finally:
+        tools._check_tools_cache.clear()
+
+
+def test_a_clear_during_a_probe_is_not_overwritten(monkeypatch):
+    def fake():
+        tools._check_tools_cache.clear()      # an install finished meanwhile
+        return {"stale": True}
+
+    monkeypatch.setattr(tools, "_check_tools_uncached", fake)
+    tools._check_tools_cache.clear()
+    try:
+        assert tools.check_tools() == {"stale": True}
+        assert not tools._check_tools_cache
+    finally:
+        tools._check_tools_cache.clear()
+
+
+def test_container_status_shares_the_invalidation(monkeypatch):
+    n = []
+    monkeypatch.setattr(tools, "container_engine", lambda: n.append(1) or {"ready": True, "n": len(n)})
+    tools._check_tools_cache.clear()
+    try:
+        a = tools.container_status()
+        assert tools.container_status() is a and len(n) == 1
+        tools._check_tools_cache.clear()
+        assert tools.container_status()["n"] == 2
+    finally:
+        tools._check_tools_cache.clear()
+
+
+def test_preflight_container_mode_skips_host_tool_probes(monkeypatch):
+    from lanex.server import routes
+    monkeypatch.setattr(tools, "container_status", lambda force=False: {"ready": True, "engine": "docker"})
+    warmed = []
+    monkeypatch.setattr(tools, "warm_check_tools", lambda: warmed.append(1))
+    monkeypatch.setattr(tools, "check_tools", lambda force=False: pytest.fail("host probes awaited"))
+    assert routes._preflight_container_tools() == {"container": {"ready": True, "engine": "docker"}}
+    assert warmed == [1]
+
+
+def test_windows_path_is_only_searched_without_a_linux_build(monkeypatch):
+    from lanex.controller import platform_env
+    monkeypatch.setattr(platform_env, "is_wsl", lambda: True)
+    monkeypatch.setattr(platform_env, "linux_only_path", lambda path=None: "/usr/bin")
+    monkeypatch.setattr(tools, "_windows_path", lambda: "/mnt/c/x")
+    seen = []
+
+    def which(c, path=None):
+        seen.append(path)
+        return "/usr/bin/" + c if path == "/usr/bin" and c == "here" else None
+
+    monkeypatch.setattr(tools.shutil, "which", which)
+    monkeypatch.setattr(tools, "_shell_exec", lambda argv, timeout=0: (0, "here 1.0", ""))
+    assert tools._probe(["here"], ["--version"])["installed"] is True
+    assert seen == ["/usr/bin"]
+    seen.clear()
+    assert tools._probe(["gone"], ["--version"])["installed"] is False
+    assert seen == ["/usr/bin", "/mnt/c/x"]
+
+
+def test_pdk_size_cached_by_mtime_and_on_disk(tmp_path, monkeypatch):
+    monkeypatch.setenv("LANEX_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(tools, "_dir_size_cache", {})
+    monkeypatch.setattr(tools, "_dir_size_disk_loaded", [False])
+    tree = tmp_path / "pdk" / "sky130A"
+    (tree / "libs.ref").mkdir(parents=True)
+    (tree / "libs.ref" / "a.lib").write_bytes(b"x" * (3 * 1024 * 1024))
+    walks = []
+    real_scandir = os.scandir
+    monkeypatch.setattr(tools.os, "scandir", lambda p: walks.append(p) or real_scandir(p))
+    assert tools._dir_size_mb(tree) == 3
+    n = len(walks)
+    assert tools._dir_size_mb(tree) == 3 and len(walks) == n            # no second walk
+    assert (tmp_path / "home" / "cache" / "pdk-sizes.json").is_file()
+    # A fresh process reads the size from disk.
+    monkeypatch.setattr(tools, "_dir_size_cache", {})
+    monkeypatch.setattr(tools, "_dir_size_disk_loaded", [False])
+    assert tools._dir_size_mb(tree) == 3 and len(walks) == n
+    # The tree changed (its mtime moved): measured again.
+    time.sleep(0.02)
+    (tree / "b.lib").write_bytes(b"y" * (2 * 1024 * 1024))
+    assert tools._dir_size_mb(tree) == 5 and len(walks) > n

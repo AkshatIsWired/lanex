@@ -894,18 +894,24 @@ _PREFLIGHT_TOOLS_CACHE: Dict[str, Any] = {"t": 0.0, "v": None}
 
 
 def _preflight_tools_cached(ttl: float = 8.0) -> Dict[str, Any]:
-    import time
-    now = time.time()
-    cached = _PREFLIGHT_TOOLS_CACHE
-    if cached["v"] is not None and (now - cached["t"]) < ttl:
-        return cached["v"]
+    # check_tools() is session-cached (cleared by installs, pulls and
+    # Recheck; refreshed in the background), so this is a dict lookup after
+    # the first call and an install shows at once, not up to 8 s later.
     try:
-        v = tools_mod.check_tools()
+        return tools_mod.check_tools()
     except Exception:
-        v = {}
-    cached["t"] = now
-    cached["v"] = v
-    return v
+        return {}
+
+
+def _preflight_container_tools() -> Dict[str, Any]:
+    """Container mode needs only the engine and image, not the host tool
+    probes: those warm up in the background for the Tools tab."""
+    try:
+        cont = tools_mod.container_status()
+        tools_mod.warm_check_tools()
+        return {"container": cont}
+    except Exception:
+        return {}
 
 
 def h_preflight(handler: Any) -> None:
@@ -934,7 +940,8 @@ def h_preflight(handler: Any) -> None:
         (lambda: pdk_mod.check_pdk_ready(pdk, scl or None, run_mode)) if pdk
         else (lambda: {"ready": False, "missing": ["no PDK selected"]})
     )
-    _tools_future = _pool.submit(_preflight_tools_cached)
+    _tools_future = _pool.submit(_preflight_container_tools if run_mode == "container"
+                                 else _preflight_tools_cached)
 
     # 1) Design folder + config + sources.
     design_ok = bool(design_dir) and Path(design_dir).is_dir()
