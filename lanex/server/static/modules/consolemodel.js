@@ -20,7 +20,7 @@ export function pickCommand(c) {
 // LanEx's runner pins it (LIBRELANE_IMAGE_OVERRIDE) when it is a container run.
 export function commandScript({ command, cwd, image, title } = {}) {
   const out = ["#!/usr/bin/env bash"];
-  if (title) out.push("# " + title);
+  if (title) out.push("# " + oneLine(title));
   out.push("set -euo pipefail");
   if (cwd) out.push("cd " + shq(cwd));
   if (image && /--dockerized\b/.test(command || "")) out.push("export LIBRELANE_IMAGE_OVERRIDE=" + shq(image));
@@ -32,21 +32,30 @@ export function commandScript({ command, cwd, image, title } = {}) {
 // a cd when the folder changes); config edits and the rest become comments, so
 // the script says everything that happened but runs only real commands.
 export function journalScript(entries, { title = "What LanEx ran this session" } = {}) {
-  const out = ["#!/usr/bin/env bash", "# " + title, "set -euo pipefail"];
+  const out = ["#!/usr/bin/env bash", "# " + oneLine(title), "set -euo pipefail"];
   let cwd = null, image = null;
   for (const e of entries || []) {
     out.push("");
-    out.push("# " + (e.time ? e.time + " " : "") + (e.title || e.kind || "action"));
-    for (const n of e.notes || []) out.push("#   " + n);
+    out.push("# " + oneLine((e.time ? e.time + " " : "") + (e.title || e.kind || "action")));
+    for (const n of e.notes || []) out.push("#   " + oneLine(n));
     if (e.command) {
       if (e.cwd && e.cwd !== cwd) { out.push("cd " + shq(e.cwd)); cwd = e.cwd; }
       if (e.image && e.image !== image && /--dockerized\b/.test(e.command)) {
         out.push("export LIBRELANE_IMAGE_OVERRIDE=" + shq(e.image)); image = e.image;
       }
-      out.push(e.command);
+      out.push(oneLine(e.command));
     }
   }
   return out.join("\n") + "\n";
+}
+
+// A line break inside a note (a config value, an error, a run name) would end
+// the "# ..." comment and turn the rest into a command: keep each on one line.
+// Built from char codes: a literal U+2028 inside a regex literal is a line break to the parser.
+const BREAKS = new RegExp("[\\r\\n" + String.fromCharCode(0x85, 0x2028, 0x2029) + "]+", "g");
+const CTRL = new RegExp("[" + String.fromCharCode(0) + "-" + String.fromCharCode(8, 11) + "-" + String.fromCharCode(31, 127) + "]", "g");
+export function oneLine(s) {
+  return String(s ?? "").replace(BREAKS, " ").replace(CTRL, "?");
 }
 
 // A config edit through the app as a one-line diff: "FP_CORE_UTIL 50 -> 60".
