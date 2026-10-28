@@ -203,12 +203,15 @@ def _run_signature(run_dir: Path) -> tuple:
         _mtime_ns(os.path.join(rd, "final", "metrics.json")),
         _mtime_ns(os.path.join(rd, "metrics.json")),
         _mtime_ns(os.path.join(rd, "runtime.yaml")),
+        # The Runs table's origin and note columns (rewritten in place).
+        _mtime_ns(os.path.join(rd, "gui-run.json")),
+        _mtime_ns(os.path.join(rd, _NOTE_FILE)),
     )
 
 
 # The cache is also kept on disk, so the first listing after LanEx starts (a
 # cold summary of 4 runs on /mnt/c measured 6.8 s; cached, 65 ms) is fast too.
-_CACHE_FILE_VERSION = 1
+_CACHE_FILE_VERSION = 2
 _cache_loaded = False
 _cache_dirty = False
 
@@ -356,6 +359,16 @@ def _summarise(run_dir: Path) -> RunSummary:
         "design__instance__count",
         "antenna__violating__nets",
         "design__lvs_error__count",
+        # The Runs table's columns (all LibreLane's own final metrics).
+        "timing__hold__ws",
+        "design__die__area",
+        "design__die__bbox",
+        "design__instance__area__stdcell",
+        "design__instance__utilization",
+        "power__total",
+        "magic__drc_error__count",
+        "klayout__drc_error__count",
+        "route__drc_errors",
     ]
     key: Dict[str, Any] = {}
     for k in hero_keys:
@@ -378,7 +391,29 @@ def _summarise(run_dir: Path) -> RunSummary:
         key_metrics=key,
         imported=(run_dir / _IMPORT_MARKER).is_file(),
         pinned=(run_dir / _PIN_MARKER).is_file(),
+        origin=run_origin(run_dir),
+        note=read_note(run_dir)[:200],
     )
+
+
+def run_origin(run_dir: Path) -> Dict[str, Any]:
+    """Where a run came from, for the Runs table: ``{"kind": "manual"}``,
+    ``{"kind": "fix", "parent", "stage", "changes"}`` (resumed from another
+    run by the fix sheet) or ``{"kind": "sweep", "sweep_id", "values"}`` (a
+    sweep point; ``gui-run.json`` ``sweep``, written by the sweep queue)."""
+    doc = _read_json(run_dir / "gui-run.json")
+    doc = doc if isinstance(doc, dict) else {}
+    b = doc.get("branched_from")
+    if isinstance(b, dict) and b.get("tag"):
+        ch = b.get("changes")
+        return {"kind": "fix", "parent": str(b["tag"]), "stage": b.get("stage"),
+                "changes": ch if isinstance(ch, list) else []}
+    sw = doc.get("sweep")
+    if isinstance(sw, dict) and sw.get("id"):
+        vals = sw.get("values")
+        return {"kind": "sweep", "sweep_id": str(sw["id"]),
+                "values": vals if isinstance(vals, dict) else {}}
+    return {"kind": "manual"}
 
 
 def _parse_runtime_txt(path: Path) -> Optional[float]:

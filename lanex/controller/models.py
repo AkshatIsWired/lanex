@@ -133,6 +133,8 @@ class RunSummary:
     key_metrics: Dict[str, Any] = field(default_factory=dict)
     imported: bool = False
     pinned: bool = False
+    origin: Dict[str, Any] = field(default_factory=dict)
+    note: str = ""
 
 
 @dataclass(frozen=True)
