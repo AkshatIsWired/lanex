@@ -128,6 +128,24 @@ export function countText(res) {
   return n ? n + " problem" + (n === 1 ? "" : "s") : "";
 }
 
+// The status bar badge for a run, from its verdict ({state, label, blockers,
+// warnings}): {tone: fail|warn, text} or null (nothing to show). Without a
+// verdict, the problems' own counts.
+export function badgeOf(v, res) {
+  const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+  if (v && v.state) {
+    if (v.state === "failed") return { tone: "fail", text: v.blockers ? plural(v.blockers, "check") + " failed" : (v.label || "Failed") };
+    if (v.state === "warning") return { tone: "warn", text: v.timing_miss ? "Timing misses" : (v.label || "Warnings") };
+    if (v.state === "passed") return v.warnings ? { tone: "warn", text: plural(v.warnings, "warning") } : null;
+    if (v.state === "incomplete") return { tone: "warn", text: v.label || "Not enough to call it" };
+    return null;   // running, stopped: no problems to count
+  }
+  const c = (res && res.counts) || {};
+  if (c.fail) return { tone: "fail", text: plural(c.fail, "problem") };
+  if (c.warn) return { tone: "warn", text: plural(c.warn, "warning") };
+  return null;
+}
+
 // The status bar's count for the run on the results pages: "3 problems in
 // try-2", a link to Verify filtered to them. Hidden when there are none.
 export function wireProblemCount() {
@@ -140,12 +158,16 @@ export function wireProblemCount() {
     if (!tag) { b.hidden = true; return; }
     const res = await problemsOf(tag, { fresh });
     if (my !== tok) return;
-    const text = countText(res);
-    b.hidden = !text;
-    if (!text) return;
-    const fail = (res.counts || {}).fail > 0;
-    b.className = "st-item st-problems is-" + (fail ? "fail" : "warn");
-    b.querySelector(".st-problems-t").textContent = text + " in " + tag;
+    // The count and colour follow the shared run verdict (the one Flow's card
+    // and Verify show): blockers in red, warnings only in amber.
+    const row = ctx.contextRow(tag);
+    const vb = badgeOf(row && row.verdict, res);
+    b.hidden = !vb;
+    if (!vb) return;
+    b.className = "st-item st-problems is-" + vb.tone;
+    const mk = b.querySelector(".vf-mark");
+    if (mk) mk.className = "vf-mark is-" + vb.tone;
+    b.querySelector(".st-problems-t").textContent = vb.text + " in " + tag;
     const top = (res.problems || [])[0];
     b.dataset.tip = (top ? top.title + ". " : "") + "Open them in Verify.";
   };
