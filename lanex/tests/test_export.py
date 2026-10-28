@@ -44,7 +44,10 @@ def test_export_html_standalone(tmp_path: Path):
     r = history.export_run(run, "html")
     assert r["ok"]
     assert "<!doctype html>" in r["text"].lower()
-    assert "Tape-out ready" in r["text"]  # clean -> ready
+    # The report reuses Verify's three-state verdict: these four metrics never
+    # reached signoff (no LVS, DRC checkers or antenna), so it must not say ready.
+    assert "Signoff incomplete" in r["text"]
+    assert "Tape-out ready" not in r["text"]
     assert "R1" in r["text"]
 
 
