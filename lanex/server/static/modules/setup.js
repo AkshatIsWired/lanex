@@ -229,7 +229,11 @@ export async function adoptDesignDir(designDir, opts = {}) {
   const explicit = opts.explicit !== false;
   // Another project: the last one's runs are not this one's (Setup's strip
   // ticked "Run the flow" on a new project that had never run).
-  if (state.designDir !== designDir) state.runs = [];
+  if (state.designDir !== designDir) {
+    state.runs = [];
+    // Nor is the last run's result in the status bar and window title.
+    if (state.designDir) import("./runend.js").then((m) => m.clearRunResult()).catch(() => {});
+  }
   state.designDir = designDir;
   state.designExplicit = explicit;
   rememberDesign(designDir);
@@ -970,9 +974,9 @@ export function paintRunning(running) {
     pill?.classList.add("pill-running");
     if (pill) pill.textContent = "running";
   } else {
-    if (b) b.disabled = !state.designDir;
+    if (b) b.disabled = !state.designDir || !!state.designMissing;
     if (c) { c.disabled = true; c.hidden = true; }   // Stop shows only while a run is live
-    if (g) { g.disabled = !state.designDir; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); paintRunLabel(); }
+    if (g) { g.disabled = !state.designDir || !!state.designMissing; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); paintRunLabel(); }
     pill?.classList.add("pill-pending");
     pill?.classList.remove("pill-running");
     if (pill) pill.textContent = "idle";
