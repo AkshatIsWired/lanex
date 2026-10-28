@@ -28,6 +28,9 @@ from typing import Dict, List, Tuple
 # What each test file protects — the "implication" column. A file not listed
 # gets the generic regression note (still counted, never hidden).
 IMPLICATIONS: Dict[str, str] = {
+    "test_console_reproduce": "The Console's Reproduce block gives the exact command, config and image a run used, so it reruns headless without LanEx.",
+    "test_sweeps": "A sweep point that failed is shown as failed with its reason, points are named by their value, and stop-early halts the queue.",
+    "test_tools_tab_facts": "The Tools page reports installed versus LanEx-tested versions honestly and labels anything else Custom.",
     "test_pdkfeed": "PDK files are fetched from the mirror first, resumed, and used only when their SHA-256 matches the pin.",
     "test_goldens": "Metric passthrough is byte/value-faithful; non-finite metrics never reach the wire raw (Fear A).",
     "test_failing_run": "A run that FAILED signoff (real DRC/LVS/timing) is never shown as tape-out ready (Fear A, known-bad).",
