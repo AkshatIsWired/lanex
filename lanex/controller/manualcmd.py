@@ -59,6 +59,8 @@ _PYTHON = {"python", "python3"}
 # (pull_image, the flow runner) builds argv directly and never goes through this
 # validator, so narrowing here costs no functionality.
 _CONTAINER_RO = {"version", "info", "images", "ps", "pull", "logs", "inspect"}
+# ciel/volare: read-only subcommands (and bare help/version).
+_PDK_RO = {"", "ls", "ls-remote", "ls-pdks", "output", "path", "--version", "--help", "-h"}
 # ``docker image <sub>`` — only the read-only sub-subcommands.
 _CONTAINER_IMAGE_RO = {"inspect", "ls", "history"}
 # Never allow these even if someone adds them above — privilege escalation /
@@ -117,6 +119,19 @@ def validate(command: str) -> Dict[str, Any]:
             return {"ok": False, "error": f"'{prog} {sub}' isn't allowed from the GUI console — "
                     "only read-only/status commands are (version, info, images, ps, pull, logs, "
                     "inspect). Run other container commands in your own terminal."}
+    if prog in ("ciel", "volare"):
+        # The PDK store LanEx runs from: only the read-only subcommands here.
+        # `ciel rm`/`prune` delete PDK versions and `enable` switches the one
+        # every run uses; those belong in Tools or your own terminal.
+        sub = argv[1].lower() if len(argv) >= 2 else ""
+        if sub not in _PDK_RO:
+            return {"ok": False, "error": f"'{prog} {sub}' isn't allowed from the GUI console: it changes the "
+                    "PDK store LanEx runs from. Only " + ", ".join(sorted(s for s in _PDK_RO if s)) +
+                    " are. Install or remove PDKs in Tools, or use your own terminal."}
+    if prog == "yosys" and any(t.lstrip().startswith("!") for t in argv[1:]):
+        # A yosys script line starting with "!" runs a shell command.
+        return {"ok": False, "error": "yosys '!' runs a shell command, which isn't allowed here. "
+                "Run it in your own terminal."}
     return {"ok": True, "argv": argv, "base": prog}
 
 
