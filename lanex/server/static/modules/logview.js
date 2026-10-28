@@ -123,7 +123,11 @@ export class LogView {
   append(texts) {
     if (!texts.length) return;
     const start = this.lines.length;
-    for (const t of texts) this._push(t);
+    // One event may carry several lines ("a\nb", batched by the server): one row each.
+    for (const t of texts) {
+      if (typeof t === "string" && t.indexOf("\n") >= 0) { for (const part of t.replace(/\r/g, "").split("\n")) this._push(part); }
+      else this._push(t);
+    }
     const add = [];
     for (let i = start; i < this.lines.length; i++) if (this._keep(this.lines[i])) add.push(i);
     this.view.push(...add);
