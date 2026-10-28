@@ -263,6 +263,9 @@ function model() {
       steps[i].secs = disk.get(steps[i].id)?.runtime_s ?? null;
     }
   }
+  // The number each step shows (turned-off steps have none): FS.stepNumbers.
+  const nums = FS.stepNumbers(steps.map((s) => s.status));
+  steps.forEach((s, i) => { s.no = nums[i]; });
   // Metrics as of the end of each step (the server sends what changed).
   let acc = {};
   for (const s of steps) { if (s.changed) acc = { ...acc, ...s.changed }; s.metrics = acc; }
@@ -636,6 +639,9 @@ function paintSteps(steps, stages) {
   for (const s of steps) {
     const el = F.rows.get(s.id);
     if (!el) continue;
+    const no = el.querySelector(".fl-step-no");
+    const noTxt = s.no == null ? "–" : two(s.no);
+    if (no && no.textContent !== noTxt) no.textContent = noTxt;
     const cls = "fl-step is-" + s.status + (s.from ? " is-reused" : "") + (shown && shown.id === s.id ? " is-sel" : "");
     if (el.className !== cls) {
       el.className = cls; el.firstChild.className = "vf-mark is-" + (MARK[s.status] || "not_run");
@@ -670,7 +676,7 @@ function paintSteps(steps, stages) {
   const now = $("fl-now");
   const off = !!running && !F.follow;
   now.hidden = !off;
-  if (off) setHTML(now, icon("chevron", { size: 12 }) + " Now: " + esc(two(running.i + 1) + " · " + stepLabel(running.id)));
+  if (off) setHTML(now, icon("chevron", { size: 12 }) + " Now: " + esc((running.no == null ? "" : two(running.no) + " · ") + stepLabel(running.id)));
   // A link to a step or stage (revealInFlow), once its row is there.
   const r = F.reveal;
   const target = r && (r.step ? F.rows.get(r.step) : F.heads.get(r.stage));
@@ -684,7 +690,7 @@ function rowHtml(s) {
   const tool = s.id.split(".")[0];
   return "<button class='fl-step' data-step='" + esc(s.id) + "'>" +
     "<span class='vf-mark'></span>" +
-    "<span class='fl-step-no'>" + two(s.i + 1) + "</span>" +
+    "<span class='fl-step-no'>" + (s.no == null ? "–" : two(s.no)) + "</span>" +
     "<span class='fl-step-name'>" + esc(stepLabel(s.id)) + "</span>" +
     "<span class='fl-step-tool' style='--tool:" + (TOOL[tool] || "var(--text-muted)") + "'>" + esc(TOOL_LABEL[tool] || tool) + "</span>" +
     "<span class='fl-step-time'></span></button>";
@@ -761,7 +767,7 @@ function stepMetaHtml(s) {
   const src = (F.src && [...(F.src.stages || []), ...(F.src.steps || [])].find((x) => x.step === s.dir)) || null;
   const odb = s.dir && /^(OpenROAD|Odb)\./.test(s.id) && s.status === "done" && F.rs && F.rs.design_name ? s.dir + "/" + F.rs.design_name + ".odb" : "";
   return "<button class='fl-id' data-fl='copy-id' data-id='" + esc(s.id) + "' title='Copy the step ID'>" + esc(s.id) + " " + icon("file", { size: 11 }) + "</button>" +
-    "<span>" + esc(FS.stageLabel(s.stage)) + " · step " + (s.i + 1) + "</span>" +
+    "<span>" + esc(FS.stageLabel(s.stage)) + (s.no == null ? " · turned off" : " · step " + s.no) + "</span>" +
     (s.secs != null && s.status !== "running" ? "<span>" + fmtDur(s.secs) + (bs && bs.runtime_s ? " <span class='muted'>(was " + fmtDur(bs.runtime_s) + ")</span>" : "") + "</span>" : "") +
     (s.peak ? "<span>" + Math.round(s.peak) + " MiB peak</span>" : "") +
     "<span class='fl-insp-acts'>" +

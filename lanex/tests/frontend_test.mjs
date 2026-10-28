@@ -1255,6 +1255,13 @@ check("steps: one count meaning (turned-off steps out of the total, current = do
   assert.deepEqual(FS.stepCounts(live), { done: 2, total: 4, skipped: 1, current: 3 });
 });
 
+check("steps: list numbers skip turned-off steps (list N == header 'Step N' == NN- folder)", () => {
+  const live = ["done", "done", "skipped", "running", "pending"];
+  assert.deepEqual(FS.stepNumbers(live), [1, 2, null, 3, 4]);
+  // The running step's list number is the header's "Step N of M".
+  assert.equal(FS.stepNumbers(live)[3], FS.stepCounts(live).current);
+});
+
 // The run bar never guesses pass/fail for a verdict state it doesn't know.
 {
   {
