@@ -453,17 +453,30 @@ function etaSecs(steps) {
   return left;
 }
 
+// The shared run verdict ({state, label, stage}) for the shown run: Verify's
+// copy once it is read, else the run list's.
+function runVerdict() {
+  if (F.vf && F.vf.run_verdict) return F.vf.run_verdict;
+  const row = (ctx.contextRuns() || []).find((r) => r.tag === F.tag &&
+    (!F.design || !r._design || ctx.normDir(r._design) === ctx.normDir(F.design)));
+  return (row && row.verdict) || null;
+}
+
 function failHtml(rx, stages) {
   const c = rx.card || {};
-  const stg = stages.find((s) => s.id === rx.stage);
+  // The word and stage are the shared run verdict's (Runs, the run bar and
+  // Analytics say the same): a step that raised is "Failed", not "Stopped".
+  const rv = runVerdict();
+  const word = rv && rv.state === "stopped" ? "Stopped" : "Failed";
+  const stg = stages.find((s) => s.id === ((rv && rv.stage) || rx.stage));
   const where = (stg ? stg.label + " · " : "") + stepLabel(rx.step && rx.step.id) + (rx.step ? " (step " + rx.step.n + ")" : "");
-  const title = c.title || ("Stopped at " + stepLabel(rx.step && rx.step.id));
+  const title = c.title || (word + " at " + stepLabel(rx.step && rx.step.id));
   const plain = c.plain || "The tool reported the error below. The step's log has the lines around it.";
   const ev = (rx.errors || []).slice(0, 3).join("\n") || (rx.at && rx.at.text) || "";
   const fixes = (c.fixes || []).length ? fixListHtml(c.fixes, { tag: F.tag, title }) : "";
   const layoutSrc = stageSource(rx.stage, true);
   return "<div class='an-verdict fl-hero fl-fail is-fail'><div class='an-verdict-main" + (fixes ? " fl-split" : "") + "'>" +
-    "<div class='fl-split-a'><div class='an-eyebrow'>Stopped · " + esc(where) + "</div>" +
+    "<div class='fl-split-a'><div class='an-eyebrow'>" + word + " · " + esc(where) + "</div>" +
     "<h2 class='an-title'>" + esc(title) + "</h2>" + branchHtml() +
     "<p class='an-lede'>" + esc(plain) + "</p>" +
     (ev ? "<div class='fl-ev'><pre>" + esc(ev) + "</pre>" + (c.code ? "<span class='fl-code'>" + esc(c.code) + "</span>" : "") + "</div>" : "") +
