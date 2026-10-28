@@ -148,3 +148,30 @@ def test_a_lint_checker_that_raised_shows_verilators_own_lines(tmp_path):
     # "Show it in the log" opens the Verilator step's log at the error.
     assert rx["at"]["step"] == "Verilator.Lint" and rx["at"]["line"] == 3
     assert rx["at"]["path"] == "01-verilator-lint/verilator-lint.log"
+
+
+def test_a_synth_check_that_raised_names_the_loop_and_its_lines(tmp_path):
+    design = tmp_path / "brk"
+    run = design / "runs" / "loop"
+    run.mkdir(parents=True)
+    steps = ["01-verilator-lint", "02-yosys-synthesis", "03-checker-yosyssynthchecks"]
+    for d in steps:
+        (run / d).mkdir()
+        (run / d / "state_in.json").write_text("{}")
+    for d in steps[:2]:
+        (run / d / "state_out.json").write_text("{}")
+    src = str(design) + "/src/brk.v"
+    block = "".join(
+        ("Warning: found logic loop in module brk:\n"
+         "    cell $or$" + src + ":11$3 ($or) source: " + src + ":11.17-11.33\n"
+         "      A[%d] --> Y[%d]\n"
+         "    cell $and$" + src + ":10$2 ($and) source: " + src + ":10.17-10.38\n"
+         "      B[%d] --> Y[%d]\n") % (b, b, b, b) for b in range(4))
+    (run / "02-yosys-synthesis" / "yosys-synthesis.log").write_text(
+        "19. Executing CHECK pass\n" + block + "Found and reported 4 problems.\n", encoding="utf-8")
+    (run / "resolved.json").write_text("{}")
+    (run / "error.log").write_text("[Checker.YosysSynthChecks] 4 synthesis check errors found.\n")
+    (run / "warning.log").write_text("")
+    card = runexplain.explain_run(run)["card"]
+    assert card["title"] == "Synthesis found structural problems"
+    assert card["evidence"] == ["Warning: found logic loop in module brk (src/brk.v:11, src/brk.v:10) (×4)"]

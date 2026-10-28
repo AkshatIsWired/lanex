@@ -144,22 +144,41 @@ def _checker_evidence(run: "verify._Run", tool_id: str, design_dir: Optional[Pat
     log = _step_log(run.dir, step["dir"])
     if log is None:
         return None
-    rx = _VL_RX if tool_id.startswith("Verilator") else _YS_RX
-    hits = []
-    for i, ln in enumerate(_read(log).splitlines(), 1):
+    vl = tool_id.startswith("Verilator")
+    rx = _VL_RX if vl else _YS_RX
+    lines = _read(log).splitlines()
+    rel = (lambda t: t.replace(str(design_dir).rstrip("/") + "/", "")) if design_dir is not None else (lambda t: t)
+    hits: List[Any] = []
+    seen: Dict[str, int] = {}
+    for i, ln in enumerate(lines, 1):
         m = rx.match(ln)
         if not m or "Exiting due to" in ln:
             continue
-        text = ln.strip()
-        if design_dir is not None:
-            text = text.replace(str(design_dir).rstrip("/") + "/", "")
-        err = tool_id.startswith("Verilator") and m.group(1) == "Error" or ln.lstrip().upper().startswith("ERROR")
-        hits.append((0 if err else 1, i, text[:400]))
+        text = rel(ln.strip())
+        if not vl:
+            # Yosys puts where on the indented lines below ("source: f.v:11.17-11.33"):
+            # name the files and lines, so a loop or undriven wire points at the RTL.
+            where = []
+            for nxt in lines[i:i + 12]:
+                if not nxt.startswith(" "):
+                    break
+                for s in re.findall(r"source: (\S+?):(\d+)\.", nxt):
+                    w = rel(s[0]) + ":" + s[1]
+                    if w not in where:
+                        where.append(w)
+            if where:
+                text = text.rstrip(":") + " (" + ", ".join(where[:4]) + ")"
+        if text in seen:
+            hits[seen[text]][3] += 1
+            continue
+        err = vl and m.group(1) == "Error" or ln.lstrip().upper().startswith("ERROR")
+        seen[text] = len(hits)
+        hits.append([0 if err else 1, i, text[:400], 1])
     if not hits:
         return None
     hits.sort(key=lambda h: (h[0], h[1]))
     first = hits[0]
-    return {"lines": [h[2] for h in hits[:3]],
+    return {"lines": [h[2] + (" (×%d)" % h[3] if h[3] > 1 else "") for h in hits[:3]],
             "at": {"path": step["dir"] + "/" + log.name, "line": first[1], "text": first[2], "step": tool_id}}
 
 
