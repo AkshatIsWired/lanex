@@ -8,7 +8,7 @@
 // RTL-to-GDS run. Shares api.js + SSE; no bundler.
 import { api, sse, fmt } from "../api.js";
 import { Editor } from "./editor.js";
-import { parseVCD, formatTime, parseTimescale, valueAt } from "./vcd.js";
+import { parseVCD, formatTime, parseTimescale, valueAt, plainTicks } from "./vcd.js";
 import { explain, TESTBENCH_STYLE } from "./lintinfo.js";
 import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
@@ -2032,7 +2032,7 @@ async function loadWaveform(vcdRel, partial) {
     const shown = state.wave ? state.wave.rows.length : vcd.signals.length;
     const all = state.wave ? state.wave.vars.length : vcd.signals.length;
     note("Waveform: " + (shown === all ? shown + (shown === 1 ? " signal" : " signals") : shown + " of " + all + " signals shown") +
-      " over " + formatTime(vcd.end, vcd.tick) + ".");
+      " over " + formatTime(vcd.end, vcd.tick) + (plainTicks(vcd.tick) ? " time units (no `timescale)" : "") + ".");
   } catch (ex) {
     note("Could not load waveform: " + (ex.message || ex), true);
   }

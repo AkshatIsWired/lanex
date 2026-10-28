@@ -288,6 +288,9 @@ check("vcd.js: times read in real units, exact to the dump's resolution", () => 
   assert.equal(formatTime(5, parseTimescale("10ns")), "50 ns");
   assert.equal(formatTime(120020, ps, 20), "120.02 ns");            // ruler label, decimals from the step
   assert.equal(formatTime(0, ps), "0");
+  // No `timescale (Icarus writes 1s): plain time units, never "2680 s".
+  assert.equal(formatTime(2680, parseTimescale("1s")), "2680");
+  assert.equal(formatTime(200, parseTimescale("1s"), 200), "200");
 });
 
 check("vcd.js: aliases stay addressable; values come from the shared stream", () => {
