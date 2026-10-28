@@ -435,6 +435,22 @@ def _worst(run: _Run, base: str) -> Optional[float]:
 
 
 # ---------------------------------------------------------------- the checks
+def _antenna_final(run: _Run) -> bool:
+    """True once the antenna check after detailed routing has run (Classic
+    runs OpenROAD.CheckAntennas after global routing too, as an estimate)."""
+    drt = run.step("OpenROAD.DetailedRouting")
+    if drt is None or drt["status"] != "done":
+        return False
+    for s in run.steps:
+        if s["n"] <= drt["n"] or s["status"] != "done":
+            continue
+        sid = re.sub(r"-\d+$", "", s["id"] or "")
+        sdir = re.sub(r"-\d+$", "", s["dir"].split("-", 1)[-1]).lower()
+        if sid == "OpenROAD.CheckAntennas" or sdir == "openroad-checkantennas":
+            return True
+    return False
+
+
 def _checks(run: _Run) -> List[Dict[str, Any]]:
     m = run.metrics
     out: List[Dict[str, Any]] = []
@@ -590,6 +606,12 @@ def _checks(run: _Run) -> List[Dict[str, Any]]:
         if m.get("antenna_diodes_count") is not None:
             rec["breakdown"].append({"label": "diodes inserted", "metric": "antenna_diodes_count",
                                      "value": m.get("antenna_diodes_count")})
+    # Classic checks antennas twice: after global routing (an estimate, before
+    # the repair and detailed routing) and after detailed routing (the real
+    # one). A run cut off before the second must not be judged on the first.
+    if not run.completed and rec["status"] in (_PASS, _FAIL) and not _antenna_final(run):
+        rec["estimate_only"] = ("the antenna check after detailed routing (the one checked at "
+                                "global routing is an estimate, before antenna repair)")
     out.append(rec)
 
     # --- Timing sign-off (multi-corner STA) -------------------------------------
@@ -688,7 +710,8 @@ def _checks(run: _Run) -> List[Dict[str, Any]]:
         for r in out:
             ck, tl = r.get("checker"), r.get("tool")
             ref = ck if ck else tl
-            if not ref or ref.get("status") != "absent":
+            est = r.pop("estimate_only", None)
+            if not est and (not ref or ref.get("status") != "absent"):
                 continue
             if r["status"] in (_PASS, _WARN, _FAIL, _INFO):
                 r["interim"] = r["value"]
@@ -696,9 +719,16 @@ def _checks(run: _Run) -> List[Dict[str, Any]]:
                 r["value"] = None
                 r["corners"] = []
                 r["detail"] = _no_data_reason(run, ck, tl)
+                if est and not any(s["status"] == "stopped" for s in run.steps):
+                    last = run.steps[-1] if run.steps else None
+                    r["detail"] = (f"Not reached: the run ended after step {last['n']} "
+                                   f"({last['id'] or last['dir']}), before {est}."
+                                   if last else f"Not reached: the run ended before {est}.")
                 if r["interim"] is not None and run.metrics_from:
+                    iv = r["interim"]
+                    iv = f"{iv:g}" if isinstance(iv, float) else iv
                     r["detail"] += (f" The last value LibreLane recorded (after step {run.metrics_from['n']}, "
-                                    f"an earlier estimate) was {r['interim']}.")
+                                    f"an earlier estimate) was {iv}.")
 
     # Report files that back each check (relative to the run).
     rep = {
