@@ -1464,6 +1464,124 @@ check("provenance: every value on Verify, Analytics and Setup has its source but
   }
 });
 
+// ------------------------------------------------- palette search (spec 5.8)
+const PM = await import(toUrl(resolve(MOD, "palettemodel.js")));
+
+check("palette: prefixes pick a group, no prefix searches everything", () => {
+  assert.deepEqual(PM.parseQuery("#clock"), { group: "setting", q: "clock", prefix: "#" });
+  assert.deepEqual(PM.parseQuery("@ dse"), { group: "run", q: "dse", prefix: "@" });
+  assert.equal(PM.parseQuery("/spm.v").group, "file");
+  assert.equal(PM.parseQuery("?drc").group, "help");
+  assert.equal(PM.parseQuery(">run").group, "action");
+  assert.deepEqual(PM.parseQuery("  drc "), { group: null, q: "drc", prefix: "" });
+});
+
+check("palette: exact > prefix > word start > substring > subsequence", () => {
+  const s = (t) => PM.fuzzyScore("clock", t);
+  assert.ok(s("clock") > s("CLOCK_PERIOD"));
+  assert.ok(s("CLOCK_PERIOD") > s("PL_CLOCK_X"));          // prefix beats word start
+  assert.ok(s("PL_CLOCK_X") > s("unclocked"));              // word start beats mid-word
+  assert.ok(s("unclocked") > s("c_l_o_c_k"));               // substring beats subsequence
+  assert.equal(PM.fuzzyScore("zzz", "CLOCK_PERIOD"), -1);
+});
+
+check("palette: ranking, group filter, recents first", () => {
+  const items = [
+    { id: "a:run", group: "action", title: "Run the flow" },
+    { id: "a:verify", group: "action", title: "Go to Verify" },
+    { id: "s:CLOCK_PERIOD", group: "setting", title: "CLOCK_PERIOD", keys: ["The clock period in ns."] },
+    { id: "s:FP_CORE_UTIL", group: "setting", title: "FP_CORE_UTIL", keys: ["Core utilization percentage."] },
+    { id: "s:MAGIC_DRC_USE_GDS", group: "setting", title: "MAGIC_DRC_USE_GDS", keys: ["Run DRC on the GDS."] },
+    { id: "h:DRC", group: "help", title: "DRC", keys: ["Design Rule Check."] },
+    { id: "f:src/spm.v", group: "file", title: "src/spm.v" },
+    { id: "r:d:dse-spm-02", group: "run", title: "dse-spm-02" },
+  ];
+  assert.equal(PM.rank(items, "#clock")[0].id, "s:CLOCK_PERIOD");
+  assert.ok(PM.rank(items, "#clock").every((i) => i.group === "setting"));
+  assert.equal(PM.rank(items, "FP_CORE")[0].id, "s:FP_CORE_UTIL");
+  assert.equal(PM.rank(items, "drc")[0].id, "h:DRC", "an exact title match wins");
+  assert.equal(PM.rank(items, "spm.v")[0].id, "f:src/spm.v");
+  assert.equal(PM.rank(items, "@spm")[0].id, "r:d:dse-spm-02");
+  assert.ok(PM.rank(items, "utilization").some((i) => i.id === "s:FP_CORE_UTIL"), "descriptions are searched");
+  // Empty: actions only, recents on top (a recent setting shows too).
+  const empty = PM.rank(items, "", { recentIds: ["s:FP_CORE_UTIL", "a:verify"] });
+  assert.deepEqual(empty.map((i) => i.id), ["s:FP_CORE_UTIL", "a:verify", "a:run"]);
+  // A recent pick wins a tie.
+  const tie = [{ id: "x1", group: "action", title: "Open A" }, { id: "x2", group: "action", title: "Open B" }];
+  assert.equal(PM.rank(tie, "open", { recentIds: ["x2"] })[0].id, "x2");
+  assert.deepEqual(PM.pushRecent(["a", "b", "c"], "b", 3), ["b", "a", "c"]);
+  assert.equal(PM.oneLine("First sentence here is long enough. Second one.", 200), "First sentence here is long enough.");
+});
+
+// ------------------------------------------------- console drawer (spec 5.9)
+const CNM = await import(toUrl(resolve(MOD, "consolemodel.js")));
+const HK = await import(toUrl(resolve(MOD, "hotkeys.js")));
+
+check("console: shell quoting matches shlex.quote", () => {
+  assert.equal(CNM.shq("config.yaml"), "config.yaml");
+  assert.equal(CNM.shq("VERILOG_FILES=a.v b.v"), "'VERILOG_FILES=a.v b.v'");
+  assert.equal(CNM.shq("it's"), "'it'\"'\"'s'");
+  assert.equal(CNM.shq(""), "''");
+});
+
+check("console: next-run script pins the image only for a container run", () => {
+  const c = { container: "librelane --docker-no-tty --dockerized config.yaml -p sky130A", local: "librelane /d/config.yaml", recommended: "container", cwd: "/home/u/my design" };
+  assert.equal(CNM.pickCommand(c), c.container);
+  assert.equal(CNM.pickCommand({ ...c, recommended: "local" }), c.local);
+  const s = CNM.commandScript({ command: c.container, cwd: c.cwd, image: "ghcr.io/librelane/librelane:3.0.4@sha256:ab" });
+  assert.match(s, /^#!\/usr\/bin\/env bash\n/);
+  assert.match(s, /\ncd '\/home\/u\/my design'\n/);
+  assert.match(s, /\nexport LIBRELANE_IMAGE_OVERRIDE=ghcr.io\/librelane\/librelane:3.0.4@sha256:ab\n/);
+  assert.ok(s.trimEnd().endsWith(c.container));
+  assert.ok(!/IMAGE_OVERRIDE/.test(CNM.commandScript({ command: c.local, cwd: "/d", image: "x" })));
+});
+
+check("console: the Journal as a script runs only commands, the rest are comments", () => {
+  const s = CNM.journalScript([
+    { time: "10:00:00", title: "Config edited", notes: ["FP_CORE_UTIL 50 -> 60"] },
+    { time: "10:01:00", title: "Run a1 · finished", command: "librelane --dockerized config.yaml --run-tag a1", cwd: "/d", image: "img@sha256:1" },
+    { time: "10:05:00", title: "Run a2 · finished", command: "librelane --dockerized config.yaml --run-tag a2", cwd: "/d", image: "img@sha256:1" },
+  ]);
+  const live = s.split("\n").filter((l) => l && !l.startsWith("#"));
+  assert.deepEqual(live, ["set -euo pipefail", "cd /d", "export LIBRELANE_IMAGE_OVERRIDE=img@sha256:1",
+    "librelane --dockerized config.yaml --run-tag a1", "librelane --dockerized config.yaml --run-tag a2"]);
+  assert.match(s, /#   FP_CORE_UTIL 50 -> 60/);
+  assert.deepEqual(CNM.configDiffLines({ set: { FP_CORE_UTIL: 60 }, remove: ["X"] }, { before: { FP_CORE_UTIL: 50 } }),
+    ["FP_CORE_UTIL 50 -> 60", "X removed (back to its default)"]);
+});
+
+check("console: command history steps like a shell and keeps the draft", () => {
+  const h = new CNM.History(["a", "b"]);
+  assert.equal(h.up("typing"), "b");
+  assert.equal(h.up("b"), "a");
+  assert.equal(h.up("a"), "a");
+  assert.equal(h.down("a"), "b");
+  assert.equal(h.down("b"), "typing");
+  h.push("c"); h.push("c");
+  assert.deepEqual(h.items, ["a", "b", "c"]);
+  assert.equal(CNM.runTagOf("librelane --dockerized config.yaml --run-tag 'x1' -T floorplan"), "x1");
+  assert.ok(CNM.makesRun("librelane config.yaml"));
+  assert.ok(!CNM.makesRun("librelane --version"));
+  assert.ok(!CNM.makesRun("openroad -exit x.tcl"));
+});
+
+check("hotkeys: a bare r runs only on Setup and Flow; Ctrl+Enter anywhere", () => {
+  assert.ok(HK.runKeyAllowed("r", { tab: "setup" }));
+  assert.ok(HK.runKeyAllowed("r", { tab: "pipeline" }));
+  assert.ok(!HK.runKeyAllowed("r", { tab: "verify" }));
+  assert.ok(!HK.runKeyAllowed("r", { tab: "layout" }));
+  assert.ok(HK.runKeyAllowed("Enter", { ctrl: true, tab: "verify" }));
+});
+
+check("console: Manual rail item is gone, go('manual') opens the drawer", () => {
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  assert.ok(!/data-tab="manual"/.test(html), "no Manual rail item");
+  assert.ok(!/id="sec-manual"/.test(html));
+  assert.match(html, /id="console-btn"/);
+  const nav = readFileSync(resolve(MOD, "nav.js"), "utf8");
+  assert.match(nav, /tab === "manual" \|\| tab === "console"/);
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

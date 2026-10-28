@@ -93,6 +93,12 @@ function describe(e) {
 // `link: false` for the rail, number keys and the palette: the user picked the
 // page itself, so there is no "Back to" chip (Back still works).
 export function go(tab, params = {}, { link = true } = {}) {
+  // The Manual page became the Console drawer (console.js): it opens over
+  // whatever page is showing, on its "Run a command" tab (or params.pane).
+  if (tab === "manual" || tab === "console") {
+    import("./console.js").then((m) => m.openConsole(params.pane || (tab === "manual" ? "run" : null)));
+    return;
+  }
   if (!document.getElementById("sec-" + tab)) return;
   const from = currentTab();
   saveScroll();

@@ -1545,6 +1545,14 @@ def h_cli_command(handler: Any) -> None:
         extra_sources=asm["extra_sources"], extra_extras=asm["extra_extras"],
         extra_config_files=asm["extra_config_files"],
     )
+    # The image the runner pins with LIBRELANE_IMAGE_OVERRIDE, so a copied
+    # script runs the same tools (Console drawer).
+    if run_mode == "container":
+        try:
+            from ..controller import container_run
+            cmd["image"] = container_run.image_ref() or None
+        except Exception:
+            pass
     _respond(handler, cmd)
 
 
@@ -2500,6 +2508,27 @@ def h_run_gui_meta(handler: Any) -> None:
     except Exception as ex:
         _log.exception("reading gui-run.json failed")
         _respond(handler, str(ex), 500)
+
+
+def h_run_reproduce(handler: Any) -> None:
+    """How to rerun a run headless without LanEx (Console drawer, Command tab):
+    the recorded command, config, PDK version, image digest and LibreLane
+    version, plus a bash script. Read-only; from gui-run.json + resolved.json."""
+    from ..controller import manualcmd
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag)
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    def _load(name: str) -> Optional[Dict[str, Any]]:
+        p = run_dir / name
+        try:
+            return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
+        except Exception:
+            return None
+    info = manualcmd.reproduce_info(_load("gui-run.json") or {}, _load("resolved.json"), str(run_dir))
+    info["script"] = manualcmd.reproduce_script(info)
+    _respond(handler, info)
 
 
 def h_run_import_dir(handler: Any) -> None:
@@ -4343,6 +4372,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/watch", h_watch),
     ("/api/run-pin", h_run_pin),
     ("/api/run-gui-meta", h_run_gui_meta),
+    ("/api/run-reproduce", h_run_reproduce),
     ("/api/run-import-dir", h_run_import_dir),
     ("/api/run-import-bundle", h_run_import_bundle),
     ("/api/run-bundle", h_run_bundle),
