@@ -191,6 +191,11 @@ function paintEst() {
 
 async function start() {
   if (problems() || S.busy) return;
+  // The server still has the previous project active: a sweep now would run there.
+  if (state.designMissing) {
+    toast.show("Project folder not found: " + state.designMissing + ". Locate it or remove it from the list on Setup.", "warn");
+    return;
+  }
   const n = countRuns(S.axes, S.mode);
   // Each point is a full flow: warn when the machine is short on memory.
   let res = null;

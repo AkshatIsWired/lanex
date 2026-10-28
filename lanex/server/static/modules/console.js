@@ -377,6 +377,11 @@ function paintCwd() {
   const d = state.designDir || "";
   C.manualCwd = d;
   const el = C.el.querySelector("#cn-cwd");
+  if (state.designMissing) {
+    el.textContent = "project folder not found";
+    el.title = state.designMissing + " is gone. Locate it or remove it from the list on Setup.";
+    return;
+  }
   el.textContent = d ? d.replace(/^\/home\/[^/]+/, "~") : "no project open";
   el.title = d ? "The command runs in " + d : "Open a project first: the command runs in its folder";
 }
@@ -387,6 +392,14 @@ async function runManual() {
   const cmd = (input.value || "").trim();
   if (!cmd || C.manualRunning) return;
   paintCwd();
+  // The server still has the previous project active: a command now would
+  // run in that folder, not the one this window shows.
+  if (state.designMissing) {
+    out.textContent += (out.textContent ? "\n" : "") + "Not run: the project folder " + state.designMissing +
+      " is not there any more. Locate it or remove it from the list on Setup.\n";
+    out.scrollTop = out.scrollHeight;
+    return;
+  }
   C.hist.push(cmd);
   safeStorage.set(HIST_KEY, JSON.stringify(C.hist.items));
   out.textContent += (out.textContent ? "\n" : "") + "$ " + cmd + "\n";
