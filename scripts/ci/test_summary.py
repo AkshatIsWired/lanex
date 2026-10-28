@@ -28,6 +28,8 @@ from typing import Dict, List, Tuple
 # What each test file protects — the "implication" column. A file not listed
 # gets the generic regression note (still counted, never hidden).
 IMPLICATIONS: Dict[str, str] = {
+    "test_local_time": "Run names and times match the Windows clock, not the WSL distro's UTC.",
+    "test_run_verdict": "Every tab reads one verdict from Verify's logic: running, stopped, warning and failed runs are never shown as clean, and pinning a run never reorders the list.",
     "test_console_reproduce": "The Console's Reproduce block gives the exact command, config and image a run used, so it reruns headless without LanEx.",
     "test_sweeps": "A sweep point that failed is shown as failed with its reason, points are named by their value, and stop-early halts the queue.",
     "test_tools_tab_facts": "The Tools page reports installed versus LanEx-tested versions honestly and labels anything else Custom.",

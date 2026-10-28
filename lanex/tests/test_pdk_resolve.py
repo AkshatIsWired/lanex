@@ -265,7 +265,9 @@ def test_run_success_and_metrics_from_final(tmp_path):
     runs = history.list_runs(str(tmp_path))
     assert len(runs) == 1
     r = runs[0]
-    assert r["success"] is True                 # final/ present, no errors
+    # final/ present and no errors, but only one check reported: Verify's verdict
+    # says there is not enough to call it, and success means exactly "passed".
+    assert r["verdict"]["state"] == "incomplete" and r["success"] is False
     assert r["wall_time_s"] and r["wall_time_s"] > 0   # summed from runtime.txt
     view = history.get_run(str(run))
     assert view["metrics"]["values"]["design__instance__area"] == 100.0

@@ -167,7 +167,7 @@ def test_project_on_gf180_gets_the_tuning_at_the_top_level(tmp_path: Path) -> No
 def test_project_on_sky130_carries_a_gf180_section(tmp_path: Path) -> None:
     scaffold.create_project(tmp_path / "b", "blinky", top="", pdk="sky130A", scl="sky130_fd_sc_hd")
     cfg = json.loads((tmp_path / "b" / "config.json").read_text())
-    assert cfg["CLOCK_PERIOD"] == 10.0 and "FP_CORE_UTIL" not in cfg
+    assert cfg["CLOCK_PERIOD"] == 10.0 and cfg["FP_CORE_UTIL"] == 40 and cfg["PL_TARGET_DENSITY_PCT"] == 55
     assert cfg["pdk::gf180mcu*"] == {"FP_CORE_UTIL": 38, "PL_TARGET_DENSITY_PCT": 50, "CLOCK_PERIOD": 20.0}
     # ...and the Design row says the section wins for a gf180 run.
     s = configedit.scoped_values(cfg, "CLOCK_PERIOD")
@@ -187,7 +187,9 @@ def test_blank_project_gets_a_bigger_gf180_die(tmp_path: Path) -> None:
     assert json.loads((tmp_path / "g" / "config.json").read_text())["DIE_AREA"] == [0, 0, 300, 300]
     scaffold.create_project(tmp_path / "s", "empty", top="top", pdk="sky130A")
     cfg = json.loads((tmp_path / "s" / "config.json").read_text())
-    assert cfg["DIE_AREA"] == [0, 0, 150, 150] and cfg["pdk::gf180mcu*"]["DIE_AREA"] == [0, 0, 300, 300]
+    # sky130: relative sizing, so a bigger design gets a bigger die instead of failing placement.
+    assert "DIE_AREA" not in cfg and cfg["FP_SIZING"] == "relative" and cfg["FP_CORE_UTIL"] == 40
+    assert cfg["pdk::gf180mcu*"]["DIE_AREA"] == [0, 0, 300, 300]
 
 
 def test_template_pdk_tuning_keys_are_real_variables() -> None:
