@@ -22,6 +22,45 @@
   <link rel="stylesheet" href="/static/runs.css" />
   <link rel="stylesheet" href="/static/vendor/driverjs/driver.css" />
   <link rel="stylesheet" href="/static/guide.css" />
+  <link rel="stylesheet" href="/static/skeleton.css" />
+  <!-- The modules the first paint needs (app.js's static imports, all of
+       them): fetched side by side now instead of one import level at a time.
+       Page modules load on demand (app.js PAGES). frontend_test.mjs checks
+       this list against the real import graph. -->
+  <link rel="modulepreload" href="/static/app.js" />
+  <link rel="modulepreload" href="/static/modules/api.js" />
+  <link rel="modulepreload" href="/static/modules/state.js" />
+  <link rel="modulepreload" href="/static/modules/setup.js" />
+  <link rel="modulepreload" href="/static/modules/config.js" />
+  <link rel="modulepreload" href="/static/modules/fs.js" />
+  <link rel="modulepreload" href="/static/modules/preflight.js" />
+  <link rel="modulepreload" href="/static/modules/nav.js" />
+  <link rel="modulepreload" href="/static/modules/tabs.js" />
+  <link rel="modulepreload" href="/static/modules/context.js" />
+  <link rel="modulepreload" href="/static/modules/shell.js" />
+  <link rel="modulepreload" href="/static/modules/palette.js" />
+  <link rel="modulepreload" href="/static/modules/palettemodel.js" />
+  <link rel="modulepreload" href="/static/modules/help.js" />
+  <link rel="modulepreload" href="/static/modules/wizard.js" />
+  <link rel="modulepreload" href="/static/modules/runend.js" />
+  <link rel="modulepreload" href="/static/modules/reportcard.js" />
+  <link rel="modulepreload" href="/static/modules/verify-model.js" />
+  <link rel="modulepreload" href="/static/modules/problems.js" />
+  <link rel="modulepreload" href="/static/modules/dialog.js" />
+  <link rel="modulepreload" href="/static/modules/loading.js" />
+  <link rel="modulepreload" href="/static/modules/zoom.js" />
+  <link rel="modulepreload" href="/static/modules/hotkeys.js" />
+  <link rel="modulepreload" href="/static/modules/density.js" />
+  <link rel="modulepreload" href="/static/modules/jumpnav.js" />
+  <link rel="modulepreload" href="/static/modules/flowstages.js" />
+  <link rel="modulepreload" href="/static/modules/icons.js" />
+  <link rel="modulepreload" href="/static/modules/toast.js" />
+  <link rel="modulepreload" href="/static/modules/tooltip.js" />
+  <link rel="modulepreload" href="/static/modules/pdkinfo.js" />
+  <link rel="modulepreload" href="/static/modules/fullscreen.js" />
+  <link rel="modulepreload" href="/static/modules/runmode.js" />
+  <link rel="modulepreload" href="/static/modules/logs.js" />
+  <link rel="modulepreload" href="/static/modules/theme.js" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
        real icon (zero extra deps; static manifest, no service worker). -->
@@ -457,7 +496,7 @@
     <!-- FLOW (rail "Flow"; the id stays "pipeline", spec decision 1): one run,
          stage by stage, and why it stopped (modules/flow.js). -->
     <section class="section" id="sec-pipeline">
-      <div class="an-runbar fl-runbar">
+      <div class="an-runbar fl-runbar ld-keep">
         <div class="rb-host" id="flow-runbar"></div>
         <span class="bar-spacer"></span>
         <button class="btn btn-ghost btn-sm" id="fl-live" hidden><span class="fl-live-dot"></span> Back to the live run</button>
@@ -1032,7 +1071,7 @@
     </div>
   </div>
 
-  <script src="/static/vendor/echarts.min.js"></script>
+  <!-- ECharts (1 MB) loads when a chart is first drawn (loading.js loadECharts). -->
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

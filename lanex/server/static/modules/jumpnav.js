@@ -105,8 +105,16 @@ export function wireJumpNav(nav, { clicks = true } = {}) {
   const onScroll = () => { if (!raf) raf = requestAnimationFrame(compute); };
   (root || window).addEventListener("scroll", onScroll, { passive: true });
   window.addEventListener("resize", onScroll, { passive: true });
-  document.addEventListener("g:tab_activated", () => setTimeout(compute, 0));
-  compute();
+  // A page switch recomputes only the nav of the page that showed, in the
+  // next frame (every nav measuring itself inside the click forced a layout
+  // per nav).
+  const sec = nav.closest(".section");
+  document.addEventListener("g:tab_activated", (e) => {
+    const tab = e.detail && e.detail.tab;
+    if (sec && tab && sec.id !== "sec-" + tab) return;
+    if (!raf) raf = requestAnimationFrame(compute);
+  });
+  onScroll();   // first measure in a frame, not while wiring
 }
 
 // Kept for callers that only want the spy (Analytics wires its own clicks).

@@ -14,18 +14,55 @@ import { setupZoom } from "./modules/zoom.js";
 import { setupPalette, openPalette } from "./modules/palette.js";
 import { setupRunMode } from "./modules/runmode.js";
 import { renderConfig } from "./modules/config.js";
-import { renderFlow, flowEvent } from "./modules/flow.js";
 import { runStarted, runProgress, runFinished } from "./modules/runend.js";
-import { renderRuns } from "./modules/runs.js";
-import { renderTools, updatePullProgress, finishPull } from "./modules/tools.js";
-import { renderAnalyticsFull } from "./modules/analytics.js";
 import { renderLogs } from "./modules/logs.js";
+import { loadingStart, pageSkeleton } from "./modules/loading.js";
 import { help } from "./modules/help.js";
 import { toast } from "./modules/toast.js";
 import { setupWizard } from "./modules/wizard.js";
 import { icon } from "./modules/icons.js";
 import { setupFullscreen } from "./modules/fullscreen.js";
 import { setupTooltips } from "./modules/tooltip.js";
+
+// ---------------------------------------------------------------- pages on demand
+// Each page's code loads the first time it is needed (its tab opens, or an
+// event it must hear arrives once it is loaded), so the first paint only waits
+// for the shell and Setup. After boot, Flow and Runs (the pages a run lands
+// on) load in idle time, and any tab loads while the pointer rests on it.
+const PAGES = {
+  flow: () => import("./modules/flow.js"),
+  runs: () => import("./modules/runs.js"),
+  tools: () => import("./modules/tools.js"),
+  analytics: () => import("./modules/analytics.js"),
+  verify: () => import("./modules/verify.js"),
+  layout: () => import("./modules/layout.js"),
+  cells: () => import("./modules/cells.js"),
+  ide: () => import("./modules/ide/main.js"),
+};
+const TAB_PAGE = { pipeline: "flow", runs: "runs", tools: "tools", analytics: "analytics", verify: "verify", layout: "layout", cells: "cells", ide: "ide" };
+const _mods = {};      // name -> the module, once loaded
+const _modP = {};      // name -> its loading promise
+function page(name) {
+  if (!_modP[name]) {
+    _modP[name] = PAGES[name]().then((m) => (_mods[name] = m), (e) => { delete _modP[name]; throw e; });
+  }
+  return _modP[name];
+}
+// Call into a page's module only if it is loaded (an event for a page that
+// has never shown needs nothing: it reads the state when it first renders).
+function ifLoaded(name, fn) {
+  const m = _mods[name];
+  if (m) R(name, () => fn(m));
+}
+function prefetch(names) {
+  const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200));
+  const next = () => {
+    const n = names.shift();
+    if (!n) return;
+    idle(() => page(n).catch(() => {}).finally(next), { timeout: 3000 });
+  };
+  next();
+}
 
 // Map each side-nav tab to a line-style SVG icon (replaces per-OS emoji glyphs).
 const TAB_ICONS = {
@@ -107,30 +144,47 @@ async function boot() {
     document.getElementById("palette-btn")?.addEventListener("click", openPalette);
     document.getElementById("theme-btn")?.addEventListener("click", toggleTheme);
 
-    try {
-      const health = await api.health();
-      maybeWarnCompat(health && health.compat);
-    } catch (_) {}
-
+    // Everything boot asks the server goes out at once: the compatibility
+    // check, the flow metadata, and which project to open. None waits for
+    // another.
+    api.health().then((h) => maybeWarnCompat(h && h.compat)).catch(() => {});
     setStatus("loading flow metadata…");
-    // Boot metadata in parallel.
-    const [steps, vars, formats, flows, pdks] = await Promise.all([
+    const metaP = Promise.all([
       api.steps(),
       api.variables(),
       api.designFormats(),
       api.flows(),
       api.pdks(),
     ]);
+    // Adopt a design directory so the GUI opens ready to run AND the Runs tab
+    // shows that design's history immediately. Prefer one the server already
+    // knows (e.g. `librelane-gui --design-dir`); otherwise re-adopt the most
+    // recent design the user opened (persisted in localStorage `ll.recentDesigns`).
+    // Runs are scoped to the active design dir server-side, so without this the
+    // Runs tab stays empty until the user re-picks a source.
+    const designP = (async () => {
+      const dd = await api.designDir().catch(() => null);
+      if (dd && dd.design_dir) return { adopt: dd.design_dir, serverKnew: true };
+      try {
+        const recent = JSON.parse(localStorage.getItem("ll.recentDesigns") || "[]").filter(Boolean);
+        if (recent.length) {
+          // Tell the server about it before adopting (it's not active yet).
+          const res = await api.setDesignDir(recent[0]);
+          return { adopt: res && res.design_dir, serverKnew: false };
+        }
+      } catch (_e) { /* stale/removed recent dir — ignore */ }
+      return { adopt: null, serverKnew: false };
+    })();
+    const [[steps, vars, formats, flows, pdks], proj] = await Promise.all([metaP, designP]);
     state.steps = steps;
     state.variables = vars;
     state.designFormats = formats;
     state.flows = flows;
     state.pdks = pdks;
     state.selectedPdk = (state.pdks[0] && state.pdks[0].name) || "";
-
-    await populatePdkPicker();
-    setStatus("rendering panels…");
-    renderConfig();
+    if (state.steps.length) {
+      state.selectedStepId = state.steps[0].id;
+    }
 
     // Subscribe to the event stream. SSE is optional; don't block boot.
     try {
@@ -140,70 +194,59 @@ async function boot() {
       sse.on(handle);
     } catch (_e) { /* ignore */ }
 
-    if (state.steps.length) {
-      state.selectedStepId = state.steps[0].id;
+    // The project: what every page needs before it draws (the server's
+    // active project, its card, the config's PDK). Its files, runs and
+    // summary are read after the window shows (finishAdopt).
+    const setupMod = await import("./modules/setup.js");
+    let opened = false;
+    if (proj.adopt) {
+      const input = document.getElementById("design-dir-input");
+      if (input) input.value = proj.adopt;
+      // Boot adoption is implicit: scope Runs/Preview but keep the Setup file
+      // selector hidden (history/recents stay shown) until the user explicitly
+      // loads a design. See adoptDesignDir({explicit}).
+      try { opened = await setupMod.openDesignQuick(proj.adopt, { explicit: proj.serverKnew }); } catch (_e) { opened = false; }
     }
-
-    // Adopt a design directory so the GUI opens ready to run AND the Runs tab
-    // shows that design's history immediately. Prefer one the server already
-    // knows (e.g. `librelane-gui --design-dir`); otherwise re-adopt the most
-    // recent design the user opened (persisted in localStorage `ll.recentDesigns`).
-    // Runs are scoped to the active design dir server-side, so without this the
-    // Runs tab stays empty until the user re-picks a source.
-    try {
-      let adopt = null;
-      const dd = await api.designDir();
-      if (dd && dd.design_dir) {
-        adopt = dd.design_dir;
-      } else {
-        try {
-          const recent = JSON.parse(localStorage.getItem("ll.recentDesigns") || "[]").filter(Boolean);
-          if (recent.length) {
-            // Tell the server about it before adopting (it's not active yet).
-            const res = await api.setDesignDir(recent[0]);
-            adopt = res && res.design_dir;
-          }
-        } catch (_e) { /* stale/removed recent dir — ignore */ }
-      }
-      if (adopt) {
-        const input = document.getElementById("design-dir-input");
-        if (input) input.value = adopt;
-        // Boot adoption is implicit: scope Runs/Preview but keep the Setup file
-        // selector hidden (history/recents stay shown) until the user explicitly
-        // loads a design. See adoptDesignDir({explicit}).
-        const serverKnew = !!(dd && dd.design_dir);
-        await import("./modules/setup.js").then((m) => m.adoptDesignDir(adopt, { explicit: serverKnew }));
-      }
-    } catch (_e) {}
-
-    // Adopt the most recent run as the default selection so every run-scoped
-    // view (Preview, Verify, Analytics, Layout viewers, step output) works
-    // without first clicking "Open" on the Runs tab.
-    try {
-      // Through the shared run context: one listing that every page reuses,
-      // instead of a second one of its own.
-      // (It keeps state.runs to this design's runs itself.)
-      await loadContextRuns();
-      if (!state.selectedRunTag && state.runs && state.runs.length) {
-        state.selectedRunTag = state.runs[0].tag;
-      }
-    } catch (_e) {}
-
+    // The PDK picker, already following the project's config.
+    await populatePdkPicker(pdks);
+    setStatus("rendering panels…");
+    renderConfig();
+    // The shared run list every results page reads: asked for now, used by
+    // whichever page shows first (they share the one request).
+    loadContextRuns().then(() => {
+      if (!state.selectedRunTag && state.runs && state.runs.length) state.selectedRunTag = state.runs[0].tag;
+    }).catch(() => {});
+    if (opened) {
+      setupMod.finishAdopt(proj.adopt, { explicit: proj.serverKnew })
+        .then(() => paintOnboardChecklist())
+        .catch((e) => console.error("adopt", e));
+    }
     paintOnboardChecklist();  // E5.1 — reflect the real design/PDK/run state now
 
     // Open on Setup (the design/PDK/run entry point) for a bare address,
     // whatever tab was last visited; an address that names a page (#ide after
     // a reload, a pasted #verify) opens that page instead.
     const asked = hashTab();
+    // Hide splash and reveal the app (then take the splash out of the
+    // document: a hidden spinner still animates every frame).
+    setStatus("ready");
+    document.getElementById("app").style.display = "";
     startAt(bootTab());
     if (asked && !document.getElementById("sec-" + asked)) go(asked);
-
-    // Hide splash and reveal the app.
-    setStatus("ready");
-    if (splash) splash.classList.add("hide");
-    document.getElementById("app").style.display = "";
+    if (splash) {
+      splash.classList.add("hide");
+      const gone = () => { splash.hidden = true; };
+      splash.addEventListener("transitionend", gone, { once: true });
+      setTimeout(gone, 400);
+    }
     // First launch: the Press Start card; mid-guide: offer to carry on (guide.js).
     import("./modules/guide.js").then((m) => m.setupGuide()).catch((e) => console.error("guide", e));
+    // The pages a run lands on, in idle time; any tab while the pointer rests on it.
+    prefetch(["flow", "runs"]);
+    document.querySelectorAll(".side-tab").forEach((t) => {
+      const name = TAB_PAGE[t.dataset.tab];
+      if (name) t.addEventListener("pointerenter", () => page(name).catch(() => {}), { once: true });
+    });
   } catch (err) {
     failUI(err);
   }
@@ -234,17 +277,21 @@ function handle(ev) {
       for (const s of ev.step_graph) state.stepStatuses[s.id] = s.status || "pending";
       resetTimings();         // a fresh run is starting; clear old step timings
       renderLogs.clear();
-      R("runs", renderRuns);  // surface the just-created run dir immediately
+      ifLoaded("runs", (m) => m.renderRuns());  // surface the just-created run dir immediately
       // setup.js shows Flow when a run starts, unless the Run menu says to stay
       // on the page you're on.
       noteRunStarted();
+      // The clock started when Run was pressed (setup.js), not now.
+      const t0 = ev.tag && state.runStartedFor === ev.tag ? state.runStartedAt : 0;
       runStarted(ev.tag);
-      flowEvent(ev);
+      if (t0) state.runStartedAt = t0;
+      state.runStartedFor = "";
+      ifLoaded("flow", (m) => m.flowEvent(ev));
     }
     if (ev.message) {
       renderLogs.append(ev);
       // Step by step: the runner waits for "Next step".
-      if (/^paused/.test(ev.message)) { state.paused = true; flowEvent(ev); }
+      if (/^paused/.test(ev.message)) { state.paused = true; ifLoaded("flow", (m) => m.flowEvent(ev)); }
     }
   } else if (ev.type === "phase") {
     // Container pre-step milestone — show the "preparing" hero with a timer.
@@ -253,7 +300,7 @@ function handle(ev) {
     state.prepPhase = ev.label || "Preparing…";
     if (ev.tag) state.liveTag = ev.tag;
     if (ev.label) renderLogs.append({ type: "log", payload: { message: "• " + ev.label } });
-    flowEvent(ev);
+    ifLoaded("flow", (m) => m.flowEvent(ev));
   } else if (ev.type === "log") {
     renderLogs.append(ev);
   } else if (ev.type === "dse_config_started") {
@@ -265,7 +312,7 @@ function handle(ev) {
     resetTimings();
     state.prepStart = Date.now();
     state.prepPhase = "Sweep run " + (((ev.index || 0) + 1)) + " of " + (ev.total || "?") + (ev.tag ? " (" + ev.tag + ")" : "") + ": preparing…";
-    flowEvent(ev);
+    ifLoaded("flow", (m) => m.flowEvent(ev));
     // A sweep point is a run: the top bar shows Stop and the status bar "running".
     import("./modules/setup.js").then((m) => m.paintRunning(true)).catch(() => {});
     document.dispatchEvent(new CustomEvent("g:sweep", { detail: ev }));
@@ -282,7 +329,7 @@ function handle(ev) {
   } else if (ev.type === "installer_line" || ev.type === "installer_started" || ev.type === "installer_done" || ev.type === "installer_error" || ev.type === "installer_info") {
     const isImagePull = ev.key === "container:image";
     if (isImagePull && ev.type === "installer_line") {
-      updatePullProgress(ev.line);   // heartbeat on the runtime card
+      page("tools").then((m) => m.updatePullProgress(ev.line)).catch(() => {});   // heartbeat on the runtime card
     }
     // A privileged install needs a password: sudo prompts in the terminal the
     // GUI was launched from (or a pkexec dialog). The browser can't host that
@@ -314,11 +361,15 @@ function handle(ev) {
     if (ev.type === "installer_done" || ev.type === "installer_error") clearPasswordBanner();
     if (ev.type === "installer_done" || ev.type === "installer_error") {
       if (ev.key) delete state.installJobs[ev.key];
+      // What Setup's "Ready to run?" check read has changed.
+      document.dispatchEvent(new CustomEvent("g:tools_changed", { detail: { key: ev.key || "" } }));
       if (isImagePull) {
         // The pull owns the runtime card; finishPull re-probes + reports.
-        finishPull(ev.type === "installer_done" ? (ev.rc ?? 0) : (typeof ev.rc === "number" ? ev.rc : 1));
+        const rc = ev.type === "installer_done" ? (ev.rc ?? 0) : (typeof ev.rc === "number" ? ev.rc : 1);
+        page("tools").then((m) => m.finishPull(rc)).catch(() => {});
       } else {
-        renderTools();
+        // The Tools page probes again if it has been shown (it probes on every visit).
+        ifLoaded("tools", (m) => m.renderTools());
         // A finished PDK install changes what Setup can offer — re-fetch the
         // PDK list and repopulate the picker so the new PDK appears without a
         // manual page reload (the app window has no browser refresh button).
@@ -336,7 +387,7 @@ function handle(ev) {
     };
     paintProgress(Math.min(ev.done || 0, ev.total || 0), ev.total || 0);
     runProgress();
-    flowEvent(ev);
+    ifLoaded("flow", (m) => m.flowEvent(ev));
   } else if (ev.type === "run_status_resync") {
     // The SSE stream dropped and reconnected past events the server's ring had
     // already evicted (e.g. laptop sleep during a verbose flow) — our step
@@ -353,8 +404,8 @@ function handle(ev) {
     if (typeof ev.running === "boolean") state.status.running = ev.running;
     if (typeof ev.paused === "boolean") state.paused = ev.paused;
     if (ev.run_dir) state.liveTag = String(ev.run_dir).split(/[\\/]/).pop();
-    flowEvent(ev);
-    R("runs", renderRuns);
+    ifLoaded("flow", (m) => m.flowEvent(ev));
+    ifLoaded("runs", (m) => m.renderRuns());
   } else if (
     ev.type === "step_started" ||
     ev.type === "step_done" ||
@@ -375,7 +426,7 @@ function handle(ev) {
       if (ev.type === "step_started") { renderLogs.markStep(id); state.paused = false; state.prepPhase = null; }
       if (ev.tag) state.liveTag = ev.tag;
       runProgress();
-      flowEvent(ev);
+      ifLoaded("flow", (m) => m.flowEvent(ev));
     }
     // A failed step is told once, when the run ends, with the reason (runend.js).
   } else if (ev.type === "flow_done") {
@@ -407,8 +458,8 @@ function handle(ev) {
         if (total) state.runProgress = { done: total, total, current: "" };
       }
       refreshMetrics();
-      renderRuns();
-      flowEvent(ev);
+      ifLoaded("runs", (m) => m.renderRuns());
+      ifLoaded("flow", (m) => m.flowEvent(ev));
       // Results pages follow the new run if the user was on the newest one.
       noteRunFinished(ev.tag).catch(() => {});
       paintOnboardChecklist();
@@ -582,25 +633,35 @@ document.addEventListener("g:active_design_changed", (e) => {
 });
 
 // Each page renders when it shows (nav.js says so with g:tab_activated).
+// The page's code loads the first time (its skeleton shows if that takes more
+// than a moment, until the page draws).
 const RENDER = {
-  tools: () => import("./modules/tools.js").then((m) => m.renderTools()),
-  analytics: () => {
-    import("./modules/analytics.js").then((m) => m.renderAnalyticsFull());
-    import("./modules/compare.js").then((m) => m.renderCompare());
-    import("./modules/watch.js").then((m) => m.renderWatch());
+  tools: (m) => m.renderTools(),
+  analytics: (m) => {
+    m.renderAnalyticsFull();
+    import("./modules/compare.js").then((c) => c.renderCompare());
+    import("./modules/watch.js").then((w) => w.renderWatch());
   },
-  runs: () => renderRuns(),
-  pipeline: () => renderFlow(),
-  ide: () => import("./modules/ide/main.js").then((m) => m.initIde({ designDir: state.designDir, runMode: state.runMode })),
-  layout: () => import("./modules/layout.js").then((m) => m.renderLayout()),
-  verify: () => import("./modules/verify.js").then((m) => m.renderVerify()),
-  cells: () => import("./modules/cells.js").then((m) => m.renderCells()),
+  runs: (m) => m.renderRuns(),
+  pipeline: (m) => m.renderFlow(),
+  ide: (m) => m.initIde({ designDir: state.designDir, runMode: state.runMode }),
+  layout: (m) => m.renderLayout(),
+  verify: (m) => m.renderVerify(),
+  cells: (m) => m.renderCells(),
 };
 document.addEventListener("g:tab_activated", (e) => {
   const tab = e.detail?.tab;
   const r = RENDER[tab];
   // g:tab_rendered says the page has drawn (the guide waits for it).
   const rendered = () => document.dispatchEvent(new CustomEvent("g:tab_rendered", { detail: { tab } }));
-  if (r) Promise.resolve().then(r).then(rendered).catch((err) => console.error("render " + tab, err));
-  else rendered();
+  if (!r) { rendered(); return; }
+  const name = TAB_PAGE[tab];
+  // The skeleton stands in while the page's code downloads; it goes before
+  // the page draws (a page measures its boxes as it draws: they must show).
+  const job = _mods[name] ? null : loadingStart(document.getElementById("sec-" + tab), { skeleton: pageSkeleton(tab) });
+  page(name)
+    .finally(() => job && job.done())
+    .then((m) => r(m))
+    .then(rendered)
+    .catch((err) => console.error("render " + tab, err));
 });
