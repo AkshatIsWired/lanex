@@ -366,12 +366,17 @@ def resolved_settings(run_dir: Path, design_dir: Optional[Path]) -> Dict[str, An
 
     gui_overrides: Optional[Dict[str, Any]] = None
     gui_pdk = gui_scl = None
+    sized: Dict[str, Any] = {}
+    sized_reason = None
     gpath = Path(run_dir) / "gui-run.json"
     if gpath.is_file():
         try:
             gui = _json.loads(gpath.read_text(encoding="utf-8"))
             gui_overrides = dict(gui.get("overrides") or {})
             gui_pdk, gui_scl = gui.get("pdk"), gui.get("scl")
+            res = gui.get("resources") if isinstance(gui.get("resources"), dict) else {}
+            sized = dict(res.get("values") or {})
+            sized_reason = res.get("reason") or None
         except Exception:
             gui_overrides = None
 
@@ -394,6 +399,11 @@ def resolved_settings(run_dir: Path, design_dir: Optional[Path]) -> Dict[str, An
         cfg_top = bool(c) and not c["scoped"]
         if gui_overrides is not None and key in gui_overrides:
             row["source"] = "override"
+        elif key in sized:
+            # A thread count LanEx sized to the PC the run started on.
+            row["source"] = "lanex"
+            if sized_reason:
+                row["reason"] = sized_reason
         elif key == "PDK" and gui_pdk and not cfg_top:
             row["source"] = "picker"
         elif key == "STD_CELL_LIBRARY" and gui_scl and not cfg_top:

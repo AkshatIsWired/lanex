@@ -103,6 +103,7 @@ export function sourceLabel(row, configRel) {
   switch (row.source) {
     case "override": return "Setup parameter (runtime override; supersedes configuration file)";
     case "picker": return "your Setup picker (flow option)";
+    case "lanex": return "LanEx (sized to this PC" + (row.reason ? ": " + row.reason : "") + "; set it in your config to choose your own)";
     case "config": {
       const rel = configRel || "your config";
       return rel + " line " + (row.config_line || row.line) +

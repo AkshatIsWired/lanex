@@ -651,6 +651,23 @@ class FlowRunner:
             _log.debug("could not persist gui-run.json", exc_info=True)
             self._gui_meta_written = True  # don't retry every step
 
+    def _emit_resources_note(self) -> None:
+        """One log line saying which thread counts LanEx sized to this PC (from
+        ``gui_meta["resources"]``), so the run's own log shows it."""
+        rec = (self._gui_meta or {}).get("resources") or {}
+        vals = rec.get("values") or {}
+        kept = rec.get("kept") or {}
+        if not vals and not kept:
+            return
+        msg = ""
+        if vals:
+            msg = ("Threads sized to this PC (" + (rec.get("reason") or "?") + "): " +
+                   " ".join(f"{k}={v}" for k, v in vals.items()) + ".")
+        if kept:
+            msg += (" " if msg else "") + "Left as set: " + ", ".join(
+                f"{k} ({src})" for k, src in kept.items()) + "."
+        self._emit(EventType.INFO, {"message": msg, "resources": rec})
+
     # ---- progress hooks (called from the patched FlowProgressBar) ----
 
     def _on_set_max(self, count: int) -> None:
@@ -814,6 +831,7 @@ class FlowRunner:
             flow = flow_factory(all_configs, **ctor_kwargs)
             self._flow = flow
             self._seed_step_graph(flow)
+            self._emit_resources_note()
 
             self._emit(
                 EventType.INFO,
@@ -1014,6 +1032,7 @@ class FlowRunner:
                 EventType.INFO,
                 {"message": "Container mode — running: " + " ".join(argv)},
             )
+            self._emit_resources_note()
             # Seed an immediate phase so the pipeline shows "preparing" the
             # instant the run starts, before any container stdout arrives.
             self._emit(
@@ -1158,6 +1177,7 @@ class FlowRunner:
                 EventType.INFO,
                 {"message": f"Container step-by-step — {len(sub)} steps; running one at a time."},
             )
+            self._emit_resources_note()
             self._run_container_step(0)
         except Exception as ex:
             self._error = f"{type(ex).__name__}: {ex}"

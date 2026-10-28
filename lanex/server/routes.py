@@ -1215,15 +1215,35 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
             macro_warning = custommacros.merge_warning(design_dir)
     except Exception:
         _log.exception("custom-macro overlay failed (continuing without it)")
+    # Thread counts sized to this PC, for the thread variables the config and
+    # these overrides leave unset (theirs win). Kept apart from ``overrides``
+    # (the user's own settings, which gui-run.json and "Load into Setup" keep);
+    # callers send ``{**overrides, **threads}`` to LibreLane and the command.
+    from ..controller import runresources
+    _cf = _resolve_config_file(design_dir)
+    sized = runresources.plan(
+        design_dir=design_dir,
+        config_files=([str(_cf)] if _cf else []) + list(extra_config_files),
+        flow_factory=_flow_factory_or_none(body.get("flow") or "Classic"),
+        overrides=overrides, pdk=pdk)
     return {
         "pdk": pdk,
         "scl": scl,
         "overrides": overrides,
+        "threads": sized["overrides"],
+        "resources": sized["record"],
         "extra_sources": body.get("sources") or None,
         "extra_extras": body.get("extras") or None,
         "extra_config_files": extra_config_files or None,
         "macro_warning": macro_warning,
     }
+
+
+def _flow_factory_or_none(name: str) -> Any:
+    try:
+        return _flow_factory(name)
+    except Exception:
+        return None
 
 
 def _hash_files(paths: Optional[List[str]]) -> Optional[str]:
@@ -1449,6 +1469,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
         _asm = _assemble_overrides(design_dir, body, custom_cells=not overrides_ready)
         pdk, scl = _asm["pdk"], _asm["scl"]
         overrides = _asm["overrides"]
+        run_overrides = {**overrides, **_asm["threads"]}  # + threads sized to this PC
         extra_config_files: List[str] = list(_asm["extra_config_files"] or [])
 
         # LibreLane builds for the PDK/library the config file names, whatever
@@ -1513,6 +1534,9 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             # Final-settings preview detect that the file was edited between
             # preview and Run (TOCTOU, N7).
             "config_hash": _hash_files([str(config_file)]),
+            # Thread counts LanEx sized to this PC (and why); they ride the
+            # command below, so Reproduce runs with the same numbers.
+            "resources": _asm["resources"],
         }
         if branched_from:
             # Resumed from another run: its steps before ``frm`` are this run's
@@ -1525,7 +1549,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
                 flow=flow_name, pdk=pdk, scl=scl, pdk_root=pdk_root,
                 run_mode=run_mode, tag=body.get("tag") or None,
                 frm=body.get("frm") or None, to=body.get("to") or None,
-                skip=body.get("skip") or [], overrides=overrides,
+                skip=body.get("skip") or [], overrides=run_overrides,
                 extra_sources=body.get("sources") or None,
                 extra_extras=body.get("extras") or None,
                 extra_config_files=extra_config_files or None,
@@ -1544,7 +1568,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             frm=body.get("frm") or None,
             to=body.get("to") or None,
             skip=body.get("skip"),
-            config_overrides=overrides,
+            config_overrides=run_overrides,
             extra_sources=body.get("sources"),
             extra_extras=body.get("extras"),
             extra_config_files=extra_config_files or None,
@@ -1563,6 +1587,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             # hash it previewed in Final-settings to catch a mid-flight edit (N7).
             result["config_hash"] = gui_meta.get("config_hash")
             result["command"] = gui_meta.get("cli_command")
+            result["resources"] = gui_meta.get("resources")
         return result, 200
     except Exception as ex:
         _log.exception("run start failed")
@@ -1676,10 +1701,11 @@ def h_cli_command(handler: Any) -> None:
         flow=body.get("flow") or "Classic", pdk=pdk, scl=scl, pdk_root=pdk_root,
         run_mode=run_mode, tag=body.get("tag") or None,
         frm=body.get("frm") or None, to=body.get("to") or None,
-        skip=body.get("skip") or [], overrides=asm["overrides"],
+        skip=body.get("skip") or [], overrides={**asm["overrides"], **asm["threads"]},
         extra_sources=asm["extra_sources"], extra_extras=asm["extra_extras"],
         extra_config_files=asm["extra_config_files"],
     )
+    cmd["resources"] = asm["resources"]  # threads sized to this PC, as Run would now
     # The image the runner pins with LIBRELANE_IMAGE_OVERRIDE, so a copied
     # script runs the same tools (Console drawer).
     if run_mode == "container":
@@ -3303,6 +3329,14 @@ def h_verify_rerun(handler: Any) -> None:
         except Exception:
             pass
     kwargs = reverify.reverify_kwargs(run_dir, step_id, overrides=overrides)
+    try:  # the re-run step gets threads sized to this PC too (its config/overrides win)
+        from ..controller import runresources
+        kwargs["config_overrides"] = {**runresources.plan(
+            design_dir=design_dir, config_files=[str(config_file)],
+            flow_factory=_flow_factory_or_none(body.get("flow") or "Classic"),
+            overrides=overrides, pdk=pdk)["overrides"], **kwargs["config_overrides"]}
+    except Exception:
+        _log.debug("thread sizing for the re-run failed", exc_info=True)
     extra_config_files = []
     try:
         from ..controller import custommacros
@@ -3353,6 +3387,7 @@ def _sweep_point_meta(design_dir: str, config_file: Path, flow_name: str, run_mo
         "extra_config_hash": _hash_files(extra_config_files),
         "config_file": str(config_file),
         "config_hash": _hash_files([str(config_file)]),
+        "resources": asm.get("resources") or {},
     }
     if sweep_id:
         meta["sweep"] = {"id": sweep_id, "values": dict(values)}
@@ -3361,7 +3396,7 @@ def _sweep_point_meta(design_dir: str, config_file: Path, flow_name: str, run_mo
         meta["cli_command"] = manualcmd.cli_command_for(
             design_dir=design_dir, config_file=str(config_file),
             flow=flow_name, pdk=pdk, scl=scl, pdk_root=pdk_root,
-            run_mode=run_mode, tag=tag, overrides=overrides,
+            run_mode=run_mode, tag=tag, overrides={**overrides, **(asm.get("threads") or {})},
             extra_sources=asm.get("extra_sources") or None,
             extra_extras=asm.get("extra_extras") or None,
             extra_config_files=extra_config_files or None,
@@ -3423,7 +3458,7 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
             design_dir=design_dir,
             pdk=pdk, scl=scl, pdk_root=pdk_root,
             tag=tag, overwrite=True,
-            config_overrides=asm["overrides"],
+            config_overrides={**asm["overrides"], **asm["threads"]},
             extra_sources=asm["extra_sources"],
             extra_extras=asm["extra_extras"],
             extra_config_files=asm["extra_config_files"],

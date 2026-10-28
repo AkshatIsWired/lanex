@@ -265,6 +265,7 @@ async function paintCommand() {
     h += cmdRow(nextCmd, "next") +
       "<p class='cn-muted'>From <code>" + esc(next.cwd) + "</code>" +
       (next.image ? " · image <code>" + esc(next.image) + "</code>" : "") + ". A run started in a terminal shows up in Runs.</p>" +
+      threadsLine(next.resources && next.resources.values, next.resources && next.resources.reason, "this PC", next.resources && next.resources.kept) +
       "<div class='cn-acts'><button class='btn btn-ghost btn-xs' data-cn='copy-next-script'>" + icon("file", { size: 12 }) + " Copy as script</button>" +
       (next.local && next.container ? "<button class='btn btn-ghost btn-xs' data-cn='copy-other'>Copy the " + (next.recommended === "container" ? "local tools" : "container") + " form</button>" : "") + "</div>";
   }
@@ -290,8 +291,19 @@ function cmdRow(cmd, which) {
   return "<div class='cn-cmd'><code>" + esc(cmd) + "</code><button class='btn btn-ghost btn-xs' data-cn='copy-" + which + "'>Copy</button></div>";
 }
 
+// Thread counts LanEx sized to the PC (runresources.py): which, and from what.
+function threadsLine(vals, reason, pc, kept) {
+  const v = Object.entries(vals || {}).map(([k, n]) => k + "=" + n).join(" ");
+  const k = Object.keys(kept || {});
+  if (!v && !k.length) return "";
+  return "<p class='cn-muted'>" + (v ? "Threads sized to " + pc + (reason ? " (" + esc(reason) + ")" : "") + ": <code>" + esc(v) + "</code>. " : "") +
+    (k.length ? "Your " + esc(k.join(", ")) + " " + (k.length === 1 ? "is" : "are") + " kept. " : "") +
+    "A value you set in the config always wins.</p>";
+}
+
 function factsHtml(r) {
   const row = (k, v, mono = true) => v ? "<dt>" + esc(k) + "</dt><dd>" + (mono ? "<code>" + esc(v) + "</code>" : esc(v)) + "</dd>" : "";
+  const th = r.threads && r.threads.values ? Object.entries(r.threads.values).map(([k, n]) => k + "=" + n).join(" ") : "";
   return "<dl class='cn-facts'>" +
     row("Folder", r.cwd) +
     row("Config", r.config_file) +
@@ -301,6 +313,7 @@ function factsHtml(r) {
     row("PDK version", r.pdk_version ? r.pdk_version + " (ciel)" : "") +
     row("Image", r.image) +
     row("LibreLane", r.librelane_version) +
+    row("Threads", th ? th + "  (LanEx, sized to that PC" + (r.threads.reason ? ": " + r.threads.reason : "") + ")" : "") +
     (r.branched_from ? row("Started from", r.branched_from.tag + " at " + (r.branched_from.step || "?") + " (needs that run folder)", false) : "") +
     "</dl>";
 }
