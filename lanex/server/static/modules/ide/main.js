@@ -8,7 +8,7 @@
 // RTL-to-GDS run. Shares api.js + SSE; no bundler.
 import { api, sse, fmt } from "../api.js";
 import { Editor } from "./editor.js";
-import { parseVCD, formatTime, parseTimescale, valueAt, plainTicks } from "./vcd.js";
+import { readVCD, formatTime, parseTimescale, valueAt, plainTicks } from "./vcd.js";
 import { explain, explainMessage, TESTBENCH_STYLE } from "./lintinfo.js";
 import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
@@ -2023,7 +2023,10 @@ async function loadWaveform(vcdRel, partial) {
       note("The dump is " + Math.round(size / 1048576) + " MB, too big to show here. GTKWave opens it.", true);
       return;
     }
-    const vcd = parseVCD(await r.text());
+    // Parsed in a worker when big (vcd.js readVCD), with progress in the note.
+    const vcd = await readVCD(r, { onProgress: (phase, p) => {
+      if (state.designDir === dir) note((phase === "parse" ? "Reading waveform " : "Loading waveform ") + vcdRel + "… " + Math.round(p * 100) + "%");
+    } });
     if (state.designDir !== dir) return;
     setPanel("wave");
     growPanelFor("wave");

@@ -1921,6 +1921,27 @@ check("cells: the compiled matcher catches exactly what per-pattern globs catch"
   }
 });
 
+const VC = await import(toUrl(resolve(MOD, "ide", "vcd.js")));
+check("vcd.js: a dump packed for the worker unpacks to exactly what parseVCD gives", () => {
+  const extra = "$timescale 10 ps $end\n$scope module t $end\n$var wire 1 ! a $end\n$var wire 8 \" b [7:0] $end\n$var real 64 # r $end\n$var wire 1 $ never $end\n$upscope $end\n$enddefinitions $end\n" +
+    "#0\n0!\nb0 \"\nr1.5 #\n#5\n1!\nb\n#10\nb1010 \"\n0!\n#12345678901\nr-2e-3 #\n";
+  for (const text of [GOLDEN_VCD, extra]) {
+    const a = VC.parseVCD(text);
+    const m = VC.packVCD(VC.parseVCD(text)).msg;
+    const b = VC.unpackVCD(structuredClone(m));
+    for (const k of ["timescale", "tick", "end", "signals", "vars", "scopes"]) assert.deepEqual(b[k], a[k], k);
+    assert.deepEqual(Object.keys(b.byId), Object.keys(a.byId));
+    for (const id of Object.keys(a.byId)) {
+      assert.deepEqual(b.byId[id].changes, a.byId[id].changes, "changes of " + id);
+      assert.equal(b.byId[id].name, a.byId[id].name); assert.equal(b.byId[id].width, a.byId[id].width);
+    }
+    assert.equal(VC.valueAt(b.byId[Object.keys(a.byId)[0]], a.end), VC.valueAt(a.byId[Object.keys(a.byId)[0]], a.end));
+  }
+  let seen = 0;
+  VC.parseVCD("$enddefinitions $end\n" + "#1\n".repeat(200000), { onProgress: () => { seen++; } });
+  assert.ok(seen >= 2, "progress reported while parsing");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 
