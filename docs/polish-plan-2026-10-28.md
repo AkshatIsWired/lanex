@@ -148,3 +148,57 @@ Open after round 2:
 - The gf180 final-GDS view is a mostly yellow wash.
 - Script files given to klayout/openroad/magic through the Console runner can run anything.
 - LibreLane's own log timestamps and terminal run tags are UTC (its text, not LanEx's).
+
+## Performance pass (2026-10-28/29)
+
+Goal: instant on a strong PC, smooth on a 2-4 core, 8 GB laptop, without dropping
+any function. Two measuring agents (frontend with CDP CPU throttling at 1x and 6x;
+server and run resources) and a research agent set budgets first; four fixers built
+it in worktrees, and an independent checker re-measured the merged result and did a
+full regression click-through (real guide run, sweeps, fix sheet, Compare, Layout,
+waveform, IDE, Tools, 302 runs, three windows).
+
+Both sides measured the same way (in-distro copies of e004b75 and of the merged code,
+warm second runs):
+
+| Metric | before 1x / 6x | after 1x / 6x |
+|---|---|---|
+| Cold boot, splash gone | 836 / 1578 ms | 101 / 658 ms |
+| Warm reload (transfer) | 612 / 1088 ms (1928 KB) | 68 / 432 ms (20 KB) |
+| Run click to Flow | ~2000 ms | 2 / 21 ms |
+| Runs, 302 runs, open | 2305 / 4280 ms | 62 / 489 ms |
+| Runs sort INP | 80 / 800 ms | 16 / 104 ms |
+| Tools first open | 1732 / 1979 ms | 37 / 355 ms |
+| Cells first open, longest task at 6x | 1014 ms | 57 ms |
+| Live run at 6x, paint per 6 s | 1.6 s | 0.2 s |
+| design-info, 300 runs (on /mnt/c) | 7.9 s (23 s) | 2.4 ms (74 ms) |
+| Server RSS after 300-run scan | 608 MB | 258 MB |
+
+What was done:
+- Boot: ECharts and every page module load on demand; index.html preloads only
+  app.js's static imports. HTTP/1.1 keep-alive, gzip, ETag/304 for static and JSON.
+- Run: answers at once and shows "Starting" on Flow; preflight results reused; the
+  first events that beat the start reply are kept; Stop works while starting.
+- One loading look (`loading.js`, `skeleton.css`): nothing before 300 ms, then a
+  pulsing skeleton; stale content stays; reduced motion respected; `aria-busy`.
+- Live runs: log lines batched (about 20x fewer events), SSE streams sleep until an
+  event, the log view appends only new rows, indicators animate on their own layers.
+- Server: finished runs read once and cached by signature, `runs/` skipped when
+  walking a project, bounded cell-library cache, timing reports cached by mtime,
+  session-long tool probe with background refresh.
+- Heavy pages: Runs virtualised past 100 rows, Analytics draws the first screen then
+  one section per task, Compare disposes old charts, VCD parsed in a worker, IDE
+  folding from cached words.
+- Run resources (`runresources.py`): DRT/KLayout/STA thread counts sized to cores and
+  free memory, user config wins, recorded in `gui-run.json` and the command; final
+  metrics identical on spm and mac_array. A pre-run heads-up when free memory looks
+  too small.
+
+Still over budget (all also slower or equal before): Verify first open has a
+525 ms task at 6x; Analytics re-open at 6x settles in about 1.1 s; Layout first open
+is about 1.25 s (server thumbnails); real Run click INP at 6x is 208 ms (budget 200);
+celllib cold 857 ms; on /mnt/c layout/sources 608 ms. Not fixed, also in e004b75:
+after a server restart without a reload, the server forgets the active project.
+
+Tests after the pass: frontend 133 checks; pytest only the 8 known environment
+failures.
