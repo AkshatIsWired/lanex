@@ -731,11 +731,20 @@ async function paintCard(r) {
   } else {
     const v = verdictOf(r);
     const c = (rx && rx.card) || {};
-    const title = v.state === "stopped" ? "You stopped this run" : v.state === "incomplete" ? "This run ended before the last step"
+    // Flow's wording: "You stopped this run" only when it was cancelled; a run
+    // that just ended early (no error, no Stop) may have lost LanEx mid-run.
+    const cancelled = !!rx && rx.kind === "stopped";
+    const early = !cancelled && (v.state === "stopped" || v.state === "incomplete");
+    const at = rx && rx.step ? (rx.step.id || rx.step.dir) + (rx.step.n ? " (step " + rx.step.n + ")" : "") : "";
+    const title = cancelled ? "You stopped this run" : early ? "This run ended before the last step"
       : c.title ? c.title : v.label;
+    const lede = c.plain ? c.plain
+      : cancelled ? (at ? "It stopped at " + at + ". " : "") + "Everything before it is kept; run again whenever you're ready."
+      : early ? (at ? "Its folder ends at " + at + " with no error" : "It has no error") + ": LanEx may have been closed while it ran. Run it again to finish."
+      : at ? "It stopped at " + at + "." : "";
     card = "<div class='an-verdict fl-hero is-" + (VERDICT_TONE[v.state] === "pass" ? "pass" : v.state === "failed" ? "fail" : "warn") + "'><div class='an-verdict-main'>" +
       "<div class='an-eyebrow'>Run " + esc(r.tag) + "</div><h2 class='an-title'>" + esc(title) + "</h2>" +
-      (c.plain ? "<p class='an-lede'>" + esc(c.plain) + "</p>" : rx && rx.step ? "<p class='an-lede'>It stopped at " + esc(rx.step.id || rx.step.dir) + ".</p>" : "") +
+      (lede ? "<p class='an-lede'>" + esc(lede) + "</p>" : "") +
       "</div><div class='an-verdict-act'>" + (v.state === "failed" ? "<button class='btn btn-primary btn-sm' data-go='pipeline'>" + icon("flow", { size: 13 }) + " Why, and how to fix it</button>" : "") + "</div></div>";
   }
   host.innerHTML = lineageHtml(r) + card + actionsHtml(r) + "<div class='rn-note-row'><label class='muted' for='rn-note-ta'>Note</label>" +
