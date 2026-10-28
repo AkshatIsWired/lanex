@@ -259,6 +259,16 @@ export function verdictCopy(rep) {
     return { tone: "warn", title: "Still running", short: "running",
       sub: ran + " of " + v.total + " checks have a result so far. The verdict comes when the flow ends." };
   }
+  if (v.state !== "blocked" && v.state !== "stopped" && rv && rv.timing_miss) {
+    // Negative slack is never "clean", even where LibreLane only warns.
+    const m = rv.timing_miss;
+    const what = m.kind === "hold" ? "Some paths change too soon after the clock edge" : "Some paths arrive too late for the clock";
+    const fix = m.kind === "hold" ? "The hold-fixing step (buffer insertion) usually closes this." : "A slower clock (a larger CLOCK_PERIOD) or a less crowded layout usually closes this.";
+    const gate = ((by.get(m.kind) || {}).gate_note) || "";
+    return { tone: "fail", title: rv.label, short: "timing misses",
+      sub: what + " in " + m.where + ": worst " + m.kind + " slack " + m.ws.toFixed(2) + " ns. " + fix +
+        (gate ? " LibreLane only warned here, because this corner is outside the ones it fails on (" + gate + ")." : "") };
+  }
   if (v.state === "incomplete" && rv && rv.state === "stopped") {
     return { tone: "warn", title: rv.label, short: "stopped",
       sub: "The flow ended before its last step, so " + (v.total - ran) + " of " + v.total + " checks have no result. Nothing failed; run it again to finish." };

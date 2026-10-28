@@ -137,3 +137,19 @@ def test_resumed_run_counts_reused_steps(tmp_path):
     assert s["branched_from"] == "parent"
     assert s["steps_reused"] == 1 and s["step_count"] == 3 and s["steps_done"] == 3
     assert child.is_dir()
+
+
+def test_negative_slack_in_a_warning_corner_is_never_clean(tmp_path):
+    # Setup misses only in a corner outside TIMING_VIOLATION_CORNERS: LibreLane
+    # warns and passes the run, but LanEx must not call it clean.
+    m = dict(CLEAN)
+    m.update({"timing__setup__ws": -0.43, "timing__setup__ws__corner:max_ss_100C_1v60": -0.43,
+              "timing__setup__ws__corner:nom_tt_025C_1v80": 0.8,
+              "timing__setup_vio__count": 3, "timing__setup_vio__count__corner:max_ss_100C_1v60": 3,
+              "timing__setup_vio__count__corner:nom_tt_025C_1v80": 0})
+    run = _run(tmp_path, "R", m)
+    (run / "resolved.json").write_text(json.dumps({"TIMING_VIOLATION_CORNERS": ["*tt*"]}), encoding="utf-8")
+    v = verify.run_verdict(run)
+    assert v["state"] == "failed"
+    assert v["label"] == "Timing misses in the slow corner (setup -0.43 ns)"
+    assert v["timing_miss"]["corner"] == "max_ss_100C_1v60"

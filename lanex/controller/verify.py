@@ -1169,6 +1169,33 @@ def _stage_of(step_id: Optional[str]) -> Optional[str]:
         return None
 
 
+def _corner_words(corner: Optional[str]) -> str:
+    """``max_ss_100C_1v60`` -> ``the slow corner (max_ss_100C_1v60)``."""
+    if not corner:
+        return "one corner"
+    c = corner.lower()
+    kind = ("slow" if "_ss_" in c or c.startswith("ss") else "fast" if "_ff_" in c or c.startswith("ff")
+            else "typical" if "_tt_" in c or c.startswith("tt") else "")
+    return (f"the {kind} corner ({corner})" if kind else f"corner {corner}")
+
+
+def _timing_miss(run: "_Run") -> Optional[Dict[str, Any]]:
+    """The worst negative setup or hold slack STA reported in any corner, or
+    None. A run with negative slack is never called clean, even when
+    LibreLane only warns because the corner is outside
+    ``TIMING_VIOLATION_CORNERS``: the chip would miss its clock there."""
+    worst: Optional[Dict[str, Any]] = None
+    for kind in ("setup", "hold"):
+        base = f"timing__{kind}__ws"
+        vals = {c: _finite(v) for c, v in _by_corner(run.metrics, base).items()}
+        if not vals and _finite(run.metrics.get(base)) is not None:
+            vals = {None: _finite(run.metrics.get(base))}
+        for c, v in vals.items():
+            if v is not None and v < 0 and (worst is None or v < worst["ws"]):
+                worst = {"kind": kind, "ws": v, "corner": c}
+    return worst
+
+
 _STATE_BY_GROUP = {"rtl": "synthesis", "synth": "synthesis", "pnr": "routing",
                    "timing": "signoff", "physical": "signoff"}
 
@@ -1227,6 +1254,14 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
         st = _stage_of(last.get("id") or last.get("dir")) if last else None
         if st:
             out["stage"] = st
+        return out
+    miss = _timing_miss(run)
+    if miss:
+        # LibreLane passed the run (the corner only warns), but the design
+        # misses its clock there: a problem, said in plain words first.
+        out.update(state="failed", stage="signoff", timing_miss={**miss, "where": _corner_words(miss["corner"])},
+                   label=f"Timing misses in {_corner_words(miss['corner']).split(' (')[0]}"
+                         f" ({miss['kind']} {miss['ws']:.2f} ns)")
         return out
     if v["state"] == "incomplete":
         out.update(state="incomplete", label="Not enough to call it")
