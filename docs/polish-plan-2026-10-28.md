@@ -112,9 +112,39 @@ raw run files, a code review of the whole diff) and fixed in four more rounds.
   command run headless in WSL (produced a GDS).
 - Tests: frontend 110 checks; pytest 1151 passed, the 8 known environment failures.
 
-Open after this pass:
-- Sweeps recorded before this pass keep a `created_at` without a UTC offset.
-- LibreLane's own log timestamps are UTC (its text, not LanEx's).
-- Resume is not blocked while a project folder is missing.
-- Not tested here: gf180 runs from a private server ("PDK gf180mcuD was not found"
-  in one agent's environment), light theme, widths below about 1180 px for Tools.
+## Round 2 (2026-10-28 night)
+
+Four more agents on the merged branch:
+- **Tools v2:** the owner found round 1's Tools page generic and harder to scan than
+  the old one. It now opens on a verdict band (ready, or N problems each with its fix
+  button), with the flow engine as a hero tile pair, PDKs grouped by family, and
+  viewer/helper cards that say what in LanEx uses them. The fake sub-tabs, per-row
+  Check buttons and filter chips are gone, and actions round 1 dropped are back.
+- **Beginner journey (sky130, real runs):**
+  - IDE lint uses the flow's `--Werror-LATCH --Werror-MULTIDRIVEN` flags.
+  - Syntax errors warn before Run, and lint failures show file:line.
+  - The slew fix tries MAX_FANOUT_CONSTRAINT first, and the templates are zero-warning on sky130.
+  - Step numbers follow the run folders; status bar and title reset on project switch.
+- **Expert journey (sky130B, gf180mcuD, ihp-sg13g2, a 12k-cell MAC array):**
+  - gf180 "PDK not found" root cause: the Console command had no `-p`. PDK and SCL now come from config.json.
+  - "Stop at the first clean run" needs a passed verdict.
+  - Reproduce uses a `-repro` tag; Compare shows std-cell area.
+  - gf180's missing KLayout DRC deck is explained; IHP's `*typ*` corner is named.
+- **Hardening:**
+  - The server answers only a loopback Host (stops DNS rebinding).
+  - Commands recorded in shared runs are re-quoted librelane-only.
+  - The Console runner refuses with no project, kills after 5 s, and blocks `yosys -p '!'` and `ciel rm`.
+  - One flow at a time across run, sweep and Console.
+  - Sweep values are validated, and 300 runs list in 0.4 s instead of 32 s.
+  - Guide cards are placed right under CSS zoom; keyboard focus is held in sheets.
+
+Tests after round 2: frontend 121 checks; pytest only the 8 known environment failures.
+Test build: pre-release `windows-test-2026-10-28` (built from 72c3063, SHA-256
+`b8e3e029…412b490`); app changes only, installer unchanged, not VM-checked.
+
+Open after round 2:
+- The fix sheet's "slow the clock" does not always close a slow-corner miss.
+- The Runs table scrolls sideways at about 1100 px.
+- The gf180 final-GDS view is a mostly yellow wash.
+- Script files given to klayout/openroad/magic through the Console runner can run anything.
+- LibreLane's own log timestamps and terminal run tags are UTC (its text, not LanEx's).
