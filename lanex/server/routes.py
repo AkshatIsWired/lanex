@@ -4151,7 +4151,8 @@ def h_project_new_file(handler: Any) -> None:
     if use and _refuse_while_running(handler):
         return
     res = projectfiles.new_file(d, str(body.get("kind") or ""), str(body.get("name") or ""),
-                                top=body.get("top") or None, clock=body.get("clock") or None, use=use)
+                                top=body.get("top") or None, clock=body.get("clock") or None, use=use,
+                                folder=(str(body["folder"]) if body.get("folder") is not None else None))
     if not res.get("ok"):
         _respond(handler, res.get("error") or "could not create the file", 400)
         return

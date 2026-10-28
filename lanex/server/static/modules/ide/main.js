@@ -1745,8 +1745,10 @@ async function rewriteTestbench(tb) {
     await api.fileRename(rel, backup);
   } catch (ex) { note("Couldn't keep a backup of " + rel + ": " + (ex.message || ex) + ". Nothing was changed.", true); return; }
   try {
+    // Back in the old testbench's own folder, under its own name.
+    const folder = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
     const r = await api.newProjectFile({ design_dir: state.designDir, kind: /\.sv$/i.test(rel) ? "tb_sv" : "tb_v",
-      name, top, clock, use: false });
+      name, top, clock, use: false, folder });
     await loadTree();
     await loadTestbenches();
     await openFile(r.abs, r.rel);

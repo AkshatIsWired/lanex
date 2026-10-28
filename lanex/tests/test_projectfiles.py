@@ -144,6 +144,17 @@ def test_new_testbench_never_touches_sources(design):
     assert _cfg(design)["VERILOG_FILES"] == ["dir::src/alu.v"]
 
 
+def test_rewritten_testbench_stays_in_its_folder(design):
+    # The IDE rewrites a testbench in place: same folder, same name.
+    res = projectfiles.new_file(design, "tb_v", "alu_tb2", top="alu", use=False, folder="sim/tb")
+    assert res["ok"] and res["rel"] == "sim/tb/alu_tb2.v"
+    res = projectfiles.new_file(design, "tb_v", "top_tb", top="alu", use=False, folder="")
+    assert res["ok"] and res["rel"] == "top_tb.v"
+    assert not projectfiles.new_file(design, "tb_v", "x_tb", top="alu", use=False, folder="../out")["ok"]
+    # A folder only moves testbenches.
+    assert projectfiles.new_file(design, "module_v", "fifo2", folder="elsewhere")["rel"] == "src/fifo2.v"
+
+
 def test_new_sdc_is_used_for_pnr_and_signoff(design):
     res = projectfiles.new_file(design, "sdc", "impl.sdc", top="alu")
     assert res["ok"] and res["rel"] == "src/impl.sdc"

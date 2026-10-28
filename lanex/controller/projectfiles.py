@@ -540,17 +540,24 @@ _FILE_RX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*$")
 
 
 def new_file(design_dir: str | Path, kind: str, name: str, *, top: Optional[str] = None,
-             clock: Optional[str] = None, use: bool = True) -> Dict[str, Any]:
+             clock: Optional[str] = None, use: bool = True,
+             folder: Optional[str] = None) -> Dict[str, Any]:
     """Create a starter file of *kind* named *name* and, with *use*, point the
     config at it: a new design module joins VERILOG_FILES (unless a glob
     already covers it), an SDC becomes PNR_SDC_FILE and SIGNOFF_SDC_FILE,
     a pin file becomes IO_PIN_ORDER_CFG.
 
+    *folder* (project-relative, ``""`` for the project root) puts a testbench
+    somewhere other than ``verify/``: a rewritten testbench goes back where
+    the old one was.
+
     Returns ``{ok, rel, abs, config: {changed, name}|None, config_error}``.
     """
     if kind not in KINDS:
         return {"ok": False, "error": f"unknown kind '{kind}'"}
-    folder, ext = KINDS[kind]
+    sub, ext = KINDS[kind]
+    if folder is not None and kind.startswith("tb"):
+        sub = str(folder).replace("\\", "/").strip().strip("/")
     name = (name or "").strip()
     if kind.startswith(("module", "tb")):
         if not _NAME_RX.match(name):
@@ -563,7 +570,7 @@ def new_file(design_dir: str | Path, kind: str, name: str, *, top: Optional[str]
         if not _FILE_RX.match(fname) or (ext is None and Path(fname).suffix.lower() not in EDITABLE_EXTS):
             return {"ok": False, "error": "Use letters, digits, - _ and . in the file name"
                     + ("" if ext else ", with an extension LanEx can edit (.txt, .md, .tcl, .json, .yaml …).")}
-    rel = f"{folder}/{fname}" if folder else fname
+    rel = f"{sub}/{fname}" if sub else fname
     target = _resolve_inside(design_dir, rel)
     if target is None:
         return {"ok": False, "error": "That path is outside the project."}
