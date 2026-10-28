@@ -98,8 +98,11 @@ function settleBaseline() {
   const cur = same[idx];
   // A resumed (fix) run is compared with the run it was resumed from: that
   // is the "before" of the fix, whatever else passed in between.
+  // Not a run the user stopped (or one cut off): that is a resume, not a fix,
+  // and its numbers are from mid-flow (pre-route power, half the runtime).
   const parent = cur && cur.branched_from && same.find((r) => r.tag === cur.branched_from);
-  if (parent && ok(parent.tag)) { C.baseline = parent.tag; return; }
+  const partial = parent && parent.verdict && ["stopped", "incomplete", "running"].includes(parent.verdict.state);
+  if (parent && !partial && ok(parent.tag)) { C.baseline = parent.tag; return; }
   const passed = (r) => (r.verdict && r.verdict.state ? r.verdict.state === "passed" : r.success);
   const prev = same.slice(idx + 1).find(passed);
   C.baseline = prev ? prev.tag : "";

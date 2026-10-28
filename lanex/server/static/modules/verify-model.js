@@ -289,7 +289,7 @@ export function verdictCopy(rep) {
         // The PDK sets the default (*tt* on sky130 and gf180, *typ* on IHP), so
         // name this run's rule rather than one PDK's.
         " LibreLane finished the run because it only fails on the corners listed in TIMING_VIOLATION_CORNERS" +
-        (gate ? " (this run: " + gate + ")" : " (the PDK's typical corner by default)") + "." };
+        (gate ? " (this run: " + gate.replace(/^TIMING_VIOLATION_CORNERS = /, "") + ")" : " (the PDK's typical corner by default)") + "." };
   }
   if (v.state === "incomplete" && rv && rv.state === "stopped") {
     return { tone: "warn", title: rv.label, short: "stopped",
