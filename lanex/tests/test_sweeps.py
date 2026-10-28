@@ -227,3 +227,19 @@ def test_start_time_is_reread_for_a_recreated_run_folder(tmp_path):
     (run / "note.txt").write_text("hi")
     os.utime(run, (1_800_000_000, 1_800_000_000))
     assert history.started_ts(run) == 1_700_000_000
+
+
+def test_a_sweep_point_records_its_own_command(tmp_path):
+    from lanex.controller import manualcmd
+    from lanex.server import routes
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"DESIGN_NAME": "spm"}')
+    asm = {"overrides": {"FP_CORE_UTIL": "40", "CLOCK_PERIOD": "10"}, "extra_sources": [],
+           "extra_extras": [], "extra_config_files": []}
+    meta = routes._sweep_point_meta(str(tmp_path), cfg, "Classic", "container", "sweep-util-40",
+                                    "sky130A", "sky130_fd_sc_hd", None, asm, "s1", {"FP_CORE_UTIL": "40"})
+    assert meta["sweep"] == {"id": "s1", "values": {"FP_CORE_UTIL": "40"}}
+    assert meta["config_hash"]
+    info = manualcmd.reproduce_info(meta, None, str(tmp_path / "runs" / "sweep-util-40"))
+    assert info["recorded"] is True
+    assert "FP_CORE_UTIL=40" in info["command"] and "sweep-util-40" in info["command"]

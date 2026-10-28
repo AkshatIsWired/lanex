@@ -3172,6 +3172,49 @@ def h_verify_rerun(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def _sweep_point_meta(design_dir: str, config_file: Path, flow_name: str, run_mode: str, tag: str,
+                      pdk: Optional[str], scl: Optional[str], pdk_root: Optional[str],
+                      asm: Dict[str, Any], sweep_id: Optional[str],
+                      values: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``gui-run.json`` a sweep point records, like a Setup run's: what was
+    launched, and the exact CLI command with the point's own ``-c`` values, so
+    Reproduce works for every point."""
+    overrides = asm.get("overrides") or {}
+    extra_config_files = list(asm.get("extra_config_files") or [])
+    meta: Dict[str, Any] = {
+        "flow": flow_name,
+        "pdk": pdk,
+        "scl": scl,
+        "run_mode": run_mode,
+        "mode": "full",
+        "overrides": overrides,
+        "frm": None,
+        "to": None,
+        "skip": [],
+        "sources": list(asm.get("extra_sources") or []),
+        "extras": list(asm.get("extra_extras") or []),
+        "extra_config_files": extra_config_files,
+        "extra_config_hash": _hash_files(extra_config_files),
+        "config_file": str(config_file),
+        "config_hash": _hash_files([str(config_file)]),
+    }
+    if sweep_id:
+        meta["sweep"] = {"id": sweep_id, "values": dict(values)}
+    try:
+        from ..controller import manualcmd
+        meta["cli_command"] = manualcmd.cli_command_for(
+            design_dir=design_dir, config_file=str(config_file),
+            flow=flow_name, pdk=pdk, scl=scl, pdk_root=pdk_root,
+            run_mode=run_mode, tag=tag, overrides=overrides,
+            extra_sources=asm.get("extra_sources") or None,
+            extra_extras=asm.get("extra_extras") or None,
+            extra_config_files=extra_config_files or None,
+        )
+    except Exception:
+        _log.debug("cli_command_for failed for a sweep point", exc_info=True)
+    return meta
+
+
 def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
                           run_mode: str, base_overrides: Dict[str, Any],
                           dse_body: Optional[Dict[str, Any]] = None,
@@ -3216,6 +3259,8 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
         from ..controller import dse as _dse
         if _dse.job.cancelled:
             return {"ok": False, "kind": "stopped", "reason": "stopped"}
+        gui_meta = _sweep_point_meta(design_dir, config_file, flow_name, run_mode, tag, pdk, scl,
+                                     pdk_root, asm, sweep_id, overrides)
         res = r.start(
             flow_factory=_flow_factory(flow_name),
             config_files=[str(config_file)],
@@ -3227,6 +3272,7 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
             extra_extras=asm["extra_extras"],
             extra_config_files=asm["extra_config_files"],
             run_mode=run_mode, flow_name=flow_name,
+            gui_meta=gui_meta,
         )
         if not res.get("ok"):
             return {"ok": False, "kind": "error",
