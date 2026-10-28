@@ -729,13 +729,14 @@ export function paintRunButton() {
   b.disabled = off;
 }
 
-// Errors the RTL IDE's last syntax check found in a project (ide/main.js
+// Errors the RTL IDE's last syntax check found in a project's design files (ide/main.js
 // recordRtlStatus keeps it per project), or 0 when it wasn't checked.
 export function lastLintErrors(designDir, store = safeStorage) {
   if (!designDir) return 0;
   let st = null;
   try { st = JSON.parse(store.get("ll.rtl:" + designDir, "") || "null"); } catch (_e) { st = null; }
-  const n = st && st.lint && Number(st.lint.errors);
+  // Design files only: the flow never lints testbenches.
+  const n = st && st.lint && Number(st.lint.design_errors);
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
@@ -757,7 +758,7 @@ async function onRunClick({ show = false, fixed = false } = {}) {
     const pick = await choiceDialog({
       title: "The RTL has " + lintErrs + (lintErrs === 1 ? " error" : " errors"),
       body: "The last syntax check in the RTL IDE found " + (lintErrs === 1 ? "an error" : lintErrs + " errors") +
-        " in this project. The flow's first step runs the same check (Verilator lint) and stops on it.",
+        " in this project's design files. The flow's first step runs the same check (Verilator lint) and stops on it.",
       choices: [{ label: "Show them", value: "show" }, { label: "Run anyway", value: "run", danger: true }],
     });
     if (pick === "show") { (await import("./nav.js")).go("ide"); return; }

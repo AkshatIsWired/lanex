@@ -1269,7 +1269,7 @@ check("steps: one count meaning (turned-off steps out of the total, current = do
 {
   const SU = await import(toUrl(resolve(MOD, "setup.js")));
   check("run: the IDE's last syntax-check errors are read per project", () => {
-    const mem = { "ll.rtl:/p/a": JSON.stringify({ lint: { errors: 2, warnings: 1 } }), "ll.rtl:/p/b": JSON.stringify({ lint: { errors: 0 } }), "ll.rtl:/p/c": "{bad" };
+    const mem = { "ll.rtl:/p/a": JSON.stringify({ lint: { errors: 3, design_errors: 2, warnings: 1 } }), "ll.rtl:/p/b": JSON.stringify({ lint: { errors: 1, design_errors: 0 } }), "ll.rtl:/p/c": "{bad" };
     const store = { get: (k, d) => (k in mem ? mem[k] : d) };
     assert.equal(SU.lastLintErrors("/p/a", store), 2);
     assert.equal(SU.lastLintErrors("/p/b", store), 0);

@@ -1811,7 +1811,7 @@ function simStatus(run) {
     "reported-fail": ["warn", "The testbench reported " + plural(r.fails || 0, "failure"), facts, "<button class='btn btn-sm' data-ss='first-fail'>Show the first one</button>" + wave],
     build: portMismatch(r)
       ? ["fail", "Didn't build: the testbench doesn't match the module's ports",
-        "The design's ports changed since " + (tbName || "the testbench") + " was written (" + plural(r.buildErrors || 0, "error") + " in Problems). LanEx can write it again for the current ports and keep yours as a backup.",
+        (tbName || "The testbench") + " connects ports the module doesn't have, or leaves some out (" + plural(r.buildErrors || 0, "error") + " in Problems). Fix the names, or LanEx can write it again for the current ports and keep yours as a backup.",
         "<button class='btn btn-primary btn-sm' data-ss='rewrite-tb'>Rewrite the testbench for these ports</button><button class='btn btn-ghost btn-sm' data-ss='first-error'>Show the first error</button>"]
       : ["fail", "Didn't build: " + plural(r.buildErrors || 0, "error"), "They're listed in Problems and underlined in the editor.", "<button class='btn btn-sm' data-ss='first-error'>Show the first error</button>"],
     failed: ["fail", "The simulator stopped with an error", "Exit code " + r.rc + ". The output below says why." + (secs ? " " + secs : ""), ""],
@@ -1938,7 +1938,9 @@ function recordRtlStatus() {
   const real = allDiags().filter((d) => !isNoise(d));
   const st = {
     lint: state.lintChecked ? { errors: real.filter((d) => d.severity === "error").length,
-      warnings: real.filter((d) => d.severity === "warning").length, at: state.lintAt } : prev.lint,
+      warnings: real.filter((d) => d.severity === "warning").length, at: state.lintAt,
+      // What the flow's own lint (design files only, never testbenches) will hit.
+      design_errors: real.filter((d) => d.severity === "error" && !isTestbenchFile(d.file)).length } : prev.lint,
     sim: state.simRun && state.simRun.verdict && state.simRun.verdict !== "running"
       ? { tb: state.simRun.tb, verdict: state.simRun.verdict, at: Date.now() } : prev.sim,
   };

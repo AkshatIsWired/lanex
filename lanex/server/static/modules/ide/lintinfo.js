@@ -26,6 +26,7 @@ export const LINT_INFO = {
   MULTITOP: "More than one module is never instantiated, so there are several tops.",
   PINCONNECTEMPTY: "A port is connected to nothing with .port(). Connect it or leave it out on purpose.",
   PINMISSING: "An instance doesn't connect one of the module's ports.",
+  PINNOTFOUND: "The instance connects a port the module doesn't have. Compare the port names with the module's.",
   PINNOCONNECT: "An output port of an instance isn't connected.",
   PROCASSINIT: "A signal has an initial value and is also assigned in an always block. Set it with a reset instead.",
   SELRANGE: "A bit select is outside the signal's range.",
