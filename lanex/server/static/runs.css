@@ -50,21 +50,29 @@
 .rn-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
 .rn-wrap[hidden] { display: none; }
 .rn-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.rn-table th, .rn-table td { padding: 6px 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); text-align: left; white-space: nowrap; }
-.rn-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-2); font-weight: 500; }
+.rn-table th, .rn-table td { padding: 6px 9px; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); text-align: left; white-space: nowrap; }
+.rn-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-2); font-weight: 500; white-space: normal; vertical-align: bottom; line-height: 1.25; }
+.rn-table thead th.is-num { text-align: right; }
 .rn-table .is-num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 12.5px; }
 .rn-sort {
   background: none; border: 0; padding: 0; color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer;
-  display: inline-flex; align-items: baseline; gap: 3px; white-space: nowrap;
+  display: inline-block; text-align: inherit; white-space: normal; max-width: 11ch;
 }
 .rn-sort small { font-size: 10.5px; opacity: 0.8; }
 .rn-sort:hover, .rn-sort.is-on { color: var(--text-strong); }
 .rn-arrow { font-size: 9px; min-width: 8px; }
-.rn-c-pick, .rn-c-base { width: 28px; padding-left: 8px !important; padding-right: 0 !important; text-align: center !important; }
+.rn-c-pick, .rn-c-base { width: 28px; min-width: 28px; max-width: 28px; box-sizing: border-box; padding-left: 6px !important; padding-right: 0 !important; text-align: center !important; }
+/* The run name stays in view while the numbers scroll sideways (narrow screens). */
+.rn-table td.rn-c-pick, .rn-table td.rn-c-base, .rn-table td.rn-c-name { position: sticky; z-index: 1; background: var(--surface); }
+.rn-table th.rn-c-pick, .rn-table th.rn-c-base, .rn-table th.rn-c-name { position: sticky; z-index: 3; }
+.rn-table .rn-c-pick { left: 0; }
+.rn-table .rn-c-base { left: 28px; }
+.rn-table .rn-c-name { left: 56px; box-shadow: inset -1px 0 0 var(--border); }
+.rn-hasnote { color: var(--text-muted); display: inline-flex; }
 .rn-th.rn-c-base { color: var(--text-muted); font-size: 12px; }
 .rn-row { cursor: pointer; }
-.rn-row:hover td { background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
-.rn-row.is-picked td { background: color-mix(in srgb, var(--accent-soft) 60%, transparent); }
+.rn-row:hover td { background: color-mix(in srgb, var(--surface-2) 70%, var(--surface)); }
+.rn-row.is-picked td { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
 .rn-row.is-viewing td:first-child { box-shadow: inset 3px 0 0 var(--met1); }
 .rn-row.is-viewing .rn-viewing { display: inline-block; }
 .rn-viewing {
@@ -111,7 +119,8 @@
 .rn-c-when, .rn-c-origin, .rn-c-pdk, .rn-c-design { color: var(--text-muted); }
 
 /* sweep parent rows */
-.rn-sweep td { background: color-mix(in srgb, var(--surface-2) 55%, transparent); cursor: pointer; }
+.rn-sweep td { background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)); cursor: pointer; }
+.rn-sweep td:nth-child(3) .rn-sw { position: sticky; left: 66px; width: max-content; max-width: calc(100vw / var(--ll-zoom, 1) - 220px); }
 .rn-sw { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rn-sw b { font-weight: 600; color: var(--text-strong); }
 .rn-sw-m { color: var(--text-muted); font-size: 12.5px; }

@@ -56,19 +56,19 @@ function checksOf(r) {
   return { drc: d, lvs, ant, total: (d || 0) + (lvs || 0) + (ant || 0) };
 }
 const COLS = [
-  { id: "verdict", label: "Result", fixed: true, sort: (r) => VERDICT_ORDER[verdictOf(r).state] ?? 9 },
   { id: "name", label: "Run", fixed: true, sort: (r) => r.tag.toLowerCase() },
+  { id: "verdict", label: "Result", fixed: true, sort: (r) => VERDICT_ORDER[verdictOf(r).state] ?? 9 },
   { id: "when", label: "When", sort: (r) => r.started_at || "", def: true },
-  { id: "origin", label: "Origin", sort: (r) => originText(r), def: true },
+  { id: "origin", label: "Origin", sort: (r) => originText(r), def: 2000 },
   { id: "design", label: "Design", sort: (r) => designLabel(r._design), allOnly: true, def: true },
   { id: "pdk", label: "PDK", sort: (r) => r.pdk || "", def: false },
   { id: "wns", label: "Setup WNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__setup__ws"), f: (v) => signed(v), def: true,
     tip: "Worst setup slack in any corner (ns). Positive: the design meets its clock." },
-  { id: "tns", label: "Setup TNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__setup__tns"), f: (v) => signed(v), def: true,
+  { id: "tns", label: "Setup TNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__setup__tns"), f: (v) => signed(v), def: 1500,
     tip: "Total negative setup slack (ns). 0 when every path meets timing." },
-  { id: "hold", label: "Hold WNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__hold__ws"), f: (v) => signed(v), def: true,
+  { id: "hold", label: "Hold WNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__hold__ws"), f: (v) => signed(v), def: 1500,
     tip: "Worst hold slack in any corner (ns)." },
-  { id: "die", label: "Die area", unit: "µm²", dir: -1, get: (r) => km(r, "design__die__area"), f: (v) => grp(v), def: true,
+  { id: "die", label: "Die area", unit: "µm²", dir: -1, get: (r) => km(r, "design__die__area"), f: (v) => grp(v), def: 1500,
     tip: "design__die__area: the whole die, in µm²." },
   { id: "cells", label: "Std-cell area", unit: "µm²", dir: -1, get: (r) => km(r, "design__instance__area__stdcell"), f: (v) => grp(v), def: true,
     tip: "design__instance__area__stdcell: the standard cells' area in µm², without fill, tap or decap cells." },
@@ -78,9 +78,9 @@ const COLS = [
     f: (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(3)), def: true, tip: "Total power OpenROAD estimated (power__total), in mW." },
   { id: "checks", label: "DRC · LVS · Ant", dir: -1, get: (r) => { const c = checksOf(r); return c ? c.total : null; }, def: true,
     tip: "Design-rule errors (worst of Magic, KLayout and the router), LVS errors and antenna violations. Not checked: blank." },
-  { id: "runtime", label: "Runtime", dir: -1, get: (r) => num(r.wall_time_s), f: (v) => fmtDur(v), def: true, tip: "The sum of every step's time." },
+  { id: "runtime", label: "Runtime", dir: -1, get: (r) => num(r.wall_time_s), f: (v) => fmtDur(v), def: 1300, tip: "The sum of every step's time." },
   { id: "changed", label: "Changed vs baseline", sort: (r) => (CHANGES.get(keyOf(r)) || []).length, def: true },
-  { id: "note", label: "Note", sort: (r) => r.note || "", def: true },
+  { id: "note", label: "Note", sort: (r) => r.note || "", def: 2100 },
 ];
 const VERDICT_ORDER = { running: 0, passed: 1, warning: 2, incomplete: 3, stopped: 4, failed: 5 };
 const signed = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2);
@@ -90,7 +90,14 @@ const COLS_KEY = "ll.runsCols", SORT_KEY = "ll.runsSort", BASE_KEY = "ll.runsBas
 function visibleCols(scope) {
   const saved = safeStorage.getJSON(COLS_KEY, null);
   return COLS.filter((c) => (c.allOnly ? scope === "all" : true) &&
-    (c.fixed || (saved && saved[c.id] != null ? saved[c.id] : c.def)));
+    (c.fixed || (saved && saved[c.id] != null ? saved[c.id] : defOn(c))));
+}
+// A column whose default is a width shows by default only when the table has
+// that much room, so the default set fits the screen (1366: the essentials).
+function defOn(c) {
+  if (typeof c.def !== "number") return !!c.def;
+  const w = document.getElementById("sec-runs")?.clientWidth || window.innerWidth;
+  return w >= c.def - 120;
 }
 
 // ------------------------------------------------------------------ verdict
@@ -197,6 +204,9 @@ function wire() {
   document.addEventListener("click", (e) => { if (cp && !cp.hidden && !e.target.closest(".rn-cols-wrap")) { cp.hidden = true; cb.setAttribute("aria-expanded", "false"); } });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && cp && !cp.hidden) { cp.hidden = true; cb.setAttribute("aria-expanded", "false"); } });
   // A sweep running anywhere shows its progress here.
+  // Default columns follow the room the table has.
+  let rz = 0;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (document.getElementById("sec-runs")?.classList.contains("section-active")) renderRuns({ cached: true }); }, 250); });
   document.addEventListener("g:sweep", () => {
     if (document.getElementById("sec-runs")?.classList.contains("section-active")) renderRuns();
   });
@@ -206,7 +216,7 @@ function paintColPicker() {
   const cp = document.getElementById("rn-cols");
   const saved = safeStorage.getJSON(COLS_KEY, {}) || {};
   cp.innerHTML = "<div class='rn-cols-h'>Columns</div>" + COLS.filter((c) => !c.fixed && !c.allOnly).map((c) => {
-    const on = saved[c.id] != null ? saved[c.id] : c.def;
+    const on = saved[c.id] != null ? saved[c.id] : defOn(c);
     return "<label class='rn-col-opt'><input type='checkbox' data-col='" + c.id + "'" + (on ? " checked" : "") + "/> " + esc(c.label) + "</label>";
   }).join("") + "<button class='btn btn-ghost btn-xs' data-cols-reset>Reset</button>";
   cp.querySelectorAll("input[data-col]").forEach((i) => i.addEventListener("change", () => {
@@ -409,7 +419,8 @@ function cellHtml(c, r, base) {
   const v = c.get(r);
   if (v == null) return "<td class='rn-c-" + c.id + " is-num muted'></td>";
   let cls = "", delta = "";
-  if (c.dir && base) {
+  // Only finished runs are measured against the baseline (a stopped run is "faster").
+  if (c.dir && base && /passed|warning/.test(verdictOf(r).state)) {
     const b = c.get(base);
     if (b != null) {
       const d = v - b;
@@ -436,6 +447,7 @@ function rowHtml(r, cols, { child = null } = {}) {
     (vals ? "<span class='rn-val'>" + esc(valuesText(vals)) + "</span>" : "") +
     (r.pinned ? "<span class='rn-pin' title='Pinned'>" + icon("star", { size: 11 }) + "</span>" : "") +
     (r.imported ? "<span class='rn-chip'>imported</span>" : "") +
+    (r.note && !cols.some((c) => c.id === "note") ? "<span class='rn-hasnote' title='" + esc(r.note) + "'>" + icon("file", { size: 11 }) + "</span>" : "") +
     "<span class='rn-viewing' title='Flow, Layout, Analytics and Verify show this run'>shown</span></div>" + lineageHtml(r) + "</td>";
   const cells = cols.map((c) => (c.id === "name" ? name : cellHtml(c, r, base))).join("");
   const n = cols.length + 2;
@@ -692,12 +704,18 @@ async function paintCard(r) {
   const base = baselineRowFor(r);
   const active = normDir(r._design) === normDir(state.designDir);
   let rx = RX.get(keyOf(r));
-  if (!rx && active) { try { rx = await api.runExplain(r.tag, base ? base.tag : undefined); } catch (_e) { rx = null; } }
+  // Verify's reading of the run, for the verdict words (the same as Flow and Verify).
+  const [rx2, vfr] = await Promise.all([
+    rx || !active ? Promise.resolve(rx || null) : api.runExplain(r.tag, base ? base.tag : undefined).catch(() => null),
+    active && (r.success || (r.verdict && r.verdict.state !== "running")) ? api.verify(r.tag).catch(() => null) : Promise.resolve(null),
+  ]);
+  rx = rx2;
+  const vf = vfr && (vfr.verdict ? vfr : vfr.data && vfr.data.verdict ? vfr.data : null);
   if (document.getElementById("rn-card") !== host) return;
   let card;
   if (rx && (rx.kind === "clean" || rx.kind === "checks-failed")) {
     // Flow's report card, fed with this run's final metrics (and the baseline's).
-    card = reportCardHtml({ tag: r.tag, rx, vf: null, steps: [{ metrics: r.key_metrics || {}, secs: r.wall_time_s || 0 }],
+    card = reportCardHtml({ tag: r.tag, rx, vf, steps: [{ metrics: r.key_metrics || {}, secs: r.wall_time_s || 0 }],
       stages: [], base: base ? base.tag : "", baseRs: base ? { steps: [{ changed: base.key_metrics || {}, runtime_s: base.wall_time_s || 0 }] } : null });
   } else {
     const v = verdictOf(r);
@@ -711,6 +729,8 @@ async function paintCard(r) {
   }
   host.innerHTML = lineageHtml(r) + card + actionsHtml(r) + "<div class='rn-note-row'><label class='muted' for='rn-note-ta'>Note</label>" +
     "<textarea id='rn-note-ta' class='rn-note-ta' rows='2' placeholder='What you tried, what you saw…'></textarea></div>";
+  // Verify didn't answer (another design, or it failed): don't promise a reading.
+  if (!vf) host.querySelectorAll(".an-lede").forEach((p) => { if (/Reading the sign-off checks/.test(p.textContent)) p.textContent = "No step failed. Open Verify for the sign-off checks."; });
   const ta = host.querySelector("#rn-note-ta");
   ta.value = r.note || "";
   ta.addEventListener("blur", async () => {
