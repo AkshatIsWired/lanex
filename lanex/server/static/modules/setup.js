@@ -930,6 +930,21 @@ async function fillResume() {
   paintRunLabel();
 }
 
+// Resume the run on the results pages from a stage, through the Run menu's own
+// "Resume from" path (so the server plans it the same way). Returns why it
+// can't, or "" once the run is asked to start.
+export async function resumeFrom(stage) {
+  await fillResume();
+  const sel = document.getElementById("run-resume-from");
+  const opt = sel && [...sel.options].find((o) => o.dataset.stage === stage);
+  if (!opt) return "LanEx can't resume this run from " + FS.stageLabel(stage) + ".";
+  if (opt.disabled) return opt.textContent.replace(/^\d+\.\s*/, "");
+  sel.value = opt.value;
+  paintRunLabel();
+  document.getElementById("btn-run-global")?.click();
+  return "";
+}
+
 // "Run", "Run to Placement" or "Resume from Placement": the button says what
 // it will do.
 function paintRunLabel() {

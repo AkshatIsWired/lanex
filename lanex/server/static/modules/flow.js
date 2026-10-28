@@ -378,12 +378,17 @@ function headHtml(steps, stages) {
   }
   const at = rx.step ? (stepLabel(rx.step.id) + " (step " + rx.step.n + ")") : "";
   const title = rx.kind === "stopped" ? "You stopped this run" : "This run ended before the last step";
+  // Resume picks up at the stage the run was in: its earlier stages are reused.
+  const rstage = rx.step ? FS.stagesOf([{ id: rx.step.id }])[0] : null;
+  const canResume = rstage && FS.STAGES.findIndex((s) => s.id === rstage) > 0;
   const sub = rx.kind === "stopped"
-    ? "It stopped at " + at + ". Everything before it is kept; run again whenever you're ready."
-    : "Its folder ends at " + at + " with no error: LanEx may have been closed while it ran. Run it again to finish.";
+    ? "It stopped at " + at + ". Everything before it is kept: resume to reuse it, or run again from the start."
+    : "Its folder ends at " + at + " with no error: LanEx may have been closed while it ran. Resume or run it again to finish.";
   return "<div class='an-verdict fl-hero is-warn'><div class='an-verdict-main'><div class='an-eyebrow'>Run " + esc(F.tag) + "</div>" +
     "<h2 class='an-title'>" + esc(title) + "</h2><p class='an-lede'>" + esc(sub) + "</p></div>" +
-    "<div class='an-verdict-act'><button class='btn btn-ghost' data-fl='run'>" + icon("play", { size: 14 }) + " Run again</button></div></div>";
+    "<div class='an-verdict-act'>" +
+    (canResume ? "<button class='btn btn-primary' data-fl='resume-from' data-stage='" + esc(rstage) + "'>" + icon("play", { size: 14 }) + " Resume from " + esc(FS.stageLabel(rstage)) + "</button>" : "") +
+    "<button class='btn btn-ghost' data-fl='run'>" + icon("play", { size: 14 }) + " Run again</button></div></div>";
 }
 
 // The live head is built once per run and then only its text changes, so
@@ -407,6 +412,9 @@ function paintLive(head, steps, stages) {
   const done = nc.done;
   const total = nc.total || 1;
   const pct = Math.min(100, Math.round((done / total) * 100));
+  // "Step N of M" counts this run's own steps, as its folders (01-…) and the
+  // status bar do; a resumed run's reused steps are not its own.
+  const own = FS.stepCounts(steps.filter((s) => !s.from).map((s) => s.status));
   const started = steps.filter((s) => s.status !== "pending");
   const lastStarted = started.length ? started[started.length - 1].i : -1;
   const next = steps.slice(lastStarted + 1).find((s) => s.status === "pending") || null;
@@ -424,7 +432,7 @@ function paintLive(head, steps, stages) {
     : paused ? "Paused <span class='fl-sep'>›</span> next: " + esc(stepLabel(paused.id))
     : esc(ending ? "Finishing the run…" : prep || "Starting the run…");
   const sub = cur
-    ? "Step " + nc.current + " of " + total + (cur.status === "pending" ? " · starting" : "") +
+    ? "Step " + own.current + " of " + own.total + (cur.status === "pending" ? " · starting" : "") +
       (left != null ? " · about " + fmtDur(left) + " left" : "") +
       (stg && stg.bsecs ? " · " + stg.label + " took " + fmtDur(stg.bsecs) + " last time" : "")
     : paused ? "Step by step: " + done + " of " + total + " done. Next step runs it."
@@ -977,6 +985,11 @@ function wireOnce() {
     if (act === "run") document.getElementById("btn-run-global")?.click();
     else if (act === "stop") api.cancelRun().catch(() => {});
     else if (act === "resume") api.resumeRun().catch(() => {});
+    else if (act === "resume-from") {
+      import("./setup.js").then((m) => m.resumeFrom(a.dataset.stage))
+        .then((why) => { if (why) toast.show(why, "warn", 9000); })
+        .catch((e) => toast.show("Couldn't resume: " + (e.message || e), "error"));
+    }
     else if (act === "parent") ctx.setRun(a.dataset.tag);
     else if (act === "unpick") { F.sel = ""; F.tab = "log"; if (F.live) { F.follow = true; F.followed = ""; } paint(); }
     else if (act === "at-error") {

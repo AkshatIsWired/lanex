@@ -312,7 +312,9 @@ class FlowRunner:
         """
         self._cancel.set()
         self._resume.set()  # unblock a paused worker so it can see the cancel
-        self._emit(EventType.INFO, {"message": "cancel requested — stopping after the current step"})
+        # The running step is killed below (its process and the container), so
+        # the run ends now, not after the step.
+        self._emit(EventType.INFO, {"message": "stop requested: ending the current step now"})
         self._kill_child_processes()
         self._kill_container()
         # Container step-by-step paused between steps: no live process to kill, so
