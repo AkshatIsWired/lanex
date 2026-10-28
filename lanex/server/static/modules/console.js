@@ -39,6 +39,10 @@ export function isConsoleOpen() { return !!C.el && !C.el.hidden; }
 
 export function openConsole(tab) {
   ensure();
+  // Where focus goes back to when the drawer closes (Esc from its input left
+  // the keyboard on <body> before).
+  const a = document.activeElement;
+  if (a && a !== document.body && !C.el.contains(a)) C.prevFocus = a;
   if (tab) selectTab(tab === "manual" ? "run" : tab);
   if (C.el.hidden) {
     C.el.hidden = false;
@@ -52,9 +56,15 @@ export function openConsole(tab) {
 
 export function closeConsole() {
   if (!C.el || C.el.hidden) return;
+  const hadFocus = C.el.contains(document.activeElement);
   C.el.hidden = true;
   document.getElementById("app")?.classList.remove("has-console");
   syncBtn();
+  if (hadFocus) {
+    const back = C.prevFocus && C.prevFocus.isConnected && C.prevFocus.getClientRects().length ? C.prevFocus : document.getElementById("console-btn");
+    back?.focus({ preventScroll: true });
+  }
+  C.prevFocus = null;
 }
 
 export function toggleConsole(tab) {
@@ -142,6 +152,15 @@ function ensure() {
   wireGrip(el.querySelector(".cn-grip"));
   wireRunner();
   el.addEventListener("click", onAction);
+  // Esc closes the drawer from anywhere inside it (a tab, a Copy button, the
+  // log), not only from the command input; a filter box with text clears first.
+  el.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    const t = e.target;
+    if (t && t.matches && t.matches("input[type=search]") && t.value) return;
+    closeConsole();
+    e.stopPropagation();
+  });
   window.addEventListener("resize", () => { if (isConsoleOpen()) applyHeight(readHeight()); });
 
   C.log = new LogView(el.querySelector("#cn-log"), { follow: true });
@@ -479,15 +498,38 @@ function setRunning(on) {
   C.el.querySelector("#cn-stop").disabled = !on;
 }
 
+// The output pane keeps the last OUT_KEEP lines. Lines arrive one SSE event
+// each: appending to textContent per line copied the whole pane every time
+// (a chatty yosys or a 10 MB log froze the window), so they are batched once
+// per frame into one text node, and the oldest are cut past OUT_MAX.
+const OUT_MAX = 8000, OUT_KEEP = 5000;
+function flushOut() {
+  C.outRaf = 0;
+  const out = C.el && C.el.querySelector("#cn-out");
+  if (!out || !C.outBuf || !C.outBuf.length) return;
+  const atEnd = out.scrollTop + out.clientHeight >= out.scrollHeight - 24;
+  out.appendChild(document.createTextNode(C.outBuf.join("\n") + "\n"));
+  C.outLines = (C.outLines || 0) + C.outBuf.length;
+  C.outBuf = [];
+  if (C.outLines > OUT_MAX) {
+    const lines = out.textContent.split("\n");
+    out.textContent = "[Earlier output cut: the Console keeps the last " + OUT_KEEP + " lines. Run it in a terminal for all of it.]\n" +
+      lines.slice(-OUT_KEEP).join("\n");
+    C.outLines = OUT_KEEP;
+  }
+  if (atEnd) out.scrollTop = out.scrollHeight;
+}
+
 // manual_* SSE events (app.js): the runner's output.
 export function onManualEvent(ev) {
   ensure();
   const out = C.el.querySelector("#cn-out");
   if (ev.type === "manual_started") setRunning(true);
   else if (ev.type === "manual_line") {
-    out.textContent += (ev.line || "") + "\n";
-    out.scrollTop = out.scrollHeight;
+    (C.outBuf = C.outBuf || []).push(ev.line || "");
+    if (!C.outRaf) C.outRaf = requestAnimationFrame(flushOut);
   } else if (ev.type === "manual_done") {
+    if (C.outRaf) { cancelAnimationFrame(C.outRaf); flushOut(); }
     out.textContent += (ev.error ? "Failed: " + ev.error : "Exit code " + (ev.rc ?? "?")) + "\n";
     setRunning(false);
     // A librelane flow made a run folder: say where it went and link it.

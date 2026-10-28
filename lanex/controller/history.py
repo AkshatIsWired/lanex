@@ -276,6 +276,11 @@ def _run_signature(run_dir: Path) -> tuple:
         # The Runs table's origin and note columns (rewritten in place).
         _mtime_ns(os.path.join(rd, "gui-run.json")),
         _mtime_ns(os.path.join(rd, _NOTE_FILE)),
+        # Pin and import markers, by presence: pinning and unpinning inside
+        # one tick of the folder's mtime left the folder stat unchanged, and
+        # the Runs table showed the run still pinned.
+        _mtime_ns(os.path.join(rd, _PIN_MARKER)),
+        _mtime_ns(os.path.join(rd, _IMPORT_MARKER)),
     )
 
 

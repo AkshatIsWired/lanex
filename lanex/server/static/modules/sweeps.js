@@ -11,7 +11,7 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toast } from "./toast.js";
 import { icon } from "./icons.js";
-import { confirmDialog } from "./dialog.js";
+import { confirmDialog, holdFocus } from "./dialog.js";
 import { fmtDur } from "./reportcard.js";
 import * as FS from "./flowstages.js";
 
@@ -72,6 +72,8 @@ export async function openSweepSheet(goal, { values } = {}) {
   pickGoal(GOALS.some((g) => g.id === goal) ? goal : S.goal);
   if (values && S.axes[0]) { S.axes[0].values = values; paintAxes(); }
   S.el.hidden = false;
+  // Tab stays in the sheet (it is aria-modal); closing puts focus back.
+  if (!S.release) S.release = holdFocus(S.el.querySelector(".sw-sheet"));
   requestAnimationFrame(() => S.el.classList.add("is-open"));
   if (!S.vars) {
     try { const v = await api.variables(); S.vars = (v && (v.data || v)) || []; } catch (_e) { S.vars = state.variables || []; }
@@ -83,6 +85,7 @@ export async function openSweepSheet(goal, { values } = {}) {
 
 export function closeSweepSheet() {
   if (!S.el) return;
+  if (S.release) { const r = S.release; S.release = null; r(); }
   S.el.classList.remove("is-open");
   setTimeout(() => { if (S.el && !S.el.classList.contains("is-open")) S.el.hidden = true; }, 180);
 }
@@ -121,7 +124,7 @@ function build() {
     else if (b.dataset.goal) pickGoal(b.dataset.goal);
     else if (b.dataset.rm != null) { S.axes.splice(+b.dataset.rm, 1); if (!S.axes.length) S.axes.push({ var: "", values: "" }); paintAxes(); }
   });
-  el.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSweepSheet(); });
+  el.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); closeSweepSheet(); } });
   el.querySelectorAll("input[name='sw-mode']").forEach((r) => r.addEventListener("change", () => { S.mode = r.value; paintEst(); }));
   el.querySelector("#sw-stop").addEventListener("change", (e) => { S.stop = e.target.checked; });
   el.querySelector("#sw-start").addEventListener("click", start);

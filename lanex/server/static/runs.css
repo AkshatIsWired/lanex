@@ -125,6 +125,7 @@
 .rn-sw b { font-weight: 600; color: var(--text-strong); }
 .rn-sw-m { color: var(--text-muted); font-size: 12.5px; }
 .rn-sw-when { color: var(--text-muted); font-size: 12px; }
+.rn-sw-when.is-assumed { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
 .rn-row.is-child td.rn-c-name { padding-left: 28px; }
 .rn-sw-sum { margin: var(--s-3) 0 var(--s-2); cursor: default; white-space: normal; position: sticky; left: 12px; max-width: calc(100vw / var(--ll-zoom, 1) - 200px); }
 

@@ -34,6 +34,7 @@ process tree on cancel. Cross-platform via ``shlex`` / ``subprocess``.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -129,6 +130,8 @@ class ManualJob:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._lines: List[str] = []
+        self._cancel = threading.Event()
+        self.running_base: Optional[str] = None
         self.last_result: Dict[str, Any] = {}
 
     @property
@@ -138,10 +141,18 @@ class ManualJob:
     def start(self, command: str, *, cwd: Optional[str] = None) -> Dict[str, Any]:
         with self._lock:
             if self._running:
-                return {"ok": False, "error": "a command is already running — cancel it first"}
+                return {"ok": False, "error": "A command is already running. Press Stop, or wait for it to end."}
             v = validate(command)
             if not v.get("ok"):
                 return v
+            # Never the server's own folder: a command with no project (or one
+            # whose folder is gone) would run wherever LanEx was started.
+            if not cwd or not Path(cwd).is_dir():
+                return {"ok": False, "error": (f"The project folder {cwd} is not there any more. "
+                                               "Locate it or remove it on Setup, then run the command."
+                                               if cwd else "Open a project first: commands run in its folder.")}
+            self._cancel.clear()
+            self.running_base = v["base"]
             argv = v["argv"]
             base = v["base"]
             run_env = os.environ.copy()
@@ -188,6 +199,9 @@ class ManualJob:
                 kwargs["start_new_session"] = True
             proc = subprocess.Popen(list(argv), **kwargs)  # noqa: S603 - allow-listed program only
             self._proc = proc
+            if self._cancel.is_set():
+                # Stop arrived while the process was being started.
+                self._terminate(proc)
             assert proc.stdout is not None
             for raw in proc.stdout:
                 line = raw.rstrip("\n")
@@ -208,26 +222,55 @@ class ManualJob:
         finally:
             self._running = False
             self._proc = None
+            self.running_base = None
 
-    def cancel(self) -> Dict[str, Any]:
-        proc = self._proc
-        if proc is None:
-            return {"ok": True, "note": "nothing running"}
+    @staticmethod
+    def _terminate(proc: subprocess.Popen, grace: float = 5.0) -> None:
+        """SIGTERM the command and everything it started; SIGKILL whatever is
+        still alive after *grace* seconds (a tool that ignores SIGTERM, or a
+        hung GUI viewer, must not keep Stop from working)."""
+        procs = []
         try:
             import psutil
             p = psutil.Process(proc.pid)
-            for child in p.children(recursive=True):
+            procs = p.children(recursive=True) + [p]
+            for q in procs:
                 try:
-                    child.terminate()
+                    q.terminate()
                 except Exception:
                     pass
-            p.terminate()
         except Exception:
             try:
                 proc.terminate()
             except Exception:
                 pass
-        bus.emit("manual_line", {"line": "⏹ cancelled by user"})
+
+        def _reap() -> None:
+            try:
+                import psutil
+                _gone, alive = psutil.wait_procs(procs, timeout=grace) if procs else ([], [])
+                for q in alive:
+                    try:
+                        q.kill()
+                    except Exception:
+                        pass
+            except Exception:
+                try:
+                    proc.wait(timeout=grace)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+        threading.Thread(target=_reap, daemon=True, name="librelane.gui.ManualJob.reap").start()
+
+    def cancel(self) -> Dict[str, Any]:
+        self._cancel.set()
+        proc = self._proc
+        if proc is None:
+            return {"ok": True, "note": "nothing running"}
+        self._terminate(proc)
+        bus.emit("manual_line", {"line": "Stopped by you."})
         return {"ok": True}
 
 
@@ -367,6 +410,36 @@ def _pdk_version(pdk_root: str) -> str:
     return m.group(1) if m else ""
 
 
+def _safe_librelane_line(line: Any) -> Optional[str]:
+    """A recorded command as a script may run it: a ``librelane`` (or
+    ``python -m librelane``) command, re-quoted token by token.
+
+    ``gui-run.json`` is a file in the run folder, and runs arrive from other
+    people (an imported bundle or folder): its ``cli_command`` must not be able
+    to smuggle ``; curl … | sh`` into "Copy as script". Re-quoting turns every
+    shell operator into a literal argument; anything that is not a librelane
+    command is dropped (None)."""
+    if not isinstance(line, str) or not line.strip() or "\n" in line or "\r" in line or "\0" in line:
+        return None
+    try:
+        argv = shlex.split(line, posix=True)
+    except ValueError:
+        return None
+    if not argv:
+        return None
+    prog = Path(argv[0]).name
+    if prog != "librelane" and not (prog in _PYTHON and argv[1:3] == ["-m", "librelane"]):
+        return None
+    return " ".join(shlex.quote(a) for a in argv)
+
+
+def _comment(v: Any) -> str:
+    """Text for a ``#`` line of the script: no line breaks or control
+    characters (a run name or path from someone else's run must not end the
+    comment and start a command)."""
+    return "".join(ch if (ch.isprintable() and ch not in "\r\n") else "?" for ch in str(v))
+
+
 def reproduce_info(meta: Dict[str, Any], resolved: Optional[Dict[str, Any]],
                    run_dir: str) -> Dict[str, Any]:
     """What a run recorded about how it was started (``gui-run.json``) and what
@@ -377,7 +450,10 @@ def reproduce_info(meta: Dict[str, Any], resolved: Optional[Dict[str, Any]],
     cmd = meta.get("cli_command") if isinstance(meta.get("cli_command"), dict) else {}
     tc = meta.get("toolchain") if isinstance(meta.get("toolchain"), dict) else {}
     mode = cmd.get("recommended") or meta.get("run_mode") or "container"
-    line = cmd.get(mode) or cmd.get("container") or cmd.get("local") or None
+    if mode not in ("container", "local"):
+        mode = "container"
+    line = _safe_librelane_line(cmd.get(mode)) or _safe_librelane_line(cmd.get("container")) \
+        or _safe_librelane_line(cmd.get("local")) or None
     rmeta = resolved.get("meta") if isinstance(resolved.get("meta"), dict) else {}
     pdk_root = resolved.get("PDK_ROOT") or ""
     resolved_path = str(Path(run_dir) / "resolved.json") if resolved else None
@@ -386,10 +462,13 @@ def reproduce_info(meta: Dict[str, Any], resolved: Optional[Dict[str, Any]],
         "run_dir": str(run_dir),
         "mode": mode,
         "command": line,
-        "commands": {k: cmd.get(k) for k in ("container", "local") if cmd.get(k)},
+        "commands": {k: _safe_librelane_line(cmd.get(k)) for k in ("container", "local")
+                     if _safe_librelane_line(cmd.get(k))},
         "cwd": cmd.get("cwd") or None,
         "config_file": meta.get("config_file") or None,
-        "config_hash": meta.get("config_hash") or None,
+        # A sha256 or nothing: the script echoes it into sha256sum.
+        "config_hash": (meta.get("config_hash") if isinstance(meta.get("config_hash"), str)
+                        and re.fullmatch(r"[0-9a-f]{64}", meta["config_hash"]) else None),
         "resolved_config": resolved_path,
         "pdk": meta.get("pdk") or resolved.get("PDK") or None,
         "scl": meta.get("scl") or resolved.get("STD_CELL_LIBRARY") or None,
@@ -409,33 +488,36 @@ def reproduce_script(info: Dict[str, Any]) -> str:
     The image is pinned the way LanEx's runner pins it (``LIBRELANE_IMAGE_OVERRIDE``
     with the digest); the PDK version and config hash are written as checks the
     reader can see, not silently assumed."""
-    q = shlex.quote
+    q, c = shlex.quote, _comment
     out = ["#!/usr/bin/env bash",
-           f"# Reproduce LanEx run {info.get('tag') or '?'} without LanEx.",
+           f"# Reproduce LanEx run {c(info.get('tag') or '?')} without LanEx.",
            "set -euo pipefail"]
     if info.get("librelane_version"):
-        out.append(f"# LibreLane {info['librelane_version']}"
-                   + (f" (LanEx {info['lanex_version']})" if info.get("lanex_version") else ""))
+        out.append(f"# LibreLane {c(info['librelane_version'])}"
+                   + (f" (LanEx {c(info['lanex_version'])})" if info.get("lanex_version") else ""))
     if info.get("pdk"):
         pv = info.get("pdk_version")
-        out.append(f"# PDK {info['pdk']}" + (f" / {info['scl']}" if info.get("scl") else "")
-                   + (f", ciel version {pv}" if pv else ""))
+        out.append(f"# PDK {c(info['pdk'])}" + (f" / {c(info['scl'])}" if info.get("scl") else "")
+                   + (f", ciel version {c(pv)}" if pv else ""))
         if pv:
             fam = "gf180mcu" if str(info["pdk"]).startswith("gf180") else (
                 "ihp-sg13g2" if str(info["pdk"]).startswith("ihp") else "sky130")
-            out.append(f"#   to get exactly this PDK: ciel enable --pdk-family {fam} {pv}")
+            out.append(f"#   to get exactly this PDK: ciel enable --pdk-family {fam} {c(pv)}")
     if info.get("resolved_config"):
-        out.append(f"# Every setting the run used: {info['resolved_config']}")
+        out.append(f"# Every setting the run used: {c(info['resolved_config'])}")
     if info.get("cwd"):
         out.append(f"cd {q(info['cwd'])}")
     if info.get("config_hash") and info.get("config_file"):
-        out.append(f"# The config the run read had sha256 {info['config_hash']}:")
+        out.append(f"# The config the run read had sha256 {c(info['config_hash'])}:")
         out.append(f"echo {q(info['config_hash'] + '  ' + info['config_file'])} | sha256sum -c - "
                    "|| echo 'Note: the config changed since this run.' >&2")
     if info.get("image"):
         out.append(f"export LIBRELANE_IMAGE_OVERRIDE={q(info['image'])}")
-    if info.get("command"):
-        out.append(info["command"])
+    line = _safe_librelane_line(info.get("command"))
+    if line:
+        out.append(line)
+    elif info.get("command"):
+        out.append("# The recorded command is not a librelane command, so it is left out.")
     else:
         out.append("# This run has no recorded command (it was not started from LanEx).")
     return "\n".join(out) + "\n"
