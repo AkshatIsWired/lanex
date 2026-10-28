@@ -667,7 +667,7 @@ function paintSummary(info) {
     counts.fail && "<span class='is-fail'><b>" + counts.fail + "</b> " + (counts.fail === 1 ? "problem" : "problems") + "</span>",
     counts.warn && "<span class='is-warn'><b>" + counts.warn + "</b> to check</span>",
     counts.busy && "<span><b>" + counts.busy + "</b> working</span>",
-    counts.off && "<span class='is-off'><b>" + counts.off + "</b> optional</span>",
+    counts.off && "<span class='is-off'><b>" + counts.off + "</b> not installed</span>",
   ].filter(Boolean).join("");
 
   const nPdk = (pdk.installed_pdks || []).length;
@@ -860,6 +860,7 @@ export function startPullUI() {
   _pull.done = false;
   _pull.blobs = null;
   paintRuntimeCard(state.tools && state.tools.container);
+  try { if (state.tools) paintSummary(state.tools); } catch (_e) {}
   _pullTicker();
 }
 

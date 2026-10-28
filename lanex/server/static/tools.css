@@ -378,7 +378,6 @@ details.tl-local[open] > .tl-local-sum { border-bottom: 1px solid var(--border);
   .tl-kv > div { grid-template-columns: 112px minmax(0, 1fr); }
 }
 @media (max-width: 1180px) {
-  .tl-tiles { grid-template-columns: minmax(0, 1fr); }
   .tl-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tl-sec-aside { margin-left: 0; width: 100%; }
   #sec-tools { --tl-cols: 124px minmax(0, 1fr) 150px; }
@@ -389,7 +388,8 @@ details.tl-local[open] > .tl-local-sum { border-bottom: 1px solid var(--border);
   .tl-size:empty { display: none; }
   .tl-acts { grid-column: 3; grid-row: 1; }
 }
-@media (max-width: 900px) {
+@media (max-width: 980px) {
+  .tl-tiles { grid-template-columns: minmax(0, 1fr); }
   .tl-attn-item { grid-template-columns: 22px minmax(0, 1fr); }
   .tl-attn-acts { grid-column: 2; }
 }
