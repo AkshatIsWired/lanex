@@ -1,7 +1,7 @@
 {
   "name": "multiplier",
   "title": "Registered Multiplier",
-  "description": "An N×N multiplier with registered outputs. A small datapath where synthesis trades area against timing, so it's a good one to sweep in DSE.",
+  "description": "An N×N multiplier with registered outputs. A small datapath where synthesis trades area against timing, so it's a good one to sweep (Runs › New sweep).",
   "top": "mult",
   "clock_port": "clk",
   "clock_period": 15.0,
