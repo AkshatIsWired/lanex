@@ -659,9 +659,6 @@ function paintSteps(steps, stages) {
   for (const s of steps) {
     const el = F.rows.get(s.id);
     if (!el) continue;
-    const no = el.querySelector(".fl-step-no");
-    const noTxt = s.no == null ? "–" : two(s.no);
-    if (no && no.textContent !== noTxt) no.textContent = noTxt;
     const cls = "fl-step is-" + s.status + (s.from ? " is-reused" : "") + (shown && shown.id === s.id ? " is-sel" : "");
     if (el.className !== cls) {
       el.className = cls; el.firstChild.className = "vf-mark is-" + (MARK[s.status] || "not_run");
