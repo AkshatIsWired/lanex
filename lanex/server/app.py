@@ -163,6 +163,10 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     # An idle kept-alive connection is closed after this long.
     timeout = 120
+    # Headers and body go out as two writes; on a kept-alive connection Nagle
+    # would hold the second until the client's delayed ACK of the first
+    # (~40 ms per small answer). TCP_NODELAY sends both at once.
+    disable_nagle_algorithm = True
 
     # Reduce the default BaseHTTPRequestHandler noise.
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002

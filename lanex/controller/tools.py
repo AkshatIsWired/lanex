@@ -873,6 +873,16 @@ def container_engine() -> Dict[str, Any]:
     version = ""
     version_ok = True
     min_version = _ENGINE_MIN_VERSION.get(engine or "", "")
+    # The engine version and the image check do not depend on each other:
+    # both run at once (each is a docker CLI start, ~150 ms).
+    inspect_f = None
+    pool = None
+    if ready and engine:
+        from concurrent.futures import ThreadPoolExecutor
+        inspect = ["image", "inspect", image, "--format", "{{.Size}}"]
+        cmd = sg_wrap_argv(["docker"] + inspect) if sg_wrap else [engine] + inspect
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lanex-inspect")
+        inspect_f = pool.submit(_shell_exec, cmd, 10.0)
     if engine:
         _rc, vout, verr = _shell_exec([engine, "--version"], timeout=6.0)
         version = _version_string(vout) or _version_string(verr)
@@ -882,10 +892,9 @@ def container_engine() -> Dict[str, Any]:
 
     image_present = False
     image_size_mb: Optional[int] = None
-    if ready and engine:
-        inspect = ["image", "inspect", image, "--format", "{{.Size}}"]
-        cmd = sg_wrap_argv(["docker"] + inspect) if sg_wrap else [engine] + inspect
-        rc, out, _err = _shell_exec(cmd, timeout=10.0)
+    if inspect_f is not None:
+        rc, out, _err = inspect_f.result()
+        pool.shutdown(wait=False)
         image_present = rc == 0
         if image_present:
             try:
