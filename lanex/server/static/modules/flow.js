@@ -790,13 +790,26 @@ function rowHtml(s) {
 
 // Scroll the list (only the list, never the page) so `el` sits a little above
 // the middle; a stage heading goes to the top.
+// Measured in the next frame, with the layout the browser does for it anyway:
+// reading offsetTop right after the list was rebuilt forced an extra layout
+// inside the Run click (375 ms at 6x CPU throttle). Calls in one frame
+// coalesce to the last.
+let _scrollReq = null;
 function scrollListTo(el, smooth, at = 0.4) {
-  const sc = $("fl-steps");
-  if (!el || !sc || !sc.clientHeight) return;
-  const top = Math.max(0, el.offsetTop - (at ? sc.clientHeight * at : 0));
-  const calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  F.autoScroll = Date.now();
-  sc.scrollTo({ top, behavior: smooth && !calm ? "smooth" : "auto" });
+  if (!el) return;
+  const pending = !!_scrollReq;
+  _scrollReq = { el, smooth, at };
+  if (pending) return;
+  requestAnimationFrame(() => {
+    const { el: e, smooth: sm, at: a } = _scrollReq;
+    _scrollReq = null;
+    const sc = $("fl-steps");
+    if (!e.isConnected || !sc || !sc.clientHeight) return;
+    const top = Math.max(0, e.offsetTop - (a ? sc.clientHeight * a : 0));
+    const calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    F.autoScroll = Date.now();
+    sc.scrollTo({ top, behavior: sm && !calm ? "smooth" : "auto" });
+  });
 }
 
 // ---- output pane: the run's output, or one step
