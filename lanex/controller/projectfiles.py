@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import configedit
 from .editor import EDITABLE_EXTS, _resolve_inside
+from .fastscan import iter_entries, prune_names
 
 _SKIP_DIRS = {".git", "runs", "tmp", "__pycache__", "build", "node_modules", "sim_build", "obj_dir"}
 _TB_DIR_RX = re.compile(r"(^|/)(verify|tb|tbs|test|tests|sim|testbench|testbenches)/", re.I)
@@ -302,12 +303,19 @@ def module_is_empty(text: str, module: str) -> Optional[bool]:
     return not _DECL_ONLY_RX.sub(keep, body).strip()
 
 
+def _project_verilog(d: Path) -> List[Path]:
+    """Every .v/.sv under *d* outside ``runs/``, sorted. ``runs/`` folders are
+    never entered (they hold ~800 files a run, slow on /mnt/c)."""
+    return sorted(
+        p for p in iter_entries(d, prune_names({"runs"}))
+        if p.suffix.lower() in (".v", ".sv") and "runs" not in p.relative_to(d).parts)
+
+
 def find_module_file(design_dir: str | Path, module: str, files: Optional[List[str]] = None) -> Optional[Path]:
     """The first source file (of *files*, or every .v/.sv in the project)
     that declares *module*."""
     d = Path(design_dir)
-    cands = [Path(f) for f in files] if files else sorted(
-        p for p in d.rglob("*") if p.suffix.lower() in (".v", ".sv") and "runs" not in p.relative_to(d).parts)
+    cands = [Path(f) for f in files] if files else _project_verilog(d)
     for f in cands:
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
@@ -320,8 +328,7 @@ def find_module_file(design_dir: str | Path, module: str, files: Optional[List[s
 
 def find_module_ports(design_dir: str | Path, module: str, files: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     d = Path(design_dir)
-    cands = [Path(f) for f in files] if files else sorted(
-        p for p in d.rglob("*") if p.suffix.lower() in (".v", ".sv") and "runs" not in p.relative_to(d).parts)
+    cands = [Path(f) for f in files] if files else _project_verilog(d)
     for f in cands:
         try:
             text = f.read_text(encoding="utf-8", errors="replace")

@@ -385,8 +385,10 @@ attempt_install() {
     local py_site
     py_site="$("$LAUNCHER" -c "import sysconfig; print(sysconfig.get_path('purelib'))" 2>/dev/null || true)"
     if [ -d "$py_site" ]; then
+        # httpx's default timeout raised when httpx is first imported (not at
+        # every interpreter start); same line as installer.py _HTTPX_TIMEOUT_PTH.
         cat << 'EOFPTH' > "$py_site/lanex_timeout.pth" 2>/dev/null || true
-import sys; exec("try:\n import httpx\n if hasattr(httpx, 'Client') and hasattr(httpx.Client.__init__, '__kwdefaults__') and httpx.Client.__init__.__kwdefaults__ is not None:\n  httpx.Client.__init__.__kwdefaults__['timeout'] = httpx.Timeout(300.0, connect=60.0)\nexcept Exception:\n pass")
+import sys; exec("class _LanexHttpxTimeout:\n @staticmethod\n def find_spec(name, path=None, target=None):\n  if name != 'httpx':\n   return None\n  import importlib.machinery as m\n  spec = m.PathFinder.find_spec(name, path)\n  if spec is None or not hasattr(spec.loader, 'exec_module'):\n   return spec\n  run = spec.loader.exec_module\n  def exec_module(module):\n   run(module)\n   try:\n    d = module.Client.__init__.__kwdefaults__\n    if d is not None:\n     d['timeout'] = module.Timeout(300.0, connect=60.0)\n   except Exception:\n    pass\n  spec.loader.exec_module = exec_module\n  return spec\nif 'httpx' not in sys.modules:\n sys.meta_path.insert(0, _LanexHttpxTimeout)")
 EOFPTH
     fi
     return "$rc"

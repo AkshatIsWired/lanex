@@ -39,11 +39,17 @@ import os
 import re
 import struct
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 _LOCK = threading.Lock()
-_CACHE: Dict[Tuple[str, str], Tuple[Tuple[Any, ...], Any]] = {}
+_CACHE: "OrderedDict[Tuple[str, str], Tuple[Tuple[Any, ...], Any]]" = OrderedDict()
+# Parsed files kept in memory, per kind, least recently used dropped first.
+# A parsed Liberty library is ~100 MB and a cell GDS is read whole, so opening
+# every library of three PDKs took the server from 50 MB to 600+ MB for good.
+_CACHE_LIMITS = {"lib": 2, "gds": 2, "lef": 2, "desc": 4}
+_CACHE_LIMIT_DEFAULT = 8
 
 
 def _stamp(paths: Iterable[Path]) -> Tuple[Any, ...]:
@@ -62,11 +68,66 @@ def _cached(kind: str, key: str, paths: List[Path], build):
     with _LOCK:
         hit = _CACHE.get((kind, key))
         if hit and hit[0] == stamp:
+            _CACHE.move_to_end((kind, key))
             return hit[1]
-    val = build()
+    val = build(stamp) if getattr(build, "wants_stamp", False) else build()
     with _LOCK:
         _CACHE[(kind, key)] = (stamp, val)
+        _CACHE.move_to_end((kind, key))
+        limit = _CACHE_LIMITS.get(kind, _CACHE_LIMIT_DEFAULT)
+        same = [k for k in _CACHE if k[0] == kind]
+        for k in same[:max(0, len(same) - limit)]:
+            del _CACHE[k]
     return val
+
+
+# A parsed Liberty file is also kept on disk (LANEX_HOME/cache/celllib), as
+# the compact form the tab uses (cell summaries + timing arcs), so a restarted
+# server opens the Cells tab without re-reading a 100 MB library. Keyed by the
+# file's path, mtime and size, the Python version and this format version.
+_DISK_FORMAT = 1
+
+
+def _disk_path(kind: str, stamp: Tuple[Any, ...]) -> Optional[Path]:
+    try:
+        import hashlib
+        import sys
+        from . import platform_env
+        key = repr((kind, stamp, sys.version_info[:3], _DISK_FORMAT)).encode("utf-8")
+        return platform_env.home() / "cache" / "celllib" / (hashlib.sha256(key).hexdigest()[:32] + ".marshal")
+    except Exception:
+        return None
+
+
+def _disk_load(kind: str, stamp: Tuple[Any, ...]) -> Any:
+    import marshal
+    p = _disk_path(kind, stamp)
+    if p is None or not p.is_file():
+        return None
+    try:
+        with open(p, "rb") as f:
+            return marshal.load(f)
+    except Exception:
+        return None
+
+
+def _disk_store(kind: str, stamp: Tuple[Any, ...], value: Any) -> None:
+    import marshal
+    p = _disk_path(kind, stamp)
+    if p is None:
+        return
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Only the newest few libraries are kept on disk.
+        olds = sorted(p.parent.glob("*.marshal"), key=lambda q: q.stat().st_mtime)
+        for q in olds[:max(0, len(olds) - 15)]:
+            q.unlink(missing_ok=True)
+        tmp = p.with_name(p.name + f".{os.getpid()}.tmp")
+        with open(tmp, "wb") as f:
+            marshal.dump(value, f)
+        os.replace(tmp, p)
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -586,22 +647,33 @@ def _main_lib(pdk: str, scl: str) -> Optional[Path]:
 
 
 def _liberty(path: Path) -> Dict[str, Any]:
-    """Parse a whole Liberty file: units + per-cell summary + raw spans for
-    detail lookups. Cached."""
-    def build() -> Dict[str, Any]:
+    """Parse a whole Liberty file into what the tab uses: units, a summary of
+    each cell, its timing arcs and its per-state leakage. The full parse trees
+    (power tables and all) are not kept. Cached in memory and on disk."""
+    def build(stamp: Tuple[Any, ...]) -> Dict[str, Any]:
+        hit = _disk_load("lib", stamp)
+        if isinstance(hit, dict) and hit.get("path") == str(path):
+            return hit
         text = path.read_text(encoding="utf-8", errors="replace")
         header, spans = _split_cells(text)
         units = _units(header)
         cells: Dict[str, Dict[str, Any]] = {}
-        trees: Dict[str, Dict[str, Any]] = {}
+        arcs: Dict[str, List[Dict[str, Any]]] = {}
+        leaks: Dict[str, List[Dict[str, Any]]] = {}
         for name, a, b in spans:
             nodes = _parse_liberty_block(text[a:b])
             node = next((x for x in nodes if x.get("g") == "cell"), None)
             if node is None:
                 continue
-            trees[name] = node
             cells[name] = _cell_summary(name, node)
-        return {"units": units, "cells": cells, "trees": trees, "path": str(path)}
+            arcs[name] = _arcs(node)
+            leaks[name] = [{"when": _attr(g, "when"), "value": v}
+                           for g in _groups(node, "leakage_power")
+                           for v in [_num(_attr(g, "value"))] if v is not None]
+        out = {"units": units, "cells": cells, "arcs": arcs, "leaks": leaks, "path": str(path)}
+        _disk_store("lib", stamp, out)
+        return out
+    build.wants_stamp = True  # type: ignore[attr-defined]
     return _cached("lib", str(path), [path], build)
 
 
@@ -1011,7 +1083,7 @@ def _fo4(lib: Dict[str, Any], cells: Dict[str, Dict[str, Any]]) -> Tuple[Optiona
     invs.sort()
     _, inv, cap = invs[0]
     load = 4 * cap
-    arcs = _delay_arcs(_arcs(lib["trees"][inv]))
+    arcs = _delay_arcs(lib["arcs"][inv])
     slew = None
     if arcs:
         a = arcs[0]
@@ -1045,7 +1117,7 @@ def _library(pdk: str, scl: str, design_dir: Optional[str]) -> Dict[str, Any]:
     lef = _lef(pdk, scl)
     if libp is None and not lef["macros"]:
         return {"ok": False, "error": "this library has neither Liberty nor LEF files on disk."}
-    lib = _liberty(libp) if libp else {"units": {}, "cells": {}, "trees": {}, "path": None}
+    lib = _liberty(libp) if libp else {"units": {}, "cells": {}, "arcs": {}, "leaks": {}, "path": None}
     descs = _descriptions(pdk, scl)
     names = sorted(set(lib["cells"]) | set(lef["macros"]))
     prefix = lib_prefix(names, scl)
@@ -1070,7 +1142,7 @@ def _library(pdk: str, scl: str, design_dir: Optional[str]) -> Dict[str, Any]:
         cat = _category(name, fam, s, m.get("class", ""))
         delay = None
         if s and load is not None and slew is not None:
-            ds = [d for d in (_arc_delay(a, slew, load) for a in _delay_arcs(_arcs(lib["trees"][name]))) if d is not None]
+            ds = [d for d in (_arc_delay(a, slew, load) for a in _delay_arcs(lib["arcs"][name])) if d is not None]
             delay = max(ds) * ts if ds else None
         outs = [p for p in (s or {}).get("pins", []) if p["dir"] == "output"]
         ins = [p for p in (s or {}).get("pins", []) if p["dir"] == "input"]
@@ -1135,7 +1207,7 @@ def _curve(arc: Dict[str, Any], slew: float, loads: List[float], ts: float) -> L
 
 def _cell_detail(pdk: str, scl: str, cell: str) -> Dict[str, Any]:
     libp = _main_lib(pdk, scl)
-    lib = _liberty(libp) if libp else {"units": {}, "cells": {}, "trees": {}}
+    lib = _liberty(libp) if libp else {"units": {}, "cells": {}, "arcs": {}, "leaks": {}}
     lef = _lef(pdk, scl)
     if cell not in lib["cells"] and cell not in lef["macros"]:
         return {"ok": False, "error": f"{cell} is not in {scl}"}
@@ -1144,8 +1216,8 @@ def _cell_detail(pdk: str, scl: str, cell: str) -> Dict[str, Any]:
     cs = _scale(units.get("cap", "1pf"), "cap")
     ls = _scale(units.get("leakage", "1nW"), "leakage")
     s = lib["cells"].get(cell)
-    tree = lib["trees"].get(cell)
-    arcs = _arcs(tree) if tree is not None else []
+    has_lib = cell in lib["arcs"]
+    arcs = lib["arcs"].get(cell) or []
 
     def conv_table(t: Optional[Dict[str, Any]], vscale: float) -> Optional[Dict[str, Any]]:
         if not t:
@@ -1166,12 +1238,8 @@ def _cell_detail(pdk: str, scl: str, cell: str) -> Dict[str, Any]:
             **{k: conv_table(a.get(k), ts) for k in ("cell_rise", "cell_fall", "rise_transition",
                                                     "fall_transition", "rise_constraint", "fall_constraint")},
         })
-    leak_states = []
-    if tree is not None:
-        for g in _groups(tree, "leakage_power"):
-            v = _num(_attr(g, "value"))
-            if v is not None:
-                leak_states.append({"when": _attr(g, "when"), "value": v * ls})
+    leak_states = [{"when": g["when"], "value": g["value"] * ls}
+                   for g in (lib["leaks"].get(cell) or [])]
     # siblings: same family, every drive strength, delay-vs-load curves on the
     # first combinational arc (same from/to pins in every drive).
     names = sorted(set(lib["cells"]) | set(lef["macros"]))
@@ -1181,7 +1249,7 @@ def _cell_detail(pdk: str, scl: str, cell: str) -> Dict[str, Any]:
     load_ref, slew_ref = _fo4(lib, lib["cells"]) if lib["cells"] else (None, None)
     curves = []
     loads: List[float] = []
-    if tree is not None and load_ref:
+    if has_lib and load_ref:
         darcs = _delay_arcs(arcs)
         if darcs:
             pick = darcs[0]
@@ -1190,11 +1258,11 @@ def _cell_detail(pdk: str, scl: str, cell: str) -> Dict[str, Any]:
             hi = min(hi, load_ref * 16) if load_ref else hi
             loads = [hi * k / 24 for k in range(0, 25)]
             for n in sibs:
-                t = lib["trees"].get(n)
+                t = lib["arcs"].get(n)
                 if t is None:
                     continue
-                cand = [a for a in _delay_arcs(_arcs(t)) if a["from"] == pick["from"] and a["to"] == pick["to"]] \
-                    or _delay_arcs(_arcs(t))
+                cand = [a for a in _delay_arcs(t) if a["from"] == pick["from"] and a["to"] == pick["to"]] \
+                    or _delay_arcs(t)
                 if not cand:
                     continue
                 curves.append({"cell": n, "drive": split_name(n, prefix)[1], "from": cand[0]["from"],

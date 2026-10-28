@@ -13,12 +13,15 @@ transport concerns (encoding, headers, error mapping).
 """
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
 import logging
 import math
 import numbers
 import os
 import socket
+import stat as _stat
 import sys
 import threading
 import time
@@ -100,25 +103,174 @@ def _note_page_activity(path: str) -> None:
         activity.note_page_request()
 
 
+# ---------- transport: compression, validators, static cache
+
+# Text answers above this size go gzip-compressed to a client that accepts it.
+_GZIP_MIN = 1024
+# Dynamic answers are compressed on the fly (level 1: ~1 ms for 300 KB of
+# JSON); above this they are sent as they are.
+_GZIP_MAX_DYNAMIC = 8 * 1024 * 1024
+_COMPRESSIBLE = ("application/json", "text/", "application/javascript", "image/svg+xml")
+
+_STATIC_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+}
+
+# Static files by real path: (mtime_ns, size, bytes, gzip bytes or None, etag).
+# Re-read when the file's mtime or size moves, so an edited first-party file is
+# served at once (the dev install edits them in place).
+_STATIC_CACHE: Dict[str, Tuple[int, int, bytes, Optional[bytes], str]] = {}
+_STATIC_CACHE_MAX_FILE = 16 * 1024 * 1024
+_GZ_PENDING: Any = object()   # compressible, gzip copy not made yet
+_STATIC_TARGETS: Dict[str, Path] = {}
+_STATIC_LOCK = threading.Lock()
+_STATIC_BASE: List[Path] = []
+
+
+def _static_base() -> Path:
+    if not _STATIC_BASE:
+        _STATIC_BASE.append(static_root().resolve())
+    return _STATIC_BASE[0]
+
+
+def _compressible(ctype: str) -> bool:
+    return any(ctype.startswith(c) for c in _COMPRESSIBLE)
+
+
+def _gzip_etag(etag: str) -> str:
+    return etag[:-1] + '-gz"'
+
+
 class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
     """One request handler. Stream-friendly, no globals except the runner."""
 
     server_version = "LibreLaneGUI/0.1"
+    # Keep-alive: a page load is ~90 requests; HTTP/1.0 opened a new connection
+    # (and a new server thread) for each. Every answer carries Content-Length
+    # (or closes the connection: the event stream, a handler that wrote
+    # nothing, a failure part-way through an answer).
+    protocol_version = "HTTP/1.1"
+    # An idle kept-alive connection is closed after this long.
+    timeout = 120
+    # Headers and body go out as two writes; on a kept-alive connection Nagle
+    # would hold the second until the client's delayed ACK of the first
+    # (~40 ms per small answer). TCP_NODELAY sends both at once.
+    disable_nagle_algorithm = True
 
     # Reduce the default BaseHTTPRequestHandler noise.
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         _log.debug("%s - %s", self.address_string(), format % args)
 
+    def handle_one_request(self) -> None:
+        self._responded = False
+        self._body_read = False
+        self._conn_hdr = False
+        super().handle_one_request()
+
+    def send_response(self, code: int, message: Optional[str] = None) -> None:
+        self._responded = True
+        super().send_response(code, message)
+        if self.close_connection and self.request_version != "HTTP/0.9":
+            # Decided before answering (an HTTP/1.0 or "Connection: close"
+            # client, an unread oversized body): say so.
+            self.send_header("Connection", "close")
+
+    def send_header(self, keyword: str, value: str) -> None:
+        if keyword.lower() == "connection":
+            if getattr(self, "_conn_hdr", False):
+                return
+            self._conn_hdr = True
+        super().send_header(keyword, value)
+
+    def _discard_body(self) -> None:
+        """Read and drop a request body we answer without using (a refused
+        POST), so the kept-alive connection stays in step; a body too large
+        to drain ends the connection instead."""
+        try:
+            n = int(self.headers.get("Content-Length") or "0")
+        except ValueError:
+            n = -1
+        if n == 0:
+            self._body_read = True
+        elif 0 < n <= 10 * 1024 * 1024:
+            self._body_read = len(self.rfile.read(n)) == n
+        if not self._body_read:
+            self.close_connection = True
+
     # ---------- low-level helpers
+
+    def _accepts_gzip(self) -> bool:
+        for part in (self.headers.get("Accept-Encoding") or "").lower().split(","):
+            name, _, params = part.strip().partition(";")
+            if name.strip() in ("gzip", "*"):
+                q = params.strip()
+                if q.startswith("q="):
+                    try:
+                        return float(q[2:]) > 0
+                    except ValueError:
+                        return False
+                return True
+        return False
+
+    def _etag_matches(self, *etags: str) -> bool:
+        inm = self.headers.get("If-None-Match")
+        if not inm:
+            return False
+        sent = {t.strip().removeprefix("W/") for t in inm.split(",")}
+        return "*" in sent or any(e in sent for e in etags)
+
+    def _send_not_modified(self, etag: str, cache_control: str, vary: bool = False) -> None:
+        # 304: no body, so no Content-Length (the client knows there is none).
+        self.send_response(304)
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", cache_control)
+        if vary:
+            self.send_header("Vary", "Accept-Encoding")
+        self.end_headers()
+
+    def _encode_body(self, body: bytes, content_type: str) -> Tuple[bytes, Optional[str]]:
+        """gzip a text answer for a client that accepts it (level 1: cheap)."""
+        if _GZIP_MIN <= len(body) <= _GZIP_MAX_DYNAMIC and _compressible(content_type) \
+                and self._accepts_gzip():
+            return gzip.compress(body, compresslevel=1, mtime=0), "gzip"
+        return body, None
 
     def _send_json(self, obj: Any, status: int = 200) -> None:
         # allow_nan=False guarantees standards-compliant JSON; _json_safe has
         # already converted every non-finite float, so this never raises here.
         body = json.dumps(_json_safe(obj), allow_nan=False).encode("utf-8")
+        ctype = "application/json; charset=utf-8"
+        # A successful GET carries a validator: the browser revalidates every
+        # time (no-cache), and an unchanged answer (steps, variables, the run
+        # list...) comes back as a bodiless 304 instead of the same bytes.
+        etag = None
+        if status == 200 and getattr(self, "command", "") == "GET":
+            etag = '"' + hashlib.blake2b(body, digest_size=12).hexdigest() + '"'
+            if self._etag_matches(etag, _gzip_etag(etag)):
+                self._send_not_modified(_gzip_etag(etag) if self._accepts_gzip() and len(body) >= _GZIP_MIN
+                                        else etag, "no-cache", vary=True)
+                return
+        body, enc = self._encode_body(body, ctype)
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "no-cache" if etag else "no-store")
+        if etag:
+            self.send_header("ETag", _gzip_etag(etag) if enc else etag)
+            self.send_header("Vary", "Accept-Encoding")
+        if enc:
+            self.send_header("Content-Encoding", enc)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
@@ -126,23 +278,63 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_text(self, text: str, status: int = 200, content_type: str = "text/plain; charset=utf-8") -> None:
-        body = text.encode("utf-8")
+        body, enc = self._encode_body(text.encode("utf-8"), content_type)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.end_headers()
         self.wfile.write(body)
 
     def _send_bytes(self, blob: bytes, status: int = 200, content_type: str = "application/octet-stream") -> None:
+        blob, enc = self._encode_body(blob, content_type)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(blob)))
         self.send_header("Cache-Control", "no-store")
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            self.send_header("Vary", "Accept-Encoding")
         self.end_headers()
         self.wfile.write(blob)
+
+    def _send_file(self, path: str, content_type: str, status: int = 200) -> None:
+        """Stream a file (a run's GDS or log can be tens of MB) with
+        ``sendfile`` instead of reading it into memory. Opening it may raise
+        (nothing is sent then); a file that shrinks while it is sent ends the
+        connection, since the promised length can no longer be met."""
+        f = open(path, "rb")
+        try:
+            size = os.fstat(f.fileno()).st_size
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(size))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if self.command == "HEAD" or size == 0:
+                return
+            try:
+                sent = self.connection.sendfile(f, 0, size)
+            except (AttributeError, ValueError, OSError) as ex:
+                if self._is_conn_error(ex):
+                    raise
+                f.seek(0)
+                sent = 0
+                while sent < size:
+                    chunk = f.read(min(1024 * 1024, size - sent))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    sent += len(chunk)
+            if sent < size:
+                self.close_connection = True
+        finally:
+            f.close()
 
     def _send_404(self) -> None:
         self._send_text("Not found", 404)
@@ -154,6 +346,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         if n <= 0:
             return {}
         raw = self.rfile.read(n)
+        self._body_read = len(raw) == n
         try:
             parsed = json.loads(raw)
         except Exception:
@@ -247,18 +440,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         for prefix, fn in ROUTES:
             if self._match(prefix, path):
                 # Found exact match — dispatch.
-                try:
-                    fn(self)
-                except Exception as ex:
-                    if self._is_conn_error(ex):
-                        _log.debug("client closed connection on %s", self.path)
-                        return            # socket is gone — don't try to write a 500
-                    _log.exception("dispatch failure on %s", self.path)
-                    try:
-                        self._send_json({"error": str(ex)}, 500)
-                    except Exception as ex2:
-                        if not self._is_conn_error(ex2):
-                            raise
+                self._dispatch(fn)
                 return
 
         # Static fallback.
@@ -295,7 +477,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         if response is None:
             self._send_404()
             return
-        self._send_bytes(response["blob"], 200, response["content_type"])
+        self._send_path(response["path"], response["content_type"])
 
     def do_HEAD(self) -> None:  # noqa: N802
         """Many browsers and module loaders issue HEAD.
@@ -362,13 +544,31 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
     _install_rates: Dict[str, float] = {}
 
     def do_POST(self) -> None:  # noqa: N802
+        try:
+            self._do_post()
+        finally:
+            # A POST answered without reading its body (refused, too large)
+            # leaves those bytes on the connection: the next "request" would
+            # be read from them. End the connection instead.
+            if not getattr(self, "_body_read", False):
+                try:
+                    pending = int(self.headers.get("Content-Length") or "0") > 0
+                except ValueError:
+                    pending = True
+                if pending:
+                    self.close_connection = True
+
+    def _do_post(self) -> None:
         if not self._host_ok():
+            self._discard_body()
             self._refuse_host()
             return
         if self.headers.get("X-Requested-With") != "XMLHttpRequest":
+            self._discard_body()
             self._send_text("CSRF validation failed", 403)
             return
         if not self._same_origin_ok():
+            self._discard_body()
             self._send_text("cross-origin request rejected", 403)
             return
 
@@ -384,6 +584,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             ip = self.client_address[0]
             now = time.time()
             if now - self._install_rates.get(ip, 0) < 1.0:
+                self._discard_body()
                 self._send_text("Rate limit exceeded", 429)
                 return
             self._install_rates[ip] = now
@@ -392,84 +593,153 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             body = self._read_json_body()
         except ValueError as ex:
             msg = str(ex)
+            if not self._body_read:
+                self._discard_body()
             self._send_text(msg, 413 if "too large" in msg.lower() else 400)
             return
             
         self._body = body  # type: ignore[attr-defined]
         for prefix, fn in ROUTES:
             if self._match(prefix, path):
-                try:
-                    fn(self)
-                except Exception as ex:
-                    if self._is_conn_error(ex):
-                        _log.debug("client closed connection on %s", self.path)
-                        return
-                    _log.exception("dispatch failure on %s", self.path)
-                    try:
-                        self._send_json({"error": str(ex)}, 500)
-                    except Exception as ex2:
-                        if not self._is_conn_error(ex2):
-                            raise
+                self._dispatch(fn)
                 return
         self._send_404()
 
+    def _dispatch(self, fn: Callable[[Any], None]) -> None:
+        try:
+            fn(self)
+        except Exception as ex:
+            if self._is_conn_error(ex):
+                _log.debug("client closed connection on %s", self.path)
+                self.close_connection = True
+                return            # socket is gone — don't try to write a 500
+            _log.exception("dispatch failure on %s", self.path)
+            if getattr(self, "_responded", False):
+                # Part of an answer is already out: a second one would corrupt
+                # the kept-alive stream. Closing tells the client it ended.
+                self.close_connection = True
+                return
+            try:
+                self._send_json({"error": str(ex)}, 500)
+            except Exception as ex2:
+                if not self._is_conn_error(ex2):
+                    raise
+                self.close_connection = True
+        if not getattr(self, "_responded", False):
+            # A handler that wrote nothing: close, as HTTP/1.0 did, rather than
+            # leave the client waiting on a kept-alive connection.
+            self.close_connection = True
+
     # ---------- static
 
-    def _serve_static(self, rel: str) -> None:
-        base = static_root().resolve()
-        target = (base / rel).resolve()
-        if not target.is_relative_to(base):
-            self._send_404()
-            return
-        if not target.is_file():
-            self._send_404()
-            return
-        ext = target.suffix.lower()
-        ctype = {
-            ".html": "text/html; charset=utf-8",
-            ".js": "application/javascript; charset=utf-8",
-            ".mjs": "application/javascript; charset=utf-8",
-            ".css": "text/css; charset=utf-8",
-            ".json": "application/json; charset=utf-8",
-            ".svg": "image/svg+xml",
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".webp": "image/webp",
-            ".ico": "image/x-icon",
-            ".woff2": "font/woff2",
-        }.get(ext, "application/octet-stream")
+    def _static_entry(self, rel: str) -> Optional[Tuple[Path, Tuple[int, int, bytes, Optional[bytes], str]]]:
+        """(real path, cache entry) of a static file, or None (404).
+
+        Resolution (symlink-safe containment in static/) is remembered per
+        name; the file itself is stat'ed every time and re-read only when its
+        mtime or size moved. Text files keep a gzip copy, made once."""
+        base = _static_base()
+        target = _STATIC_TARGETS.get(rel)
+        if target is None:
+            target = (base / rel).resolve()
+            if not target.is_relative_to(base):
+                return None
+            with _STATIC_LOCK:
+                if len(_STATIC_TARGETS) > 4096:
+                    _STATIC_TARGETS.clear()
+                _STATIC_TARGETS[rel] = target
         try:
-            st = target.stat()
-            blob = target.read_bytes()
-        except Exception:
+            st = os.stat(target)
+        except OSError:
+            return None
+        if not _stat.S_ISREG(st.st_mode):
+            return None
+        key = str(target)
+        ent = _STATIC_CACHE.get(key)
+        if ent is None or ent[0] != st.st_mtime_ns or ent[1] != st.st_size:
+            try:
+                with open(target, "rb") as f:
+                    blob = f.read()
+            except OSError:
+                return None
+            ctype = _STATIC_TYPES.get(target.suffix.lower(), "application/octet-stream")
+            # The gzip copy is made on the first request that accepts it.
+            gz: Any = _GZ_PENDING if len(blob) >= _GZIP_MIN and _compressible(ctype) else None
+            ent = (st.st_mtime_ns, st.st_size, blob, gz, '"%x-%x"' % (st.st_mtime_ns, st.st_size))
+            if st.st_size <= _STATIC_CACHE_MAX_FILE:
+                with _STATIC_LOCK:
+                    _STATIC_CACHE[key] = ent
+        return target, ent
+
+    def _serve_static(self, rel: str) -> None:
+        found = self._static_entry(rel)
+        if found is None:
             self._send_404()
             return
+        target, ent = found
+        _mt, _sz, blob, gz, etag = ent
+        ctype = _STATIC_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        compressible = gz is not None
+        if gz is _GZ_PENDING and self._accepts_gzip():
+            packed = gzip.compress(blob, compresslevel=6, mtime=0)
+            gz = packed if len(packed) < len(blob) else None
+            if _sz <= _STATIC_CACHE_MAX_FILE:
+                with _STATIC_LOCK:
+                    if _STATIC_CACHE.get(str(target)) is ent:
+                        _STATIC_CACHE[str(target)] = (_mt, _sz, blob, gz, etag)
+        if gz is _GZ_PENDING:
+            gz = None
         # Vendored, version-bumped assets (echarts ~1 MB, three.js, fonts, logos)
-        # live under static/vendor/ and are immutable between releases. Serve them
-        # with a validating ETag + max-age instead of the blanket no-store, so a
-        # WSL2/remote client stops re-downloading a megabyte on every page load.
-        # First-party code (index.html, app.js, modules/*) stays no-store so edits
-        # show up without a server restart (C4).
-        rel_posix = target.relative_to(base).as_posix()
-        if rel_posix.startswith("vendor/"):
-            etag = '"%x-%x"' % (int(st.st_mtime), st.st_size)
-            if (self.headers.get("If-None-Match") or "") == etag:
-                self.send_response(304)
-                self.send_header("ETag", etag)
-                self.send_header("Cache-Control", "public, max-age=86400")
-                self.end_headers()
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(blob)))
-            self.send_header("Cache-Control", "public, max-age=86400")
-            self.send_header("ETag", etag)
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.end_headers()
-            self.wfile.write(blob)
+        # live under static/vendor/ and are immutable between releases: cached
+        # for a day. First-party code (index.html, app.js, modules/*) is
+        # revalidated on every load (no-cache + ETag), so an edit shows at once
+        # (C4) while an unchanged file is a bodiless 304, which also keeps the
+        # browser's compiled-code cache.
+        vendor = target.relative_to(_static_base()).as_posix().startswith("vendor/")
+        cache_control = "public, max-age=86400" if vendor else "no-cache"
+        use_gz = gz is not None and self._accepts_gzip()
+        sent_etag = _gzip_etag(etag) if use_gz else etag
+        if self._etag_matches(etag, _gzip_etag(etag)):
+            self._send_not_modified(sent_etag, cache_control, vary=compressible)
             return
-        self._send_bytes(blob, 200, ctype)
+        body = gz if use_gz else blob
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", cache_control)
+        self.send_header("ETag", sent_etag)
+        if compressible:
+            self.send_header("Vary", "Accept-Encoding")
+        if use_gz:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _send_path(self, path: str, content_type: str) -> None:
+        """A run file or view: a text file small enough is sent compressed
+        to a client that takes gzip; anything else is streamed."""
+        try:
+            size = os.stat(path).st_size
+        except OSError:
+            self._send_404()
+            return
+        if _GZIP_MIN <= size <= _GZIP_MAX_DYNAMIC and _compressible(content_type) and self._accepts_gzip():
+            try:
+                with open(path, "rb") as f:
+                    blob = f.read()
+            except OSError:
+                self._send_404()
+                return
+            self._send_bytes(blob, 200, content_type)
+            return
+        try:
+            self._send_file(path, content_type)
+        except OSError as ex:
+            if self._is_conn_error(ex) or getattr(self, "_responded", False):
+                raise
+            self._send_404()
 
     def _serve_view(self, spec: str) -> None:
         """Serve an artefact from the active run dir."""
@@ -484,7 +754,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         if response is None:
             self._send_404()
             return
-        self._send_bytes(response["blob"], 200, response["content_type"])
+        self._send_path(response["path"], response["content_type"])
 
 
 def _addr_family(host: str) -> int:

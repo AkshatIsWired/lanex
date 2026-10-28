@@ -61,9 +61,14 @@ def test_wsl_dns_remediation_preserves_modern_resolver(monkeypatch):
 # ----------------------------------------------------------- #2 WSL win-only probe
 def test_wsl_windows_path_tool_reported_missing(monkeypatch):
     monkeypatch.setattr(platform_env, "is_wsl", lambda: True)
+    # Linux folders are searched first, the Windows ones (/mnt/<drive>) only
+    # when there is no Linux build.
+    monkeypatch.setattr(platform_env, "linux_only_path", lambda path=None: "/usr/bin")
+    monkeypatch.setattr(tools, "_windows_path", lambda: "/mnt/c/HDL/bin")
     monkeypatch.setattr(
         tools.shutil, "which",
-        lambda c: "/mnt/c/HDL/bin/verilator.exe" if c == "verilator" else None,
+        lambda c, path=None: "/mnt/c/HDL/bin/verilator.exe"
+        if c == "verilator" and path == "/mnt/c/HDL/bin" else None,
     )
     res = tools._probe(["verilator"], ["--version"])
     assert res["installed"] is False

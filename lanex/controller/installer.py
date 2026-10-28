@@ -2805,6 +2805,23 @@ _PDK_PERMANENT_FAILURES = (
     "incompatible", "unknown library", "invalid choice", "no space left",
 )
 
+# lanex_timeout.pth: raises httpx's default timeout to 300 s (connect 60 s) so
+# ciel's PDK download survives a slow line, in every Python of the venv. It
+# applies when httpx is first imported (a meta-path hook), not at every
+# interpreter start: importing httpx up front cost each process ~65 ms. The
+# same line is written by windows/provision/provision.sh and scripts/install.sh.
+_HTTPX_TIMEOUT_PTH = (
+    'import sys; exec("class _LanexHttpxTimeout:\\n @staticmethod\\n'
+    ' def find_spec(name, path=None, target=None):\\n  if name != \'httpx\':\\n   return None\\n'
+    '  import importlib.machinery as m\\n  spec = m.PathFinder.find_spec(name, path)\\n'
+    '  if spec is None or not hasattr(spec.loader, \'exec_module\'):\\n   return spec\\n'
+    '  run = spec.loader.exec_module\\n  def exec_module(module):\\n   run(module)\\n   try:\\n'
+    '    d = module.Client.__init__.__kwdefaults__\\n    if d is not None:\\n'
+    '     d[\'timeout\'] = module.Timeout(300.0, connect=60.0)\\n   except Exception:\\n    pass\\n'
+    '  spec.loader.exec_module = exec_module\\n  return spec\\n'
+    'if \'httpx\' not in sys.modules:\\n sys.meta_path.insert(0, _LanexHttpxTimeout)")\n'
+)
+
 
 def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
                      required_version: Optional[str] = None,
@@ -2873,15 +2890,12 @@ def install_pdk_sync(pdk: str, libraries: Optional[List[str]] = None, *,
             sp = sysconfig.get_path("purelib")
             if sp and os.path.isdir(sp):
                 pth = os.path.join(sp, "lanex_timeout.pth")
+                # Only when missing: an existing hook is the installer's to
+                # replace (provision.sh / install.sh rewrite it on every
+                # install and upgrade), not a PDK download's.
                 if not os.path.exists(pth):
                     with open(pth, "w", encoding="utf-8") as pf:
-                        pf.write(
-                            'import sys; exec("try:\\n import httpx\\n if hasattr(httpx, \'Client\') and '
-                            'hasattr(httpx.Client.__init__, \'__kwdefaults__\') and '
-                            'httpx.Client.__init__.__kwdefaults__ is not None:\\n  '
-                            'httpx.Client.__init__.__kwdefaults__[\'timeout\'] = httpx.Timeout(300.0, connect=60.0)\\n'
-                            'except Exception:\\n pass")\n'
-                        )
+                        pf.write(_HTTPX_TIMEOUT_PTH)
         except Exception:
             pass
 

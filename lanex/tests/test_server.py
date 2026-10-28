@@ -110,9 +110,11 @@ def test_vendor_assets_cacheable_first_party_no_store(server):
     with pytest.raises(urllib.error.HTTPError) as ei:
         urllib.request.urlopen(req)
     assert ei.value.code == 304
-    # First-party JS keeps no-store.
+    # First-party JS is revalidated on every load (no-cache + ETag): an edit
+    # shows at once, an unchanged file is a 304 (perf pass 2026-10-28).
     a = urllib.request.urlopen(f"http://127.0.0.1:{server}/static/app.js")
-    assert a.headers.get("Cache-Control") == "no-store"
+    assert a.headers.get("Cache-Control") == "no-cache"
+    assert a.headers.get("ETag")
 
 
 def test_landing_page(server):

@@ -366,6 +366,24 @@ def _live_run_dir() -> Optional[str]:
         return None
 
 
+def _live_probe() -> Optional[str]:
+    """:func:`_live_run_dir` for history's caches: lets them trust a finished
+    run's quick signature while always re-reading the live one. A runner that
+    was never created runs nothing; one whose run folder is not known yet
+    makes every run count as possibly live."""
+    from ..server import app as _app
+    r = _app._RUNNER
+    if r is None or not r.running:
+        return None
+    rd = r.run_dir
+    if not rd:
+        raise RuntimeError("live run folder not known yet")
+    return rd
+
+
+history.set_live_probe(_live_probe)
+
+
 def h_run_step_log(handler: Any) -> None:
     """One step's log + reports, for click-to-inspect on the flow graph.
 
@@ -417,7 +435,7 @@ def h_run(handler: Any) -> None:
         _respond(handler, f"run '{tag}' not found", 404)
         return
     try:
-        _respond(handler, history.get_run(run_path))
+        _respond(handler, history.cached_run_result("run", run_path, lambda: history.get_run(run_path)))
     except Exception as ex:
         _log.exception("get_run failed")
         _respond(handler, str(ex), 500)
@@ -551,7 +569,9 @@ def h_run_reports(handler: Any) -> None:
         _respond(handler, "missing design_dir or run_tag", 400)
         return
     try:
-        _respond(handler, fsbrowser.list_run_reports(design_dir, run_tag))
+        _respond(handler, history.cached_run_result(
+            "reports", os.path.join(design_dir, "runs", run_tag),
+            lambda: fsbrowser.list_run_reports(design_dir, run_tag)))
     except Exception as ex:
         _log.exception("list_run_reports failed")
         _respond(handler, str(ex), 500)
@@ -874,18 +894,24 @@ _PREFLIGHT_TOOLS_CACHE: Dict[str, Any] = {"t": 0.0, "v": None}
 
 
 def _preflight_tools_cached(ttl: float = 8.0) -> Dict[str, Any]:
-    import time
-    now = time.time()
-    cached = _PREFLIGHT_TOOLS_CACHE
-    if cached["v"] is not None and (now - cached["t"]) < ttl:
-        return cached["v"]
+    # check_tools() is session-cached (cleared by installs, pulls and
+    # Recheck; refreshed in the background), so this is a dict lookup after
+    # the first call and an install shows at once, not up to 8 s later.
     try:
-        v = tools_mod.check_tools()
+        return tools_mod.check_tools()
     except Exception:
-        v = {}
-    cached["t"] = now
-    cached["v"] = v
-    return v
+        return {}
+
+
+def _preflight_container_tools() -> Dict[str, Any]:
+    """Container mode needs only the engine and image, not the host tool
+    probes: those warm up in the background for the Tools tab."""
+    try:
+        cont = tools_mod.container_status()
+        tools_mod.warm_check_tools()
+        return {"container": cont}
+    except Exception:
+        return {}
 
 
 def h_preflight(handler: Any) -> None:
@@ -914,7 +940,8 @@ def h_preflight(handler: Any) -> None:
         (lambda: pdk_mod.check_pdk_ready(pdk, scl or None, run_mode)) if pdk
         else (lambda: {"ready": False, "missing": ["no PDK selected"]})
     )
-    _tools_future = _pool.submit(_preflight_tools_cached)
+    _tools_future = _pool.submit(_preflight_container_tools if run_mode == "container"
+                                 else _preflight_tools_cached)
 
     # 1) Design folder + config + sources.
     design_ok = bool(design_dir) and Path(design_dir).is_dir()
@@ -2088,15 +2115,15 @@ _CONTENT_TYPE_MAP = {
 
 
 def _read_view_file(path: Path) -> Optional[Dict[str, Any]]:
+    """``{path, content_type}`` of a servable file. The transport streams it
+    (a final GDS or a long log is tens of MB, never read into memory)."""
     if not path.is_file():
         return None
     ext = path.suffix.lower()
     content_type = _CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
-    try:
-        blob = path.read_bytes()
-        return {"blob": blob, "content_type": content_type}
-    except Exception:
+    if not os.access(path, os.R_OK):
         return None
+    return {"path": str(path), "content_type": content_type}
 
 
 def _resolve_run_dir(tag: Optional[str]) -> Optional[Path]:
@@ -2134,7 +2161,8 @@ def h_run_files(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, {"tag": tag, "files": history.list_run_files(run_dir)})
+        _respond(handler, {"tag": tag, "files": history.cached_run_result(
+            "files", run_dir, lambda: history.list_run_files(run_dir))})
     except Exception as ex:
         _log.exception("list_run_files failed")
         _respond(handler, str(ex), 500)
@@ -2148,7 +2176,8 @@ def h_run_images(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, {"tag": tag, "images": history.list_run_images(run_dir)})
+        _respond(handler, {"tag": tag, "images": history.cached_run_result(
+            "images", run_dir, lambda: history.list_run_images(run_dir))})
     except Exception as ex:
         _log.exception("list_run_images failed")
         _respond(handler, str(ex), 500)
@@ -3138,7 +3167,8 @@ def h_verify(handler: Any) -> None:
         _respond(handler, "no run to verify", 404)
         return
     try:
-        rep = verify_mod.verify_report(run_dir)
+        # Shallow copy: the cached report is shared; only run_verdict changes.
+        rep = dict(history.cached_run_result("verify", run_dir, lambda: verify_mod.verify_report(run_dir)))
         rv = rep.get("run_verdict")
         if rv is not None:
             rep["run_verdict"] = history.mark_live([{"run_dir": rep.get("run_dir"), "verdict": rv}],
@@ -3205,7 +3235,8 @@ def h_timing_paths(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, timing.timing_paths(run_dir, kind=kind, limit=limit))
+        _respond(handler, history.cached_run_result(
+            f"timing:{kind}:{limit}", run_dir, lambda: timing.timing_paths(run_dir, kind=kind, limit=limit)))
     except Exception as ex:
         _log.exception("timing_paths failed")
         _respond(handler, str(ex), 500)
@@ -3262,7 +3293,7 @@ def h_run_stages(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, history.run_stages(run_dir))
+        _respond(handler, history.cached_run_result("stages", run_dir, lambda: history.run_stages(run_dir)))
     except Exception as ex:
         _log.exception("run_stages failed")
         _respond(handler, str(ex), 500)
@@ -3903,8 +3934,10 @@ def h_waveform(handler: Any) -> None:
         _respond(handler, "not found", 404)
         return
     try:
-        handler._send_bytes(target.read_bytes(), 200, "application/octet-stream")
+        handler._send_file(str(target), "application/octet-stream")
     except Exception as ex:
+        if handler._is_conn_error(ex):
+            raise
         _respond(handler, str(ex), 500)
 
 
