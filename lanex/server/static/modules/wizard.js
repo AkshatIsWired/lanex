@@ -331,8 +331,17 @@ async function doCreate(body, tpl) {
       if (tbRel) await ide.openInIde({ rel: tbRel });
       await ide.openInIde({ rel: "src/" + topName + ext });
     } else {
-      (await import("./nav.js")).go("setup", {}, { link: false });
-      toast.show("Created " + name + ". It's ready to run.", "success");
+      const { go } = await import("./nav.js");
+      go("setup", {}, { link: false });
+      // Say what comes next (the first-chip guide points at it itself).
+      if (document.body.classList.contains("guide-on")) toast.show("Created " + name + ".", "success");
+      else toast.show("Created " + name + ". It's ready to run.", "success", 10000, [
+        tpl.has_testbench ? { label: "Simulate first", run: () => go("ide") } : null,
+        { label: "Go to Run", run: () => {
+          go("setup", { section: "setup-preflight" }, { link: false });
+          setTimeout(() => document.getElementById("btn-run")?.focus({ preventScroll: true }), 400);
+        } },
+      ]);
     }
   } catch (ex) {
     err.textContent = ex.message || String(ex);
