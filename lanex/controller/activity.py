@@ -105,8 +105,16 @@ def track_viewer(proc: subprocess.Popen, label: str) -> None:
 
 def open_viewers() -> List[str]:
     """Labels of tracked desktop tools whose process is still alive."""
+    # One entry that can't be polled is dropped on its own; it must not make
+    # every other open viewer vanish from the quit check.
+    def alive(p) -> bool:
+        try:
+            return p.poll() is None
+        except Exception:
+            return False
+
     with _viewers_lock:
-        _viewers[:] = [(label, p) for label, p in _viewers if p.poll() is None]
+        _viewers[:] = [(label, p) for label, p in _viewers if alive(p)]
         return [label for label, _ in _viewers]
 
 

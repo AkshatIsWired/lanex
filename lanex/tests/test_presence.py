@@ -162,3 +162,16 @@ def test_stale_heartbeat_stops_counting(monkeypatch):
     assert activity.live_pages() >= 1
     monkeypatch.setattr(activity, "PAGE_ALIVE_FOR", -1.0)
     assert activity.live_pages() == 0
+
+
+def test_one_bad_viewer_entry_does_not_hide_the_others():
+    from lanex.controller import activity
+
+    live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        activity.track_viewer(None, "Broken")   # e.g. a test's fake Popen
+        activity.track_viewer(live, "KLayout")
+        assert activity.open_viewers() == ["KLayout"]
+    finally:
+        live.kill()
+        live.wait()
