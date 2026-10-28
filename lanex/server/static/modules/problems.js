@@ -61,7 +61,7 @@ export function fixRowHtml(f, { tag, title, n = 0, primary = false } = {}) {
     return "<li class='px-fix is-open'>" + (n ? "<span class='px-fix-n'>" + n + "</span>" : "") +
       "<div class='px-fix-main'><div class='px-fix-what'><b>" + esc(f.label) + "</b></div>" +
       (f.why ? "<div class='px-fix-why'>" + esc(f.why) + "</div>" : "") + "</div>" +
-      "<button class='btn btn-ghost btn-sm' " + attrs + ">" + esc(shortOpen(f.label)) + " " + icon("chevron", { size: 12 }) + "</button></li>";
+      "<button class='btn " + (primary ? "btn-primary" : "btn-ghost") + " btn-sm' " + attrs + ">" + esc(shortOpen(f.label)) + " " + icon("chevron", { size: 12 }) + "</button></li>";
   }
   return "";
 }
@@ -69,7 +69,9 @@ const shortOpen = (label) => (/layout/i.test(label) ? "Show" : /paths/i.test(lab
 
 export function fixListHtml(fixes, { tag, title } = {}) {
   const set = (fixes || []).filter((f) => f.kind === "setting");
-  const firstSetting = set.length ? fixes.indexOf(set[0]) : -1;
+  // The fix to try first is the primary button: the first setting, else the
+  // first place to look.
+  const firstSetting = set.length ? fixes.indexOf(set[0]) : (fixes || []).findIndex((f) => f.kind === "open" && f.go);
   let n = 0;
   return "<ol class='px-fixes'>" + (fixes || []).map((f, i) =>
     fixRowHtml(f, { tag, title, n: f.kind === "setting" ? ++n : 0, primary: i === firstSetting })).join("") + "</ol>";

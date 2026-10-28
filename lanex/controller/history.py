@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .models import RunSummary, RunView, MetricSet, to_json
+from . import platform_env
 
 # The metric keys we surface on the dashboard by default.
 # Kept conservative: pull every key from metrics.json and let the
@@ -211,7 +212,7 @@ def _run_signature(run_dir: Path) -> tuple:
 
 # The cache is also kept on disk, so the first listing after LanEx starts (a
 # cold summary of 4 runs on /mnt/c measured 6.8 s; cached, 65 ms) is fast too.
-_CACHE_FILE_VERSION = 2
+_CACHE_FILE_VERSION = 3  # 2: new summary fields; 3: started_at carries its UTC offset
 _cache_loaded = False
 _cache_dirty = False
 
@@ -383,7 +384,7 @@ def _summarise(run_dir: Path) -> RunSummary:
         flow=flow_name or "Classic",
         pdk=pdk,
         scl=scl,
-        started_at=datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(),
+        started_at=platform_env.iso_from_epoch(run_dir.stat().st_mtime),
         step_count=step_count,
         steps_done=steps_done,
         steps_failed=steps_failed,
@@ -1848,7 +1849,7 @@ def metric_trends(design_dir: str | Path, keys: Optional[List[str]] = None,
             metrics = {}
         runs_meta.append({
             "tag": rd.name,
-            "started_at": datetime.fromtimestamp(rd.stat().st_mtime).isoformat(),
+            "started_at": platform_env.iso_from_epoch(rd.stat().st_mtime),
             "success": _success_from_metrics(metrics, run_dir=rd),
         })
         for k in use_keys:

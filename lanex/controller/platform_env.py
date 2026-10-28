@@ -30,6 +30,52 @@ from typing import Dict, Optional
 
 _log = logging.getLogger("librelane.lanex.platform_env")
 
+# ---------------------------------------------------------------- local time
+# The WSL distro's clock runs on UTC while the person reads Windows' local
+# time. The browser says its UTC offset on every POST (api.js), so run names
+# can carry the person's own wall-clock time; timestamps shown in the UI are
+# sent with an offset and formatted by the browser.
+_client_utc_offset_min: Optional[int] = None
+
+
+def note_client_utc_offset(value: Optional[str]) -> None:
+    """Remember the browser's UTC offset in minutes (east positive), from the
+    ``X-LanEx-UTC-Offset`` header. Anything out of range is ignored."""
+    global _client_utc_offset_min
+    try:
+        v = int(str(value).strip())
+    except (TypeError, ValueError):
+        return
+    if -14 * 60 <= v <= 14 * 60:
+        _client_utc_offset_min = v
+
+
+def local_now():
+    """Now, as an aware datetime in the person's time zone: the browser's
+    offset when it has told us, else this machine's own."""
+    from datetime import datetime, timedelta, timezone
+    if _client_utc_offset_min is not None:
+        return datetime.now(timezone(timedelta(minutes=_client_utc_offset_min)))
+    return datetime.now().astimezone()
+
+
+def iso_from_epoch(ts: float) -> str:
+    """An epoch time as ISO 8601 with its offset, so a browser formats it in
+    its own zone (a naive string would be read as the browser's local time)."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ts, timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def new_run_tag(runs_dir: Optional[Path] = None, prefix: str = "glui-") -> str:
+    """A run folder name from the person's local time (``glui-YYYYmmdd-HHMMSS``),
+    with ``-2``, ``-3``... when that name is taken (two runs in one second, or
+    the clock moved back an hour)."""
+    base = prefix + local_now().strftime("%Y%m%d-%H%M%S")
+    tag, n = base, 2
+    while runs_dir is not None and (Path(runs_dir) / tag).exists():
+        tag, n = f"{base}-{n}", n + 1
+    return tag
+
 
 def home() -> Path:
     """The LanEx config/state home directory (F1).

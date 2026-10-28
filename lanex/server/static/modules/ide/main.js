@@ -1216,9 +1216,18 @@ function isTestbenchFile(file) {
 function isNoise(d) {
   return d.severity === "warning" && TESTBENCH_STYLE.has(d.code) && isTestbenchFile(d.file);
 }
+// The lint check and a Verilator simulation build report the same problem on
+// the same line: each is counted and listed once (the badge said "4 · 2"
+// while the build said 2 errors).
+export function mergeDiags(lint, sim, simLabel = "Simulator") {
+  const key = (d) => d.file + ":" + d.line + ":" + (d.code || d.msg);
+  const seen = new Set((lint || []).map(key));
+  return (lint || []).map((d) => ({ ...d, src: "Verilator" }))
+    .concat((sim || []).filter((d) => !seen.has(key(d))).map((d) => ({ ...d, src: simLabel })));
+}
+
 function allDiags() {
-  return (state.diags || []).map((d) => ({ ...d, src: "Verilator" }))
-    .concat((state.simDiags || []).map((d) => ({ ...d, src: state.simEngineLabel || "Simulator" })));
+  return mergeDiags(state.diags, state.simDiags, state.simEngineLabel || "Simulator");
 }
 
 function applyMarkers() {
@@ -1694,6 +1703,62 @@ const SS_ICON = {
   run: "<span class='ss-spin' aria-hidden='true'></span>",
 };
 
+// A build that failed only because the testbench names ports the module no
+// longer has (Verilator PINNOTFOUND, Icarus "is not a port of"), all in the
+// testbench file.
+const PORT_RX = /is not a port of|port .* not found|unknown port|PINNOTFOUND/i;
+export function isPortMismatch(diags, tbRel, isTb = (f) => f === tbRel) {
+  const errs = (diags || []).filter((d) => d.severity === "error");
+  return errs.length > 0 && errs.every((d) => (d.code === "PINNOTFOUND" || PORT_RX.test(d.msg || "")) && isTb(d.file));
+}
+function portMismatch(r) {
+  if (r.verdict !== "build" || !r.tb) return false;
+  const f = projectFile(r.tb);
+  return isPortMismatch(state.simDiags, f ? f.relpath : r.tb, (file) => isTestbenchFile(file));
+}
+
+// Write the testbench again for the module's current ports; the old file is
+// kept next to it as <name>.v.bak.txt (outside the testbench glob).
+async function rewriteTestbench(tb) {
+  const f = projectFile(tb);
+  if (!f || !state.designDir) return;
+  const rel = f.relpath;
+  const name = rel.split("/").pop().replace(/\.s?v$/i, "");
+  const backup = rel + ".bak.txt";
+  const { confirmDialog } = await import("../dialog.js");
+  const ok = await confirmDialog({
+    title: "Rewrite " + rel.split("/").pop() + "?",
+    body: "LanEx writes a new testbench for the module's current ports: every input driven, every output watched, " +
+      "the clock and reset from the config. Your file is kept as " + backup + ", so nothing you wrote is lost.",
+    confirmText: "Rewrite it",
+  });
+  if (!ok) return;
+  let top = null, clock = null;
+  try {
+    const info = await api.designInfo({ design_dir: state.designDir });
+    top = (info.values && info.values.DESIGN_NAME) || info.suggested_top || null;
+    const cp = info.values && info.values.CLOCK_PORT;
+    clock = Array.isArray(cp) ? cp[0] : cp || null;
+  } catch (_e) { /* the server says what's missing */ }
+  try {
+    await api.fileRename(rel, backup);
+  } catch (ex) { note("Couldn't keep a backup of " + rel + ": " + (ex.message || ex) + ". Nothing was changed.", true); return; }
+  try {
+    const r = await api.newProjectFile({ design_dir: state.designDir, kind: /\.sv$/i.test(rel) ? "tb_sv" : "tb_v",
+      name, top, clock, use: false });
+    await loadTree();
+    await loadTestbenches();
+    await openFile(r.abs, r.rel);
+    state.simDiags = [];
+    renderProblems();
+    applyMarkers();
+    note("Rewrote " + rel + " for " + (top || "the top module") + "'s ports. Your old file is " + backup + ". Simulate to run it.");
+  } catch (ex) {
+    try { await api.fileRename(backup, rel); } catch (_e) { /* leave the backup where it is */ }
+    note("Couldn't write the new testbench: " + (ex.message || ex) + ". Your file is back as it was.", true);
+  }
+}
+
 let _ssTimer = 0;
 // The result of the last simulation, in words, with what to do next.
 function simStatus(run) {
@@ -1720,7 +1785,11 @@ function simStatus(run) {
     passed: ["ok", "Passed", "The testbench printed PASS and ran to the end. " + facts, wave + next],
     ran: ["ok", "Ran to the end", facts + (facts ? ". " : "") + "Check the waveform and the output against what you expect.", wave + next],
     "reported-fail": ["warn", "The testbench reported " + plural(r.fails || 0, "failure"), facts, "<button class='btn btn-sm' data-ss='first-fail'>Show the first one</button>" + wave],
-    build: ["fail", "Didn't build: " + plural(r.buildErrors || 0, "error"), "They're listed in Problems and underlined in the editor.", "<button class='btn btn-sm' data-ss='first-error'>Show the first error</button>"],
+    build: portMismatch(r)
+      ? ["fail", "Didn't build: the testbench doesn't match the module's ports",
+        "The design's ports changed since " + (tbName || "the testbench") + " was written (" + plural(r.buildErrors || 0, "error") + " in Problems). LanEx can write it again for the current ports and keep yours as a backup.",
+        "<button class='btn btn-primary btn-sm' data-ss='rewrite-tb'>Rewrite the testbench for these ports</button><button class='btn btn-ghost btn-sm' data-ss='first-error'>Show the first error</button>"]
+      : ["fail", "Didn't build: " + plural(r.buildErrors || 0, "error"), "They're listed in Problems and underlined in the editor.", "<button class='btn btn-sm' data-ss='first-error'>Show the first error</button>"],
     failed: ["fail", "The simulator stopped with an error", "Exit code " + r.rc + ". The output below says why." + (secs ? " " + secs : ""), ""],
     "timeout-partial": ["warn", "Stopped at the time limit", "No $finish within 120 s, so the waveform is partial. Add $finish at the end of the testbench's initial block.", wave + "<button class='btn btn-ghost btn-sm' data-ss='open-tb'>Open the testbench</button>"],
     timeout: ["fail", "Stopped at the time limit, no waveform", "Add $finish at the end of the testbench's initial block, and $dumpfile/$dumpvars to write a waveform.", "<button class='btn btn-ghost btn-sm' data-ss='open-tb'>Open the testbench</button>"],
@@ -1769,6 +1838,8 @@ function simStatus(run) {
         const start = all.findLastIndex((x) => x.classList.contains("ll-head"));
         const hit = all.slice(Math.max(0, start)).find((x) => x.classList.contains("ll-err"));
         if (hit) { hit.scrollIntoView({ block: "center" }); hit.classList.add("ll-flash"); setTimeout(() => hit.classList.remove("ll-flash"), 1600); }
+      } else if (act === "rewrite-tb") {
+        await rewriteTestbench(run2.tb);
       } else if (act === "open-tb" || act === "add-dump") {
         const f = projectFile(run2.tb);
         if (!f) return;

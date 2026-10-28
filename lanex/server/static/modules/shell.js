@@ -235,6 +235,12 @@ async function switchProject(dir) {
     import("./nav.js").then((m) => m.go("setup", {}, { link: false }));
     toast.show("Opened " + baseName(dir) + ".", "success");
   } catch (ex) {
+    if (/not found/i.test((ex && ex.message) || "")) {
+      // A project whose folder is gone: its card says so, with Locate and Remove.
+      (await import("./setup.js")).showMissingProject(dir);
+      import("./nav.js").then((m) => m.go("setup", {}, { link: false }));
+      return;
+    }
     toast.show("Could not open " + displayPath(dir) + ": " + (ex.message || ex), "error");
   }
 }

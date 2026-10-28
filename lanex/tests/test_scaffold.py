@@ -45,14 +45,33 @@ def test_blank_systemverilog_project(tmp_path: Path):
     assert json.loads((dest / "config.json").read_text())["VERILOG_FILES"] == ["dir::src/*.sv"]
 
 
-def test_blank_project_starts_with_a_fixed_die(tmp_path: Path):
-    # A handful of cells on a utilization-sized die (~33x44 um) fails detailed
-    # placement after CTS (DPL-0036); the starter gets room to place and route.
+def test_blank_project_sizes_its_die_from_the_design(tmp_path: Path):
+    # A fixed 150 um die put a 32x32 multiplier at 370 % utilization. A
+    # utilization-sized die grows with the design; measured with LibreLane
+    # 3.0.4 on sky130A, the 8-bit starter (35x46 um die) and a 32x32
+    # multiplier both reach a clean GDS at FP_CORE_UTIL 40 / density 55.
     dest = tmp_path / "b"
     scaffold.create_project(str(dest), "empty", top="top", pdk="sky130A")
     cfg = json.loads((dest / "config.json").read_text())
-    assert cfg["FP_SIZING"] == "absolute" and cfg["DIE_AREA"] == [0, 0, 150, 150]
+    assert cfg["FP_SIZING"] == "relative" and "DIE_AREA" not in cfg
+    assert cfg["FP_CORE_UTIL"] == 40 and cfg["PL_TARGET_DENSITY_PCT"] > cfg["FP_CORE_UTIL"]
+    # gf180 keeps the fixed die it was verified with (until a gf180 run of
+    # the relative settings is measured), self-contained in its own section.
+    assert cfg["pdk::gf180mcu*"]["FP_SIZING"] == "absolute"
     assert cfg["DESIGN_NAME"] == "top"
+
+
+@pytest.mark.parametrize("tdir", sorted(p.name for p in scaffold._templates_root().iterdir() if p.is_dir()))
+def test_no_template_pins_a_die_it_cannot_outgrow(tdir: str):
+    # A DIE_AREA beside relative sizing is ignored by the floorplan but still
+    # drawn as the outline by Magic's stream-out, which fails the XOR check.
+    doc = scaffold._read_manifest(scaffold._templates_root() / tdir) or {}
+    sections = [doc.get("config") or {}] + [(v.get("config") or {}) for v in (doc.get("pdk") or {}).values()]
+    for sec in sections:
+        if sec.get("FP_SIZING") != "absolute":
+            assert "DIE_AREA" not in sec, tdir
+        if "PL_TARGET_DENSITY_PCT" in sec and "FP_CORE_UTIL" in sec:
+            assert sec["PL_TARGET_DENSITY_PCT"] >= sec["FP_CORE_UTIL"] + 10, tdir
 
 
 def test_template_config_keys_are_real_variables():
