@@ -1266,8 +1266,97 @@ def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None,
     return None
 
 
+_TAG_RX = re.compile(r"[A-Za-z0-9._-]{1,120}")
+
+
+def _bad_tag(tag: Any) -> Optional[str]:
+    """A plain refusal for a run name LibreLane would turn into a folder
+    outside ``runs/`` (``../x``, ``a/b``) or one a shell would split; None when
+    *tag* is empty (LanEx names the run) or fine."""
+    if tag in (None, ""):
+        return None
+    t = str(tag)
+    if not _TAG_RX.fullmatch(t) or t in (".", "..") or t.startswith("-"):
+        return (f"The run name '{t[:60]}' can't be used: use letters, digits and . _ - "
+                "(up to 120), not starting with '-'.")
+    return None
+
+
+def _design_refusal(handler: Any, design_dir: Optional[str]) -> Optional[str]:
+    """Why a run, sweep or Console command must not start in *design_dir*,
+    in plain words, or None.
+
+    Two cases: the open project's folder is gone (moved, renamed or deleted
+    while LanEx had it open), or the window that asked shows another project
+    (``X-LanEx-Design``, sent by api.js): a window showing a missing project
+    keeps the previous one active on the server, and a second window may have
+    switched projects. Either way the run would land in a folder the person
+    is not looking at."""
+    def _gone(d: str) -> str:
+        return (f"The project folder {d} is not there any more (moved, renamed or deleted). "
+                "Nothing was started. On Setup, Locate the folder or remove the project from the list.")
+    if design_dir and not Path(design_dir).is_dir():
+        return _gone(design_dir)
+    headers = getattr(handler, "headers", None)
+    raw = headers.get("X-LanEx-Design") if headers is not None else None
+    if not raw:
+        return None
+    try:
+        from urllib.parse import unquote
+        shown = platform_env.to_host_path(unquote(str(raw))) or ""
+    except Exception:
+        return None
+    if not shown:
+        return None
+    if not Path(shown).expanduser().is_dir():
+        return _gone(shown)
+    if not design_dir:
+        return None
+    try:
+        same = Path(shown).expanduser().resolve() == Path(design_dir).resolve()
+    except OSError:
+        same = True
+    if not same:
+        return (f"This window shows {shown}, but LanEx has {design_dir} open (another window "
+                "may have opened it). Nothing was started. Reload this page, or open the project again, then retry.")
+    return None
+
+
+def _other_flow_busy(*, sweep_ok: bool = False, runner_ok: bool = False) -> Optional[str]:
+    """Another flow already has the machine: a sweep's queue (which starts its
+    next point the moment the runner goes idle), a flow run, or a ``librelane``
+    command from the Console. Two flows at once double the memory a full run
+    needs and can write into the same run folder. A plain refusal, or None."""
+    try:
+        from ..controller import dse
+        if not sweep_ok and dse.job.active:
+            return ("A sweep is running. Wait for it to finish, or stop it in Runs, then try again.")
+    except Exception:
+        pass
+    if not runner_ok:
+        try:
+            from ..server.app import get_runner
+            if get_runner().running:
+                return "A run is in progress. Wait for it to finish, or stop it, then try again."
+        except Exception:
+            pass
+    try:
+        from ..controller import manualcmd
+        job = manualcmd.get_job()
+        if job.running and job.running_base == "librelane":
+            return ("A librelane command is running in the Console. Wait for it to finish, "
+                    "or press Stop there, then try again.")
+    except Exception:
+        pass
+    return None
+
+
 def h_run_start(handler: Any) -> None:
     body = getattr(handler, "_body", {}) or {}
+    why = _design_refusal(handler, _get_active_design_dir())
+    if why:
+        _respond(handler, why, 409)
+        return
     if body.get("branch_from"):
         # "Resume from <stage>" (Run menu): a new run from a step of another
         # run, with nothing changed. The fix route plans and starts it.
@@ -1291,7 +1380,13 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
     from ..server.app import get_runner
     design_dir = _get_active_design_dir()
     if not design_dir:
-        return "no active design dir", 400
+        return "No project is open. Open or create one on Setup, then run.", 400
+    gone = _design_refusal(None, design_dir)
+    if gone:
+        return gone, 409
+    tag_err = _bad_tag(body.get("tag"))
+    if tag_err:
+        return tag_err, 400
     ws_err = _whitespace_path_error(design_dir)
     if ws_err:
         return ws_err, 400
@@ -1302,6 +1397,9 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
     r = get_runner()
     if r.running:
         return "already running", 400
+    busy = _other_flow_busy(runner_ok=True)
+    if busy:
+        return busy, 409
     try:
         from librelane.flows import Flow
         flow_name = body.get("flow") or "Classic"
@@ -1573,7 +1671,22 @@ def h_manual_run(handler: Any) -> None:
     from ..controller import manualcmd
     body = getattr(handler, "_body", {})
     command = body.get("command", "")
+    if not isinstance(command, str):
+        _respond(handler, "The command must be text.", 400)
+        return
     cwd = _get_active_design_dir()
+    why = _design_refusal(handler, cwd)
+    if why:
+        _respond(handler, why.replace("Nothing was started.", "The command was not run."), 409)
+        return
+    v = manualcmd.validate(command)
+    if v.get("ok") and v.get("base") == "librelane":
+        # A second flow next to a live run or sweep: double the memory, and a
+        # copied command may name the same run folder.
+        busy = _other_flow_busy()
+        if busy:
+            _respond(handler, busy.replace("try again", "run the command"), 409)
+            return
     result = manualcmd.get_job().start(command, cwd=cwd)
     if not result.get("ok"):
         _respond(handler, result.get("error", "could not run"), 400)
@@ -3318,7 +3431,15 @@ def h_dse_start(handler: Any) -> None:
     body = getattr(handler, "_body", {})
     design_dir = _get_active_design_dir()
     if not design_dir:
-        _respond(handler, "no active design dir", 400)
+        _respond(handler, "No project is open. Open one on Setup, then start the sweep.", 400)
+        return
+    why = _design_refusal(handler, design_dir)
+    if why:
+        _respond(handler, why, 409)
+        return
+    busy = _other_flow_busy()
+    if busy:
+        _respond(handler, busy, 409)
         return
     ws_err = _whitespace_path_error(design_dir)
     if ws_err:
@@ -3326,7 +3447,8 @@ def h_dse_start(handler: Any) -> None:
         return
     config_file = _config_file_for(design_dir)
     if config_file is None:
-        _respond(handler, "no config file in design dir", 400)
+        _respond(handler, "This project has no config file (config.json or config.yaml). "
+                 "Create one on Setup, then start the sweep.", 400)
         return
     spec = {"axes": body.get("axes") or [], "mode": body.get("mode") or "grid"}
     try:
@@ -4287,6 +4409,10 @@ def h_fix_apply(handler: Any) -> None:
     """Apply a fix: save it (config file or this run only), then start a run
     resumed from the old one at the first step that reads it (or the whole
     flow). Returns the new run's tag and the Undo token of a config change."""
+    why = _design_refusal(handler, _get_active_design_dir())
+    if why:
+        _respond(handler, why, 409)
+        return
     _apply_fix(handler, getattr(handler, "_body", {}) or {})
 
 

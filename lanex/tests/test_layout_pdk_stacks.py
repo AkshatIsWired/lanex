@@ -346,7 +346,7 @@ def test_gf180_layout_stacks_in_3d_with_its_own_lyp(tmp_path, no_gds3d_install):
 
 
 # ----------------------------------------------------------------- viewer display env
-def test_manual_console_runs_with_the_wsl_viewer_env(monkeypatch):
+def test_manual_console_runs_with_the_wsl_viewer_env(monkeypatch, tmp_path):
     from lanex.controller import manualcmd
 
     monkeypatch.setattr(platform_env, "wsl_gui_env",
@@ -355,7 +355,7 @@ def test_manual_console_runs_with_the_wsl_viewer_env(monkeypatch):
     monkeypatch.setattr(manualcmd.ManualJob, "_run",
                         lambda self, argv, cwd, env, shown: (seen.update(env=env), setattr(self, "_running", False)))
     job = manualcmd.ManualJob()
-    res = job.start("klayout -v")
+    res = job.start("klayout -v", cwd=str(tmp_path))
     assert res["ok"], res
     job._thread.join(5)
     assert seen["env"]["GDK_BACKEND"] == "x11,*" and seen["env"]["LIBGL_ALWAYS_SOFTWARE"] == "1"

@@ -3,7 +3,18 @@
 // EventSource so we don't poll. The bus of installer events is folded into
 // the same stream by the server.
 
+import { state } from "./state.js";
+
 const base = "";
+
+// The project this window shows, on every POST: the server refuses to start a
+// run, sweep or Console command when it differs from the project it has open
+// (a window showing a missing folder keeps the previous project active there;
+// another window may have switched). Encoded: a header can't carry "é" or "₹".
+function shownDesign() {
+  const d = state.designMissing || state.designDir || "";
+  return d ? encodeURIComponent(d) : "";
+}
 
 // Default request timeout. A hung/slow server must not freeze the UI forever:
 // AbortController fires after this and the call rejects with a clear message.
@@ -18,6 +29,10 @@ async function _fetch(path, init) {
     // run names should read in the person's own time.
     "X-LanEx-UTC-Offset": String(-new Date().getTimezoneOffset())
   }, init.headers || {});
+  if (init.method === "POST" && !headers["X-LanEx-Design"]) {
+    const d = shownDesign();
+    if (d) headers["X-LanEx-Design"] = d;
+  }
   // Per-call AbortController + timeout (init.timeout overrides; timeout: 0
   // disables the abort entirely; init.signal still honoured).
   const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
