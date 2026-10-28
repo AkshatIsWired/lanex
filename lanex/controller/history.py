@@ -72,26 +72,39 @@ def _started_ts(run_dir: Path, dir_mtime: Optional[float] = None) -> float:
     return min(cands) if cands else 0.0
 
 
-# Start times by run folder: (folder mtime when read, start). A run's start
-# never changes; annotating it only moves the folder mtime forward, so an
-# entry is reused while the folder mtime has not gone back (a folder deleted
-# and re-created under the same tag is read again).
+# Start times by run folder: (folder mtime when read, folder identity, start).
+# A run's start never changes; annotating it only moves the folder mtime
+# forward, so an entry is reused while the folder mtime has not gone back AND
+# the folder is the same one: same inode and same ``resolved.json`` (written
+# once, when the run starts). A folder deleted and re-created under the same
+# tag (a re-run with overwrite) is read again, even when the file system hands
+# out the old inode number.
 _START_CACHE: Dict[str, tuple] = {}
+
+
+def _run_identity(run_dir: Path, st: os.stat_result) -> tuple:
+    try:
+        rmt = (run_dir / "resolved.json").stat().st_mtime
+    except OSError:
+        rmt = None
+    return (st.st_ino, rmt)
 
 
 def started_ts(run_dir: Path) -> float:
     key = str(run_dir)
     try:
-        mt = run_dir.stat().st_mtime
+        st = run_dir.stat()
     except OSError:
         return 0.0
+    mt = st.st_mtime
+    ident = _run_identity(run_dir, st)
     hit = _START_CACHE.get(key)
-    if hit and hit[0] <= mt:
-        return hit[1]
+    if hit and hit[0] <= mt and hit[1] == ident:
+        return hit[2]
     ts = _started_ts(run_dir, mt)
     if len(_START_CACHE) > 8000:
         _START_CACHE.clear()
-    _START_CACHE[key] = (mt, ts)
+    _START_CACHE[key] = (mt, ident, ts)
     return ts
 
 
