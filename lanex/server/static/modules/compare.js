@@ -6,6 +6,7 @@ import { state } from "./state.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
 import { gatherRunsScoped, designLabel } from "./context.js";
 import { icon } from "./icons.js";
+import { localeNum } from "./intlcache.js";
 
 // The run's verdict as the Runs page reads it: a run that finished with a
 // timing warning is not a failure.
@@ -237,7 +238,7 @@ export function summaryCellHtml(row) {
 function shortMetric(v) {
   const r = fmt.metric(v);
   if (typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 100 && Number(r) === v) {
-    return v.toLocaleString("en-US", { maximumFractionDigits: 3 });
+    return localeNum(v, "en-US", { maximumFractionDigits: 3 });
   }
   return r;
 }

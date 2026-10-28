@@ -406,3 +406,8 @@ body.theme-light .mc-src-ic { color: var(--accent); }
 .cr-view b { color: var(--text-strong); }
 .cr-check { font-size: 13px; display: flex; align-items: flex-start; gap: 8px; }
 .cr-form-act { display: flex; align-items: center; gap: 10px; }
+
+/* Only the family rows near the list's view are laid out and painted; the
+   rules section below the library likewise until it is scrolled to. */
+.cl-fam { content-visibility: auto; contain-intrinsic-size: auto 54px; }
+#sec-cells #cl-rules { content-visibility: auto; contain-intrinsic-size: auto 1500px; }

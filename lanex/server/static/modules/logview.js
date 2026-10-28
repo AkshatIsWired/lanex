@@ -10,6 +10,7 @@
 // the page may add heading rows of its own (where each step starts).
 
 import { icon } from "./icons.js";
+import { localeNum } from "./intlcache.js";
 
 const ROW = 20;          // CSS px per line (flow.css .lv-row)
 const OVER = 30;         // extra rows rendered above and below the view
@@ -183,8 +184,8 @@ export class LogView {
     wb.textContent = w + (w === 1 ? " warning line" : " warning lines");
     wb.title = "Next warning. Counts the lines of this log marked as a warning; the run's warning count (from warning.log) lists each warning once.";
     const n = this.lines.length, shown = this.view.length;
-    const lines = (k) => k.toLocaleString("en-US") + (k === 1 ? " line" : " lines");
-    this.$(".lv-count").textContent = shown === n ? lines(this._n || n) : shown.toLocaleString("en-US") + " of " + lines(this._n || n);
+    const lines = (k) => localeNum(k) + (k === 1 ? " line" : " lines");
+    this.$(".lv-count").textContent = shown === n ? lines(this._n || n) : localeNum(shown) + " of " + lines(this._n || n);
     const em = this.$(".lv-empty");
     em.hidden = this.view.length > 0;
     em.textContent = n ? "No line matches." : (this._empty || "Nothing here yet.");

@@ -14,6 +14,7 @@ import { icon } from "./icons.js";
 import { confirmDialog, holdFocus } from "./dialog.js";
 import { fmtDur } from "./reportcard.js";
 import * as FS from "./flowstages.js";
+import { localeNum } from "./intlcache.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const MAX_RUNS = 64;               // controller/dse.py MAX_COMBOS
@@ -299,7 +300,7 @@ function plotSvg(pts) {
       (hit ? "" : "<text x='" + cx.toFixed(1) + "' y='" + (cy - 10).toFixed(1) + "' text-anchor='middle'>" + esc(lab) + "</text>") + "</g>";
   }).join("");
   const zero = y0 < 0 && y1 > 0 ? "<line class='sw-zero' x1='" + L + "' x2='" + (W - R) + "' y1='" + Y(0).toFixed(1) + "' y2='" + Y(0).toFixed(1) + "'/>" : "";
-  const tick = (v) => (Math.abs(v) >= 100 ? Math.round(v).toLocaleString("en-US") : v.toFixed(2));
+  const tick = (v) => (Math.abs(v) >= 100 ? localeNum(Math.round(v)) : v.toFixed(2));
   return "<figure class='sw-plot'><svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='Std-cell area against setup slack for each point'>" +
     "<line class='sw-ax' x1='" + L + "' x2='" + L + "' y1='" + T + "' y2='" + (H - B) + "'/><line class='sw-ax' x1='" + L + "' x2='" + (W - R) + "' y1='" + (H - B) + "' y2='" + (H - B) + "'/>" + zero +
     "<text class='sw-tk' x='" + (L - 6) + "' y='" + (T + 4) + "' text-anchor='end'>" + tick(y1) + "</text><text class='sw-tk' x='" + (L - 6) + "' y='" + (H - B) + "' text-anchor='end'>" + tick(y0) + "</text>" +

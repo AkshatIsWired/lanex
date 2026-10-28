@@ -25,6 +25,7 @@ import * as M from "./analytics-model.js";
 import * as V from "./verify-model.js";
 import { fmtDur } from "./reportcard.js";
 import * as C from "./analytics-charts.js";
+import { localeNum, localeDateTime } from "./intlcache.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -372,7 +373,7 @@ function renderOverview() {
   if (row.pdk || stages.pdk) meta.push(esc((row.pdk || stages.pdk) + (row.scl || stages.scl ? " / " + (row.scl || stages.scl) : "")));
   if (row.started_at) {
     const d = new Date(row.started_at);
-    if (!Number.isNaN(d.getTime())) meta.push(esc(d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })));
+    if (!Number.isNaN(d.getTime())) meta.push(esc(localeDateTime(d, undefined, { dateStyle: "medium", timeStyle: "short" })));
   }
   if (Number.isFinite(row.wall_time_s)) meta.push(esc(fmtDur(row.wall_time_s)) + " of step time");
   // Verify's step totals (V.stepTotals): the same "34 of 76" Flow shows.
@@ -469,7 +470,7 @@ function kpiArea() {
   });
 }
 
-function trimNum(x) { return Number(x.toFixed(3)).toLocaleString("en-US", { maximumFractionDigits: 3 }); }
+function trimNum(x) { return localeNum(Number(x.toFixed(3)), "en-US", { maximumFractionDigits: 3 }); }
 
 function kpiPower() {
   const k = "power__total";
@@ -679,14 +680,14 @@ function renderCellRows() {
   const list = q ? cells.filter((c) => String(c.cell).toLowerCase().includes(q)) : cells;
   const cnt = document.getElementById("an-cells-count");
   const pfx = commonPrefix(cells.map((c) => String(c.cell)));
-  if (cnt) cnt.textContent = cells.length + " cell types · " + total.toLocaleString("en-US") + " instances" + (pfx ? " · names without the " + pfx + " prefix" : "") + " · from the Cells by Master report";
+  if (cnt) cnt.textContent = cells.length + " cell types · " + localeNum(total) + " instances" + (pfx ? " · names without the " + pfx + " prefix" : "") + " · from the Cells by Master report";
   const LIMIT = 12;
   const max = Math.max(...cells.map((c) => Number(c.count)));
   const pre = commonPrefix(cells.map((c) => String(c.cell)));
   host.innerHTML = C.barList(list.map((c, i) => ({
     label: pre ? String(c.cell).slice(pre.length) : c.cell, mono: true, value: Number(c.count), tone: PHYSICAL_ONLY.test(String(c.cell).replace(/^.*__/, "")) ? "muted" : "s1",
-    text: esc(Number(c.count).toLocaleString("en-US")) + " <span class='muted'>" + C.pctText((Number(c.count) / total) * 100) + "</span>",
-    tip: c.cell + "\n" + Number(c.count).toLocaleString("en-US") + " instances · " + C.pctText((Number(c.count) / total) * 100) + " of all",
+    text: esc(localeNum(Number(c.count))) + " <span class='muted'>" + C.pctText((Number(c.count) / total) * 100) + "</span>",
+    tip: c.cell + "\n" + localeNum(Number(c.count)) + " instances · " + C.pctText((Number(c.count) / total) * 100) + " of all",
     _i: i,
   })), { max }) + (!q && list.length > LIMIT ? "<button class='btn btn-ghost btn-sm an-more' data-an-more='Show all " + list.length + "'>Show all " + list.length + "</button>" : "") +
     (q && !list.length ? "<p class='muted'>No cell matches “" + esc(q) + "”.</p>" : "");

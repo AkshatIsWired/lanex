@@ -1882,6 +1882,45 @@ check("console: Manual rail item is gone, go('manual') opens the drawer", () => 
   assert.match(nav, /tab === "manual" \|\| tab === "console"/);
 });
 
+// ---------- performance pass: cached formatters and the compiled matcher ----------
+const IC = await import(toUrl(resolve(MOD, "intlcache.js")));
+check("intlcache: cached number formats match toLocaleString exactly", () => {
+  const nums = [0, -0, 1, -1, 12.5, 1234.5678, -98765.4321, 1e6, 0.000123, 7214.42, 1226];
+  const opts = [undefined, { maximumFractionDigits: 0 }, { maximumFractionDigits: 2 }, { maximumFractionDigits: 3 },
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 }, { minimumFractionDigits: 0, maximumFractionDigits: 4 }];
+  for (const n of nums) for (const o of opts) {
+    assert.equal(IC.localeNum(n, "en-US", o), n.toLocaleString("en-US", o));
+    assert.equal(IC.localeNum(n, "en-US", o), n.toLocaleString("en-US", o));   // second call: from the cache
+  }
+  assert.equal(IC.localeNum(1234567), (1234567).toLocaleString("en-US"));
+});
+check("intlcache: cached date formats match Date#toLocale*String", () => {
+  const ds = [new Date(2026, 9, 28, 4, 19, 7), new Date(2025, 0, 1, 23, 59, 59), new Date(2026, 5, 3, 12, 0, 0)];
+  for (const d of ds) {
+    assert.equal(IC.localeTime(d, [], { hour: "2-digit", minute: "2-digit" }), d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    assert.equal(IC.localeDate(d, [], { day: "numeric", month: "short", year: undefined }), d.toLocaleDateString([], { day: "numeric", month: "short", year: undefined }));
+    assert.equal(IC.localeDate(d, [], { day: "numeric", month: "short", year: "numeric" }), d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }));
+    assert.equal(IC.localeDateTime(d, undefined, { dateStyle: "medium", timeStyle: "short" }), d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }));
+    // no options: each method's own defaults (date and time / date / time)
+    assert.equal(IC.localeDateTime(d), d.toLocaleString());
+    assert.equal(IC.localeDate(d), d.toLocaleDateString());
+    assert.equal(IC.localeTime(d), d.toLocaleTimeString());
+    assert.equal(IC.localeTime(d, "en-US", { hour: "numeric" }), d.toLocaleTimeString("en-US", { hour: "numeric" }));
+    assert.equal(IC.localeDate(d, "en-GB", { weekday: "long" }), d.toLocaleDateString("en-GB", { weekday: "long" }));
+  }
+});
+check("cells: the compiled matcher catches exactly what per-pattern globs catch", () => {
+  const names = ["sky130_fd_sc_hd__dlygate4sd3_1", "sky130_fd_sc_hd__buf_16", "sky130_fd_sc_hd__buf_1", "sky130_fd_sc_hd__a2bb2o_1",
+    "a.b", "axb", "lib$cell", "x(1)", "sky130_fd_sc_hd__probe_p_8", "sky130_fd_sc_hd__lpflow_inputiso0n_1", "[weird]"];
+  const lists = [[], ["*dlygate*"], ["*buf_16", "*probe_p_*", "*lpflow*"], ["a?b"], ["a.b"], ["lib$cell"], ["x(1)"], ["[weird]"], ["*"], ["sky130_fd_sc_hd__buf_?"]];
+  for (const pats of lists) {
+    const want = names.filter((n) => CM.globMatch(n, pats).length > 0);
+    const got = names.filter(CM.globMatcher(pats));
+    assert.deepEqual(got, want, "patterns " + JSON.stringify(pats));
+    assert.equal(CM.globMatcher(pats), CM.globMatcher(pats.slice()), "same patterns: one compiled matcher");
+  }
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 

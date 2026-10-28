@@ -8,6 +8,7 @@
 // ratio -> %) and never derives a new silicon number.
 
 import * as FS from "./flowstages.js";
+import { localeNum } from "./intlcache.js";
 
 // ---------- key anatomy ----------------------------------------------------
 
@@ -55,7 +56,7 @@ const US = "en-US";
 
 // Fixed decimals, grouped, trailing zeros trimmed only when `trim`.
 function fixed(n, d, trim) {
-  let s = n.toLocaleString(US, { minimumFractionDigits: trim ? 0 : d, maximumFractionDigits: d });
+  let s = localeNum(n, US, { minimumFractionDigits: trim ? 0 : d, maximumFractionDigits: d });
   if (s === "-0") s = "0";
   return s.replace(/^-/, "−");
 }
