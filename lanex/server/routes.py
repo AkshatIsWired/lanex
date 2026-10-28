@@ -2280,6 +2280,9 @@ def h_layout_sources(handler: Any) -> None:
     from ..controller import layoutview
     tag = _query_param(handler.path, "tag")
     run_dir = _resolve_run_dir(tag)
+    if run_dir is None and _live_tag_pending(tag):
+        _respond(handler, {"tag": tag, "stages": [], "pending": True, "engine": layoutview.available()})
+        return
     if run_dir is None:
         _respond(handler, "run not found", 404)
         return
@@ -3059,10 +3062,21 @@ def h_run_explain(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def _live_tag_pending(tag: Optional[str]) -> bool:
+    """True when *tag* is the run starting right now whose folder LibreLane
+    hasn't made yet: pages that load it on the run's first event get an empty
+    answer instead of a 404 (a console error at every run start)."""
+    live = _live_run_dir()
+    return bool(tag and live and Path(live).name == tag and not Path(live).is_dir())
+
+
 def h_run_stages(handler: Any) -> None:
     """Per-step metrics, runtime and peak memory for a run (Analytics)."""
     tag = _query_param(handler.path, "tag")
     run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None and _live_tag_pending(tag):
+        _respond(handler, {"tag": tag, "steps": [], "pending": True})
+        return
     if run_dir is None:
         _respond(handler, "run not found", 404)
         return
