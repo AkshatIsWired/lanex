@@ -99,6 +99,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_macos_install": "The macOS install paths (GDS3D app, engines, XQuartz display detection, arch/version guards) stay correct without a Mac in CI.",
     "test_appwindow": "The standalone app-window launcher picks a real browser per platform and can never leave the user with no UI.",
     "test_runner": "The flow runner streams librelane's own per-step events and full-detail logs (the __librelane__/SUBPROCESS bridge) — local runs stay first-class.",
+    "test_runresources": "Runs size LibreLane's thread counts to the PC without overriding the user's config, record and reproduce them, warn on low memory, and stream log lines in complete, ordered batches.",
     "test_tools_container_grid": "The Tools grid only advertises container launches the engine+image can actually deliver.",
     "test_fixes_gf180": "gf180/non-sky130 PDKs keep working: root-owned ciel store recovery and the generalized KLayout .lyp lookup.",
     "test_fixes_audit": "The audited round-19 fixes stay fixed: security confinement, DSE sweep manifests, SSE robustness.",
