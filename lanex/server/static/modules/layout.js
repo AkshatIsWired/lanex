@@ -706,7 +706,7 @@ function renderLayers() {
           const purpose = L.purpose && !/^(drawing|drw)$/i.test(L.purpose) ? L.purpose : "";
           return "<div class='lx-layer" + (S.vis.has(L.id) ? "" : " is-off") + (in3d && !c3 ? " is-flat" : "") + "' data-lid='" + L.id + "' title='" +
             esc((L.about ? L.about[0].toUpperCase() + L.about.slice(1) + ". " : "") + L.label + ", GDS layer " + L.src + "." +
-              (in3d && !c3 ? " Not part of the 3D stack." : "") + " Alt-click shows only this layer.") + "'>" +
+              (in3d && !c3 ? " Not in this 3D view: outside the PDK's 3D stack, or nothing of it here." : "") + " Alt-click shows only this layer.") + "'>" +
             "<label class='lx-check'><input type='checkbox' data-lid='" + L.id + "'" + (S.vis.has(L.id) ? " checked" : "") + "/>" +
             "<i class='lx-sw" + (c3 ? " is-3d" : "") + "' style='" + sw + "'></i><span class='lx-ln'>" + esc(L.name) + "</span>" +
             (purpose ? "<em class='lx-purpose'>" + esc(purpose) + "</em>" : "") + "</label>" +
