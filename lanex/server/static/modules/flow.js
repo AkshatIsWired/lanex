@@ -567,7 +567,12 @@ function keyNumber(st) {
       const bb = String(m["design__die__bbox"] || "").split(/\s+/).map(Number);
       return bb.length === 4 && bb.every(Number.isFinite) ? "die " + fmtUm(bb[2] - bb[0]) + " × " + fmtUm(bb[3] - bb[1]) + " µm" : "";
     }
-    case "pdn": return st.status === "done" ? "VPWR / VGND rails" : "";
+    case "pdn": {
+      // The run's own net names (VPWR/VGND on sky130, VDD/VSS on gf180/IHP).
+      const pn = (F.rs && F.rs.power_nets) || {};
+      const nets = [...(pn.vdd || []), ...(pn.gnd || [])];
+      return st.status === "done" ? (nets.length ? nets.join(" / ") + " rails" : "power rails") : "";
+    }
     case "placement": return n("design__instance__utilization") != null ? "core " + Math.round(n("design__instance__utilization") * 100) + " % full" : "";
     case "cts": return n("clock__skew__worst_setup") != null ? "clock skew " + Math.abs(n("clock__skew__worst_setup") * 1000).toFixed(0) + " ps" : "";
     case "routing": return n("route__wirelength") != null ? fmtWire(n("route__wirelength")) + " of wire" + (n("route__drc_errors") ? " · " + int(n("route__drc_errors")) + " route DRC" : "") : "";

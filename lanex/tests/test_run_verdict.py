@@ -139,6 +139,12 @@ def test_resumed_run_counts_reused_steps(tmp_path):
     assert child.is_dir()
 
 
+def test_power_nets_come_from_the_run_config():
+    assert history.power_nets({"VDD_PIN": "VPWR", "GND_PIN": "VGND"}) == {"vdd": ["VPWR"], "gnd": ["VGND"]}
+    assert history.power_nets({"VDD_NETS": ["VDD"], "GND_NETS": ["VSS"], "VDD_PIN": "x"}) == {"vdd": ["VDD"], "gnd": ["VSS"]}
+    assert history.power_nets({}) == {"vdd": [], "gnd": []}
+
+
 def test_fix_sheet_attributes_a_sweep_value_to_the_run_not_the_config(tmp_path):
     from lanex.controller import branch
     (tmp_path / "config.yaml").write_text("FP_CORE_UTIL: 55\nCLOCK_PERIOD: 10\n", encoding="utf-8")

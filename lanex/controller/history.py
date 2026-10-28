@@ -2076,8 +2076,25 @@ def run_stages(run_dir: str | Path) -> Dict[str, Any]:
         "flow": (meta or {}).get("flow") or "",
         "clock_period": cfg.get("CLOCK_PERIOD"),
         "clock_port": cfg.get("CLOCK_PORT"),
+        # The power and ground net names this run used (VPWR/VGND on sky130,
+        # VDD/VSS on gf180 and IHP): from its own resolved config.
+        "power_nets": power_nets(cfg),
         "steps": steps,
     }
+
+
+def power_nets(cfg: Dict[str, Any]) -> Dict[str, List[str]]:
+    """``{vdd: [...], gnd: [...]}`` from a resolved config: ``VDD_NETS`` /
+    ``GND_NETS`` when set, else the PDK's ``VDD_PIN`` / ``GND_PIN``."""
+    def names(*keys: str) -> List[str]:
+        for k in keys:
+            v = cfg.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.split()
+            if isinstance(v, list) and v:
+                return [str(x) for x in v if x]
+        return []
+    return {"vdd": names("VDD_NETS", "VDD_PIN"), "gnd": names("GND_NETS", "GND_PIN")}
 
 
 def diff_runs(run_dir_a: str | Path, run_dir_b: str | Path) -> Dict[str, Any]:

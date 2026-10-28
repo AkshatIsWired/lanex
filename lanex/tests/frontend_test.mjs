@@ -1189,6 +1189,12 @@ check("layout: one Layout tab; Preview is gone everywhere", () => {
 // ---------- P0 glue: one context, links, stages, keys --------------------------------
 const FS = await import(toUrl(resolve(MOD, "flowstages.js")));
 
+check("tools: PDK family fallback knows sky130, gf180mcu and IHP", () => {
+  assert.equal(toolsModule.pdkFamily("sky130A"), "sky130");
+  assert.equal(toolsModule.pdkFamily("gf180mcuD"), "gf180mcu");
+  assert.equal(toolsModule.pdkFamily("ihp-sg13g2"), "ihp-sg13g2");
+});
+
 check("steps: one count meaning (turned-off steps out of the total, current = done + 1)", () => {
   const st = [...Array(76).fill("done"), "skipped", "skipped", "skipped", "skipped"];
   assert.deepEqual(FS.stepCounts(st), { done: 76, total: 76, skipped: 4, current: 76 });

@@ -179,8 +179,8 @@ function defaultPower(info) {
   return {
     vdd_pin: p.vdd.length > 1 ? p.vdd.join("|") : (p.vdd[0] || ""),
     gnd_pin: p.gnd.length > 1 ? p.gnd.join("|") : (p.gnd[0] || ""),
-    vdd_net: D.inspect.vdd || rules.vdd || "VPWR",
-    gnd_net: D.inspect.gnd || rules.gnd || "VGND",
+    vdd_net: D.inspect.vdd || rules.vdd || (/sky130/i.test(state.selectedPdk || C.pdk || "") ? "VPWR" : "VDD"),
+    gnd_net: D.inspect.gnd || rules.gnd || (/sky130/i.test(state.selectedPdk || C.pdk || "") ? "VGND" : "VSS"),
   };
 }
 

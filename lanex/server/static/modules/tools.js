@@ -12,6 +12,15 @@ import { confirmDialog } from "./dialog.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 
+// A PDK's family when the catalog doesn't say (pdk_catalog.py's names).
+export function pdkFamily(pdk) {
+  const p = String(pdk || "");
+  if (p.startsWith("sky130")) return "sky130";
+  if (p.startsWith("gf180mcu")) return "gf180mcu";
+  if (/^ihp-sg13g2/i.test(p) || /^sg13g2/i.test(p)) return "ihp-sg13g2";
+  return p;
+}
+
 export function normalizeUnavailableLibraries(value) {
   if (Array.isArray(value)) {
     return Object.fromEntries(
@@ -823,7 +832,7 @@ export function renderPdkStore(info) {
   drop.querySelectorAll(".pdk-uninstall-btn").forEach(btn => {
     btn.addEventListener("click", async () => {
       const pdk = btn.dataset.pdk;
-      const family = (catalog[pdk] && catalog[pdk].family) || (pdk.startsWith("sky130") ? "sky130" : pdk.startsWith("gf180mcu") ? "gf180mcu" : pdk);
+      const family = (catalog[pdk] && catalog[pdk].family) || pdkFamily(pdk);
       if (!(await confirmDialog({ title: "Uninstall PDK Family", danger: true, confirmText: "Uninstall",
         body: "Uninstalling " + pdk + " will remove the " + family + " family and all installed variants of this PDK from disk. Continue?" }))) return;
       btn.textContent = "…";
@@ -836,12 +845,12 @@ export function renderPdkStore(info) {
           if (state.tools?.pdk) {
             const removedFamily = result.family || family;
             state.tools.pdk.installed_pdks = (state.tools.pdk.installed_pdks || []).filter((x) => {
-              const xFam = (catalog[x] && catalog[x].family) || (x.startsWith("sky130") ? "sky130" : x.startsWith("gf180mcu") ? "gf180mcu" : x);
+              const xFam = (catalog[x] && catalog[x].family) || pdkFamily(x);
               return xFam !== removedFamily;
             });
             if (state.tools.pdk.installed_sizes_mb) {
               for (const k of Object.keys(state.tools.pdk.installed_sizes_mb)) {
-                const kFam = (catalog[k] && catalog[k].family) || (k.startsWith("sky130") ? "sky130" : k.startsWith("gf180mcu") ? "gf180mcu" : k);
+                const kFam = (catalog[k] && catalog[k].family) || pdkFamily(k);
                 if (kFam === removedFamily) delete state.tools.pdk.installed_sizes_mb[k];
               }
             }
