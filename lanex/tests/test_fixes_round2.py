@@ -48,6 +48,8 @@ def test_build_lint_command_local_and_container():
     # A testbench with `timescale next to design files without one is the
     # normal case, not a warning (TIMESCALEMOD).
     assert argv[argv.index("--timescale") + 1] == "1ns/1ps"
+    # Errors where LibreLane's lint step errors (LINTER_ERROR_ON_LATCH).
+    assert "--Werror-LATCH" in argv and "--Werror-MULTIDRIVEN" in argv
 
     cargv = lint.build_lint_command("/d", sources=["src/a.v"], run_mode="container",
                                     engine="podman", image="img:1")
