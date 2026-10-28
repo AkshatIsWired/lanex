@@ -344,6 +344,50 @@ def _gb(text: Any) -> Optional[float]:
     return float(m.group(1)) * _UNIT[m.group(2).upper()]
 
 
+# Each run's peak, by run folder and what says it changed: a run's step folders
+# are only read again when one was added or its newest one changed. Preflight
+# asks on every design load and PDK pick; reading ~80 step folders each time
+# cost ~0.3 s on a /mnt/c project.
+_PEAK_CACHE: Dict[str, Any] = {}
+_PEAK_CACHE_MAX = 64
+
+
+def _step_no(entry: Any) -> int:
+    """LibreLane numbers its step folders ('44-openroad-detailedrouting')."""
+    m = re.match(r"(\d+)-", entry.name)
+    return int(m.group(1)) if m else -1
+
+
+def _run_peak(path: str, name: str) -> Optional[Dict[str, Any]]:
+    try:
+        steps = [s for s in os.scandir(path) if s.is_dir()]
+        newest = max(steps, key=_step_no) if steps else None
+        key = (os.stat(path).st_mtime_ns, len(steps), newest.stat().st_mtime_ns if newest else 0)
+    except Exception:
+        return None
+    hit = _PEAK_CACHE.get(path)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    best: Optional[Dict[str, Any]] = None
+    for s in steps:
+        try:
+            files = [f for f in os.scandir(s.path) if f.name.endswith(".process_stats.json")]
+        except Exception:
+            continue
+        for f in files:
+            try:
+                d = json.loads(Path(f.path).read_text(encoding="utf-8"))
+                gb = _gb((d.get("peak_resources") or {}).get("memory_rss"))
+            except Exception:
+                gb = None
+            if gb is not None and (best is None or gb > best["gb"]):
+                best = {"gb": round(gb, 2), "tag": name, "step": s.name}
+    if len(_PEAK_CACHE) >= _PEAK_CACHE_MAX:
+        _PEAK_CACHE.clear()
+    _PEAK_CACHE[path] = (key, best)
+    return best
+
+
 def last_run_peak_gb(design_dir: Any) -> Optional[Dict[str, Any]]:
     """The biggest memory any step of this design's newest finished run used
     (LibreLane's ``*.process_stats.json``): ``{gb, tag, step}`` or None."""
@@ -354,24 +398,7 @@ def last_run_peak_gb(design_dir: Any) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     for e in dirs[:6]:
-        best: Optional[Dict[str, Any]] = None
-        try:
-            steps = [s for s in os.scandir(e.path) if s.is_dir()]
-        except Exception:
-            continue
-        for s in steps:
-            try:
-                files = [f for f in os.scandir(s.path) if f.name.endswith(".process_stats.json")]
-            except Exception:
-                continue
-            for f in files:
-                try:
-                    d = json.loads(Path(f.path).read_text(encoding="utf-8"))
-                    gb = _gb((d.get("peak_resources") or {}).get("memory_rss"))
-                except Exception:
-                    gb = None
-                if gb is not None and (best is None or gb > best["gb"]):
-                    best = {"gb": round(gb, 2), "tag": e.name, "step": s.name}
+        best = _run_peak(e.path, e.name)
         if best:
             return best
     return None
