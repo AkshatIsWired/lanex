@@ -278,6 +278,17 @@ class FlowRunner:
         # (issue #4). Written once, the first time the run dir is known.
         self._gui_meta: Optional[Dict[str, Any]] = None
         self._gui_meta_written = False
+        # Log lines are sent in batches (one ``log`` event carrying several
+        # lines joined by "\n", which the page already splits) instead of one
+        # event per line: a big run prints ~1,000-2,000 lines a second, and an
+        # event each kept the server busy and the page repainting. Every other
+        # event first flushes the lines before it, so the order is unchanged.
+        self._emit_lock = threading.RLock()
+        self._log_buf: List[str] = []
+        self._log_level: Optional[str] = None
+        self._log_t0 = 0.0
+        self._log_cv = threading.Condition(self._emit_lock)
+        self._log_flusher: Optional[threading.Thread] = None
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -573,7 +584,63 @@ class FlowRunner:
 
     # --------------------------------------------------------------- worker body
 
+    # Log batching: a batch goes out after LOG_BATCH_S from its first line, at
+    # LOG_BATCH_LINES lines, or before any other event, whichever comes first.
+    LOG_BATCH_S = 0.15
+    LOG_BATCH_LINES = 200
+    _LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+
     def _emit(self, kind: EventType, payload: Optional[Dict[str, Any]] = None) -> None:
+        with self._emit_lock:
+            if kind == EventType.LOG and payload and set(payload) <= {"message", "level"} \
+                    and isinstance(payload.get("message"), str):
+                self._log_buf.append(payload["message"])
+                lvl = payload.get("level")
+                if lvl and self._LEVELS.get(lvl, 0) > self._LEVELS.get(self._log_level or "", 0):
+                    self._log_level = lvl
+                if len(self._log_buf) == 1:
+                    self._log_t0 = time.monotonic()
+                    self._start_log_flusher()
+                    self._log_cv.notify_all()
+                if len(self._log_buf) >= self.LOG_BATCH_LINES:
+                    self._flush_logs()
+                return
+            self._flush_logs()
+            self._emit_now(kind, payload)
+
+    def _flush_logs(self) -> None:
+        """Send the buffered log lines as one ``log`` event (call with the lock)."""
+        if not self._log_buf:
+            return
+        lines, self._log_buf = self._log_buf, []
+        body: Dict[str, Any] = {"message": "\n".join(lines)}
+        if self._log_level:
+            body["level"] = self._log_level
+        self._log_level = None
+        self._emit_now(EventType.LOG, body)
+
+    def _start_log_flusher(self) -> None:
+        if self._log_flusher is not None and self._log_flusher.is_alive():
+            return
+        self._log_flusher = threading.Thread(target=self._log_flush_loop, daemon=True,
+                                             name="librelane.gui.FlowRunner.logflush")
+        self._log_flusher.start()
+
+    def _log_flush_loop(self) -> None:
+        """Flush a batch LOG_BATCH_S after its first line. Sleeps on the
+        condition while nothing is buffered (no idle wake-ups)."""
+        with self._emit_lock:
+            while True:
+                if not self._log_buf:
+                    self._log_cv.wait()
+                    continue
+                left = self._log_t0 + self.LOG_BATCH_S - time.monotonic()
+                if left > 0:
+                    self._log_cv.wait(left)
+                    continue
+                self._flush_logs()
+
+    def _emit_now(self, kind: EventType, payload: Optional[Dict[str, Any]] = None) -> None:
         seq = self._next_seq()
         body = _safe_jsonable(payload) if payload else {}
         tag = Path(self._run_dir).name if self._run_dir else None
@@ -650,6 +717,23 @@ class FlowRunner:
         except Exception:  # pragma: no cover - fs/permission dependent
             _log.debug("could not persist gui-run.json", exc_info=True)
             self._gui_meta_written = True  # don't retry every step
+
+    def _emit_resources_note(self) -> None:
+        """One log line saying which thread counts LanEx sized to this PC (from
+        ``gui_meta["resources"]``), so the run's own log shows it."""
+        rec = (self._gui_meta or {}).get("resources") or {}
+        vals = rec.get("values") or {}
+        kept = rec.get("kept") or {}
+        if not vals and not kept:
+            return
+        msg = ""
+        if vals:
+            msg = ("Threads sized to this PC (" + (rec.get("reason") or "?") + "): " +
+                   " ".join(f"{k}={v}" for k, v in vals.items()) + ".")
+        if kept:
+            msg += (" " if msg else "") + "Left as set: " + ", ".join(
+                f"{k} ({src})" for k, src in kept.items()) + "."
+        self._emit(EventType.INFO, {"message": msg, "resources": rec})
 
     # ---- progress hooks (called from the patched FlowProgressBar) ----
 
@@ -814,6 +898,7 @@ class FlowRunner:
             flow = flow_factory(all_configs, **ctor_kwargs)
             self._flow = flow
             self._seed_step_graph(flow)
+            self._emit_resources_note()
 
             self._emit(
                 EventType.INFO,
@@ -1014,6 +1099,7 @@ class FlowRunner:
                 EventType.INFO,
                 {"message": "Container mode — running: " + " ".join(argv)},
             )
+            self._emit_resources_note()
             # Seed an immediate phase so the pipeline shows "preparing" the
             # instant the run starts, before any container stdout arrives.
             self._emit(
@@ -1158,6 +1244,7 @@ class FlowRunner:
                 EventType.INFO,
                 {"message": f"Container step-by-step — {len(sub)} steps; running one at a time."},
             )
+            self._emit_resources_note()
             self._run_container_step(0)
         except Exception as ex:
             self._error = f"{type(ex).__name__}: {ex}"

@@ -514,8 +514,19 @@ def reproduce_info(meta: Dict[str, Any], resolved: Optional[Dict[str, Any]],
         "librelane_version": tc.get("librelane_version") or rmeta.get("librelane_version") or None,
         "lanex_version": tc.get("lanex_version") or None,
         "branched_from": meta.get("branched_from") or None,
+        # Thread counts LanEx sized to the PC the run started on (they are in
+        # the command as -c values, so the script reruns with the same ones).
+        "threads": _threads_record(meta.get("resources")),
         "recorded": bool(line),
     }
+
+
+def _threads_record(res: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(res, dict) or not isinstance(res.get("values"), dict) or not res["values"]:
+        return None
+    vals = {str(k): v for k, v in res["values"].items() if isinstance(v, int)}
+    return {"values": vals, "reason": _comment(res.get("reason") or ""),
+            "source": _comment(res.get("source") or "")} if vals else None
 
 
 def reproduce_script(info: Dict[str, Any]) -> str:
