@@ -38,8 +38,64 @@ from .models import RunSummary, RunView, MetricSet, to_json
 # Kept conservative: pull every key from metrics.json and let the
 # SPA pick a curated subset for the hero cards.
 
+def _started_ts(run_dir: Path, dir_mtime: Optional[float] = None) -> float:
+    """When a run started, as an epoch time that annotating it never moves.
+
+    The run folder's own mtime is NOT a start time: pinning a run, writing a
+    note or importing it drops a file into the folder and bumps it, which made
+    an annotated old run jump to "newest" (and become the default run and
+    baseline). The earliest of the run's start traces is used instead:
+    ``resolved.json`` (LibreLane writes it once, when the run starts), the
+    ``written_at`` LanEx notes in ``gui-run.json`` when the first step starts,
+    and the folder mtime (only ever later than the start, but a copied run may
+    have nothing better)."""
+    cands: List[float] = []
+    if dir_mtime is None:
+        try:
+            dir_mtime = run_dir.stat().st_mtime
+        except OSError:
+            dir_mtime = None
+    if dir_mtime is not None:
+        cands.append(dir_mtime)
+    try:
+        cands.append((run_dir / "resolved.json").stat().st_mtime)
+    except OSError:
+        pass
+    gui = _read_json(run_dir / "gui-run.json")
+    wa = gui.get("written_at") if isinstance(gui, dict) else None
+    if isinstance(wa, str) and wa:
+        try:
+            cands.append(datetime.fromisoformat(wa).timestamp())
+        except (ValueError, OverflowError, OSError):
+            pass
+    return min(cands) if cands else 0.0
+
+
+# Start times by run folder: (folder mtime when read, start). A run's start
+# never changes; annotating it only moves the folder mtime forward, so an
+# entry is reused while the folder mtime has not gone back (a folder deleted
+# and re-created under the same tag is read again).
+_START_CACHE: Dict[str, tuple] = {}
+
+
+def started_ts(run_dir: Path) -> float:
+    key = str(run_dir)
+    try:
+        mt = run_dir.stat().st_mtime
+    except OSError:
+        return 0.0
+    hit = _START_CACHE.get(key)
+    if hit and hit[0] <= mt:
+        return hit[1]
+    ts = _started_ts(run_dir, mt)
+    if len(_START_CACHE) > 8000:
+        _START_CACHE.clear()
+    _START_CACHE[key] = (mt, ts)
+    return ts
+
+
 def _walk_runs(design_dir: Path) -> List[Path]:
-    """Return run dirs sorted newest-first by mtime."""
+    """Return run dirs sorted newest-first by start time (:func:`started_ts`)."""
     runs_root = design_dir / "runs"
     if not runs_root.is_dir():
         return []
@@ -55,9 +111,9 @@ def _walk_runs(design_dir: Path) -> List[Path]:
             continue
         if not stat.S_ISDIR(st.st_mode):
             continue
-        out.append((st.st_mtime, p))
-    out.sort(key=lambda x: x[0], reverse=True)
-    return [p for _, p in out]
+        out.append((started_ts(p), p.name, p))
+    out.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [p for _, _, p in out]
 
 
 def _read_json(path: Path) -> Any:
@@ -208,7 +264,8 @@ def _run_signature(run_dir: Path) -> tuple:
 
 # The cache is also kept on disk, so the first listing after LanEx starts (a
 # cold summary of 4 runs on /mnt/c measured 6.8 s; cached, 65 ms) is fast too.
-_CACHE_FILE_VERSION = 1
+# 2: summaries carry Verify's verdict, a stable started_at and lineage steps.
+_CACHE_FILE_VERSION = 2
 _cache_loaded = False
 _cache_dirty = False
 
@@ -269,6 +326,25 @@ def _summary_json(run: Path) -> Dict[str, Any]:
         _SUMMARY_CACHE[key] = (sig, doc)
         _cache_dirty = True
     return dict(doc)
+
+
+def mark_live(runs: List[Dict[str, Any]], live_run_dir: Optional[str]) -> List[Dict[str, Any]]:
+    """Set the live run's verdict to ``running`` (the run controller knows a
+    flow is live; its folder alone reads as stopped part-way)."""
+    if not live_run_dir:
+        return runs
+    try:
+        live = str(Path(live_run_dir).resolve())
+    except Exception:
+        return runs
+    for r in runs:
+        if r.get("run_dir") == live:
+            prev = r.get("verdict") or {}
+            done = r.get("steps_done")
+            r["verdict"] = {**prev, "state": "running",
+                            "label": "Running" + (f", {done} steps done" if done else "")}
+            r["success"] = False
+    return runs
 
 
 def list_runs(design_dir: str | Path) -> List[Dict[str, Any]]:
@@ -363,17 +439,49 @@ def _summarise(run_dir: Path) -> RunSummary:
         if v is not None:
             key[k] = v
 
+    # The verdict is Verify's (controller/verify.py), so Runs, the run bar,
+    # Analytics, Compare and Verify can never call one run two things.
+    # ``success`` stays for old callers and means exactly "verdict passed".
+    verdict: Optional[Dict[str, Any]] = None
+    try:
+        from . import verify as _verify
+        verdict = _verify.run_verdict(run_dir)
+    except Exception:
+        verdict = None
+    if verdict is None:
+        ok = _success_from_metrics(metrics, run_dir=run_dir, unfinished=steps_failed > 0)
+        verdict = {"state": "passed" if ok else "failed", "label": "Passed" if ok else "Failed"}
+
+    # Step counts, one meaning everywhere (Flow, Runs, Verify): the steps this
+    # run's results stand on, in flow order. A resumed run's steps taken from
+    # its parent count as done (``steps_reused`` of them); a step that began
+    # and never finished is ``steps_failed``.
+    reused = 0
+    try:
+        lin = lineage_steps(run_dir)
+        own_n = step_count
+        reused = sum(1 for s in lin if s["run"] != run_dir.name)
+        if reused:
+            step_count = own_n + reused
+            steps_done += sum(1 for s in lin if s["run"] != run_dir.name
+                              and (s["path"] / "state_out.json").is_file())
+    except Exception:
+        reused = 0
+
     return RunSummary(
         tag=run_dir.name,
         run_dir=str(run_dir),
-        success=_success_from_metrics(metrics, run_dir=run_dir, unfinished=steps_failed > 0),
+        success=verdict.get("state") == "passed",
         flow=flow_name or "Classic",
         pdk=pdk,
         scl=scl,
-        started_at=datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(),
+        started_at=datetime.fromtimestamp(started_ts(run_dir)).isoformat(),
         step_count=step_count,
         steps_done=steps_done,
         steps_failed=steps_failed,
+        steps_reused=reused,
+        verdict=verdict,
+        branched_from=(branch_of(run_dir) or {}).get("tag"),
         wall_time_s=wall_time,
         key_metrics=key,
         imported=(run_dir / _IMPORT_MARKER).is_file(),
@@ -1813,8 +1921,8 @@ def metric_trends(design_dir: str | Path, keys: Optional[List[str]] = None,
             metrics = {}
         runs_meta.append({
             "tag": rd.name,
-            "started_at": datetime.fromtimestamp(rd.stat().st_mtime).isoformat(),
-            "success": _success_from_metrics(metrics, run_dir=rd),
+            "started_at": datetime.fromtimestamp(started_ts(rd)).isoformat(),
+            "success": _summary_json(rd).get("success", False),
         })
         for k in use_keys:
             v = metrics.get(k)

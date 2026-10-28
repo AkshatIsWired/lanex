@@ -1159,6 +1159,91 @@ def _verdict(checks: List[Dict[str, Any]], flow: Dict[str, Any]) -> Dict[str, An
     }
 
 
+def _stage_of(step_id: Optional[str]) -> Optional[str]:
+    if not step_id:
+        return None
+    try:
+        from . import flowstages
+        return flowstages.listed_stage(step_id) or ("signoff" if step_id.startswith("Checker.") else None)
+    except Exception:
+        return None
+
+
+_STATE_BY_GROUP = {"rtl": "synthesis", "synth": "synthesis", "pnr": "routing",
+                   "timing": "signoff", "physical": "signoff"}
+
+
+def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, Any],
+                     v: Dict[str, Any], *, live: bool = False) -> Dict[str, Any]:
+    """The one run verdict every page shows (Runs, run bar, Analytics, Verify,
+    Compare, the default baseline): ``{state, label, stage?}`` plus counts.
+
+    It is Verify's verdict, mapped onto five states:
+    ``passed`` (Verify "ready"), ``failed`` (a check blocks the run, or a step
+    raised), ``stopped`` (the user stopped it, or LanEx closed mid-run),
+    ``running`` (the live run) and ``incomplete`` (nothing failed, but a core
+    check has no result: LVS or DRC turned off, a partial -T run)."""
+    outcome = (run.gui.get("outcome") or {}) if isinstance(run.gui.get("outcome"), dict) else {}
+    stop = flow.get("stopped_step") or None
+    out: Dict[str, Any] = {"checks_total": v["total"], "counts": v["counts"],
+                           "warnings": len(v["warning_ids"]), "blockers": len(v["blocker_ids"])}
+    if live:
+        last = flow.get("last_step") or {}
+        out.update(state="running", label="Running" + (f", step {last['n']}" if last.get("n") else ""))
+        st = _stage_of(last.get("id") or last.get("dir")) if last else None
+        if st:
+            out["stage"] = st
+        return out
+    if outcome.get("result") == "cancelled":
+        out.update(state="stopped", label=f"Stopped at step {stop['n']}" if stop else "Stopped")
+        st = _stage_of(stop.get("id") or stop.get("dir")) if stop else None
+        if st:
+            out["stage"] = st
+        return out
+    if v["state"] == "blocked":
+        k = len(v["blocker_ids"])
+        first = next(c for c in checks if c["status"] == _FAIL)
+        out.update(state="failed", label=f"{k} check{'s' if k != 1 else ''} failed")
+        out["stage"] = (_stage_of(first.get("step_id") or (first.get("checker") or {}).get("id"))
+                        or _STATE_BY_GROUP.get(first["group"]))
+        return out
+    if v["state"] == "stopped":
+        # A step began and never finished. LibreLane raised (error.log, or the
+        # GUI noted an error) -> failed; otherwise the run was cut off (LanEx or
+        # the PC closed mid-run): stopped, not a failure of the design.
+        raised = bool(flow.get("error_log")) or outcome.get("result") == "error"
+        n = stop["n"] if stop else None
+        out.update(state="failed" if raised else "stopped",
+                   label=(("Failed" if raised else "Stopped") + (f" at step {n}" if n else "")))
+        st = _stage_of(stop.get("id") or stop.get("dir")) if stop else None
+        if st:
+            out["stage"] = st
+        return out
+    if v["state"] == "incomplete" and not run.completed and not flow.get("partial"):
+        # No final/ and nothing raised: the flow ended early (cut off between
+        # two steps). Not a design failure, but not a finished run either.
+        last = flow.get("last_step") or {}
+        out.update(state="stopped", label="Stopped" + (f" after step {last['n']}" if last.get("n") else ""))
+        st = _stage_of(last.get("id") or last.get("dir")) if last else None
+        if st:
+            out["stage"] = st
+        return out
+    if v["state"] == "incomplete":
+        out.update(state="incomplete", label="Not enough to call it")
+        return out
+    w = len(v["warning_ids"])
+    out.update(state="passed", label="Clean" + (f", {w} warning{'s' if w != 1 else ''}" if w else ""))
+    return out
+
+
+def run_verdict(run_dir: str | Path, *, live: bool = False) -> Dict[str, Any]:
+    """:func:`run_verdict_from` for one run folder (no report files parsed)."""
+    run = _Run(Path(run_dir).resolve())
+    checks = _checks(run)
+    flow = _flow_state(run)
+    return run_verdict_from(run, checks, flow, _verdict(checks, flow), live=live)
+
+
 def verify_report(run_dir: str | Path) -> Dict[str, Any]:
     """The signoff picture of one run, organised by flow stage.
 
@@ -1168,6 +1253,7 @@ def verify_report(run_dir: str | Path) -> Dict[str, Any]:
     run = _Run(Path(run_dir).resolve())
     checks = _checks(run)
     flow = _flow_state(run)
+    verdict = _verdict(checks, flow)
     by = {c["id"]: c for c in checks}
     groups = []
     for g in _GROUPS:
@@ -1206,5 +1292,8 @@ def verify_report(run_dir: str | Path) -> Dict[str, Any]:
         "groups": groups,
         "stages": stages,
         "details": details,
-        "verdict": _verdict(checks, flow),
+        "verdict": verdict,
+        # The five-state verdict the run lists use (same source, so Verify and
+        # Runs can never disagree). "running" is decided by the caller.
+        "run_verdict": run_verdict_from(run, checks, flow, verdict),
     }
