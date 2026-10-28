@@ -92,6 +92,22 @@ def test_assemble_overrides_cleans_and_carries_context(tmp_path):
     assert asm["extra_config_files"] is None      # no macro overlay in a bare dir
 
 
+def test_assemble_overrides_takes_pdk_from_config_when_request_names_none(tmp_path):
+    # LibreLane's CLI mounts the ciel version of the family -p names (default
+    # sky130A); a gf180 config run without -p fails "The PDK gf180mcuD was not
+    # found". A request without a PDK must carry the config's PDK and library.
+    from lanex.server import routes
+    (tmp_path / "config.json").write_text(
+        '{"DESIGN_NAME": "fifo", "PDK": "gf180mcuD", '
+        '"STD_CELL_LIBRARY": "gf180mcu_fd_sc_mcu7t5v0"}', encoding="utf-8")
+    asm = routes._assemble_overrides(str(tmp_path), {"overrides": {}})
+    assert asm["pdk"] == "gf180mcuD"
+    assert asm["scl"] == "gf180mcu_fd_sc_mcu7t5v0"
+    # An explicit request wins; the config's library is not paired with another PDK.
+    asm = routes._assemble_overrides(str(tmp_path), {"pdk": "ihp-sg13g2"})
+    assert asm["pdk"] == "ihp-sg13g2" and asm["scl"] is None
+
+
 def test_dse_and_setup_assemble_identically(tmp_path):
     # A2 regression guard (the audit's "golden-equality between the two entry
     # points"): given the same merged overrides + sources, a DSE sweep point and

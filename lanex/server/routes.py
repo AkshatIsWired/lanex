@@ -1174,6 +1174,19 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
     overrides = dict(body.get("overrides") or {})
     pdk = overrides.pop("PDK", None) or body.get("pdk") or None
     scl = overrides.pop("STD_CELL_LIBRARY", None) or body.get("scl") or None
+    # No PDK in the request: take the config file's. LibreLane's CLI fetches and
+    # mounts the ciel version of the family named by -p (default sky130A), so a
+    # gf180/IHP config run without -p stops with "The PDK gf180mcuD was not
+    # found" (the PDK_ROOT it gets is the sky130 version folder).
+    if not pdk or not scl:
+        try:
+            from ..controller import configedit
+            named = configedit.config_pdk(design_dir)
+            pdk = pdk or named.get("pdk") or None
+            if not scl and pdk and pdk == named.get("pdk"):
+                scl = named.get("scl") or None
+        except Exception:
+            _log.debug("config PDK lookup failed", exc_info=True)
     # Strip blank/None overrides so a left-empty constraint field never becomes a
     # bare ``KEY=`` the engine can't type-parse (issue #11); real 0/False kept.
     overrides = _clean_overrides(overrides)
