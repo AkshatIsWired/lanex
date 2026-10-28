@@ -963,10 +963,17 @@ def projects_dir() -> Path:
     fall back to ``~/lanex-projects`` in the Linux home: a Windows profile path
     with whitespace (LibreLane splits file lists on spaces) and no WSL at all.
     """
+    return projects_dir_info()[0]
+
+
+def projects_dir_info() -> "tuple[Path, Optional[str]]":
+    """:func:`projects_dir` and why it is in the Linux home, if it is:
+    ``"space"`` (the Windows profile path has whitespace), ``"no_windows"``
+    (Windows could not be asked, or this is not WSL), or ``None``."""
     win = wsl_windows_home()
     if win and not any(c.isspace() for c in win):
-        return Path(win) / "LanEx-Projects"
-    return Path.home() / "lanex-projects"
+        return Path(win) / "LanEx-Projects", None
+    return Path.home() / "lanex-projects", ("space" if win else "no_windows")
 
 
 _WIN_PATH_RX = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")

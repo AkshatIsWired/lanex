@@ -32,11 +32,14 @@ def test_projects_dir_avoids_paths_with_spaces(monkeypatch):
     # would break every run; those fall back to the Linux home.
     monkeypatch.setattr(platform_env, "wsl_windows_home", lambda: "/mnt/c/Users/Jane Doe")
     assert platform_env.projects_dir() == Path.home() / "lanex-projects"
+    # The wizard says why; only this case is "your user name has a space".
+    assert platform_env.projects_dir_info()[1] == "space"
 
 
 def test_projects_dir_off_wsl_is_the_home_folder(monkeypatch):
     monkeypatch.setattr(platform_env, "wsl_windows_home", lambda: None)
     assert platform_env.projects_dir() == Path.home() / "lanex-projects"
+    assert platform_env.projects_dir_info()[1] == "no_windows"
 
 
 def test_windows_paths_pass_through_off_wsl(monkeypatch):

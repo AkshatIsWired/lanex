@@ -2814,7 +2814,7 @@ def h_templates(handler: Any) -> None:
 def h_project_defaults(handler: Any) -> None:
     """Where New project suggests putting a design, whether it exists yet, and
     what the UI needs to show paths the way the person's OS does."""
-    proj = platform_env.projects_dir()
+    proj, linux_reason = platform_env.projects_dir_info()
     # Create it up front: the Windows folder picker opens in Documents when its
     # start folder doesn't exist, so "Change..." would land somewhere else.
     try:
@@ -2822,6 +2822,7 @@ def h_project_defaults(handler: Any) -> None:
     except OSError:
         pass
     _respond(handler, {"projects_dir": str(proj), "exists": proj.is_dir(),
+                       "linux_home_reason": linux_reason,
                        "wsl": platform_env.is_wsl(),
                        "distro": os.environ.get("WSL_DISTRO_NAME") or None})
 
