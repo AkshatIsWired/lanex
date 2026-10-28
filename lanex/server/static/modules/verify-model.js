@@ -252,8 +252,21 @@ export function verdictCopy(rep) {
     if (f.state === "deferred_errors") sub = "LibreLane finished every step, then failed the run on " + names(v.blocker_ids).join(", ") + ". " + sub;
     return { tone: "fail", title, sub, short: k + (k === 1 ? " check failed" : " checks failed") };
   }
+  // rep.run_verdict is the same verdict the run lists show (server side):
+  // it tells a step that raised from a run the user stopped or LanEx left.
+  const rv = rep.run_verdict || null;
+  if (rv && rv.state === "running") {
+    return { tone: "warn", title: "Still running", short: "running",
+      sub: ran + " of " + v.total + " checks have a result so far. The verdict comes when the flow ends." };
+  }
+  if (v.state === "incomplete" && rv && rv.state === "stopped") {
+    return { tone: "warn", title: rv.label, short: "stopped",
+      sub: "The flow ended before its last step, so " + (v.total - ran) + " of " + v.total + " checks have no result. Nothing failed; run it again to finish." };
+  }
   if (v.state === "stopped") {
-    return { tone: "fail", title: "The flow stopped at step " + (stop ? stop.n : "?"), short: "not checked",
+    const failed = rv && rv.state === "failed";
+    return { tone: "fail", title: (failed ? "Failed at step " : rv && rv.state === "stopped" ? "Stopped at step " : "The flow stopped at step ") + (stop ? stop.n : "?"),
+      short: failed ? "failed" : "not checked",
       sub: (stop ? (stop.id || stop.dir) + " didn't finish. " : "") + ran + " of " + v.total + " checks ran before it stopped. The run log has the reason." };
   }
   if (v.state === "incomplete") {

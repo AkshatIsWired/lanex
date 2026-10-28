@@ -22,6 +22,8 @@ import { wireScrollSpy } from "./jumpnav.js";
 import { icon } from "./icons.js";
 import { provBtnHtml, wireProvBtns } from "./provenance.js";
 import * as M from "./analytics-model.js";
+import * as V from "./verify-model.js";
+import { fmtDur } from "./reportcard.js";
 import * as C from "./analytics-charts.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
@@ -325,6 +327,23 @@ function renderOverview() {
     title = "Clean run: all " + ran.length + " checks passed";
     lede = "Every check LibreLane ran on this layout came back at zero.";
   }
+  // The headline is Verify's verdict whenever Verify answered: one verdict
+  // for the run on every page (Runs, the run bar, Verify, Analytics). The grid
+  // below is the subset of Verify's checks that write a metric, and says so.
+  const so = _ctx.signoff;
+  const vTotal = so && so.verdict ? so.verdict.total : 0;
+  if (so && so.verdict) {
+    const vc = V.verdictCopy(so);
+    tone = vc.tone;
+    title = esc(vc.title);
+    const stopLede = (!completed || stopped) && _partial
+      ? " The numbers below are the metrics LibreLane saved after step " + _partial.n + " (" + esc(_partial.name) + "), the last step that finished."
+      : "";
+    lede = esc(vc.sub) + stopLede;
+  }
+  const subsetNote = vTotal
+    ? "<p class='an-foot'>These are " + checks.length + " of Verify's " + vTotal + " checks: the ones LibreLane writes a metric for. Verify has every check, with its limit and report.</p>"
+    : "";
 
   const groups = [];
   const shownChecks = (stopped || !completed) ? checks.filter((c) => c.status !== "absent") : checks;
@@ -356,7 +375,7 @@ function renderOverview() {
     if (!Number.isNaN(d.getTime())) meta.push(esc(d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })));
   }
   if (Number.isFinite(row.wall_time_s)) meta.push(esc(fmtDur(row.wall_time_s)) + " of step time");
-  if (row.step_count) meta.push(esc(row.steps_done + " / " + row.step_count + " steps"));
+  if (row.step_count) meta.push(esc(row.steps_done + " of " + row.step_count + " steps done" + (row.steps_reused ? " (" + row.steps_reused + " reused from " + (row.branched_from || "its parent") + ")" : "")));
 
   el.innerHTML =
     "<div class='an-verdict is-" + tone + "'>" +
@@ -365,19 +384,12 @@ function renderOverview() {
       "<div class='an-runmeta'>" + meta.join("<span class='sep'>·</span>") + "</div></div>" +
       "<div class='an-verdict-act'>" + (stopped || !completed ? goBtn("runs", "Open the run log") : goBtn("verify", "Details in Verify")) +
       "<span class='an-disclaim'>LanEx shows what LibreLane's tools reported. It is not a sign-off.</span></div>" +
-    "</div>" + strip +
+    "</div>" + strip + subsetNote +
     "<div class='an-kpis'>" + kpiTiming() + kpiArea() + kpiPower() + kpiRouting() + "</div>" +
     (_b ? "<p class='an-basenote'>" + icon("diff", { size: 13 }) + " Changes are against <b>" + esc(_baseTag) + "</b>. Green is better and red is worse, by LibreLane's own direction for each metric.</p>"
         : "<p class='an-basenote'>" + icon("diff", { size: 13 }) + " Pick a run under <b>Compare with</b> to see what changed.</p>");
 }
 
-function fmtDur(s) {
-  if (!Number.isFinite(s)) return "";
-  if (s < 60) return s.toFixed(s < 10 ? 1 : 0) + " s";
-  const m = Math.floor(s / 60), r = Math.round(s % 60);
-  if (m < 60) return m + " min " + r + " s";
-  return Math.floor(m / 60) + " h " + (m % 60) + " min";
-}
 
 // History series for one metric, aligned to the trend runs. Highlights the
 // selected run; failed runs get a hollow marker.
