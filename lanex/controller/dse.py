@@ -23,6 +23,7 @@ shared bus. No new dependency; no new run engine.
 from __future__ import annotations
 
 import itertools
+import re
 import json
 import os
 import threading
@@ -47,20 +48,65 @@ def _sweeps_path(design_dir: str | Path) -> Path:
     return Path(design_dir) / _SWEEPS_FILE
 
 
-def load_sweeps(design_dir: str | Path) -> List[Dict[str, Any]]:
-    """All recorded sweep manifests for a design, newest first."""
-    p = _sweeps_path(design_dir)
+def _read_sweeps_file(p: Path) -> Optional[List[Dict[str, Any]]]:
+    """The manifests in *p*: [] when there is no file, None when it is there
+    but unreadable (so a writer can keep it aside instead of overwriting it)."""
     if not p.is_file():
         return []
     try:
         doc = json.loads(p.read_text(encoding="utf-8", errors="replace"))
     except Exception:
-        return []
+        return None
     sweeps = doc.get("sweeps") if isinstance(doc, dict) else doc
     if not isinstance(sweeps, list):
-        return []
-    sweeps.sort(key=lambda s: s.get("created_at", ""), reverse=True)
-    return sweeps
+        return None
+    return [s for s in sweeps if isinstance(s, dict)]
+
+
+def _assume_zone(created_at: Any) -> tuple:
+    """``(iso, assumed, epoch)`` for a manifest's ``created_at``.
+
+    Sweeps recorded before 2026-10-28 wrote ``datetime.now().isoformat()``:
+    no offset, in the LanEx machine's own clock (the distro runs on UTC). A
+    browser would read such a string as ITS local time and shift it by the
+    person's offset, so it is read here the way it was written (this
+    machine's zone), given an offset, and flagged as assumed."""
+    from datetime import datetime
+    if not isinstance(created_at, str) or not created_at:
+        return created_at, False, 0.0
+    try:
+        dt = datetime.fromisoformat(created_at)
+    except ValueError:
+        return created_at, False, 0.0
+    assumed = dt.tzinfo is None
+    if assumed:
+        dt = dt.astimezone()          # naive -> this machine's local zone
+    try:
+        ts = dt.timestamp()
+    except (OverflowError, OSError, ValueError):
+        ts = 0.0
+    return dt.isoformat(timespec="seconds"), assumed, ts
+
+
+def load_sweeps(design_dir: str | Path) -> List[Dict[str, Any]]:
+    """All recorded sweep manifests for a design, newest first (by the real
+    instant: old offset-less and new offset-carrying times sort together).
+
+    A ``created_at`` without an offset gets this machine's offset and
+    ``created_at_note`` saying so (see :func:`_assume_zone`)."""
+    sweeps = _read_sweeps_file(_sweeps_path(design_dir)) or []
+    keyed = []
+    for s in sweeps:
+        iso, assumed, ts = _assume_zone(s.get("created_at"))
+        if assumed:
+            from datetime import datetime
+            zone = datetime.now().astimezone().tzname() or "this machine's zone"
+            s["created_at"] = iso
+            s["created_at_note"] = (f"Recorded by an older LanEx without a time zone; read as {zone} "
+                                    "(the LanEx machine's clock) and shown in your time.")
+        keyed.append((ts, str(s.get("id") or ""), s))
+    keyed.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [s for _, _, s in keyed]
 
 
 def new_sweep_id(design_dir: str | Path | None = None) -> str:
@@ -85,6 +131,14 @@ _sweeps_lock = threading.RLock()
 
 
 def _write_sweeps(p: Path, sweeps: List[Dict[str, Any]]) -> None:
+    # A file that is there but unreadable (hand-edited, a disk hiccup) is
+    # kept aside, never overwritten with only the new sweep: its history may
+    # still be recoverable by hand.
+    if _read_sweeps_file(p) is None:
+        try:
+            p.replace(p.with_name(f"{p.name}.unreadable-{int(time.time())}"))
+        except OSError:
+            pass
     # A unique temp name per write, so two writers never share one file.
     tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
@@ -243,6 +297,9 @@ def _known_var_names() -> frozenset:
     return frozenset(v["name"] for v in introspect.list_variables())
 
 
+_VAR_RX = re.compile(r"[A-Z][A-Z0-9_]{0,79}")
+
+
 def _format_value(v: Any) -> str:
     """Format a sweep value as a LibreLane override string (permissive)."""
     if isinstance(v, bool):
@@ -262,27 +319,50 @@ def expand_sweep(spec: Dict[str, Any]) -> List[Dict[str, str]]:
     axes = spec.get("axes") or []
     mode = spec.get("mode") or "grid"
     if not axes:
-        raise ValueError("sweep has no axes")
+        raise ValueError("The sweep has no settings to vary. Add one, then start it.")
+    if not isinstance(axes, list) or not all(isinstance(ax, dict) for ax in axes):
+        raise ValueError("The sweep's settings are not in the expected form (a list of {var, values}).")
     names = _known_var_names()
+    seen = set()
     for ax in axes:
         var = ax.get("var")
-        if not var:
-            raise ValueError("an axis is missing 'var'")
+        if not var or not isinstance(var, str):
+            raise ValueError("A swept setting has no name. Pick one from the list.")
+        # Every value becomes ``-c VAR=value`` on LibreLane's command line:
+        # only a real variable name, never text that could read as more.
+        if not _VAR_RX.fullmatch(var):
+            raise ValueError(f"'{var[:40]}' is not a LibreLane setting name (capitals, digits and _).")
         if names and var not in names:
             raise ValueError(f"unknown config variable '{var}'")
-        if not ax.get("values"):
+        if var in seen:
+            raise ValueError(f"{var} is swept twice. Keep one row for it.")
+        seen.add(var)
+        vals = ax.get("values")
+        if not vals or not isinstance(vals, list):
             raise ValueError(f"axis '{var}' has no values")
+        for v in vals:
+            if isinstance(v, (dict, list)) or v is None:
+                raise ValueError(f"{var}: each value must be a number or a word.")
+            if any(ch in str(v) for ch in "\r\n\0") or len(str(v)) > 200:
+                raise ValueError(f"{var}: a value has a line break or is too long.")
 
     if mode == "list":
         n = len(axes[0]["values"])
         if any(len(ax["values"]) != n for ax in axes):
             raise ValueError("list mode requires every axis to have the same number of values")
-        combos = [[ax["values"][i] for ax in axes] for i in range(n)]
+        count = n
+    else:
+        count = 1
+        for ax in axes:
+            count *= len(ax["values"])
+    # Counted before anything is built: a product of long value lists would
+    # otherwise be materialised (and hang the server) before being refused.
+    if count > MAX_COMBOS:
+        raise ValueError(f"sweep expands to {count} runs (max {MAX_COMBOS}); narrow it down")
+    if mode == "list":
+        combos = [[ax["values"][i] for ax in axes] for i in range(count)]
     else:
         combos = list(itertools.product(*[ax["values"] for ax in axes]))
-
-    if len(combos) > MAX_COMBOS:
-        raise ValueError(f"sweep expands to {len(combos)} runs (max {MAX_COMBOS}); narrow it down")
 
     out: List[Dict[str, str]] = []
     for combo in combos:

@@ -490,7 +490,10 @@ function sweepRowHtml(g, cols, gk, open) {
     (running ? " · running" : "") +
     (failed.length ? " · <span class='rn-bad'>" + failed.length + " failed" + (reasons.length ? " (" + esc(reasons.join(", ")) + ")" : "") + "</span>" : "") +
     (bestW.length ? " · best WNS " + esc(signed(Math.max(...bestW))) + " ns" : "") + "</span>" +
-    "<span class='rn-sw-when'>" + esc(when(sw.created_at)) + "</span>" +
+    // An old manifest's time had no zone: the server read it as its own clock
+    // (dse.load_sweeps) and says so; the dotted line shows it is assumed.
+    "<span class='rn-sw-when" + (sw.created_at_note ? " is-assumed" : "") + "'" +
+      (sw.created_at_note ? " title='" + esc(sw.created_at_note) + "'" : "") + ">" + esc(when(sw.created_at)) + "</span>" +
     "<button class='btn btn-ghost btn-xs' data-act='sweep-summary'>Summary</button></div>" +
     (open ? "<div class='rn-sw-sum' data-sum='" + esc(gk) + "'></div>" : "") + "</td></tr>";
 }
