@@ -26,6 +26,7 @@ import * as V from "./verify-model.js";
 import { fmtDur } from "./reportcard.js";
 import * as C from "./analytics-charts.js";
 import { localeNum, localeDateTime } from "./intlcache.js";
+import { loadingStart, skel } from "./loading.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -38,6 +39,8 @@ let _v = {};                    // selected run's metrics
 let _b = null;                  // baseline metrics (or null)
 let _ctx = null;                // everything the sections render from
 let _token = 0;                 // guards against out-of-order loads
+let _job = null;                // the first load's skeleton (loading.js), until the first paint
+function loadDone() { if (_job) { _job.done(); _job = null; } }
 const _trendCache = new Map();  // design dir -> trends payload
 let _allFilter = "all";         // All metrics: all | problems | changed
 let _partial = null;            // {n, name, dir} when values come from a step's state_out.json
@@ -136,12 +139,16 @@ export async function renderAnalyticsFull() {
   if (!body) return;
   wireOnce();
   _trendCache.clear();   // a run may have finished since the tab was last shown
+  // First visit: a skeleton of the sections after 300 ms (never an empty state before the runs came back).
+  loadDone();
+  if (!_ctx) _job = loadingStart(body, { skeleton: skel.cards(3) + skel.block(200), label: "Analytics" });
   await loadMeta();
   const runs = await ctx.loadRuns();
   // The list could not be loaded at all (LanEx busy or asleep): leave the page
   // as it is; context.js retries and the page repaints when runs arrive.
-  if (!runs.length && ctx.runsLoadFailed()) return;
+  if (!runs.length && ctx.runsLoadFailed()) { loadDone(); return; }
   if (!runs.length || !ctx.contextRun()) {
+    loadDone();
     body.classList.add("is-empty");
     document.getElementById("an-empty").hidden = false;
     return;
@@ -238,6 +245,7 @@ async function selectRun(tag) {
   }
   _ctx = { row: row || {}, view: view || {}, stages: stages || {}, steps, cells, trends, designDir, signoff };
   body.classList.remove("is-loading");
+  loadDone();             // before drawing: the charts measure their boxes
   if (!view && !_partial) {
     document.getElementById("an-overview").innerHTML = "<div class='empty'><span class='ico'>" + icon("alert", { size: 40 }) +
       "</span><h3>Could not load " + esc(tag) + "</h3><p>The run folder may have been moved or deleted. Refresh, or pick another run.</p></div>";

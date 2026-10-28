@@ -22,6 +22,7 @@ import { wireJump } from "./jumpnav.js";
 import * as M from "./cells-model.js";
 import * as runCtx from "./context.js";
 import { localeNum } from "./intlcache.js";
+import { loadingStart, skel } from "./loading.js";
 
 const esc = M.esc;
 const LS = "lanex.cells.view";
@@ -155,7 +156,10 @@ async function load(pdk, scl, wantCell, { keepScroll = false } = {}) {
   const my = ++S.token;
   S.pdk = pdk; S.scl = scl; S.dd = state.designDir || "";
   const host = document.getElementById("cl-lib");
-  if (!keepScroll) host.innerHTML = "<div class='cl-loading'><span class='spinner'></span> Reading " + esc(scl) + " (Liberty, LEF and the PDK's flow config)…</div>";
+  // The first library read gets the page skeleton after 300 ms; switching library keeps its own line.
+  if (S._job) S._job.done();
+  S._job = !S.lib && !keepScroll ? loadingStart(host, { skeleton: skel.cards(3) + skel.rows(6, 4), label: "Cells" }) : null;
+  if (!keepScroll) host.innerHTML = S._job ? "" : "<div class='cl-loading'><span class='spinner'></span> Reading " + esc(scl) + " (Liberty, LEF and the PDK's flow config)…</div>";
   let res;
   try { res = await api.cellLibrary(pdk, scl, state.designDir); } catch (ex) { res = { ok: false, error: ex.message || String(ex) }; }
   if (my !== S.token) return;
@@ -173,6 +177,7 @@ async function load(pdk, scl, wantCell, { keepScroll = false } = {}) {
       if (my !== S.token) return;
     }
   }
+  if (S._job) { S._job.done(); S._job = null; }      // before drawing (the curves measure their box)
   if (!res || res.ok === false) {
     S.lib = null;
     host.innerHTML = emptyHtml("Couldn't read " + scl, (res && res.error) || "unknown error", null);

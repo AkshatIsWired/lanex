@@ -18,6 +18,7 @@ import * as FS from "./flowstages.js";
 import { icon } from "./icons.js";
 import { reportCardHtml, fmtDur } from "./reportcard.js";
 import { localeNum, localeTime, localeDate } from "./intlcache.js";
+import { loadingStart, pageSkeleton } from "./loading.js";
 
 // The last step of a stage in the Classic flow (matches setup.js's --to).
 function lastStepOfStage(stageId) {
@@ -294,6 +295,9 @@ export async function renderRuns({ cached = false } = {}) {
   let runs;
   if (cached && _shown.key === key) runs = _shown.runs;
   else {
+    // A list not shown yet: the page skeleton after 300 ms, never "No runs" before the answer.
+    const job = _shown.key !== key ? loadingStart(document.getElementById("sec-runs"), { skeleton: pageSkeleton("runs"), label: "Runs",
+      hasContent: () => !!document.querySelector("#runs-table tbody tr") }) : null;
     try {
       const [rs, sw] = await Promise.all([gatherRunsScoped(scope, { strict: true }),
         state.designDir ? api.dseSweeps().catch(() => null) : Promise.resolve(null)]);
@@ -303,7 +307,7 @@ export async function renderRuns({ cached = false } = {}) {
       if (my !== _renderSeq) return;
       if (_shown.key === key && _shown.runs.length) { note("Couldn't refresh the list. Trying again…"); setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000); return; }
       runs = null;
-    }
+    } finally { if (job) job.done(); }
   }
   if (my !== _renderSeq) return;
   const empty = document.getElementById("rn-empty"), wrap = document.getElementById("rn-wrap");
