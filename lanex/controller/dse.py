@@ -85,6 +85,39 @@ def record_sweep(design_dir: str | Path, sweep: Dict[str, Any]) -> None:
         pass
 
 
+def record_point(design_dir: str | Path, sweep_id: str, tag: str, result: Dict[str, Any]) -> None:
+    """Note how one point of a sweep ended in its manifest (``results``), so
+    the outcome survives a reload and a restart. Best-effort; never raises."""
+    try:
+        for s in load_sweeps(design_dir):
+            if s.get("id") == sweep_id:
+                res = dict(s.get("results") or {})
+                res[tag] = dict(result)
+                s["results"] = res
+                record_sweep(design_dir, s)
+                return
+    except Exception:
+        pass
+
+
+def stamp_run(run_dir: str | Path, sweep_id: str, values: Dict[str, Any]) -> None:
+    """Mark a run folder as a sweep point (``gui-run.json`` ``sweep``), so the
+    Runs table can group it and name its origin. Best-effort."""
+    try:
+        p = Path(run_dir) / "gui-run.json"
+        if not p.parent.is_dir():
+            return
+        doc = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+        if not isinstance(doc, dict):
+            doc = {}
+        doc["sweep"] = {"id": sweep_id, "values": dict(values)}
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(p)
+    except Exception:
+        pass
+
+
 def unique_base_tag(design_dir: str | Path, base_tag: str, n: int) -> str:
     """Return a base tag whose ``dse-<base>-NN`` run dirs don't already exist.
 
@@ -215,6 +248,75 @@ def dse_run_tags(base_tag: str, n: int) -> List[str]:
     return [f"dse-{base}-{i:02d}" for i in range(n)]
 
 
+# Short names for the variables people sweep most, so a point's run is named by
+# what it tried: sweep-util-65, sweep-clk-12.5, sweep-synth-AREA_0.
+_SHORT = {
+    "FP_CORE_UTIL": "util",
+    "CLOCK_PERIOD": "clk",
+    "PL_TARGET_DENSITY_PCT": "density",
+    "SYNTH_STRATEGY": "synth",
+    "FP_ASPECT_RATIO": "aspect",
+    "GRT_ADJUSTMENT": "grtadj",
+}
+
+
+def _slug(v: Any) -> str:
+    out = "".join(c if (c.isalnum() or c in ".-") else "_" for c in str(v).strip())
+    return out.strip("_") or "x"
+
+
+def sweep_run_tags(design_dir: str | Path, overrides_list: Sequence[Dict[str, Any]]) -> List[str]:
+    """One run name per sweep point, named by the values it tries
+    (``sweep-util-65``; two variables: ``sweep-util-50-clk-10``). A name that
+    already has a run folder, or repeats within the sweep, gets ``-2``, ``-3``…
+    so an earlier sweep's runs are never overwritten."""
+    runs_root = Path(design_dir) / "runs"
+    used: set = set()
+    tags: List[str] = []
+    for ov in overrides_list:
+        parts = []
+        for var, val in ov.items():
+            parts.append(_SHORT.get(var, var.lower()))
+            parts.append(_slug(val))
+        base = ("sweep-" + "-".join(parts))[:80]
+        tag, k = base, 1
+        while tag in used or (runs_root / tag).exists():
+            k += 1
+            tag = f"{base}-{k}"
+        used.add(tag)
+        tags.append(tag)
+    return tags
+
+
+def point_outcome(run_dir: str | Path) -> Dict[str, Any]:
+    """How one sweep point really ended, from the run folder (the same reading
+    the Flow page uses, runexplain): ``{ok, kind, stage, step, reason}``.
+    ``ok`` only for a run that reached the end with nothing raised; a run that
+    merely launched is not a pass."""
+    try:
+        from . import runexplain
+        rx = runexplain.explain_run(run_dir)
+    except Exception as ex:  # pragma: no cover - unreadable folder
+        return {"ok": False, "kind": "unknown", "stage": None, "step": None,
+                "reason": f"could not read the run: {ex}"}
+    kind = rx.get("kind")
+    card = rx.get("card") or {}
+    step = rx.get("step") or {}
+    reason = None
+    if kind == "halted":
+        reason = card.get("title") or ((rx.get("errors") or [None])[0])
+    elif kind == "checks-failed":
+        rc = rx.get("raised_checkers") or []
+        names = [str((r.get("id") if isinstance(r, dict) else r) or "").replace("Checker.", "") for r in rc[:3]]
+        reason = "sign-off checks failed" + (": " + ", ".join(n for n in names if n) if names else "")
+    elif kind == "stopped":
+        reason = "stopped"
+    elif kind == "incomplete":
+        reason = "ended before the last step"
+    return {"ok": kind == "clean", "kind": kind, "stage": rx.get("stage"),
+            "step": step.get("id") or step.get("dir"), "reason": reason}
+
+
 class DseJob:
     """A sequential queue of runs over an expanded override list.
 
@@ -233,6 +335,14 @@ class DseJob:
         self.running_tag: Optional[str] = None
         self.done: List[str] = []
         self.failed: List[str] = []
+        # tag -> {ok, kind, stage, step, reason, values}: how each point ended.
+        self.results: Dict[str, Dict[str, Any]] = {}
+        self.sweep_id: Optional[str] = None
+        self.total = 0
+        self.started_at: Optional[float] = None
+        self._on_point = None
+        self.stop_when_good = False
+        self.stopped_early = False
 
     @property
     def active(self) -> bool:
@@ -246,21 +356,36 @@ class DseJob:
                 "running": self.running_tag,
                 "done": list(self.done),
                 "failed": list(self.failed),
+                "results": {k: dict(v) for k, v in self.results.items()},
+                "sweep_id": self.sweep_id,
+                "total": self.total,
+                "started_at": self.started_at,
+                "stopped_early": self.stopped_early,
             }
 
     def start(self, *, start_one, overrides_list: Sequence[Dict[str, str]],
-              tags: Sequence[str]) -> Dict[str, Any]:
-        """Begin the queue. ``start_one(tag, overrides) -> bool`` starts a single
-        run through the runner (returns whether it started). ``wait_idle`` is
-        polled by the worker via ``start_one`` semantics (the caller wires the
-        runner). Returns ``{ok, count, run_tags}``."""
+              tags: Sequence[str], sweep_id: Optional[str] = None,
+              on_point=None, stop_when_good: bool = False) -> Dict[str, Any]:
+        """Begin the queue. ``start_one(tag, overrides)`` runs one point through
+        the runner and blocks until it ends; it returns the point's outcome
+        (``{ok, kind, stage, step, reason}``, see :func:`point_outcome`) or a
+        bare bool. ``on_point(tag, result)`` is called after each point (the
+        route persists results into the sweep manifest with it). Returns
+        ``{ok, count, run_tags}``."""
         with self._lock:
             if self.active:
-                return {"ok": False, "error": "a DSE job is already running"}
+                return {"ok": False, "error": "a sweep is already running"}
             self._cancel.clear()
             self.queued = list(tags)
             self.done = []
             self.failed = []
+            self.results = {}
+            self.sweep_id = sweep_id
+            self.total = len(tags)
+            self.started_at = time.time()
+            self._on_point = on_point
+            self.stop_when_good = bool(stop_when_good)
+            self.stopped_early = False
             self.running_tag = None
             self._thread = threading.Thread(
                 target=self._run, args=(start_one, list(overrides_list), list(tags)),
@@ -282,20 +407,47 @@ class DseJob:
                     self.queued.remove(tag)
             events.publish("dse_config_started", {"tag": tag, "index": i, "total": len(tags),
                                                   "overrides": overrides_list[i]})
-            ok = False
+            res: Dict[str, Any]
             try:
-                ok = bool(start_one(tag, overrides_list[i]))
+                out = start_one(tag, overrides_list[i])
+                # A launched run is not a passed run: the closure reports how
+                # the point really ended. A bare bool is accepted for callers
+                # that only know whether it ran.
+                res = dict(out) if isinstance(out, dict) else {"ok": bool(out), "kind": None,
+                                                               "reason": None if out else "did not start"}
             except Exception as ex:  # pragma: no cover - depends on live runner
-                events.publish("log", {"message": f"DSE: failed to start {tag}: {ex}"})
-                ok = False
+                events.publish("log", {"message": f"Sweep: could not run {tag}: {ex}"})
+                res = {"ok": False, "kind": "error", "reason": f"could not start: {ex}"}
+            if self._cancel.is_set() and not res.get("ok"):
+                res.setdefault("kind", "stopped")
+                res["reason"] = res.get("reason") or "stopped"
+            res["values"] = dict(overrides_list[i])
+            ok = bool(res.get("ok"))
             with self._lock:
                 (self.done if ok else self.failed).append(tag)
+                self.results[tag] = res
                 self.running_tag = None
-            events.publish("dse_config_done", {"tag": tag, "ok": ok, "index": i, "total": len(tags)})
+            if self._on_point:
+                try:
+                    self._on_point(tag, res)
+                except Exception:  # pragma: no cover - persistence is best effort
+                    pass
+            events.publish("dse_config_done", {"tag": tag, "ok": ok, "index": i, "total": len(tags),
+                                               "kind": res.get("kind"), "stage": res.get("stage"),
+                                               "reason": res.get("reason")})
+            if ok and self.stop_when_good and i + 1 < len(tags):
+                # "Stop when one is good enough": timing met and every check
+                # clean (a "clean" run); the rest are dropped, not run.
+                with self._lock:
+                    self.stopped_early = True
+                    self.queued = []
+                break
         events.publish("dse_done", {"done": list(self.done), "failed": list(self.failed),
-                                    "cancelled": self._cancel.is_set()})
+                                    "cancelled": self._cancel.is_set(), "sweep_id": self.sweep_id,
+                                    "stopped_early": self.stopped_early})
         with self._lock:
             self.running_tag = None
+            self.queued = []
 
 
 # Process-wide singleton (one engine -> one queue at a time).
