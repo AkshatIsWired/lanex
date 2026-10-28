@@ -83,8 +83,9 @@ async function paintStatus() {
   let name = c.cur || "";
   try { if (c.cur) name = (await import("./flow.js")).stepLabel(c.cur); } catch (_e) {}
   const eta = state.runProgress && state.runProgress.eta_seconds;
-  el.textContent = (c.stage ? FS.stageLabel(c.stage) + " · " : "") + (name ? name + " · " : "") +
-    "Step " + c.current + " of " + c.total + (typeof eta === "number" && eta > 0 ? " · ~" + Math.max(1, Math.round(eta / 60)) + " min left" : "");
+  // The count first: a narrow window cuts the end of the line, not the count.
+  el.textContent = "Step " + c.current + " of " + c.total + (c.stage ? " · " + FS.stageLabel(c.stage) : "") + (name ? " · " + name : "") +
+    (typeof eta === "number" && eta > 0 ? " · ~" + Math.max(1, Math.round(eta / 60)) + " min left" : "");
   el.dataset.go = "pipeline";
   delete el.dataset.tone;
   el.title = "";
