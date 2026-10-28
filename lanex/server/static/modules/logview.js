@@ -15,6 +15,9 @@ import { localeNum } from "./intlcache.js";
 const ROW = 20;          // CSS px per line (flow.css .lv-row)
 const OVER = 30;         // extra rows rendered above and below the view
 
+// A live run updates the toolbar every flush: unchanged text is left alone.
+function setText(el, t) { if (el.textContent !== t) el.textContent = t; }
+
 export function lineKind(s) {
   // LibreLane's console rules a line with the step's name as each one starts.
   if (/^\s*─{4,}.*\S.*─{4,}\s*$/.test(s)) return "head";
@@ -65,8 +68,9 @@ export class LogView {
     this.$("[data-lv=warn]").addEventListener("click", () => this.next("warn"));
     this.$("[data-lv=copy]").addEventListener("click", (e) => this._copy(e.currentTarget));
     this.scroll.addEventListener("scroll", () => {
-      // Scrolling up by hand stops Follow, as in every terminal.
-      if (this.follow && this.scroll.scrollTop + this.scroll.clientHeight < this.scroll.scrollHeight - ROW * 2) {
+      // Scrolling up by hand stops Follow, as in every terminal. (Not while new
+      // lines wait for the next frame to be scrolled to: the gap is ours.)
+      if (this.follow && !this._wantEnd && this.scroll.scrollTop + this.scroll.clientHeight < this.scroll.scrollHeight - ROW * 2) {
         this.follow = false; this.$("[data-lv=follow]").checked = false;
       }
       this._paint();
@@ -101,6 +105,7 @@ export class LogView {
   setRows(rows, { empty = "" } = {}) {
     this.lines = [];
     this._n = 0;
+    this._ne = 0; this._nw = 0;
     for (const r of rows) this._push(r);
     this.hit = -1;
     this._empty = empty;
@@ -110,6 +115,7 @@ export class LogView {
   _push(r) {
     const l = typeof r === "string" ? { t: r, k: lineKind(r) } : { t: r.t, k: r.k || lineKind(r.t) };
     if (l.k !== "head") l.n = ++this._n;
+    if (l.k === "err") this._ne = (this._ne || 0) + 1; else if (l.k === "warn") this._nw = (this._nw || 0) + 1;
     this.lines.push(l);
   }
 
@@ -131,6 +137,7 @@ export class LogView {
     if (i == null || i < 0) return;
     if (!this.view.includes(i)) { this.q = ""; this.problems = false; this.$("input[type=search]").value = ""; this.$("[data-lv=problems]").checked = false; this._refilter(); }
     this.hit = i;
+    this._ver = (this._ver || 0) + 1;     // the marked row changes: redraw the rows
     this.follow = false; this.$("[data-lv=follow]").checked = false;
     const pos = this.view.indexOf(i);
     // The viewer may not be laid out yet (a step just picked): wait until it
@@ -164,6 +171,7 @@ export class LogView {
   }
 
   _refilter({ keepTop = true } = {}) {
+    this._ver = (this._ver || 0) + 1;     // rows at a position may differ now
     this.view = [];
     for (let i = 0; i < this.lines.length; i++) if (this._keep(this.lines[i])) this.view.push(i);
     this._counts();
@@ -173,53 +181,72 @@ export class LogView {
   }
 
   _counts() {
-    let e = 0, w = 0;
-    for (const l of this.lines) { if (l.k === "err") e++; else if (l.k === "warn") w++; }
+    // Kept as lines arrive (_push): no pass over a 50 000-line log per flush.
+    const e = this._ne || 0, w = this._nw || 0;
     const eb = this.$("[data-lv=err]"), wb = this.$("[data-lv=warn]");
     eb.hidden = !e; wb.hidden = !w;
-    eb.textContent = e + (e === 1 ? " error" : " errors");
+    setText(eb, e + (e === 1 ? " error" : " errors"));
     // Lines of this log marked WARNING (a tool can print one warning on
     // several lines, or repeat it); the run's warning count elsewhere is
     // LibreLane's warning.log, one entry per warning, so the words differ.
-    wb.textContent = w + (w === 1 ? " warning line" : " warning lines");
+    setText(wb, w + (w === 1 ? " warning line" : " warning lines"));
     wb.title = "Next warning. Counts the lines of this log marked as a warning; the run's warning count (from warning.log) lists each warning once.";
     const n = this.lines.length, shown = this.view.length;
     const lines = (k) => localeNum(k) + (k === 1 ? " line" : " lines");
-    this.$(".lv-count").textContent = shown === n ? lines(this._n || n) : localeNum(shown) + " of " + lines(this._n || n);
+    setText(this.$(".lv-count"), shown === n ? lines(this._n || n) : localeNum(shown) + " of " + lines(this._n || n));
     const em = this.$(".lv-empty");
     em.hidden = this.view.length > 0;
-    em.textContent = n ? "No line matches." : (this._empty || "Nothing here yet.");
+    setText(em, n ? "No line matches." : (this._empty || "Nothing here yet."));
   }
 
   _size() { this.spacer.style.height = this.view.length * ROW + "px"; }
 
+  // Scroll to the newest line in the next frame, with the rows (one layout).
   _toEnd() {
-    this.scroll.scrollTop = this.scroll.scrollHeight;
+    this._wantEnd = true;
     this._paint();
   }
 
+  _row(p) {
+    const i = this.view[p];
+    const l = this.lines[i];
+    const row = document.createElement("div");
+    row.className = "lv-row" + (l.k ? " is-" + l.k : "") + (i === this.hit ? " is-hit" : "");
+    const n = document.createElement("span");
+    n.className = "lv-n"; n.textContent = l.n ? String(l.n) : "";
+    const t = document.createElement("span");
+    t.className = "lv-t"; t.textContent = l.t || " ";
+    row.append(n, t);
+    return row;
+  }
+
+  // The rows in view (and OVER either side). Rows already drawn for the same
+  // positions stay: a live run's flush adds its new lines at the bottom and
+  // drops as many from the top, instead of rebuilding ~90 rows each time.
   _paint() {
     if (this._raf) return;
     this._raf = requestAnimationFrame(() => {
       this._raf = 0;
+      if (this._wantEnd) { this._wantEnd = false; this.scroll.scrollTop = this.scroll.scrollHeight; }
       const top = this.scroll.scrollTop, h = this.scroll.clientHeight || 400;
       const a = Math.max(0, Math.floor(top / ROW) - OVER);
       const b = Math.min(this.view.length, Math.ceil((top + h) / ROW) + OVER);
+      const ver = this._ver || 0;
+      const ra = this._ra, rb = this._rb;
+      if (ver === this._rver && a === ra && b === rb) return;
       this.rows.style.transform = "translateY(" + a * ROW + "px)";
-      const frag = document.createDocumentFragment();
-      for (let p = a; p < b; p++) {
-        const i = this.view[p];
-        const l = this.lines[i];
-        const row = document.createElement("div");
-        row.className = "lv-row" + (l.k ? " is-" + l.k : "") + (i === this.hit ? " is-hit" : "");
-        const n = document.createElement("span");
-        n.className = "lv-n"; n.textContent = l.n ? String(l.n) : "";
-        const t = document.createElement("span");
-        t.className = "lv-t"; t.textContent = l.t || " ";
-        row.append(n, t);
-        frag.appendChild(row);
+      if (ver !== this._rver || ra == null || b <= ra || a >= rb) {
+        const frag = document.createDocumentFragment();
+        for (let p = a; p < b; p++) frag.appendChild(this._row(p));
+        this.rows.replaceChildren(frag);
+      } else {
+        const kids = this.rows.children;
+        for (let k = ra; k < Math.min(a, rb); k++) kids[0].remove();
+        for (let k = rb; k > Math.max(b, a); k--) this.rows.lastElementChild.remove();
+        if (a < ra) { const f = document.createDocumentFragment(); for (let p = a; p < ra; p++) f.appendChild(this._row(p)); this.rows.prepend(f); }
+        if (b > rb) { const f = document.createDocumentFragment(); for (let p = rb; p < b; p++) f.appendChild(this._row(p)); this.rows.append(f); }
       }
-      this.rows.replaceChildren(frag);
+      this._ra = a; this._rb = b; this._rver = ver;
     });
   }
 
