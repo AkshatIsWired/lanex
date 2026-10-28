@@ -504,11 +504,22 @@ function paintPdkSrc() {
 
 const cfgFor = () => (_cfgPdk && _cfgPdk.dir === state.designDir ? _cfgPdk : null);
 
+// LibreLane's CLI default for -p/--pdk (librelane/flows/cli.py).
+const LIBRELANE_DEFAULT_PDK = "sky130A";
+
 // Point the picker at the PDK the open project's config names. A PDK that
 // isn't installed is still shown (and said), so the picker never pretends.
 export async function syncPdkFromConfig() {
   const c = await readConfigPdk();
   const sel = document.getElementById("pdk-select");
+  if (c && !c.pdk && sel && hasOpt(sel, LIBRELANE_DEFAULT_PDK)) {
+    // A config that names no PDK builds for LibreLane's default (sky130A, the
+    // -p default), as a terminal run of the folder would. Keeping the picker
+    // from the project opened before built spm on sky130B after a sky130B
+    // project: a project's target must not depend on what was open before.
+    if (sel.value !== LIBRELANE_DEFAULT_PDK) { sel.value = LIBRELANE_DEFAULT_PDK; await onPdkSelected(); }
+    return;
+  }
   if (!c || !c.pdk || !sel) return;
   const installed = (state.pdks || []).some((p) => p.name === c.pdk);
   if (!hasOpt(sel, c.pdk)) addOpt(sel, c.pdk, c.pdk + " (not installed)");
