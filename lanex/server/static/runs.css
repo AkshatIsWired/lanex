@@ -69,6 +69,10 @@
 .rn-table .rn-c-base { left: 28px; }
 .rn-table .rn-c-name { left: 56px; box-shadow: inset -1px 0 0 var(--border); }
 .rn-hasnote { color: var(--text-muted); display: inline-flex; }
+/* Long lists draw only the rows near the view (runs.js): a spacer row stands
+   for the rest, and collapsed sizer rows keep every column at its full width. */
+.rn-table tr.rn-sizer { visibility: collapse; }
+.rn-table tr.rn-spacer td { padding: 0; border: 0; background: none; }
 .rn-th.rn-c-base { color: var(--text-muted); font-size: 12px; }
 .rn-row { cursor: pointer; }
 .rn-row:hover td { background: color-mix(in srgb, var(--surface-2) 70%, var(--surface)); }
