@@ -488,6 +488,11 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .st-run .pill { height: 20px; padding: 0 7px; font-size: 12.5px; background: transparent; border-color: transparent; }
 .status-progress { font-family: var(--mono); font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: calc(42vw / var(--ll-zoom, 1)); }
 .status-progress:empty { display: none; }
+.st-run .pill { flex-shrink: 0; }
+/* How the last run ended (runend.js), in the verdict's colour. */
+.status-progress[data-tone="pass"] { color: color-mix(in srgb, var(--pass) 70%, var(--text-strong)); }
+.status-progress[data-tone="warn"] { color: color-mix(in srgb, var(--warn) 70%, var(--text-strong)); }
+.status-progress[data-tone="fail"] { color: color-mix(in srgb, var(--fail) 70%, var(--text-strong)); }
 /* Overall progress: one met1 band along the wafer edge. */
 .st-bar { position: absolute; left: 0; right: 0; top: -1px; height: 2px; pointer-events: none; }
 .st-bar-fill { display: block; height: 100%; width: 100%; background: var(--met1); box-shadow: 0 0 8px var(--accent-glow); transform: scaleX(0); transform-origin: left; transition: transform var(--dur-3) var(--ease-out); }

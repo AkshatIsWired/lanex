@@ -86,6 +86,8 @@ async function paintStatus() {
   el.textContent = (c.stage ? FS.stageLabel(c.stage) + " · " : "") + (name ? name + " · " : "") +
     "Step " + c.current + " of " + c.total + (typeof eta === "number" && eta > 0 ? " · ~" + Math.max(1, Math.round(eta / 60)) + " min left" : "");
   el.dataset.go = "pipeline";
+  delete el.dataset.tone;
+  el.title = "";
 }
 
 // A ring on the Flow tab while a run goes; a red mark when the last run failed.
@@ -135,6 +137,8 @@ export async function runFinished(ev) {
   paintRail(out.tone === "fail");
   if (status) {
     status.textContent = _result + (out.tail ? " · " + out.tail : "");
+    status.dataset.tone = out.tone;
+    status.title = out.title;
     status.dataset.go = "pipeline";
   }
   const pill = document.getElementById("run-pill");
@@ -161,7 +165,7 @@ export async function runFinished(ev) {
     : kind === "halted" ? [{ label: "Why", run: () => go("pipeline") }]
     : [];
   if (rv && rv.state === "warning") acts.splice(0, acts.length, { label: "Show timing", run: () => go("verify") }, { label: "See chip", run: () => go("layout") });
-  const msg = out.title + (out.body ? ": " + out.body : "");
+  const msg = out.title + (out.body ? (/: /.test(out.title) ? ". " : ": ") + out.body : "");
   const ttype = { pass: "success", warn: "warn", fail: "error", info: "info" }[out.tone] || "info";
   toast.show(msg, ttype, out.tone === "pass" ? 10000 : out.tone === "warn" ? 16000 : out.tone === "info" ? 6000 : 0, acts);
 
@@ -186,8 +190,12 @@ export function withVerdict(sum, rv, { tag = "", rx = null, name = (id) => id, n
       title: who + ": " + (rv.label || "clean"), body: tone === "warn" && sum.tone === "warn" ? sum.body : nums };
   }
   if (s === "warning") {
-    return { tone: "warn", mark: "▲", label: rv.label || "Finished with timing misses", tail: time,
-      title: who + ": " + (rv.label || "finished with timing misses"), body: nums };
+    const m = rv.timing_miss;
+    const short = m && typeof m.ws === "number" ? "Timing misses (" + m.kind + " " + (m.ws < 0 ? "−" : "+") + Math.abs(m.ws).toFixed(2) + " ns)" : "";
+    return { tone: "warn", mark: "▲", label: short || rv.label || "Finished with timing misses", tail: time,
+      title: who + ": " + (rv.label || "finished with timing misses"),
+      // The label already gives the slack: the body keeps size and time.
+      body: nums.split(" · ").filter((x) => !/^(setup|hold) /.test(x)).join(" · ") };
   }
   if (s === "failed") {
     const label = rv.label || "Failed";
