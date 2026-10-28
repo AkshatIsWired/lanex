@@ -227,6 +227,9 @@ async function onLoadDesign() {
 // as opposed to boot re-opening the last one ({explicit:false}).
 export async function adoptDesignDir(designDir, opts = {}) {
   const explicit = opts.explicit !== false;
+  // Another project: the last one's runs are not this one's (Setup's strip
+  // ticked "Run the flow" on a new project that had never run).
+  if (state.designDir !== designDir) state.runs = [];
   state.designDir = designDir;
   state.designExplicit = explicit;
   rememberDesign(designDir);
@@ -257,6 +260,7 @@ export async function adoptDesignDir(designDir, opts = {}) {
   await loadFilesFor(designDir);
   const { renderRuns } = await import("./runs.js");
   try { state.runs = await api.runs(designDir); } catch (_e) { state.runs = []; }
+  paintOnboardChecklist();
   // The results pages show what this project showed last time, else its
   // newest run (context.js).
   (await import("./context.js")).openProject(designDir);
