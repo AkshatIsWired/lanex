@@ -127,7 +127,9 @@ let SWEEPS = [];               // this design's sweep manifests (newest first)
 // run.origin (history.run_origin), else the summary's branched_from (TRUST).
 function originOf(r) {
   if (r.origin && r.origin.kind) return r.origin;
+  // The run summary carries branched_from as the parent's tag (a string).
   const b = r.branched_from;
+  if (typeof b === "string" && b) return { kind: "fix", parent: b, changes: [] };
   if (b && b.tag) return { kind: "fix", parent: b.tag, stage: b.stage, changes: b.changes || [] };
   return {};
 }
