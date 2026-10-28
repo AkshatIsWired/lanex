@@ -1456,6 +1456,16 @@ check("fix loop: every setting fix says where the new run resumes and opens the 
   assert.equal(PX.countText({ counts: { fail: 0, warn: 0 } }), "");
 });
 
+check("status bar badge: counts and colour follow the shared run verdict", () => {
+  const many = { counts: { fail: 3, warn: 2 } };
+  assert.deepEqual(PX.badgeOf({ state: "failed", label: "2 checks failed", blockers: 2, warnings: 1 }, many), { tone: "fail", text: "2 checks failed" });
+  assert.deepEqual(PX.badgeOf({ state: "passed", label: "Clean, 1 warning", blockers: 0, warnings: 1 }, many), { tone: "warn", text: "1 warning" });
+  assert.equal(PX.badgeOf({ state: "passed", label: "Clean", blockers: 0, warnings: 0 }, many), null, "a clean run shows no badge");
+  assert.deepEqual(PX.badgeOf({ state: "warning", label: "Finished: timing misses", timing_miss: { kind: "setup" }, warnings: 1 }, many), { tone: "warn", text: "Timing misses" });
+  assert.equal(PX.badgeOf({ state: "stopped", label: "Stopped" }, many), null);
+  assert.deepEqual(PX.badgeOf(null, { counts: { fail: 0, warn: 2 } }), { tone: "warn", text: "2 warnings" });
+});
+
 check("fix loop: the worst path is described from what its numbers say", () => {
   const b = { start: "reg", end: "out", launch: 0.65, clk_q: 0.83, cells: 0.26, wires: 0.002, io_in: 0, io_out: 0.3, drive: 0, levels: 1 };
   const say = DX.pathVerdict(b, { out_load: 33.442 });
