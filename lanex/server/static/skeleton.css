@@ -1,0 +1,62 @@
+/* skeleton.css — the one loading look (modules/loading.js). Class prefix ld-.
+ *
+ * Low-contrast blocks on the MASK ROOM surfaces, shaped like the page they
+ * stand in for. Motion: one synced opacity pulse (1 -> 0.55 over 1.8 s) on the
+ * whole skeleton, so the browser animates a single composited layer, never a
+ * per-line repaint. prefers-reduced-motion: still blocks. */
+
+.ld-skel {
+  display: flex; flex-direction: column; gap: var(--s-4);
+  pointer-events: none; user-select: none;
+  animation: ld-pulse 1.8s ease-in-out infinite alternate;
+  will-change: opacity;
+}
+/* A region showing its skeleton hides what it holds until the data lands
+   (the region's own empty/idle markup must not show before the first load). */
+.ld-loading > :not(.ld-skel):not(.ld-keep) { display: none !important; }
+
+@keyframes ld-pulse { from { opacity: 1; } to { opacity: 0.55; } }
+@keyframes ld-in { from { opacity: 0; } to { opacity: 1; } }
+.ld-in { animation: ld-in 120ms ease-out; }
+
+.ld-line {
+  display: block; height: 12px; border-radius: var(--r-sm);
+  background: var(--surface-3);
+}
+.ld-line + .ld-line { margin-top: 10px; }
+.ld-line.is-eyebrow { height: 9px; background: var(--border-strong); opacity: 0.6; }
+.ld-line.is-title { height: 26px; margin-top: 12px; margin-bottom: 4px; }
+
+.ld-hero {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s-5);
+  padding: var(--s-5); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--surface);
+  min-height: 150px;
+}
+.ld-hero-main { flex: 1 1 auto; min-width: 0; max-width: 760px; }
+.ld-hero-act { display: flex; flex-direction: column; align-items: flex-end; gap: var(--s-2); flex: none; }
+.ld-btn { display: block; width: 132px; height: 32px; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--border); }
+
+.ld-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: var(--s-2); }
+@media (min-width: 1300px) { .ld-tiles { grid-template-columns: repeat(var(--n, 7), minmax(0, 1fr)); } }
+.ld-tile { padding: var(--s-2); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.ld-pic { display: block; aspect-ratio: 16 / 10; border-radius: var(--r-sm); background: var(--surface-2); margin-bottom: var(--s-2); }
+
+.ld-rows { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
+.ld-row { display: grid; grid-template-columns: 2fr repeat(auto-fit, minmax(60px, 1fr)); gap: var(--s-4); align-items: center; padding: 14px var(--s-4); border-top: 1px solid var(--border); }
+.ld-row:first-child { border-top: 0; }
+.ld-row .ld-line + .ld-line { margin-top: 0; }
+
+.ld-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--s-3); }
+.ld-card { padding: var(--s-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); min-height: 120px; }
+
+.ld-block { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.ld-panes { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: var(--s-3); }
+
+/* Screen-reader-only live region (announce()). */
+.ld-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ld-skel { animation: none; opacity: 0.8; }
+  .ld-in { animation: none; }
+}
