@@ -456,7 +456,9 @@ function renderChecks() {
   const el = document.getElementById("vf-checks");
   const checks = _rep.checks || [];
   const count = (f) => { const keep = _filter; _filter = f; const k = checks.filter(filterMatch).length; _filter = keep; return k; };
-  const seg = [["all", "All"], ["problems", "Problems"], ["passed", "Passed"], ["unchecked", "Not checked"]]
+  // Each filter names what it counts, so it adds up with the overview tally
+  // ("21 passed, 1 info" is "Passed or info 22").
+  const seg = [["all", "All"], ["problems", "Problems"], ["passed", "Passed or info"], ["unchecked", "Not checked or off"]]
     .map(([f, l]) => "<button class='seg-btn" + (_filter === f ? " is-active" : "") + "' data-vf-filter='" + f + "' aria-pressed='" + (_filter === f) + "'>" +
       esc(l) + " <span class='vf-seg-n'>" + count(f) + "</span></button>").join("");
   const groups = (_rep.groups || []).map((g) => {
