@@ -484,12 +484,15 @@ function sweepRowHtml(g, cols, gk, open) {
   const passed = rs.filter((r) => verdictOf(r).state === "passed");
   const bestW = passed.map((r) => km(r, "timing__setup__ws")).filter((v) => v != null);
   const running = rs.some((r) => verdictOf(r).state === "running");
+  // Fewer runs than planned: say why (a Stop, or "stop at the first clean").
+  const short = Number.isFinite(sw.count) && rs.length < sw.count;
+  const stopped = rs.some((r) => verdictOf(r).state === "stopped");
   const n = cols.length + 2;
   return "<tr class='rn-sweep" + (open ? " is-open" : "") + "' data-group='" + esc(gk) + "'><td class='rn-c-pick'></td><td class='rn-c-base'></td>" +
     "<td colspan='" + (n - 2) + "'><div class='rn-sw'>" +
     "<button class='rn-exp' data-act='group' aria-expanded='" + open + "'>" + icon("chevron", { size: 12 }) + "</button>" +
-    "<b>Sweep " + esc(axes) + "</b><span class='rn-sw-m'>" + rs.length + " run" + (rs.length === 1 ? "" : "s") +
-    (running ? " · running" : "") +
+    "<b>Sweep " + esc(axes) + "</b><span class='rn-sw-m'>" + rs.length + (short ? " of " + sw.count : "") + " run" + ((short ? sw.count : rs.length) === 1 ? "" : "s") +
+    (running ? " · running" : short ? (stopped ? " · you stopped it" : sw.stop_when_good && passed.length ? " · stopped at the first clean run" : "") : "") +
     (failed.length ? " · <span class='rn-bad'>" + failed.length + " failed" + (reasons.length ? " (" + esc(reasons.join(", ")) + ")" : "") + "</span>" : "") +
     (bestW.length ? " · best WNS " + esc(signed(Math.max(...bestW))) + " ns" : "") + "</span>" +
     "<span class='rn-sw-when'>" + esc(when(sw.created_at)) + "</span>" +
