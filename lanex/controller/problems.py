@@ -693,11 +693,147 @@ _CHECK_FIXES: Dict[str, List[Any]] = {
 }
 _CHECK_OPEN = {
     "lint_errors": ("Open the RTL IDE", {"tab": "ide"}, "Its Problems list shows each lint error with file and line."),
+    "lint_warnings": ("Open the RTL IDE", {"tab": "ide"}, "Its Problems list shows each warning with file and line."),
     "lint_timing_constructs": ("Open the RTL IDE", {"tab": "ide"}, "Remove the delays or wrap them in `ifdef SIMULATION."),
     "unmapped": ("Open the RTL IDE", {"tab": "ide"}, "Usually a module that is used but never defined."),
     "synth_check": ("Open the RTL IDE", {"tab": "ide"}, "Drive every wire; break loops with a register."),
     "latch": ("Open the RTL IDE", {"tab": "ide"}, "Give every signal a value on every path of the always block."),
+    "assign": ("Open the RTL IDE", {"tab": "ide"}, "Usually a port wired straight to another port or a constant."),
+    "eqy": ("Open Verify", {"tab": "verify", "section": "vf-checks"}, "The equivalence report names the outputs that differ."),
+    "lvs": ("Open LVS in Verify", {"tab": "verify", "section": "vf-lvs"},
+            "Netgen's report: which nets or devices don't match, with their names."),
+    "overlap": ("Open DRC in Verify", {"tab": "verify", "section": "vf-drc"}, "Where the overlapping cells are."),
+    "antenna": ("Open reliability in Verify", {"tab": "verify", "section": "vf-rel"},
+                "Every violating net, with its pin and how far over the limit it is."),
+    "pdn": ("Open reliability in Verify", {"tab": "verify", "section": "vf-rel"}, "Which cells or pins have no power."),
+    "wire_length": ("Open reliability in Verify", {"tab": "verify", "section": "vf-rel"}, "The longest wires, by net."),
+    "disc_pin": ("Show the layout", {"tab": "layout"}, "Look for pins with no wire near the place it reports."),
+    "setup": ("Show the worst paths", {"tab": "analytics", "section": "an-timing"}, "Every failing path, worst first."),
+    "hold": ("Show the worst paths", {"tab": "analytics", "section": "an-timing"}, "Every failing path, worst first."),
+    "slew": ("Open timing in Verify", {"tab": "verify", "section": "vf-timing"}, "The nets over the limit, per corner."),
+    "cap": ("Open timing in Verify", {"tab": "verify", "section": "vf-timing"}, "The nets over the limit, per corner."),
+    "fanout": ("Open timing in Verify", {"tab": "verify", "section": "vf-timing"}, "The nets over the limit, per corner."),
 }
+
+# What each check means, in plain words, for the card's lede when the check's
+# own detail is only a number. Checked against LibreLane 3.0.4 (steps/checker.py,
+# steps/odb.py, steps/openroad.py) and the tools' reports.
+_CHECK_PLAIN = {
+    "antenna": "During manufacturing, a long wire collects charge before the transistor gate it ends on is connected "
+               "to anything that can drain it, and the charge can damage that gate. The antenna check counts nets whose "
+               "wire area to gate area ratio is over the PDK's limit. The usual repair is a protection diode on the net, "
+               "or a jump to a higher metal layer near the gate; LibreLane's global router does both when repair is on.",
+    "lvs": "LVS (layout versus schematic) rebuilds the circuit from the drawn shapes and compares it with the netlist "
+           "from synthesis. A mismatch means the chip that would be made is not the circuit you designed: a missing or "
+           "extra connection, a short between two nets, or a cell that isn't connected the way the netlist says. "
+           "Netgen's report names the nets and devices that differ. A short between power and ground, or an unconnected "
+           "power pin, is the most common cause.",
+    "overlap": "Two cells placed on top of each other where that's not allowed. Usually a macro or a hand-placed cell "
+               "on top of standard cells.",
+    "pdn": "Some cells or pins aren't connected to the power grid, so they would have no power.",
+    "wire_length": "A wire longer than LibreLane's warning threshold. Long wires are slow and pick up noise; usually "
+                   "the two ends sit far apart, often a pin placed far from the logic it drives.",
+    "disc_pin": "Pins of cells that no wire reaches. Usually the router ran out of room; the router's log and the "
+                "layout show where.",
+    "slew": "Signals that change too slowly at some nets: a weak driver or too much load. Design repair resizes "
+            "or buffers them.",
+    "cap": "Nets driving more capacitance than their driver is rated for. Design repair splits or buffers them.",
+    "fanout": "Nets driving more inputs than the limit. Design repair buffers them.",
+    "setup": "Some paths take longer than the clock period: data arrives after the clock edge.",
+    "hold": "Some paths are too fast: new data reaches a register too soon after the clock edge.",
+    "eqy": "The formal check says the netlist doesn't do the same thing as the RTL for some outputs.",
+    "assign": "The netlist still has assign statements, which some downstream tools can't read.",
+    "lint_errors": "Verilator found errors in the RTL: code that won't build into hardware as written.",
+    "lint_warnings": "Verilator found code that builds but often isn't what was meant, such as widths that don't match.",
+    "lint_timing_constructs": "The RTL has delays (#10) or other simulation-only timing, which synthesis can't build.",
+    "unmapped": "Synthesis left cells it couldn't map to the standard-cell library.",
+    "synth_check": "Synthesis found undriven wires, combinational loops or other structural problems.",
+    "latch": "Synthesis inferred latches: a signal keeps its old value on some path of an always block. Usually "
+             "unintended, and hard to time.",
+}
+
+# Layers known to be a drawn outline, not a mask, from each PDK's KLayout layer
+# properties (sky130A.lyp: "prBoundary.boundary - 235/4").
+_BOUNDARY_LAYERS = {"sky130": {"235/4": "prBoundary (the cell outline)"}}
+
+
+def _xor_items(run_dir: Path) -> List[Dict[str, Any]]:
+    """The XOR markers: ``[{layer, bbox}]`` from KLayout.XOR's xor.xml."""
+    xml = next(iter(sorted(Path(run_dir).glob("*-klayout-xor/xor.xml"))), None)
+    if xml is None:
+        return []
+    try:
+        text = xml.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for item in re.findall(r"<item>(.*?)</item>", text, re.S):
+        cat = re.search(r"<category>'?([^<']+)'?</category>", item)
+        nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", " ".join(re.findall(r"<value>(.*?)</value>", item, re.S)))]
+        xs, ys = nums[0::2], nums[1::2]
+        out.append({"layer": cat.group(1) if cat else "?",
+                    "bbox": [min(xs), min(ys), max(xs), max(ys)] if xs and ys else None})
+    return out
+
+
+def xor_problem(run_dir: Path, rep: Dict[str, Any], check: Dict[str, Any]) -> Dict[str, Any]:
+    """The XOR check (LibreLane 3.0.4 KLayout.XOR in steps/klayout.py, gated by
+    Checker.XOR on ``design__xor_difference__count`` in steps/checker.py): the
+    GDS Magic wrote against the one KLayout wrote, shape by shape."""
+    cfg = _cfg(run_dir)
+    items = _xor_items(run_dir)
+    n = _num(check.get("value"))
+    layers = sorted({i["layer"] for i in items})
+    pdk = str(cfg.get("PDK") or rep.get("pdk") or "")
+    fam = next((f for f in _BOUNDARY_LAYERS if pdk.startswith(f)), None)
+    bounds = _BOUNDARY_LAYERS.get(fam or "", {})
+    plain = ("LibreLane writes the finished layout twice, once with Magic and once with KLayout, and XORs the two "
+             "files: any shape that is in one and not the other is a difference. %s found. A difference means one of "
+             "the two stream-outs got something wrong, so it isn't certain which file is right. The GDS LibreLane hands "
+             "you (final/gds) is Magic's." % ("%s difference%s" % (fmt(n), "" if n == 1 else "s") if n is not None
+                                                else "Differences were"))
+    fixes: List[Dict[str, Any]] = []
+    notes: List[str] = []
+    evidence = ["On layer %s: %d marker%s." % (lay, sum(1 for i in items if i["layer"] == lay),
+                                               "" if sum(1 for i in items if i["layer"] == lay) == 1 else "s")
+                for lay in layers]
+    title = "Mask XOR: Magic's and KLayout's GDS differ"
+    die = _die(run_dir)
+    area = cfg.get("DIE_AREA")
+    area_v = [_num(x) for x in (area if isinstance(area, (list, tuple)) else str(area or "").split())]
+    stale = (str(cfg.get("FP_SIZING") or "relative") == "relative" and len(area_v) == 4 and None not in area_v
+             and die is not None and any(abs(a - b) > 0.01 for a, b in zip(area_v, die)))
+    if layers and all(lay in bounds for lay in layers):
+        title = "Mask XOR: only the cell outline differs"
+        plain += (" Here every difference is on %s, a drawn outline, not a mask layer, so the shapes that would be "
+                  "made match." % bounds[layers[0]])
+        if stale:
+            # Magic.StreamOut exports DIE_AREA from the config into mag_gds.tcl,
+            # which draws the outline (property FIXED_BBOX) from it; KLayout's
+            # stream-out takes the outline from the DEF's real die.
+            plain += (" The cause: FP_SIZING is relative, so LibreLane sized the die itself (%s µm), but config.json "
+                      "still sets DIE_AREA (%s µm). Magic drew the outline from DIE_AREA, KLayout from the real die."
+                      % (" ".join(fmt(x) for x in die), fmt(area)))
+            fixes.append(_setting("DIE_AREA", area, " ".join(fmt(x) for x in die),
+                                  "The die this run really has, so both outlines agree. Removing DIE_AREA from config.json "
+                                  "works too, as long as FP_SIZING stays relative.", "Match DIE_AREA to the die"))
+        notes.append("Still fix it rather than turning the check off: the outline tells whatever reads the GDS next "
+                     "(a parent design, a shuttle's checks) where the block ends.")
+    else:
+        plain += (" Open the markers to see where and on which layer. A difference on a metal or via layer is a real "
+                  "ambiguity in what would be made; report it with both GDS files if your design doesn't explain it.")
+    box = next((i["bbox"] for i in items if i["bbox"]), None)
+    if box:
+        fixes.append(_open("Show the difference in Layout", {"tab": "layout", "box": ",".join("%.2f" % v for v in box)},
+                           "The final layout with the XOR markers on, zoomed to the first one."))
+    fixes.append(_open("Open LVS & XOR in Verify", {"tab": "verify", "section": "vf-lvs"},
+                       "The XOR report (xor.xml) opens in KLayout's marker browser from there."))
+    notes.append("ERROR_ON_XOR_ERROR fails the run on any difference (LibreLane's Checker.XOR).")
+    return {"id": "check-xor", "severity": check["status"], "kind": "check", "title": title, "plain": plain,
+            "where": {"check": "xor", "stage": "signoff"}, "evidence": evidence,
+            "diag": {"kind": "xor", "value": check.get("value"), "limit": check.get("limit"), "layers": layers,
+                     "stale_die_area": stale},
+            "fixes": fixes, "notes": notes, "learn": ["xor"]}
 
 
 def check_problems(run_dir: Path, rep: Dict[str, Any], skip: set) -> List[Dict[str, Any]]:
@@ -705,6 +841,9 @@ def check_problems(run_dir: Path, rep: Dict[str, Any], skip: set) -> List[Dict[s
     out = []
     for c in rep.get("checks") or []:
         if c["status"] not in ("fail", "warn") or c["id"] in skip:
+            continue
+        if c["id"] == "xor":
+            out.append(xor_problem(run_dir, rep, c))
             continue
         fixes = []
         for var, prop, why in _CHECK_FIXES.get(c["id"], []):
@@ -716,8 +855,11 @@ def check_problems(run_dir: Path, rep: Dict[str, Any], skip: set) -> List[Dict[s
         if c["id"] in _CHECK_OPEN:
             label, go, why = _CHECK_OPEN[c["id"]]
             fixes.append(_open(label, go, why))
+        detail = c.get("detail") or c.get("note") or ""
+        meaning = _CHECK_PLAIN.get(c["id"], "")
         out.append({"id": "check-" + c["id"], "severity": c["status"], "kind": "check", "title": c["name"],
-                    "plain": c.get("detail") or c.get("note") or "", "where": {"check": c["id"]},
+                    "plain": (detail + " " + meaning).strip() if meaning and meaning not in detail else detail,
+                    "where": {"check": c["id"]},
                     "evidence": [], "diag": {"kind": "check", "value": c.get("value"), "limit": c.get("limit")},
                     "fixes": fixes, "notes": [], "learn": []})
     return out
