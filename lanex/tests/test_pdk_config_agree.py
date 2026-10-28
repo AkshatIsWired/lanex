@@ -192,6 +192,19 @@ def test_blank_project_gets_a_bigger_gf180_die(tmp_path: Path) -> None:
     assert cfg["pdk::gf180mcu*"]["DIE_AREA"] == [0, 0, 300, 300]
 
 
+def test_counter_and_multiplier_on_sky130_limit_fanout(tmp_path: Path) -> None:
+    # Without it both finished "Clean, 1 warning" on sky130A (11 and 121
+    # max-slew violations in the ss corners); with MAX_FANOUT_CONSTRAINT 6
+    # both ran clean (2026-10-28). Other PDKs get it only as a sky130 section.
+    for name in ("counter", "multiplier"):
+        scaffold.create_project(tmp_path / name, name, top="", pdk="sky130A", scl="sky130_fd_sc_hd")
+        cfg = json.loads((tmp_path / name / "config.json").read_text())
+        assert cfg["MAX_FANOUT_CONSTRAINT"] == 6, name
+        scaffold.create_project(tmp_path / (name + "-g"), name, top="", pdk="gf180mcuD", scl="gf180mcu_fd_sc_mcu7t5v0")
+        cfg = json.loads((tmp_path / (name + "-g") / "config.json").read_text())
+        assert "MAX_FANOUT_CONSTRAINT" not in cfg and cfg["pdk::sky130*"] == {"MAX_FANOUT_CONSTRAINT": 6}, name
+
+
 def test_template_pdk_tuning_keys_are_real_variables() -> None:
     from lanex.controller import introspect
     known = {v["name"] for v in introspect.list_variables()}
