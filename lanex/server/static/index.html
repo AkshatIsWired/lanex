@@ -599,83 +599,94 @@
 
     <!-- TOOLS -->
     <section class="section" id="sec-tools">
-      <nav class="section-jump" id="tools-jump" aria-label="Jump to section">
-        <span class="muted">Jump to:</span>
-        <button class="chip chip-clickable" data-jump="tools-toolchain">Flow engine</button>
-        <button class="chip chip-clickable" data-jump="tools-pdk">PDKs</button>
-        <button class="chip chip-clickable" data-jump="tools-viewers">Viewers</button>
-        <button class="chip chip-clickable" data-jump="tools-extras">Helpers</button>
-        <button class="chip chip-clickable" data-jump="local-tools-card">Local toolchain</button>
+      <nav class="section-jump tl-strip" id="tools-jump" aria-label="Tools page actions">
+        <span class="tl-strip-gap"></span>
+        <button class="btn btn-sm btn-ghost" id="tl-copy-diag" title="Copy versions, image digest, PDK and system facts for a bug report">Copy diagnostics</button>
+        <button class="btn btn-sm btn-ghost" id="tl-recheck" title="Probe every component again (a few seconds)">Check all</button>
       </nav>
-      <header class="an-head tl-head">
-        <div>
-          <div class="an-eyebrow">Components</div>
-          <h2 class="an-title">Tools and PDKs</h2>
-          <p class="an-lede">Everything the flow needs, on the versions this LanEx release was tested with. Nothing updates on its own.</p>
-        </div>
-        <div class="an-head-act tl-head-act">
-          <button class="btn btn-sm btn-ghost" id="tl-copy-diag" title="Copy versions, image digest, PDK and system facts for a bug report">Copy diagnostics</button>
-          <button class="btn btn-sm btn-ghost" id="tl-recheck" title="Probe every component again">Check all</button>
-        </div>
-      </header>
-      <div class="tl-bar">
-        <div id="tools-summary" class="tl-summary" aria-live="polite">
-          <div class="tl-sum is-loading"><span class="spinner-sm"></span><strong>Checking components…</strong></div>
-        </div>
-        <div class="tl-filters" role="group" aria-label="Show">
-          <button class="tl-filter is-on" data-tl-filter="all" aria-pressed="true">All <span class="tl-count"></span></button>
-          <button class="tl-filter" data-tl-filter="installed" aria-pressed="false">Installed <span class="tl-count"></span></button>
-          <button class="tl-filter" data-tl-filter="updates" aria-pressed="false">Updates <span class="tl-count"></span></button>
-          <button class="tl-filter" data-tl-filter="problems" aria-pressed="false">Problems <span class="tl-count"></span></button>
-        </div>
+      <div id="tools-summary" class="tl-summary" aria-live="polite">
+        <div class="tl-verdict is-loading"><div class="tl-verdict-main"><div class="an-eyebrow">Tools and PDKs</div>
+          <h2 class="tl-verdict-title"><span class="spinner-sm"></span> Checking components…</h2>
+          <p class="tl-verdict-lede">Probing the container engine, the LibreLane image, PDKs and helpers. This takes a few seconds.</p></div></div>
       </div>
-      <div class="tl-list" id="tl-list" data-filter="all">
-        <div class="tl-cols" aria-hidden="true"><span>Status</span><span>Component</span><span>Installed / tested</span><span>Size</span><span></span></div>
-        <section class="tl-group" id="tools-toolchain">
-          <h3 class="tl-group-h">Flow engine <span>One container image runs every EDA tool, version-matched</span></h3>
-          <div class="tl-rows" id="tl-engine-rows">
-            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="tl-list" id="tl-list">
+        <section class="tl-group tl-engine" id="tools-toolchain">
+          <div class="tl-sec-h">
+            <h3 class="tl-sec-t">Flow engine</h3>
+            <span class="tl-sec-d">Every EDA tool the flow runs comes from one container image, version-matched to LibreLane.</span>
+            <span class="tl-sec-aside tl-engine-use" id="tl-engine-use"></span>
           </div>
-          <div id="runtime-card"></div>
+          <div class="tl-hero">
+            <div class="tl-tiles" id="tl-engine-rows">
+              <div class="tl-tile tl-skel"><i></i><i></i><i></i><i></i></div>
+              <div class="tl-tile tl-skel"><i></i><i></i><i></i><i></i></div>
+            </div>
+            <div id="runtime-card"></div>
+          </div>
         </section>
         <section class="tl-group" id="tools-pdk">
-          <h3 class="tl-group-h">PDKs <span>Process design kits, downloaded by ciel at the version LibreLane pins</span></h3>
-          <div class="tl-rows" id="pdk-store-row">
-            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="tl-sec-h">
+            <h3 class="tl-sec-t">PDKs</h3>
+            <span class="tl-sec-d">Process design kits. ciel downloads each one at the version LibreLane pins.</span>
+            <span class="tl-sec-aside">
+              <span id="tl-pdk-ciel-host"></span>
+              <span class="tl-pdkroot tools-pdk-card"><span class="muted">Folder</span> <code id="tl-pdkroot-path">…</code>
+                <button class="btn btn-sm btn-ghost" id="tl-pdkroot-edit" title="Change where PDKs live (PDK_ROOT)">Change</button></span>
+            </span>
           </div>
-          <div class="tl-pdkroot tools-pdk-card">
+          <div class="tl-pdkroot-form" id="tl-pdkroot-form" hidden>
             <label class="lbl" for="pdk-root-input">PDK folder (PDK_ROOT)</label>
             <div class="pdk-root-row">
               <input type="text" id="pdk-root-input" class="grow" placeholder="e.g. /home/user/.ciel" />
-              <button id="btn-save-pdk-root" class="btn btn-sm btn-ghost tl-act">Save</button>
+              <button id="btn-save-pdk-root" class="btn btn-sm btn-primary">Save</button>
             </div>
             <p class="hint">Where PDKs live. Point it at a bigger drive if you run out of space; LanEx and the flow both read it from here.</p>
           </div>
-        </section>
-        <section class="tl-group" id="tools-viewers">
-          <h3 class="tl-group-h">Viewers <span>Desktop windows the Layout tab opens on a run's results</span></h3>
-          <div class="tl-rows" id="desktop-viewers">
-            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
-          </div>
-          <div class="tl-rows" id="viewer-gds3d"></div>
-        </section>
-        <section class="tl-group" id="tools-extras">
-          <h3 class="tl-group-h">Helpers <span>Optional: simulation, schematics and waveforms</span></h3>
-          <div class="tl-rows" id="recommended-tools">
-            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="tl-fams" id="pdk-store-row">
+            <div class="tl-fam tl-skel"><i></i><i></i><i></i></div>
+            <div class="tl-fam tl-skel"><i></i><i></i><i></i></div>
+            <div class="tl-fam tl-skel"><i></i><i></i><i></i></div>
           </div>
         </section>
+        <div class="tl-pair">
+          <section class="tl-group tl-pair-a" id="tools-viewers">
+            <div class="tl-sec-h">
+              <h3 class="tl-sec-t">Viewers</h3>
+              <span class="tl-sec-d">Desktop windows the Layout tab opens on a run.</span>
+            </div>
+            <div class="tl-cards tl-cards-4">
+              <div class="tl-cards-c" id="desktop-viewers">
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+              </div>
+              <div class="tl-cards-c" id="viewer-gds3d"></div>
+            </div>
+          </section>
+          <section class="tl-group tl-pair-b" id="tools-extras">
+            <div class="tl-sec-h">
+              <h3 class="tl-sec-t">Helpers</h3>
+              <span class="tl-sec-d">Optional. Simulation, schematics and waveforms.</span>
+            </div>
+            <div class="tl-cards tl-cards-3">
+              <div class="tl-cards-c" id="recommended-tools">
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+              </div>
+            </div>
+          </section>
+        </div>
         <details class="tl-group tl-local tools-local-card" id="local-tools-card">
-          <summary class="tl-group-h">Local toolchain <span>Only for the Local tools run engine: native binaries on this system's PATH</span></summary>
-          <p class="hint tl-local-note">With the Container engine none of these are needed. If a native tool doesn't match your LibreLane release (for example a Yosys build without pyosys), switch to Container to use the pinned binaries in the image.</p>
+          <summary class="tl-local-sum">
+            <span class="tl-sec-t">Local toolchain</span>
+            <span class="tl-sec-d">Only for the Local tools run engine: native binaries on this system's PATH.</span>
+            <span class="tl-sec-aside muted" id="tl-local-count"></span>
+          </summary>
+          <p class="hint tl-local-note">With the Container engine none of these are needed. If a native tool doesn't match your LibreLane release (for example a Yosys build without pyosys), switch to Container to use the pinned binaries in the image. librelane and ciel install with pip; OpenROAD, Magic and Netgen have no system package, so use the image, Nix or conda (litex-hub).</p>
+          <div class="tl-cols" aria-hidden="true"><span>Status</span><span>Tool</span><span>Installed</span><span>Size</span><span></span></div>
           <div class="tl-rows" id="tools-grid"></div>
         </details>
-        <p class="tl-filter-empty" id="tl-filter-empty" hidden></p>
       </div>
     </section>
 
