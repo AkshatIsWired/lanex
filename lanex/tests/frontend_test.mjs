@@ -1258,6 +1258,27 @@ check("steps: one count meaning (turned-off steps out of the total, current = do
   assert.deepEqual(FS.stepCounts(live), { done: 2, total: 4, skipped: 1, current: 3 });
 });
 
+{
+  const LI = await import(toUrl(resolve(MOD, "ide", "lintinfo.js")));
+  check("ide: plain hints for codeless syntax errors (missing ;, bad port)", () => {
+    assert.match(LI.explainMessage("syntax error, unexpected default, expecting ';'"), /semicolon .* line before/);
+    assert.match(LI.explainMessage("Pin not found: 'select'"), /port the module doesn't have/);
+    assert.equal(LI.explainMessage("something else entirely"), "");
+  });
+}
+{
+  const SU = await import(toUrl(resolve(MOD, "setup.js")));
+  check("run: the IDE's last syntax-check errors are read per project", () => {
+    const mem = { "ll.rtl:/p/a": JSON.stringify({ lint: { errors: 2, warnings: 1 } }), "ll.rtl:/p/b": JSON.stringify({ lint: { errors: 0 } }), "ll.rtl:/p/c": "{bad" };
+    const store = { get: (k, d) => (k in mem ? mem[k] : d) };
+    assert.equal(SU.lastLintErrors("/p/a", store), 2);
+    assert.equal(SU.lastLintErrors("/p/b", store), 0);
+    assert.equal(SU.lastLintErrors("/p/c", store), 0);
+    assert.equal(SU.lastLintErrors("/p/none", store), 0);
+    assert.equal(SU.lastLintErrors("", store), 0);
+  });
+}
+
 check("steps: list numbers skip turned-off steps (list N == header 'Step N' == NN- folder)", () => {
   const live = ["done", "done", "skipped", "running", "pending"];
   assert.deepEqual(FS.stepNumbers(live), [1, 2, null, 3, 4]);

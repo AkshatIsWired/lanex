@@ -729,6 +729,16 @@ export function paintRunButton() {
   b.disabled = off;
 }
 
+// Errors the RTL IDE's last syntax check found in a project (ide/main.js
+// recordRtlStatus keeps it per project), or 0 when it wasn't checked.
+export function lastLintErrors(designDir, store = safeStorage) {
+  if (!designDir) return 0;
+  let st = null;
+  try { st = JSON.parse(store.get("ll.rtl:" + designDir, "") || "null"); } catch (_e) { st = null; }
+  const n = st && st.lint && Number(st.lint.errors);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 async function onRunClick({ show = false, fixed = false } = {}) {
   if (!state.designDir) {
     toast.show("Pick a design folder first.", "warn");
@@ -737,6 +747,21 @@ async function onRunClick({ show = false, fixed = false } = {}) {
   if (state.designMissing) {
     toast.show("Project folder not found: " + state.designMissing + ". Locate it or remove it from the list on Setup.", "warn");
     return;
+  }
+  // The RTL IDE's last syntax check of this project found errors: LibreLane's
+  // first step (Verilator lint) stops on them, so say so before the run.
+  const rselNow = document.getElementById("run-resume-from");
+  const lintErrs = rselNow && rselNow.value ? 0 : lastLintErrors(state.designDir);
+  if (lintErrs > 0) {
+    const { choiceDialog } = await import("./dialog.js");
+    const pick = await choiceDialog({
+      title: "The RTL has " + lintErrs + (lintErrs === 1 ? " error" : " errors"),
+      body: "The last syntax check in the RTL IDE found " + (lintErrs === 1 ? "an error" : lintErrs + " errors") +
+        " in this project. The flow's first step runs the same check (Verilator lint) and stops on it.",
+      choices: [{ label: "Show them", value: "show" }, { label: "Run anyway", value: "run", danger: true }],
+    });
+    if (pick === "show") { (await import("./nav.js")).go("ide"); return; }
+    if (pick !== "run") return;
   }
   // Preflight: catch missing tools / PDK before a long run fails half-way.
   try {

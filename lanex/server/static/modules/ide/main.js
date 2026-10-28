@@ -9,7 +9,7 @@
 import { api, sse, fmt } from "../api.js";
 import { Editor } from "./editor.js";
 import { parseVCD, formatTime, parseTimescale, valueAt, plainTicks } from "./vcd.js";
-import { explain, TESTBENCH_STYLE } from "./lintinfo.js";
+import { explain, explainMessage, TESTBENCH_STYLE } from "./lintinfo.js";
 import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
 import { applyZoom, currentZoom, isAutoZoom } from "../zoom.js";
@@ -1282,7 +1282,7 @@ const IC_WARN = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none' str
 const IC_CARET = "<svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 9l6 6 6-6'/></svg>";
 
 function diagRow(d) {
-  const why = d.code ? explain(d.code) : "";
+  const why = d.code ? explain(d.code) : d.severity === "error" ? explainMessage(d.msg) : "";
   return "<div class='pb-item pb-" + d.severity + "' role='button' tabindex='0' data-file='" + fmt.escape(d.file) +
     "' data-line='" + (d.line || 1) + "' data-col='" + (d.col || 1) + "'>" +
     "<span class='pb-ic'>" + (d.severity === "error" ? IC_ERR : IC_WARN) + "</span>" +
