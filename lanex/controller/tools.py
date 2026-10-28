@@ -897,16 +897,77 @@ def check_tools(*, force: bool = False) -> Dict[str, Any]:
             else ("Pick a PDK below and click Install." if not installed_pdks else "")
         ),
     }
+    pdk_out["versions"] = pdk_versions(installed_pdks, catalog)
+    cont = dict(container_engine())
+    try:
+        from . import container_run
+
+        cont.update(container_run.image_provenance())
+    except Exception:
+        pass
     result = {
         "platform": _platform_key(),
         "tools": out,
         "pdk": pdk_out,
         "pdk_catalog": catalog,
-        "container": container_engine(),
+        "container": cont,
+        "host": host_facts(),
     }
     _check_tools_cache.clear()
     _check_tools_cache.append((time.time(), result))
     return result
+
+
+def pdk_versions(installed: List[str], catalog: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+    """``{variant: {"installed": <hash>, "pinned": <hash>}}`` for the Tools tab.
+
+    Read-only. ciel enables a variant as ``<root>/<variant>`` ->
+    ``ciel/<family>/versions/<hash>/<variant>``, so the hash is the link's
+    version directory ("" for a manual install). ``pinned`` is the version the
+    installed LibreLane demands ("" when it can't be determined).
+    """
+    out: Dict[str, Dict[str, str]] = {}
+    pinned_by_family: Dict[str, str] = {}
+    roots = _pdk_roots()
+    for variant in installed:
+        family = str((catalog.get(variant) or {}).get("family") or variant)
+        if family not in pinned_by_family:
+            try:
+                from . import pdk as _pdk
+
+                pinned_by_family[family] = _pdk.required_pdk_version(family) or ""
+            except Exception:
+                pinned_by_family[family] = ""
+        current = ""
+        for root in roots:
+            link = root / variant
+            try:
+                if not (link / "libs.ref").is_dir():
+                    continue
+                target = link.resolve()
+                if target.parent.parent.name == "versions":
+                    current = target.parent.name
+                break
+            except Exception:
+                continue
+        out[variant] = {"installed": current, "pinned": pinned_by_family[family]}
+    return out
+
+
+def host_facts() -> Dict[str, str]:
+    """Read-only host facts for the Tools tab's "Copy diagnostics"."""
+    import platform
+
+    facts = {"kernel": platform.release(), "os": "", "python": platform.python_version()}
+    try:
+        for line in Path("/etc/os-release").read_text(encoding="utf-8").splitlines():
+            if line.startswith("PRETTY_NAME="):
+                facts["os"] = line.split("=", 1)[1].strip().strip('"')
+                break
+    except Exception:
+        facts["os"] = platform.platform()
+    facts["wsl"] = "yes" if "microsoft" in facts["kernel"].lower() else "no"
+    return facts
 
 
 def _pdk_roots() -> List[Path]:

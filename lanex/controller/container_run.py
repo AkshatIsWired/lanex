@@ -146,6 +146,38 @@ _KNOWN_IMAGE_DIGESTS = {
 }
 
 
+def image_provenance() -> Dict[str, Any]:
+    """Read-only facts for the Tools tab: is the image LanEx will use the one
+    this release was tested with?
+
+    ``image_tested_digest`` is the digest LanEx releases test for the installed
+    LibreLane version ("" when this version has none on record);
+    ``image_custom`` is True when the image is overridden or pinned to another
+    digest, None when there is nothing to compare against.
+    """
+    ref = image_ref()
+    ver = ""
+    try:
+        import librelane  # type: ignore
+
+        ver = getattr(librelane, "__version__", "") or ""
+    except Exception:
+        ver = ""
+    tested = _KNOWN_IMAGE_DIGESTS.get(ver, "")
+    override = bool(os.environ.get("LIBRELANE_IMAGE_OVERRIDE"))
+    if override:
+        custom: Optional[bool] = True
+    elif tested:
+        custom = tested not in ref
+    else:
+        custom = None
+    return {
+        "image_tested_digest": tested,
+        "image_custom": custom,
+        "librelane_version": ver,
+    }
+
+
 def pull_argv(engine: str) -> List[str]:
     """``<engine> pull <image>`` — pre-warm the image."""
     return [engine, "pull", image_ref()]
