@@ -256,6 +256,7 @@ const _CHART_METRICS = [
 
 async function renderCompareCharts(host, data, cols) {
   if (!host) return;
+  if (typeof window.echarts === "undefined") await import("./loading.js").then((m) => m.loadECharts()).catch(() => null);
   if (typeof window.echarts === "undefined") { host.innerHTML = "<p class='muted'>Charts need ECharts.</p>"; return; }
   const { runBarsOption, runBarsHeight } = await import("./barchart.js");
   const table = data.metric_table || {};

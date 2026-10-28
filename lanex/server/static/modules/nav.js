@@ -187,13 +187,18 @@ function saveScroll() {
 // Pages render after they show (data arrives later): keep asking for the
 // position until the page is tall enough, for up to two seconds, and give up
 // the moment the user scrolls.
+// The first write waits for the next frame too: writing scrollTop right after
+// the page switch forces the browser to lay the new page out at once, inside
+// the click (20-350 ms on a slow PC); in a frame it is laid out once anyway.
 let _restoreTok = 0;
 function restoreScroll(top) {
   const w = work();
   if (!w) return;
   const tok = ++_restoreTok;
-  w.scrollTop = top;
-  if (!top) return;
+  if (!top) {
+    requestAnimationFrame(() => { if (tok === _restoreTok && w.scrollTop) w.scrollTop = 0; });
+    return;
+  }
   const t0 = performance.now();
   const stop = () => { _restoreTok++; };
   w.addEventListener("wheel", stop, { once: true, passive: true });

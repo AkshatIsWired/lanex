@@ -29,6 +29,12 @@ function slackPill(slack, met) {
 function drawHist(hist, unit) {
   const el = document.getElementById("timing-hist");
   if (!el) return;
+  // ECharts loads with the first chart (loading.js); draw once it is in.
+  if (!window.echarts && hist && hist.bins && hist.bins.length) {
+    import("./loading.js").then((m) => m.loadECharts()).then(() => drawHist(hist, unit))
+      .catch(() => { el.innerHTML = "<p class='muted' style='padding:var(--s-3)'>Couldn't load the chart library. The critical endpoints are in the table below.</p>"; });
+    return;
+  }
   let chart = window.echarts && window.echarts.getInstanceByDom(el);
   if (!window.echarts || !hist || !hist.bins || !hist.bins.length) {
     if (chart) chart.dispose();

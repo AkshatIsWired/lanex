@@ -4329,6 +4329,15 @@ def h_design_info(handler: Any) -> None:
     try:
         info = configedit.read_config(d)
         data = info["data"]
+        keys = [k for k in (body.get("keys") or []) if isinstance(k, str) and re.match(r"^[A-Z][A-Z0-9_]*$", k)]
+        if body.get("keys_only"):
+            # Only the config's values for `keys` (Setup's PDK picker at boot):
+            # no source scan, which walks the whole project tree.
+            _respond(handler, {
+                "settings": {k: data.get(k) for k in keys},
+                "config": {k: info[k] for k in ("name", "format", "editable", "reason")},
+            })
+            return
         scan = autoconfig.scan_sources(d, only_files=files or None)
         modules = [m for m in scan.get("modules", []) if m not in set(scan.get("testbench_modules", []))]
         top = body.get("top") or data.get("DESIGN_NAME") or scan.get("top")
@@ -4337,7 +4346,6 @@ def h_design_info(handler: Any) -> None:
         # The Setup page's Settings card asks for a few more keys: their
         # top-level values as the config writes them, and any pdk::/scl::
         # section that sets them too.
-        keys = [k for k in (body.get("keys") or []) if isinstance(k, str) and re.match(r"^[A-Z][A-Z0-9_]*$", k)]
         settings_scoped = {k: configedit.scoped_values(data, k) for k in keys}
         _respond(handler, {
             "settings": {k: data.get(k) for k in keys},

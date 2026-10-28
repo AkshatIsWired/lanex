@@ -1882,6 +1882,93 @@ check("console: Manual rail item is gone, go('manual') opens the drawer", () => 
   assert.match(nav, /tab === "manual" \|\| tab === "console"/);
 });
 
+// ---------------------------------------------------------------- perf pass: shell, boot, Run
+const LD = await import(toUrl(resolve(MOD, "loading.js")));
+const PF = await import(toUrl(resolve(MOD, "preflight.js")));
+
+check("loading: a skeleton shows only after the delay, and never over content", () => {
+  assert.equal(LD.skeletonDue(0), false);
+  assert.equal(LD.skeletonDue(LD.SKELETON_DELAY_MS - 1), false);
+  assert.equal(LD.skeletonDue(LD.SKELETON_DELAY_MS), true);
+  assert.equal(LD.skeletonDue(5000, { hasContent: true }), false, "stale content stays, no skeleton over it");
+  assert.equal(LD.skeletonDue(0, { delay: 0 }), true);
+});
+
+check("loading: every page has a skeleton shaped like it", () => {
+  for (const tab of ["setup", "ide", "cells", "pipeline", "runs", "layout", "analytics", "verify", "tools"]) {
+    const html = LD.pageSkeleton(tab);
+    assert.match(html, /class='ld-/, tab);
+    assert.doesNotMatch(html, /No runs|No run yet|Open a project/i, tab + " skeleton must not read as an empty state");
+  }
+  assert.equal((LD.pageSkeleton("pipeline").match(/class='ld-tile'/g) || []).length, 7, "Flow's seven stages");
+});
+
+await checkAsync("loading: onceLoader shares one load and retries after a failure", async () => {
+  let n = 0, fail = true;
+  const load = LD.onceLoader(() => { n++; if (fail) throw new Error("x"); return "lib"; });
+  await assert.rejects(load());
+  assert.equal(n, 1);
+  fail = false;
+  const [a, b] = await Promise.all([load(), load()]);
+  assert.equal(a, "lib"); assert.equal(b, "lib");
+  assert.equal(n, 2, "two callers, one load after the failed one");
+  assert.equal(await load(), "lib");
+  assert.equal(n, 2);
+});
+
+check("preflight: a result is reused only for the same picks while fresh", () => {
+  const s = { designDir: "/p/spm", selectedPdk: "sky130A", selectedScl: "sky130_fd_sc_hd", runMode: "container" };
+  const key = PF.preflightKey(s);
+  const last = { result: { ready: true }, key, at: 1000 };
+  assert.deepEqual(PF.reusablePreflight(last, { key, now: 1000 + 5000 }), { ready: true });
+  assert.equal(PF.reusablePreflight(last, { key, now: 1000 + PF.PREFLIGHT_FRESH_MS + 1 }), null, "stale");
+  assert.equal(PF.reusablePreflight(last, { key: PF.preflightKey({ ...s, selectedPdk: "sky130B" }), now: 2000 }), null, "other PDK");
+  assert.equal(PF.reusablePreflight(last, { key: PF.preflightKey({ ...s, runMode: "local" }), now: 2000 }), null, "other mode");
+  assert.equal(PF.reusablePreflight(last, { key: PF.preflightKey({ ...s, designDir: "/p/other" }), now: 2000 }), null, "other project");
+  assert.equal(PF.reusablePreflight({ ...last, at: 0 }, { key, now: 2000 }), null, "forgotten (at 0) is not fresh");
+  assert.equal(PF.reusablePreflight(last, { key, now: 500 }), null, "a clock that went back is not fresh");
+  assert.equal(PF.reusablePreflight(null, { key, now: 2000 }), null);
+});
+
+check("preflight: what a check means for a Run click", () => {
+  assert.equal(PF.runBlocker(null), null, "no check: nothing known, the run starts");
+  assert.equal(PF.runBlocker({ ready: true, pdk: {} }), null);
+  const mm = { message: "x", config: { pdk: "sky130B" } };
+  assert.deepEqual(PF.runBlocker({ ready: false, pdk: { mismatch: mm }, blockers: ["PDK"] }), { kind: "mismatch", mismatch: mm });
+  assert.deepEqual(PF.runBlocker({ ready: false, pdk: {}, blockers: ["no Docker"] }), { kind: "blockers", blockers: ["no Docker"] });
+});
+
+await checkAsync("setup: the server's refusals read in plain words", async () => {
+  const SU2 = await import(toUrl(resolve(MOD, "setup.js")));
+  assert.match(SU2.refusalText("already running"), /already going/);
+  assert.match(SU2.refusalText("HTTP 502"), /didn't answer/);
+  const ws = "The project path has spaces in it.";
+  assert.equal(SU2.refusalText(ws), ws, "a plain refusal is kept as the server wrote it");
+});
+
+check("boot: index.html preloads exactly app.js's static imports, and no blocking ECharts", () => {
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  assert.doesNotMatch(html, /<script[^>]+echarts/, "ECharts loads on demand (loading.js)");
+  const pre = new Set([...html.matchAll(/rel="modulepreload" href="\/static\/([^"]+)"/g)].map((m) => m[1]));
+  const seen = new Set();
+  const walk = (rel) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const src = readFileSync(resolve(MOD, "..", rel), "utf8");
+    for (const m of src.matchAll(/^\s*import\s+(?:[^'"]*?\s+from\s+)?["']([^"']+)["']/gm)) {
+      const parts = rel.split("/"); parts.pop();
+      for (const seg of m[1].split("/")) { if (seg === "..") parts.pop(); else if (seg !== ".") parts.push(seg); }
+      walk(parts.join("/"));
+    }
+  };
+  walk("app.js");
+  const missing = [...seen].filter((f) => !pre.has(f));
+  const extra = [...pre].filter((f) => !seen.has(f));
+  assert.deepEqual(missing, [], "add a modulepreload for these (a static import of the first paint)");
+  assert.deepEqual(extra, [], "remove these modulepreloads (no longer imported at start)");
+  for (const page of ["flow.js", "runs.js", "tools.js", "analytics.js"]) assert.ok(!seen.has("modules/" + page), page + " loads on demand");
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 
