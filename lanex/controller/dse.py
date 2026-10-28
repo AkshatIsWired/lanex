@@ -361,8 +361,19 @@ def point_outcome(run_dir: str | Path) -> Dict[str, Any]:
         reason = "stopped"
     elif kind == "incomplete":
         reason = "ended before the last step"
+    # "Good enough to stop the sweep" is Verify's passed verdict: a run that
+    # finished with timing missed in a corner LibreLane only warns about is
+    # "clean" to runexplain but not timing met.
+    verdict = None
+    if kind == "clean":
+        try:
+            from . import verify
+            verdict = (verify.run_verdict(run_dir) or {}).get("state")
+        except Exception:  # pragma: no cover - unreadable folder
+            verdict = None
     return {"ok": kind == "clean", "kind": kind, "stage": rx.get("stage"),
-            "step": step.get("id") or step.get("dir"), "reason": reason}
+            "step": step.get("id") or step.get("dir"), "reason": reason,
+            "verdict": verdict, "good": kind == "clean" and verdict == "passed"}
 
 
 class DseJob:
@@ -488,9 +499,11 @@ class DseJob:
             events.publish("dse_config_done", {"tag": tag, "ok": ok, "index": i, "total": len(tags),
                                                "kind": res.get("kind"), "stage": res.get("stage"),
                                                "reason": res.get("reason")})
-            if ok and self.stop_when_good and i + 1 < len(tags):
-                # "Stop when one is good enough": timing met and every check
-                # clean (a "clean" run); the rest are dropped, not run.
+            good = bool(res.get("good", ok))
+            if good and self.stop_when_good and i + 1 < len(tags):
+                # "Stop when one is good enough": timing met in every corner
+                # and every check clean (Verify's passed verdict, not only a
+                # flow that finished); the rest are dropped, not run.
                 with self._lock:
                     self.stopped_early = True
                     self.queued = []
