@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="/static/console.css" />
   <link rel="stylesheet" href="/static/layout.css" />
   <link rel="stylesheet" href="/static/cells.css" />
+  <link rel="stylesheet" href="/static/tools.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
        real icon (zero extra deps; static manifest, no service worker). -->
@@ -592,46 +593,82 @@
     <section class="section" id="sec-tools">
       <nav class="section-jump" id="tools-jump" aria-label="Jump to section">
         <span class="muted">Jump to:</span>
-        <button class="chip chip-clickable" data-jump="tools-toolchain">Toolchain</button>
-        <button class="chip chip-clickable" data-jump="tools-extras">Extras</button>
-        <button class="chip chip-clickable" data-jump="local-tools-card">Local tools</button>
-        <button class="chip chip-clickable" data-jump="tools-pdk">PDK</button>
+        <button class="chip chip-clickable" data-jump="tools-toolchain">Flow engine</button>
+        <button class="chip chip-clickable" data-jump="tools-pdk">PDKs</button>
         <button class="chip chip-clickable" data-jump="tools-viewers">Viewers</button>
+        <button class="chip chip-clickable" data-jump="tools-extras">Helpers</button>
+        <button class="chip chip-clickable" data-jump="local-tools-card">Local toolchain</button>
       </nav>
-      <h2 id="tools-toolchain">Install the toolchain <span class="hint">(recommended default)</span></h2>
-      <p class="hint">The most reliable way to obtain all required EDA tools (OpenROAD, Yosys, Magic, KLayout, Netgen, Verilator) is the version-matched LibreLane container image. When Docker or Podman is installed, pulling the image enables <code>Container</code> execution without requiring native binary packages. If a container engine is not present, the installer card below sets up Docker or Podman automatically.</p>
-      <div id="runtime-card"></div>
-
-      <h2 id="tools-extras">Recommended helper utilities <span class="hint">(optional)</span></h2>
-      <p class="hint">Auxiliary tools used for interactive features: <strong>Icarus Verilog</strong> provides testbench simulation in the IDE, <strong>Graphviz</strong> renders synthesis schematics, and <strong>GDS3D</strong> provides 3D layout visualization. If package installation requires elevated privileges, LanEx prompts for authentication in the terminal.</p>
-      <div id="recommended-tools"></div>
-
-      <details class="card tools-local-card" id="local-tools-card">
-        <summary><strong>Advanced: local toolchain</strong><span class="hint">Only needed for <em>Local tools</em> run mode (Nix / conda / system installs).</span></summary>
-        <div class="card-body">
-          <p class="hint">These binaries are invoked when running with native host tools. Green status indicates the executable was found in PATH. <strong>librelane</strong> and <strong>ciel</strong> can be installed via pip; <strong>OpenROAD</strong>, <strong>Magic</strong>, and <strong>Netgen</strong> require installation through Nix, Conda (litex-hub), or container mode.</p>
-          <p class="hint"><strong>Version compatibility:</strong> If an installed native tool is incompatible with your LibreLane release (such as an older Yosys build lacking pyosys bindings), switch to Container mode to execute the exact version-pinned binaries provided in the official image.</p>
-          <div id="tools-grid"></div>
+      <header class="an-head tl-head">
+        <div>
+          <div class="an-eyebrow">Components</div>
+          <h2 class="an-title">Tools and PDKs</h2>
+          <p class="an-lede">Everything the flow needs, on the versions this LanEx release was tested with. Nothing updates on its own.</p>
         </div>
-      </details>
-
-      <h2 id="tools-pdk">PDK Settings</h2>
-      <div class="card tools-pdk-card">
-        <div class="card-body">
-          <label class="lbl">PDK Installation Directory (PDK_ROOT)</label>
-          <div class="pdk-root-row">
-            <input type="text" id="pdk-root-input" class="grow" placeholder="e.g. /home/user/.ciel" />
-            <button id="btn-save-pdk-root" class="btn btn-primary">Save</button>
-          </div>
-          <p class="hint">Changing this will point the GUI and tools to a new directory. Useful if you have a secondary drive with more space.</p>
+        <div class="an-head-act tl-head-act">
+          <button class="btn btn-sm btn-ghost" id="tl-copy-diag" title="Copy versions, image digest, PDK and system facts for a bug report">Copy diagnostics</button>
+          <button class="btn btn-sm btn-ghost" id="tl-recheck" title="Probe every component again">Check all</button>
+        </div>
+      </header>
+      <div class="tl-bar">
+        <div id="tools-summary" class="tl-summary" aria-live="polite">
+          <div class="tl-sum is-loading"><span class="spinner-sm"></span><strong>Checking components…</strong></div>
+        </div>
+        <div class="tl-filters" role="group" aria-label="Show">
+          <button class="tl-filter is-on" data-tl-filter="all" aria-pressed="true">All <span class="tl-count"></span></button>
+          <button class="tl-filter" data-tl-filter="installed" aria-pressed="false">Installed <span class="tl-count"></span></button>
+          <button class="tl-filter" data-tl-filter="updates" aria-pressed="false">Updates <span class="tl-count"></span></button>
+          <button class="tl-filter" data-tl-filter="problems" aria-pressed="false">Problems <span class="tl-count"></span></button>
         </div>
       </div>
-      <h2>PDK store</h2>
-      <div id="pdk-store-row"></div>
-
-      <h2 id="tools-viewers">Desktop layout viewers</h2>
-      <p class="hint">Interactive layout viewing uses your own desktop tools (the GUI launches them on a run's GDS from the Layout tab). KLayout &amp; Magic ship in the LibreLane container image. The 3D viewer <strong>GDS3D</strong> installs from the <em>Recommended extra tools</em> section above.</p>
-      <div id="desktop-viewers"></div>
+      <div class="tl-list" id="tl-list" data-filter="all">
+        <div class="tl-cols" aria-hidden="true"><span>Status</span><span>Component</span><span>Installed / tested</span><span>Size</span><span></span></div>
+        <section class="tl-group" id="tools-toolchain">
+          <h3 class="tl-group-h">Flow engine <span>One container image runs every EDA tool, version-matched</span></h3>
+          <div class="tl-rows" id="tl-engine-rows">
+            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div id="runtime-card"></div>
+        </section>
+        <section class="tl-group" id="tools-pdk">
+          <h3 class="tl-group-h">PDKs <span>Process design kits, downloaded by ciel at the version LibreLane pins</span></h3>
+          <div class="tl-rows" id="pdk-store-row">
+            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="tl-pdkroot tools-pdk-card">
+            <label class="lbl" for="pdk-root-input">PDK folder (PDK_ROOT)</label>
+            <div class="pdk-root-row">
+              <input type="text" id="pdk-root-input" class="grow" placeholder="e.g. /home/user/.ciel" />
+              <button id="btn-save-pdk-root" class="btn btn-sm btn-ghost tl-act">Save</button>
+            </div>
+            <p class="hint">Where PDKs live. Point it at a bigger drive if you run out of space; LanEx and the flow both read it from here.</p>
+          </div>
+        </section>
+        <section class="tl-group" id="tools-viewers">
+          <h3 class="tl-group-h">Viewers <span>Desktop windows the Layout tab opens on a run's results</span></h3>
+          <div class="tl-rows" id="desktop-viewers">
+            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="tl-rows" id="viewer-gds3d"></div>
+        </section>
+        <section class="tl-group" id="tools-extras">
+          <h3 class="tl-group-h">Helpers <span>Optional: simulation, schematics and waveforms</span></h3>
+          <div class="tl-rows" id="recommended-tools">
+            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="tl-row tl-skel"><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+        </section>
+        <details class="tl-group tl-local tools-local-card" id="local-tools-card">
+          <summary class="tl-group-h">Local toolchain <span>Only for the Local tools run engine: native binaries on this system's PATH</span></summary>
+          <p class="hint tl-local-note">With the Container engine none of these are needed. If a native tool doesn't match your LibreLane release (for example a Yosys build without pyosys), switch to Container to use the pinned binaries in the image.</p>
+          <div class="tl-rows" id="tools-grid"></div>
+        </details>
+        <p class="tl-filter-empty" id="tl-filter-empty" hidden></p>
+      </div>
     </section>
 
     <!-- ANALYTICS -->

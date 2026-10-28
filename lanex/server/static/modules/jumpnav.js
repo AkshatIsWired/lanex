@@ -90,8 +90,11 @@ export function wireJumpNav(nav, { clicks = true } = {}) {
       const t = document.getElementById(c.dataset.jump);
       if (t && t.offsetParent !== null && t.getBoundingClientRect().top <= base) current = c.dataset.jump;
     }
-    // At the very bottom, the last visible section wins.
-    if (root && root.scrollTop + root.clientHeight >= root.scrollHeight - 2) {
+    // At the very bottom, the last visible section wins — but only once the
+    // user has actually scrolled there. A page that doesn't scroll yet (its
+    // sections still loading, or all of it fitting on a wide screen) is "at the
+    // bottom" at scrollTop 0, which used to light up the LAST chip on load.
+    if (root && root.scrollTop > 0 && root.scrollTop + root.clientHeight >= root.scrollHeight - 2) {
       for (const c of list) {
         const t = document.getElementById(c.dataset.jump);
         if (t && t.offsetParent !== null && t.getBoundingClientRect().top < rootBox.bottom) current = c.dataset.jump;
