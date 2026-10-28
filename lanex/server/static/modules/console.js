@@ -107,8 +107,7 @@ function ensure() {
     "</div>" +
     "<div class='cn-body'>" +
       "<div class='cn-pane' role='tabpanel' id='cn-pane-log' aria-labelledby='cn-tab-log' hidden>" +
-        "<div class='cn-sub'><span id='cn-log-what' class='cn-muted'></span><span class='cn-spacer'></span>" +
-          "<a class='btn btn-ghost btn-xs' id='cn-log-raw' target='_blank' rel='noopener' hidden>" + icon("popout", { size: 12 }) + " Open raw log</a></div>" +
+        "<div class='cn-sub'><span id='cn-log-what' class='cn-muted'></span></div>" +
         "<div class='cn-log' id='cn-log'></div></div>" +
       "<div class='cn-pane cn-scroll' role='tabpanel' id='cn-pane-command' aria-labelledby='cn-tab-command' hidden></div>" +
       "<div class='cn-pane cn-scroll' role='tabpanel' id='cn-pane-journal' aria-labelledby='cn-tab-journal' hidden></div>" +
@@ -116,7 +115,7 @@ function ensure() {
         "<div class='cn-run-row'>" +
           "<span class='cn-cwd' id='cn-cwd' title='The command runs in this folder'></span>" +
           "<span class='cn-prompt' aria-hidden='true'>$</span>" +
-          "<input type='text' id='cn-cmd' class='cn-input' aria-label='Command to run' placeholder='librelane --dockerized config.yaml -T floorplan' autocomplete='off' spellcheck='false'/>" +
+          "<input type='text' id='cn-cmd' class='cn-input' aria-label='Command to run' placeholder='librelane --dockerized config.json -T floorplan' autocomplete='off' spellcheck='false'/>" +
           "<button class='btn btn-primary btn-sm' id='cn-run'>" + icon("play", { size: 12 }) + " Run</button>" +
           "<button class='btn btn-ghost btn-sm' id='cn-stop' disabled>" + icon("stop", { size: 12 }) + " Stop</button>" +
         "</div>" +
@@ -200,17 +199,17 @@ function paintLog() {
   const running = !!(state.status && state.status.running);
   const live = liveLines();
   const what = C.el.querySelector("#cn-log-what");
-  const raw = C.el.querySelector("#cn-log-raw");
+  // One "Raw log" link: the log view's own, in its toolbar.
   if (running || live.length) {
     const tag = state.liveTag || contextRun() || "";
     if (!C.logLive) { C.log.setText(live.join("\n")); C.log.end(); C.logLive = true; C.logTag = null; }
     what.textContent = (running ? "Live: " : "Last run in this session: ") + (tag || "the flow");
-    raw.hidden = !tag; if (tag) raw.href = api.runFileUrl(tag, "flow.log");
+    C.log.setRaw(tag ? api.runFileUrl(tag, "flow.log") : "");
     return;
   }
   const tag = contextRun();
-  if (!tag) { what.textContent = "No run yet. Start one and its log streams here."; raw.hidden = true; C.log.setText(""); return; }
-  raw.hidden = false; raw.href = api.runFileUrl(tag, "flow.log");
+  if (!tag) { what.textContent = "No run yet. Start one and its log streams here."; C.log.setRaw(""); C.log.setText(""); return; }
+  C.log.setRaw(api.runFileUrl(tag, "flow.log"));
   what.textContent = "flow.log of " + tag;
   if (C.logTag === tag) return;
   C.logTag = tag; C.logLive = false;
@@ -289,11 +288,16 @@ function factsHtml(r) {
 // ---------------------------------------------------------------- Journal
 function stamp() { const d = new Date(); return d.toTimeString().slice(0, 8); }
 
+// Returns the stored entry: a run's start entry is filled in later, so callers
+// must keep this object, not the one they passed (that was the copy-not-the-
+// entry bug that left "command recorded when…" on screen for good).
 function addJournal(entry) {
-  C.journal.push({ time: stamp(), ...entry });
+  const e = { time: stamp(), ...entry };
+  C.journal.push(e);
   if (isConsoleOpen() && C.tab === "journal") paintJournal();
   const b = document.getElementById("console-btn");
   if (b && !isConsoleOpen()) b.classList.add("has-activity");
+  return e;
 }
 
 function paintJournal() {
@@ -316,10 +320,14 @@ function paintJournal() {
 async function onJournal(ev) {
   const { path, sent, data } = ev.detail || {};
   if (path === "/api/run/start") {
-    const e = { kind: "run", title: "Run started" + (sent && sent.frm ? " from " + sent.frm : "") + (sent && sent.to ? " up to " + sent.to : ""), pending: true, notes: [] };
-    if (sent && sent.overrides && Object.keys(sent.overrides).length) e.notes.push("This run only: " + Object.entries(sent.overrides).map(([k, v]) => k + "=" + v).join(", "));
+    const tag = (data && data.tag) || (sent && sent.tag) || "";
+    const entry = { kind: "run", tag, title: "Run " + (tag ? tag + " " : "") + "started" + (sent && sent.frm ? " from " + sent.frm : "") + (sent && sent.to ? " up to " + sent.to : ""), pending: true, notes: [] };
+    if (sent && sent.overrides && Object.keys(sent.overrides).length) entry.notes.push("This run only: " + Object.entries(sent.overrides).map(([k, v]) => k + "=" + v).join(", "));
+    // The start reply carries the command LanEx wrote to gui-run.json.
+    if (data && typeof data.command === "string" && data.command) { entry.command = data.command; entry.cwd = state.designDir || null; entry.pending = false; }
+    const e = addJournal(entry);
     C.pendingRun = e;
-    addJournal(e);
+    recordCommand(e);
   } else if (path === "/api/run/resume") {
     addJournal({ kind: "resume", title: "Next step (step-by-step run)", notes: ["LibreLane has no CLI form of this: the GUI runner waits between steps."] });
   } else if (path === "/api/config/set" || path === "/api/config/undo") {
@@ -337,25 +345,56 @@ async function onJournal(ev) {
   }
 }
 
-// A run ended: its gui-run.json holds the exact command it ran.
+// The run's gui-run.json holds the exact command it ran; it is written once the
+// run folder exists, a few seconds in. Fill the start entry when it is there.
+function nameRun(e, tag) {
+  if (e.tag || !tag) return;
+  e.tag = tag;
+  e.title = e.title.replace(/^Run started/, "Run " + tag + " started");
+}
+
+async function fillCommand(e) {
+  if (!e.tag) return false;
+  let rep = null;
+  try { rep = await api.runReproduce(e.tag); } catch (_e) {}
+  if (!(rep && rep.recorded)) return false;
+  e.command = rep.command; e.cwd = rep.cwd || e.cwd; e.image = rep.image; e.pending = false; e.recorded = true;
+  if (isConsoleOpen() && C.tab === "journal") paintJournal();
+  return true;
+}
+
+// Learn the run's name from the live events (the start reply has none) and
+// take the command, folder and image from its gui-run.json.
+async function recordCommand(e) {
+  const before = state.liveTag || "";
+  for (const ms of [2000, 4000, 8000, 15000, 30000]) {
+    await new Promise((r) => setTimeout(r, ms));
+    if (e.recorded || C.pendingRun !== e) return;
+    if (state.liveTag && state.liveTag !== before) nameRun(e, state.liveTag);
+    if (await fillCommand(e)) return;
+    if (isConsoleOpen() && C.tab === "journal") paintJournal();
+  }
+}
+
+// A run ended: a finish entry, and the start entry gets its command if it
+// still has none.
 async function onFlowDone(ev) {
   const d = ev.detail || {};
-  const tag = String(d.tag || "").split(/[\\/]/).pop();
   const e = C.pendingRun || null;
   C.pendingRun = null;
-  if (!tag) return;
-  let rep = null;
-  try { rep = await api.runReproduce(tag); } catch (_e) {}
+  const tag = String(d.tag || (e && e.tag) || "").split(/[\\/]/).pop();
+  if (e) {
+    nameRun(e, tag);
+    if (!e.recorded) await fillCommand(e);
+    if (!e.command) { e.pending = false; e.notes = (e.notes || []).concat(["No command was recorded for this run."]); }
+  }
   const outcome = d.error ? "failed" : d.cancelled ? "stopped" : "finished";
-  const target = e || { kind: "run", title: "Run", notes: [] };
-  target.title = target.title.replace(/^Run started/, "Run " + tag) + " · " + outcome;
-  target.pending = false;
-  if (rep && rep.recorded) { target.command = rep.command; target.cwd = rep.cwd; target.image = rep.image; }
-  else target.notes = (target.notes || []).concat(["No command was recorded for this run."]);
-  if (!e) addJournal(target);
-  else if (isConsoleOpen() && C.tab === "journal") paintJournal();
+  const notes = d.error && typeof d.error === "string" ? [oneLineErr(d.error)] : [];
+  addJournal({ kind: "run-end", title: "Run " + (tag || "") + (tag ? " " : "") + outcome, notes });
   if (isConsoleOpen() && C.tab === "log") paintLog();
 }
+
+function oneLineErr(s) { const t = String(s).split("\n")[0].trim(); return t.length > 160 ? t.slice(0, 157) + "…" : t; }
 
 // ---------------------------------------------------------------- Run a command
 function wireRunner() {
@@ -382,8 +421,27 @@ function paintCwd() {
     el.title = state.designMissing + " is gone. Locate it or remove it from the list on Setup.";
     return;
   }
-  el.textContent = d ? d.replace(/^\/home\/[^/]+/, "~") : "no project open";
+  // The box is right-to-left so a long path clips at its start; the LRMs keep
+  // "~/" in front instead of letting bidi move it to the end ("blinky/~").
+  el.textContent = d ? "‎" + d.replace(/^\/home\/[^/]+/, "~") + "‎" : "no project open";
   el.title = d ? "The command runs in " + d : "Open a project first: the command runs in its folder";
+  paintPlaceholder(d);
+}
+
+// The example command names the project's own config file (config.json or .yaml).
+async function paintPlaceholder(d) {
+  const input = C.el.querySelector("#cn-cmd");
+  const set = (name) => { input.placeholder = "librelane --dockerized " + (name || "config.json") + " -T floorplan"; };
+  if (C.cfgFor === d) return set(C.cfgName);
+  C.cfgFor = d; C.cfgName = "";
+  set("");
+  if (!d) return;
+  let info = null;
+  try { info = await api.designInfo({ design_dir: d }); } catch (_e) {}
+  const name = info && info.config && info.config.name;
+  if (C.cfgFor !== d) return;
+  C.cfgName = name ? String(name).split(/[\\/]/).pop() : "";
+  set(C.cfgName);
 }
 
 async function runManual() {
@@ -474,6 +532,10 @@ export function setupConsole() {
   });
   document.addEventListener("g:journal", onJournal);
   document.addEventListener("g:flow_done", onFlowDone);
+  // Another project: the runner's folder and example command follow it.
+  const project = () => { if (C.el) paintCwd(); };
+  document.addEventListener("g:active_design_changed", project);
+  document.addEventListener("g:projects_changed", project);
   onContext((d) => {
     if (!isConsoleOpen()) return;
     if (C.tab === "command") paintCommand();
