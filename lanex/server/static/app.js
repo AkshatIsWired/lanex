@@ -259,8 +259,12 @@ function handle(ev) {
     state.status.running = true;
     resetTimings();
     state.prepStart = Date.now();
-    state.prepPhase = "DSE config " + (((ev.index || 0) + 1)) + "/" + (ev.total || "?") + ": preparing…";
+    state.prepPhase = "Sweep run " + (((ev.index || 0) + 1)) + " of " + (ev.total || "?") + (ev.tag ? " (" + ev.tag + ")" : "") + ": preparing…";
     flowEvent(ev);
+    document.dispatchEvent(new CustomEvent("g:sweep", { detail: ev }));
+  } else if (ev.type === "dse_config_done" || ev.type === "dse_done") {
+    // Runs shows each point's real outcome as it lands.
+    document.dispatchEvent(new CustomEvent("g:sweep", { detail: ev }));
   } else if (ev.type === "manual_started" || ev.type === "manual_line" || ev.type === "manual_done") {
     import("./modules/manual.js").then((m) => m.onManualEvent(ev));
   } else if (ev.type === "installer_result") {
@@ -576,7 +580,6 @@ const RENDER = {
   ide: () => import("./modules/ide/main.js").then((m) => m.initIde({ designDir: state.designDir, runMode: state.runMode })),
   layout: () => import("./modules/layout.js").then((m) => m.renderLayout()),
   verify: () => import("./modules/verify.js").then((m) => m.renderVerify()),
-  dse: () => import("./modules/dse.js").then((m) => m.renderDse()),
   cells: () => import("./modules/cells.js").then((m) => m.renderCells()),
   manual: () => import("./modules/manual.js").then((m) => m.renderManual()),
 };

@@ -638,7 +638,7 @@ check("compare: distinct tags across designs are design-prefixed for clarity", (
 check("compare + DSE never index the metric/config table by tag (N1 regression)", () => {
   // Both consumers of /api/compare must look up per-run values by the unique
   // col (run_dir); a `[…][r.tag]` lookup would re-introduce the collision.
-  for (const f of ["compare.js", "dse.js"]) {
+  for (const f of ["compare.js", "sweeps.js"]) {
     const src = readFileSync(resolve(MOD, f), "utf8");
     assert.doesNotMatch(src, /\]\[r\.tag\]/, `${f} indexes a per-run table by tag`);
     assert.doesNotMatch(src, /\]\[t\]/, `${f} indexes a per-run table by a bare tag var`);
@@ -753,7 +753,7 @@ check("decision surfaces never render a rounded metric without the raw escape", 
   // escape. Losing titleAttr here silently re-opens the precision hole (gap #2).
   // (Flow's report card carries the exact value in its own title: see the
   // "run report card" check.)
-  for (const f of ["compare.js", "dse.js"]) {
+  for (const f of ["compare.js", "sweeps.js"]) {
     const src = readFileSync(resolve(MOD, f), "utf8");
     assert.match(src, /fmt\.metric\(/, `${f}: precondition — it does round a metric`);
     assert.match(src, /titleAttr\(/, `${f}: rounds a metric but carries no raw escape`);

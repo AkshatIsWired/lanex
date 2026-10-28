@@ -49,19 +49,23 @@ const CATALOG = {
     ],
   },
   runs: {
-    title: "Runs tab",
-    goal: "Review historical flow runs and load detailed metrics and deliverables.",
+    title: "Runs",
+    goal: "Every run of the design in one table: find, compare and sweep runs, and pick the one the results pages show.",
     how: [
-      "Each row reports the PDK, SCL, completed steps, final status, and elapsed execution time.",
-      "Click Open to show that run's chip in the Layout tab; Analytics and Verify follow the same run.",
-      "Select multiple runs in the Analytics Compare card to view delta tables and configuration differences.",
-      "Use Import to adopt external run directories or LanEx bundles; each row also provides Files, Notes, Bundle, and Reproduce actions.",
+      "One row per run: result, origin (manual, sweep, fix of another run), setup and hold slack, die and std-cell area, utilisation, power in mW, DRC, LVS and antenna, and runtime. Click a heading to sort; Columns picks what shows.",
+      "Click a row to show that run on Flow, Layout, Analytics and Verify. The chevron opens its report card and actions: open it on a page, run again with changes, copy its command, pin, bundle, files, delete.",
+      "Star a run as the baseline: every number turns green or red against it, and Changed vs baseline lists the settings that differ.",
+      "Tick two to six runs, then Compare: Analytics opens its Compare section with them picked.",
+      "New sweep runs the design at several values of one to three settings, one run per point. A sweep folds into one row; Summary shows the best for timing and for area, what failed and where, and Use this configuration.",
     ],
     samples: [
-      { key: "Tag format", sample: "RUN_2025-01-19_14-30-00" },
+      { key: "Sweep values", sample: "35, 50, 65  or  35:65:15" },
+      { key: "Sweep run names", sample: "sweep-util-65" },
     ],
     pitfalls: [
-      "A passed run indicates flow checkers completed without error flags; review the Advisor and Verify tabs to inspect timing and signoff margins.",
+      "Sweep after the RTL and constraints are right. A sweep finds a better setting; it does not fix a design, and two or three values usually show the trend.",
+      "Each sweep point is a full RTL-to-GDS run. A 3 x 3 grid is nine runs.",
+      "Passed means LibreLane finished with every check clean. LanEx is not a sign-off tool.",
     ],
   },
   layout: {
@@ -170,22 +174,9 @@ const CATALOG = {
     ],
   },
   dse: {
-    title: "Design-Space Exploration tab",
-    goal: "Sweep configuration parameters across specified values to analyze tradeoffs on a Pareto plot.",
-    how: [
-      "Add a sweep axis: select a configuration variable, provide comma-separated values, and click Add axis.",
-      "Grid executes the Cartesian product of all values; List pairs axis values index-by-index.",
-      "Run sweep launches combinations sequentially. Completed runs plot on the Pareto chart (cell area versus setup slack).",
-      "Use the Runs selector to pick which iterations populate the Pareto plot and comparison tables.",
-    ],
-    samples: [
-      { key: "FP_CORE_UTIL", sample: "40,50,60,70" },
-      { key: "Combinations", sample: "Grid 3×3 = 9 runs" },
-    ],
-    pitfalls: [
-      "Each sweep point executes a full RTL-to-GDSII flow run. A 4x4 parameter grid executes 16 complete iterations.",
-      "Sweeps inherit the base configuration from the active design's config.json; only swept parameters change.",
-    ],
+    title: "Sweeps (in Runs)",
+    goal: "Design-space exploration is now sweeps inside Runs: New sweep on the Runs page.",
+    how: ["Open Runs and click New sweep, or press the old DSE shortcut: both open the same sheet."],
   },
   layout: {
     title: "Layout tab",

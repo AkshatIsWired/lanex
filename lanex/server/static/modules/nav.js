@@ -62,6 +62,11 @@ const FOCUS = {
     const m = await import("./config.js");
     await m.revealSetting(p.setting);
   },
+  runs: async (p) => {
+    if (!p.sweep) return;
+    const m = await import("./sweeps.js");
+    m.openSweepSheet();
+  },
   verify: async (p) => {
     if (!p.check && !p.filter) return;
     const m = await import("./verify.js");
@@ -93,6 +98,8 @@ function describe(e) {
 // `link: false` for the rail, number keys and the palette: the user picked the
 // page itself, so there is no "Back to" chip (Back still works).
 export function go(tab, params = {}, { link = true } = {}) {
+  // DSE is sweeps inside Runs now: the old page name opens Runs' sweep sheet.
+  if (tab === "dse") { tab = "runs"; params = { ...params, sweep: "new" }; }
   if (!document.getElementById("sec-" + tab)) return;
   const from = currentTab();
   saveScroll();
