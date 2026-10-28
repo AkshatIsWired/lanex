@@ -253,6 +253,7 @@ async function beatSim() {
 }
 
 async function afterSim(detail) {
+  if (!document.getElementById("sec-ide")?.classList.contains("section-active")) go("ide", {}, { link: false });
   const host = await waitFor("#ide-wave-host", 4000);
   point({
     el: host,
@@ -469,9 +470,9 @@ async function finishCard() {
 }
 
 function clockOf(p) {
-  if (!p) return null;
-  const v = p.value != null ? p.value : p.resolved != null ? p.resolved : p.data && p.data.value;
-  const n = parseFloat(v);
+  // The run's resolved.json line, verbatim: `"CLOCK_PERIOD": 10,`.
+  const m = p && p.ok !== false && /"CLOCK_PERIOD"\s*:\s*([0-9.eE+-]+)/.exec(p.text || "");
+  const n = m ? parseFloat(m[1]) : NaN;
   return n > 0 ? n : null;
 }
 
@@ -618,6 +619,15 @@ export async function setupGuide() {
   });
   for (const b of BEATS) if (b.on) document.addEventListener(b.on, onProgress);
   document.addEventListener("g:sim_done", onSimDone);
+  // Setup's strip ticks "Run the flow" once the run is listed (flow_done
+  // repaints it before the listing is re-read).
+  document.addEventListener("g:flow_done", () => {
+    if (!state.designDir) return;
+    api.runs(state.designDir).then((r) => {
+      state.runs = r || [];
+      return import("./setup.js").then((m) => m.paintOnboardChecklist());
+    }).catch(() => {});
+  });
   save();
   paintPill();
   if (G.active) { offerResume(); return; }

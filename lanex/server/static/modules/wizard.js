@@ -69,7 +69,7 @@ export async function openWizard({ template = "" } = {}) {
 }
 
 function tplCard(t, cls) {
-  return "<button class='wiz-tpl " + cls + "' data-name='" + fmt.escape(t.name) + "'>" +
+  return "<button class='wiz-tpl " + cls + "' data-name='" + fmt.escape(t.name) + "' title='" + fmt.escape(t.description) + "'>" +
     "<span class='wiz-tpl-title'>" + fmt.escape(t.title) + "</span>" +
     "<span class='wiz-tpl-desc'>" + fmt.escape(t.description) + "</span>" +
     (t.has_testbench ? "<span class='wiz-tpl-tag'>Includes a testbench</span>" : "") +
