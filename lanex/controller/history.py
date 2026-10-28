@@ -471,9 +471,8 @@ def _summary_json(run: Path, st: Optional[os.stat_result] = None,
     return dict(doc)
 
 
-# Cold summaries (first listing after an upgrade, a project copied in, many
-# runs on /mnt/c where every file is a round trip to Windows) are read on a
-# few threads. Bounded so a low-end PC is not swamped.
+# Cold summaries of runs on /mnt/c (every file a round trip to Windows) are
+# read on a few threads. Bounded so a low-end PC is not swamped.
 _POOL: Optional[Any] = None
 _POOL_LOCK = threading.Lock()
 
@@ -537,11 +536,15 @@ def list_runs(design_dir: str | Path) -> List[Dict[str, Any]]:
                     results[i] = None
                 if results[i] is None:
                     todo.append(i)
-        if len(todo) > 1:
+        if slow_fs and len(todo) > 1:
+            # Threads only where reading is waiting on Windows: on a local
+            # disk summarising is CPU work, and threads fighting over the GIL
+            # made a cold list of 300 runs three times slower.
             for i, doc in zip(todo, _pool().map(lambda i: one(runs[i]), todo)):
                 results[i] = doc
-        elif todo:
-            results[todo[0]] = one(runs[todo[0]])
+        else:
+            for i in todo:
+                results[i] = one(runs[i])
         out = [r for r in results if r is not None]
     _save_disk_cache()
     return out
@@ -2340,6 +2343,56 @@ def lineage_steps(run_dir: str | Path, _depth: int = 0) -> List[Dict[str, Any]]:
     return head + own
 
 
+# What run_stages reads from one finished step folder, by folder and mtime:
+# a step that wrote state_out.json is done, and anything it adds afterwards
+# moves the folder's mtime. The live run's page asks for its stages every few
+# seconds; on /mnt/c each re-read of ~80 finished steps took over a second.
+_STEP_FACTS: "OrderedDict[str, tuple]" = OrderedDict()
+_STEP_FACTS_MAX = 2000
+_STEP_FACTS_LOCK = threading.Lock()
+
+
+def _step_facts(e: Path) -> Tuple[str, Optional[Dict[str, Any]], Optional[float], Optional[float]]:
+    """(status, state_out metrics or None, peak RSS MiB, runtime s) of a step."""
+    key = str(e)
+    try:
+        mt = os.stat(key).st_mtime_ns
+    except OSError:
+        mt = None
+    if mt is not None:
+        with _STEP_FACTS_LOCK:
+            hit = _STEP_FACTS.get(key)
+        if hit and hit[0] == mt:
+            return hit[1]
+    out_doc = _read_json(e / "state_out.json")
+    if isinstance(out_doc, dict):
+        status = "done"
+    elif (e / "state_in.json").is_file():
+        status = "stopped"
+    else:
+        status = "unknown"
+    metrics = out_doc["metrics"] if isinstance(out_doc, dict) and isinstance(out_doc.get("metrics"), dict) else None
+    peak = None
+    for ps in e.glob("*.process_stats.json"):
+        doc = _read_json(ps)
+        if isinstance(doc, dict):
+            m = _mib(((doc.get("peak_resources") or {}).get("memory_rss")))
+            if m is not None:
+                peak = m if peak is None else max(peak, m)
+    rt = e / "runtime.txt"
+    facts = (status, metrics, peak, _parse_runtime_txt(rt) if rt.is_file() else None)
+    # Only a finished step is kept (one still running changes in place), and
+    # only once its folder has been still for 2 s: a file added within the same
+    # mtime tick as the stat above would otherwise go unseen.
+    import time as _time
+    if mt is not None and status == "done" and _time.time_ns() - mt > 2 * 10**9:
+        with _STEP_FACTS_LOCK:
+            _STEP_FACTS[key] = (mt, facts)
+            while len(_STEP_FACTS) > _STEP_FACTS_MAX:
+                _STEP_FACTS.popitem(last=False)
+    return facts
+
+
 def run_stages(run_dir: str | Path) -> Dict[str, Any]:
     """Per-step view of one run, for the Analytics "through the flow" charts.
 
@@ -2358,32 +2411,18 @@ def run_stages(run_dir: str | Path) -> Dict[str, Any]:
     steps: List[Dict[str, Any]] = []
     for s in lineage_steps(run):
         e = s["path"]
-        out_doc = _read_json(e / "state_out.json")
-        if isinstance(out_doc, dict):
-            status = "done"
-        elif (e / "state_in.json").is_file():
-            status = "stopped"
-        else:
-            status = "unknown"
+        status, metrics, peak, runtime_s = _step_facts(e)
         changed: Dict[str, Any] = {}
-        if isinstance(out_doc, dict) and isinstance(out_doc.get("metrics"), dict):
-            cur = out_doc["metrics"]
+        if metrics is not None:
+            cur = metrics
             changed = {k: v for k, v in cur.items() if k not in prev or prev[k] != v}
             prev = cur
-        peak = None
-        for ps in e.glob("*.process_stats.json"):
-            doc = _read_json(ps)
-            if isinstance(doc, dict):
-                m = _mib(((doc.get("peak_resources") or {}).get("memory_rss")))
-                if m is not None:
-                    peak = m if peak is None else max(peak, m)
-        rt = e / "runtime.txt"
         row = {
             "n": int(e.name.split("-", 1)[0]),
             "dir": e.name,
             "id": s["id"],
             "status": status,
-            "runtime_s": _parse_runtime_txt(rt) if rt.is_file() else None,
+            "runtime_s": runtime_s,
             "peak_rss_mib": peak,
             "changed": changed,
         }

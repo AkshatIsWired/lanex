@@ -132,6 +132,7 @@ _STATIC_TYPES = {
 # served at once (the dev install edits them in place).
 _STATIC_CACHE: Dict[str, Tuple[int, int, bytes, Optional[bytes], str]] = {}
 _STATIC_CACHE_MAX_FILE = 16 * 1024 * 1024
+_GZ_PENDING: Any = object()   # compressible, gzip copy not made yet
 _STATIC_TARGETS: Dict[str, Path] = {}
 _STATIC_LOCK = threading.Lock()
 _STATIC_BASE: List[Path] = []
@@ -658,11 +659,8 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
             except OSError:
                 return None
             ctype = _STATIC_TYPES.get(target.suffix.lower(), "application/octet-stream")
-            gz = None
-            if len(blob) >= _GZIP_MIN and _compressible(ctype):
-                gz = gzip.compress(blob, compresslevel=6, mtime=0)
-                if len(gz) >= len(blob):
-                    gz = None
+            # The gzip copy is made on the first request that accepts it.
+            gz: Any = _GZ_PENDING if len(blob) >= _GZIP_MIN and _compressible(ctype) else None
             ent = (st.st_mtime_ns, st.st_size, blob, gz, '"%x-%x"' % (st.st_mtime_ns, st.st_size))
             if st.st_size <= _STATIC_CACHE_MAX_FILE:
                 with _STATIC_LOCK:
@@ -674,8 +672,19 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         if found is None:
             self._send_404()
             return
-        target, (_mt, _sz, blob, gz, etag) = found
+        target, ent = found
+        _mt, _sz, blob, gz, etag = ent
         ctype = _STATIC_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        compressible = gz is not None
+        if gz is _GZ_PENDING and self._accepts_gzip():
+            packed = gzip.compress(blob, compresslevel=6, mtime=0)
+            gz = packed if len(packed) < len(blob) else None
+            if _sz <= _STATIC_CACHE_MAX_FILE:
+                with _STATIC_LOCK:
+                    if _STATIC_CACHE.get(str(target)) is ent:
+                        _STATIC_CACHE[str(target)] = (_mt, _sz, blob, gz, etag)
+        if gz is _GZ_PENDING:
+            gz = None
         # Vendored, version-bumped assets (echarts ~1 MB, three.js, fonts, logos)
         # live under static/vendor/ and are immutable between releases: cached
         # for a day. First-party code (index.html, app.js, modules/*) is
@@ -687,7 +696,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         use_gz = gz is not None and self._accepts_gzip()
         sent_etag = _gzip_etag(etag) if use_gz else etag
         if self._etag_matches(etag, _gzip_etag(etag)):
-            self._send_not_modified(sent_etag, cache_control, vary=gz is not None)
+            self._send_not_modified(sent_etag, cache_control, vary=compressible)
             return
         body = gz if use_gz else blob
         self.send_response(200)
@@ -695,7 +704,7 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache_control)
         self.send_header("ETag", sent_etag)
-        if gz is not None:
+        if compressible:
             self.send_header("Vary", "Accept-Encoding")
         if use_gz:
             self.send_header("Content-Encoding", "gzip")

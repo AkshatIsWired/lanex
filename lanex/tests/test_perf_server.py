@@ -328,6 +328,27 @@ def test_cached_run_result_reuse_and_invalidation(tmp_path, probe):
     assert n[0] == 4
 
 
+def test_run_stages_step_cache_gives_the_same_answer(tmp_path):
+    d = tmp_path / "d"
+    run = _good_run(d, "r1")
+    for i, name in enumerate(["yosys-synthesis", "openroad-floorplan"], 1):
+        s = run / f"{i}-{name}"
+        (s / "state_out.json").write_text(json.dumps({"metrics": {"a": i, "b": 1}}))
+        (s / "runtime.txt").write_text(f"00:00:0{i}.500")
+        (s / "x.process_stats.json").write_text(json.dumps({"peak_resources": {"memory_rss": f"{i}0 MiB"}}))
+    _age(run, 600)
+    history._STEP_FACTS.clear()
+    first = history.run_stages(run)
+    assert len(history._STEP_FACTS) == 2
+    assert history.run_stages(run) == first
+    # A file added to a finished step moves its mtime: read again.
+    (run / "2-openroad-floorplan" / "y.process_stats.json").write_text(
+        json.dumps({"peak_resources": {"memory_rss": "99 MiB"}}))
+    again = history.run_stages(run)
+    history._STEP_FACTS.clear()
+    assert again == history.run_stages(run) and again != first
+
+
 def test_disk_cache_round_trips_fast_signatures(tmp_path, probe, monkeypatch):
     monkeypatch.setenv("LANEX_HOME", str(tmp_path / "home"))
     d = tmp_path / "d"
@@ -455,8 +476,8 @@ def test_pdk_size_cached_by_mtime_and_on_disk(tmp_path, monkeypatch):
     (tree / "libs.ref").mkdir(parents=True)
     (tree / "libs.ref" / "a.lib").write_bytes(b"x" * (3 * 1024 * 1024))
     walks = []
-    real_scandir = os.scandir
-    monkeypatch.setattr(tools.os, "scandir", lambda p: walks.append(p) or real_scandir(p))
+    real_walk = tools._dir_size_walk
+    monkeypatch.setattr(tools, "_dir_size_walk", lambda p, d: walks.append(p) or real_walk(p, d))
     assert tools._dir_size_mb(tree) == 3
     n = len(walks)
     assert tools._dir_size_mb(tree) == 3 and len(walks) == n            # no second walk
@@ -469,6 +490,21 @@ def test_pdk_size_cached_by_mtime_and_on_disk(tmp_path, monkeypatch):
     time.sleep(0.05)
     (tree / "b.lib").write_bytes(b"y" * (2 * 1024 * 1024))
     assert tools._dir_size_mb(tree) == 5 and len(walks) > n
+
+
+def test_pdk_size_walk_find_equals_python(tmp_path, monkeypatch):
+    root = tmp_path / "pdk"
+    (root / "a" / "b").mkdir(parents=True)
+    (root / "a" / "f1").write_bytes(b"x" * 1000)
+    (root / "a" / "b" / "f2").write_bytes(b"y" * 12345)
+    (root / "top").write_bytes(b"z" * 7)
+    os.symlink(root / "a" / "f1", root / "link-file")          # not counted
+    os.symlink(root / "a", root / "link-dir")                  # not entered
+    link = tmp_path / "variant"
+    os.symlink(root, link)                                     # the top is followed
+    via_find = tools._dir_size_walk(link, 10.0)
+    monkeypatch.setattr(tools.sys, "platform", "other")        # force the Python walk
+    assert via_find == tools._dir_size_walk(link, 10.0) == 1000 + 12345 + 7
 
 
 # --------------------------------------------------------------- httpx .pth hook

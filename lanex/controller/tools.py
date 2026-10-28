@@ -678,8 +678,34 @@ def _dir_size_mb(path: Path, *, deadline_s: float = 3.0) -> Optional[int]:
         hit = _dir_size_cache.get(real)
     if hit and mt is not None and hit[0] == mt and hit[1] is not None:
         return hit[1]
-    now = time.time()
-    stop_at = now + deadline_s
+    total = _dir_size_walk(path, deadline_s)
+    if total is None:
+        return None
+    result = int(total / (1024 * 1024))
+    if mt is not None:
+        _dir_size_remember(real, mt, result)
+    return result
+
+
+def _dir_size_walk(path: Path, deadline_s: float) -> Optional[int]:
+    """Bytes in the regular files under *path* (symlinks not followed below
+    the top), or None past the deadline. GNU ``find`` does the walk in its own
+    process: the same walk in Python held the GIL for seconds and slowed every
+    request the server answered meanwhile. Elsewhere (no -printf), Python."""
+    if sys.platform.startswith("linux"):
+        try:
+            out = subprocess.run(["find", "-H", str(path), "-type", "f", "-printf", "%s\n"],
+                                 capture_output=True, text=True, timeout=deadline_s)
+        except subprocess.TimeoutExpired:
+            return None
+        except Exception:
+            out = None
+        if out is not None and "printf" not in (out.stderr or ""):
+            try:
+                return sum(int(x) for x in out.stdout.split())
+            except ValueError:
+                pass
+    stop_at = time.time() + deadline_s
     try:
         total = 0
         stack = [str(path)]
@@ -701,10 +727,7 @@ def _dir_size_mb(path: Path, *, deadline_s: float = 3.0) -> Optional[int]:
                             continue
             except OSError:
                 continue
-        result = int(total / (1024 * 1024))
-        if mt is not None:
-            _dir_size_remember(real, mt, result)
-        return result
+        return total
     except Exception:
         return None
 
