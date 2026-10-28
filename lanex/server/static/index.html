@@ -19,6 +19,7 @@
   <link rel="stylesheet" href="/static/layout.css" />
   <link rel="stylesheet" href="/static/cells.css" />
   <link rel="stylesheet" href="/static/tools.css" />
+  <link rel="stylesheet" href="/static/runs.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
        real icon (zero extra deps; static manifest, no service worker). -->
@@ -174,9 +175,6 @@
         </button>
         <button class="side-tab" data-tab="runs" data-tip="Every past run; pick one to inspect">
           <span class="ico"></span><span class="label">Runs</span>
-        </button>
-        <button class="side-tab" data-tab="dse" data-tip="Design-space exploration: sweep settings and compare">
-          <span class="ico"></span><span class="label">DSE</span>
         </button>
       </div>
       <div class="rail-group" style="--n:3">
@@ -484,25 +482,33 @@
     </section>
 
     <!-- RUNS -->
-    <section class="section" id="sec-runs">
-      <div class="bar">
-        <span class="muted">Show runs from:</span>
-        <button class="btn btn-ghost runs-scope runs-scope-active" data-scope="design">This design</button>
-        <button class="btn btn-ghost runs-scope" data-scope="all" title="Runs of every design you've opened recently">All designs</button>
+    <section class="section rn" id="sec-runs">
+      <header class="an-head rn-head"><div><div class="an-eyebrow">Runs</div>
+        <h2 class="an-title" id="rn-title">Every run, side by side</h2>
+        <p class="an-lede">One row per run. Click a row to show it on Flow, Layout, Analytics and Verify; open it for its report and actions. Star one as the baseline and every number is coloured better or worse than it. Tick two to six to compare them.</p></div>
+        <div class="an-head-act rn-head-act">
+          <button class="btn btn-ghost" id="runs-import" title="Adopt a run folder or a LanEx bundle (.zip) from elsewhere">Import…</button>
+          <button class="btn btn-primary" id="runs-new-sweep" title="Run the same design with a setting at several values">New sweep</button>
+        </div>
+      </header>
+      <div class="rn-tools" role="toolbar" aria-label="Filter runs">
+        <div class="rn-seg" role="group" aria-label="Show runs from">
+          <button class="rn-segb runs-scope" data-scope="design">This design</button>
+          <button class="rn-segb runs-scope" data-scope="all" title="Runs of every design you've opened recently">All designs</button>
+        </div>
+        <input type="search" id="runs-filter" class="rn-q" placeholder="Search name, PDK, note, setting…" aria-label="Search runs"/>
+        <div class="rn-seg" role="group" aria-label="Status" id="rn-status"></div>
+        <div class="rn-seg" role="group" aria-label="Origin" id="rn-origin"></div>
+        <div class="rn-seg" role="group" aria-label="PDK" id="rn-pdk"></div>
+        <span class="rn-spacer"></span>
+        <div class="rn-cols-wrap"><button class="btn btn-ghost btn-sm" id="rn-cols-btn" aria-expanded="false">Columns</button>
+          <div class="rn-cols" id="rn-cols" hidden></div></div>
       </div>
-      <div class="bar">
-        <input type="search" id="runs-filter" class="runs-filter" placeholder="Filter runs by tag / PDK…" aria-label="Filter runs"/>
-        <select id="runs-status-filter" aria-label="Filter by status">
-          <option value="">All</option>
-          <option value="pass">Passed</option>
-          <option value="fail">Failed</option>
-        </select>
-        <button class="btn btn-ghost runs-scope" id="runs-pin-filter" aria-pressed="false" title="Show only pinned runs"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z"/></svg> Pinned</button>
-        <span class="bar-spacer"></span>
-        <button class="btn btn-ghost" id="runs-import" title="Adopt a run directory or a LanEx bundle (.zip) from elsewhere"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg> Import…</button>
-        <button class="btn btn-ghost" id="runs-batch-delete" hidden><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6"/></svg> Delete selected (0)</button>
-      </div>
-      <ul id="runs-list" class="runs-list"></ul>
+      <div class="rn-live" id="rn-live" hidden></div>
+      <div class="rn-selbar" id="rn-selbar" hidden></div>
+      <p class="muted rn-note" id="runs-note" role="status" hidden></p>
+      <div class="rn-wrap" id="rn-wrap"><table class="rn-table" id="runs-table"></table></div>
+      <div class="an-empty empty" id="rn-empty" hidden></div>
     </section>
 
     <!-- RTL IDE (embedded) -->
@@ -786,12 +792,6 @@
       </div>
     </section>
 
-    <!-- DSE -->
-    <section class="section" id="sec-dse">
-      <h2>Design-space exploration</h2>
-      <p class="hint">Sweep configuration variables; each combination runs once and the results are compared on a Pareto plot.</p>
-      <div id="dse-body"></div>
-    </section>
 
     <!-- LAYOUT: see the chip (modules/layout.js, layoutcanvas.js, runfiles.js). One
          page for what Preview and Layout used to split: KLayout draws the run live

@@ -11,6 +11,11 @@ import { gatherRunsScoped, designLabel } from "./context.js";
 // design (the per-tab pickers can surface cross-design runs).
 let _runIndex = {};
 
+// Runs picked on the Runs page (by run_dir): the next render ticks them and
+// compares straight away, so Runs' "Compare" lands on the answer.
+let _preselect = null;
+export function preselectCompare(runDirs) { _preselect = (runDirs || []).slice(0, 6); }
+
 export async function renderCompare() {
   const root = document.getElementById("compare-body");
   if (!root) return;
@@ -43,6 +48,12 @@ export async function renderCompare() {
     "</div><button class='btn btn-primary' id='cmp-go'>Compare</button></div>" +
     "<div id='cmp-out'></div>";
   root.querySelector("#cmp-go").addEventListener("click", () => doCompare(root));
+  if (_preselect && _preselect.length) {
+    const want = new Set(_preselect);
+    _preselect = null;
+    root.querySelectorAll(".cmp-check input").forEach((c) => { c.checked = want.has(c.dataset.rundir); });
+    doCompare(root);
+  }
 }
 
 async function doCompare(root) {

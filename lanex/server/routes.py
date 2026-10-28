@@ -1583,9 +1583,15 @@ def h_manual_result(handler: Any) -> None:
 
 
 def h_run_cancel(handler: Any) -> None:
+    from ..controller import dse
     from ..server.app import get_runner
+    # Stop during a sweep stops the sweep: otherwise the queue would start
+    # the next point the moment this run ends.
+    sweep = dse.job.active
+    if sweep:
+        dse.job.cancel()
     get_runner().cancel()
-    _respond(handler, {"status": "cancelled"})
+    _respond(handler, {"status": "cancelled", "sweep_stopped": sweep})
 
 
 def h_run_resume(handler: Any) -> None:
@@ -3153,7 +3159,8 @@ def h_verify_rerun(handler: Any) -> None:
 
 def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
                           run_mode: str, base_overrides: Dict[str, Any],
-                          dse_body: Optional[Dict[str, Any]] = None):
+                          dse_body: Optional[Dict[str, Any]] = None,
+                          sweep_id: Optional[str] = None):
     """Return a ``start_one(tag, overrides)`` closure for the DSE queue that
     starts a run through the shared runner and blocks until it finishes.
 
@@ -3164,7 +3171,7 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
     import time
     from ..server.app import get_runner
 
-    def start_one(tag: str, overrides: Dict[str, Any]) -> bool:
+    def start_one(tag: str, overrides: Dict[str, Any]) -> Dict[str, Any]:
         r = get_runner()
         # Wait for any prior run to clear (defensive; queue is sequential).
         for _ in range(600):
@@ -3202,17 +3209,25 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
             run_mode=run_mode, flow_name=flow_name,
         )
         if not res.get("ok"):
-            return False
+            return {"ok": False, "kind": "error",
+                    "reason": "did not start: " + str(res.get("error") or res.get("message") or "the runner refused")}
         # Block until this run completes.
         time.sleep(0.5)
         for _ in range(86400 * 2):  # generous upper bound; ~12h at 0.5s
             if not r.running:
                 break
             time.sleep(0.5)
-        # r.error is the real per-run failure signal (the old getattr(r,"error")
-        # always read None because there was no such attribute → every run was
-        # marked "done"). The `error` property now returns the last run's error.
-        return not bool(r.error)
+        from ..controller import dse
+        run_dir = Path(design_dir) / "runs" / tag
+        if sweep_id:
+            dse.stamp_run(run_dir, sweep_id, overrides)
+        # How the point really ended, read from its folder the way Flow reads
+        # it: a container run that exits non-zero leaves r.error unset, so
+        # "launched and the runner went idle" used to count as passed.
+        out = dse.point_outcome(run_dir)
+        if out.get("ok") and r.error:
+            out = {**out, "ok": False, "kind": "error", "reason": str(r.error)}
+        return out
 
     return start_one
 
@@ -3254,17 +3269,20 @@ def h_dse_start(handler: Any) -> None:
     base_tag = body.get("base_tag") or Path(design_dir).name
     # Don't clobber a prior sweep: bump the base until the target run dirs are
     # free (unless the caller explicitly opts into replacing them).
-    if not body.get("replace"):
-        base_tag = dse.unique_base_tag(design_dir, base_tag, len(overrides_list))
-    tags = dse.dse_run_tags(base_tag, len(overrides_list))
-    start_one = _dse_run_one_blocking(design_dir, config_file, flow_name, run_mode, base_overrides, body)
-    result = dse.job.start(start_one=start_one, overrides_list=overrides_list, tags=tags)
-    if not result.get("ok"):
-        _respond(handler, result.get("error") or "could not start DSE", 400)
-        return
-    # Persist a manifest so the sweep is recoverable after a restart and the DSE
-    # tab can list past sweeps without parsing run-tag regexes.
+    # Each point is named by the values it tries (sweep-util-65), never
+    # overwriting an earlier run of the same name.
+    tags = dse.sweep_run_tags(design_dir, overrides_list)
     sweep_id = dse.new_sweep_id()
+    start_one = _dse_run_one_blocking(design_dir, config_file, flow_name, run_mode, base_overrides, body,
+                                      sweep_id=sweep_id)
+    result = dse.job.start(start_one=start_one, overrides_list=overrides_list, tags=tags,
+                           sweep_id=sweep_id, stop_when_good=bool(body.get("stop_when_good")),
+                           on_point=lambda tag, res: dse.record_point(design_dir, sweep_id, tag, res))
+    if not result.get("ok"):
+        _respond(handler, result.get("error") or "could not start the sweep", 400)
+        return
+    # Persist a manifest so the sweep is recoverable after a restart and Runs
+    # can group its runs without parsing run-tag regexes.
     dse.record_sweep(design_dir, {
         "id": sweep_id,
         "base": base_tag,
@@ -3275,7 +3293,10 @@ def h_dse_start(handler: Any) -> None:
         "flow": flow_name,
         "base_overrides": base_overrides,
         "tags": tags,
+        "points": overrides_list,
         "count": len(tags),
+        "goal": str(body.get("goal") or "")[:40],
+        "stop_when_good": bool(body.get("stop_when_good")),
     })
     result = dict(result)
     result["sweep_id"] = sweep_id
