@@ -182,6 +182,44 @@ def test_drc_report_that_contradicts_the_metric_is_said(tmp_path):
     from lanex.controller import layoutview
     src = next(s for s in layoutview.markers(run)["sources"] if s["id"] == "magic-drc")
     assert src["disagree"] is True and src["metric"]["value"] == 0
+    # The run lists carry it too (verdict unchanged: LibreLane judged on the metric).
+    for v in (verify.run_verdict(run), rep["run_verdict"]):
+        assert v["state"] == "passed" and v["drc_disagree"]["markers"] == 2
+        assert v["drc_disagree"]["checks"] == ["magic_drc"]
+
+
+def test_antenna_estimate_of_a_cut_off_run_is_not_a_failure(tmp_path):
+    # Classic checks antennas after global routing (an estimate, before the
+    # repair) and again after detailed routing. A run that ended after the
+    # first must read "stopped", the estimate kept as an estimate.
+    steps = (("Yosys.Synthesis", True), ("OpenROAD.GlobalRouting", True), ("OpenROAD.CheckAntennas", True))
+    run = _run(tmp_path, "S", final=False, steps=steps)
+    (run / "3-openroad-checkantennas" / "state_out.json").write_text(json.dumps(
+        {"metrics": {"antenna__violating__nets": 2, "antenna__violating__pins": 2}}), encoding="utf-8")
+    rep = verify.verify_report(run)
+    an = next(c for c in rep["checks"] if c["id"] == "antenna")
+    assert an["status"] == "not_run" and an["interim"] == 2 and "detailed routing" in an["detail"]
+    v = verify.run_verdict(run)
+    assert v["state"] == "stopped" and v["label"] == "Stopped after step 3"
+    # Past detailed routing, the second check is the real one.
+    steps2 = steps + (("OpenROAD.DetailedRouting", True), ("OpenROAD.CheckAntennas-1", True))
+    run2 = _run(tmp_path, "S2", final=False, steps=steps2)
+    (run2 / "5-openroad-checkantennas-1" / "state_out.json").write_text(json.dumps(
+        {"metrics": {"antenna__violating__nets": 1, "antenna__violating__pins": 1}}), encoding="utf-8")
+    an2 = next(c for c in verify.verify_report(run2)["checks"] if c["id"] == "antenna")
+    assert an2["status"] == "fail"
+
+
+def test_steps_planned_is_the_flow_minus_turned_off_steps(tmp_path, monkeypatch):
+    from lanex.controller import introspect
+    monkeypatch.setattr(introspect, "flow_steps", lambda name="Classic": [{"id": i} for i in
+                        ("Yosys.Synthesis", "OpenROAD.CTS", "Yosys.EQY", "Magic.DRC")])
+    monkeypatch.setattr(introspect, "flow_gating", lambda name="Classic": {"Yosys.EQY": ["RUN_EQY"]})
+    run = _run(tmp_path, "F", final=False, steps=(("Yosys.Synthesis", True), ("OpenROAD.CTS", False)),
+               error_log="[ERROR] boom\n")
+    (run / "resolved.json").write_text(json.dumps({"RUN_EQY": False}), encoding="utf-8")
+    fs = verify.verify_report(run)["flow_state"]
+    assert fs["steps_planned"] == 3 and fs["steps_off"] == ["Yosys.EQY"] and fs["steps_done"] == 1
 
 
 def test_negative_slack_in_a_warning_corner_is_never_clean(tmp_path):

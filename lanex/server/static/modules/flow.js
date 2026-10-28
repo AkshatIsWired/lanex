@@ -233,6 +233,7 @@ function model() {
   const stages = FS.stagesOf(ids.map((id) => ({ id })));
   const lastRan = Math.max(-1, ...ids.map((id, i) => (disk.has(id) ? i : -1)));
   const rx = F.rx || {};
+  const offIds = new Set((!F.live && F.vf && F.vf.flow_state && F.vf.flow_state.steps_off) || []);
   const steps = ids.map((id, i) => {
     const d = disk.get(id);
     let status;
@@ -240,7 +241,9 @@ function model() {
     // done whatever the events said (they can arrive late or out of order).
     if (F.live) status = d && d.status === "done" && d.runtime_s != null ? "done" : st[id] || (d ? "running" : "pending");
     else if (d) status = d.status === "done" ? "done" : "failed";
-    else status = i < lastRan ? "skipped" : "not_run";
+    // A step past where the run ended that its config turns off is "turned
+    // off", not "not reached": the total is the flow's (FS.stepCounts).
+    else status = i < lastRan || offIds.has(id) ? "skipped" : "not_run";
     if (!F.live && d && d.status !== "done" && rx.kind === "stopped") status = "stopped";
     if (!F.live && d && d.status !== "done" && rx.kind === "incomplete") status = "stopped";
     const t = tm[id] || {};

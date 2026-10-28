@@ -341,7 +341,7 @@ function renderOverview() {
     _rep.pdk ? esc(_rep.pdk) + (_rep.scl ? " / " + esc(_rep.scl) : "") : "",
     _rep.flow ? esc(_rep.flow) + " flow" : "",
     _rep.librelane_version ? "LibreLane " + esc(_rep.librelane_version) : "",
-    f.steps_total ? esc(f.steps_done + " / " + f.steps_total + " steps") : "",
+    V.stepTotals(f) ? esc(V.stepTotals(f).done + " of " + V.stepTotals(f).total + " steps done") : "",
   ].filter(Boolean).join("<span class='sep'>/</span>");
   let flowNote = "";
   if (f.partial) flowNote = "<p class='vf-note'>Partial run (" + esc((f.frm ? "from " + f.frm : "") + (f.to ? " to " + f.to : "")) + "): only the steps in that range ran.</p>";

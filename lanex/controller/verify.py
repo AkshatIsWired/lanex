@@ -1087,6 +1087,34 @@ def _timing_table(run: _Run, checks: Dict[str, Dict[str, Any]]) -> Dict[str, Any
 
 
 # ---------------------------------------------------------------- flow + verdict
+def _planned_steps(run: _Run) -> Tuple[int, List[str]]:
+    """``(total, ids turned off)``: how many steps this run's flow has once
+    the steps its config switches off (``gating_config_vars``) are taken out."""
+    if run.completed or not run.has_cfg:
+        return len(run.steps), []
+    try:
+        from . import introspect
+        meta = run.cfg.get("meta") if isinstance(run.cfg.get("meta"), dict) else {}
+        name = (meta or {}).get("flow") or run.gui.get("flow") or "Classic"
+        if not isinstance(name, str):
+            name = "Classic"
+        ids = [s["id"] for s in introspect.flow_steps(name)]
+        gating = introspect.flow_gating(name)
+    except Exception:
+        return len(run.steps), []
+    if not ids:
+        return len(run.steps), []
+    import fnmatch
+    off: List[str] = []
+    for sid in ids:
+        base = re.sub(r"-\d+$", "", sid)
+        for pat, gvars in gating.items():
+            if (pat == base or fnmatch.fnmatchcase(base, pat)) and any(run.conf(g) is False for g in gvars):
+                off.append(sid)
+                break
+    return max(len(ids) - len(off), len(run.steps)), off
+
+
 def _flow_state(run: _Run) -> Dict[str, Any]:
     stopped = [s for s in run.steps if s["status"] == "stopped"]
     raised_checkers = [s for s in stopped if (s["id"] or "").startswith("Checker.")
@@ -1114,7 +1142,13 @@ def _flow_state(run: _Run) -> Dict[str, Any]:
         state = "unknown"
     first_stop = stopped[0] if stopped else None
     last = run.steps[-1] if run.steps else None
+    planned, off = _planned_steps(run)
     return {
+        # FS.stepCounts' meaning: the flow's steps minus those this run's
+        # config turns off. A finished run: its own step folders. A run that
+        # ended early: the whole flow, not just the folders it got to.
+        "steps_planned": planned,
+        "steps_off": off,
         "state": state,
         "partial": partial,
         "frm": run.gui.get("frm"), "to": run.gui.get("to"),

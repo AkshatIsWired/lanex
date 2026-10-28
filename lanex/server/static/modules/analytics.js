@@ -375,7 +375,10 @@ function renderOverview() {
     if (!Number.isNaN(d.getTime())) meta.push(esc(d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })));
   }
   if (Number.isFinite(row.wall_time_s)) meta.push(esc(fmtDur(row.wall_time_s)) + " of step time");
-  if (row.step_count) meta.push(esc(row.steps_done + " of " + row.step_count + " steps done" + (row.steps_reused ? " (" + row.steps_reused + " reused from " + (row.branched_from || "its parent") + ")" : "")));
+  // Verify's step totals (V.stepTotals): the same "34 of 76" Flow shows.
+  const nst = V.stepTotals(_ctx.signoff && _ctx.signoff.flow_state) ||
+    (row.step_count ? { done: row.steps_done, total: row.step_count } : null);
+  if (nst) meta.push(esc(nst.done + " of " + nst.total + " steps done" + (row.steps_reused ? " (" + row.steps_reused + " reused from " + (row.branched_from || "its parent") + ")" : "")));
 
   el.innerHTML =
     "<div class='an-verdict is-" + tone + "'>" +
