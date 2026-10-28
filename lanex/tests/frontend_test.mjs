@@ -1942,6 +1942,33 @@ check("vcd.js: a dump packed for the worker unpacks to exactly what parseVCD giv
   assert.ok(seen >= 2, "progress reported while parsing");
 });
 
+const ED = await import(toUrl(resolve(MOD, "ide", "editor.js")));
+const CMV = await import(toUrl(resolve(MOD, "..", "vendor", "codemirror.js")));
+check("ide editor: line-cached fold pairs equal the whole-text reading", () => {
+  const pool = [
+    "module m (input clk);", "endmodule", "  always @(posedge clk) begin", "  end", "begin end", "  if (a) begin : blk",
+    "  end else begin", "case (s)", "endcase", "function automatic f;", "endfunction", "extern function g;", "task t;", "endtask",
+    "fork", "join", "join_any", "wait fork;", "disable fork;", "generate", "endgenerate", "// begin end module", "/* begin */ end",
+    "/* begin", "still comment end", "*/ begin", "x = \"begin /* end\";", "y = \"unterminated begin", "`define begin end", "`begin",
+    "/*/ begin", "a /* b */ c /* d", "**/ end", "pure function h;", "import task k;", "constructor begin", "", "   ", "end /* x */ end",
+    "property p;", "endproperty", "class c;", "endclass", "covergroup g;", "endgroup", "begin // end", "/**/ begin",
+  ];
+  let seed = 7;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  for (let k = 0; k < 400; k++) {
+    const lines = Array.from({ length: 1 + rnd(40) }, () => pool[rnd(pool.length)]);
+    const doc = CMV.EditorState.create({ doc: lines.join("\n") }).doc;
+    assert.deepEqual([...ED.blockPairs(doc)], [...ED.blockPairsFull(doc)], "doc:\n" + lines.join("\n"));
+  }
+  // typing into one document, character by character (the caches carry over)
+  let st = CMV.EditorState.create({ doc: "module m;\n  always @(posedge clk) begin\n    x <= 1;\n  end\nendmodule\n" });
+  const typed = "  /* note begin\n  initial begin\n    y = \"end\";\n  end */\n  begin\n  end\n";
+  for (const ch of typed) {
+    st = st.update({ changes: { from: st.doc.length - 10, insert: ch } }).state;
+    assert.deepEqual([...ED.blockPairs(st.doc)], [...ED.blockPairsFull(st.doc)], "after typing " + JSON.stringify(ch));
+  }
+});
+
 console.log(`\nfrontend_test: ${passed} checks passed` +
   (process.exitCode ? " — WITH FAILURES" : ""));
 
