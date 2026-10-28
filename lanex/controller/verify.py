@@ -672,9 +672,21 @@ def _checks(run: _Run) -> List[Dict[str, Any]]:
     out.append(_metric_checker(run, _rec("magic_drc", "physical", "Magic DRC"),
                metric="magic__drc_error__count", error_var="ERROR_ON_MAGIC_DRC",
                checker="Checker.MagicDRC", tool="Magic.DRC", gates=["RUN_MAGIC_DRC"]))
-    out.append(_metric_checker(run, _rec("klayout_drc", "physical", "KLayout DRC"),
-               metric="klayout__drc_error__count", error_var="ERROR_ON_KLAYOUT_DRC",
-               checker="Checker.KLayoutDRC", tool="KLayout.DRC", gates=["RUN_KLAYOUT_DRC"]))
+    rec = _metric_checker(run, _rec("klayout_drc", "physical", "KLayout DRC"),
+                          metric="klayout__drc_error__count", error_var="ERROR_ON_KLAYOUT_DRC",
+                          checker="Checker.KLayoutDRC", tool="KLayout.DRC", gates=["RUN_KLAYOUT_DRC"])
+    # gf180mcu's LibreLane config sets no KLayout deck: KLayout.DRC logs "This
+    # step will be skipped" and Magic is the run's DRC. Say that, rather than
+    # "No value recorded", and don't hold the DRC verdict open for it.
+    if (rec["status"] == _NOT_RUN and run.completed and run.has_cfg
+            and "KLAYOUT_DRC_RUNSET" in run.cfg and not run.cfg.get("KLAYOUT_DRC_RUNSET")):
+        rec["status"] = _SKIPPED
+        rec["gate"] = "info"
+        rec["gate_note"] = "KLAYOUT_DRC_RUNSET is not set for this PDK, so LibreLane skips it"
+        rec["detail"] = (f"LibreLane skipped KLayout DRC: {run.cfg.get('PDK') or 'this PDK'} has no "
+                         "KLayout rule deck in its LibreLane config (KLAYOUT_DRC_RUNSET). Magic DRC "
+                         "is this run's design-rule check.")
+    out.append(rec)
     rec = _metric_checker(run, _rec("overlap", "physical", "Illegal overlaps"),
                           metric="magic__illegal_overlap__count", error_var="ERROR_ON_ILLEGAL_OVERLAPS",
                           checker="Checker.IllegalOverlap", tool="Magic.SpiceExtraction", gates=["RUN_LVS"])
