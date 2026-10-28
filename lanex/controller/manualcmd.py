@@ -367,6 +367,22 @@ def _pdk_version(pdk_root: str) -> str:
     return m.group(1) if m else ""
 
 
+def _repro_tag(command: Optional[str]) -> Optional[str]:
+    import re
+    m = re.search(r"(?:^|\s)--run-tag[ =](\S+)", command or "")
+    return (m.group(1).strip("'\"") + "-repro") if m else None
+
+
+def retag(command: Optional[str]) -> Optional[str]:
+    """*command* with its ``--run-tag T`` changed to ``T-repro``: a rerun that
+    leaves the run it reproduces alone. Unchanged when it names no tag."""
+    import re
+    if not command:
+        return command
+    return re.sub(r"((?:^|\s)--run-tag[ =])(['\"]?)([^\s'\"]+)\2",
+                  lambda m: m.group(1) + m.group(2) + m.group(3) + "-repro" + m.group(2), command, count=1)
+
+
 def reproduce_info(meta: Dict[str, Any], resolved: Optional[Dict[str, Any]],
                    run_dir: str) -> Dict[str, Any]:
     """What a run recorded about how it was started (``gui-run.json``) and what
@@ -385,8 +401,13 @@ def reproduce_info(meta: Dict[str, Any], resolved: Optional[Dict[str, Any]],
         "tag": meta.get("tag") or Path(run_dir).name,
         "run_dir": str(run_dir),
         "mode": mode,
-        "command": line,
-        "commands": {k: cmd.get(k) for k in ("container", "local") if cmd.get(k)},
+        # LibreLane appends to a run folder whose tag already exists ("Using
+        # existing run"), so the recorded command, pasted as is, would write
+        # into the original run. The command to rerun names a new tag.
+        "command": retag(line),
+        "recorded_command": line,
+        "repro_tag": _repro_tag(line),
+        "commands": {k: retag(cmd.get(k)) for k in ("container", "local") if cmd.get(k)},
         "cwd": cmd.get("cwd") or None,
         "config_file": meta.get("config_file") or None,
         "config_hash": meta.get("config_hash") or None,

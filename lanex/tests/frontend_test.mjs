@@ -1691,7 +1691,9 @@ check("console: the Journal as a script runs only commands, the rest are comment
   ]);
   const live = s.split("\n").filter((l) => l && !l.startsWith("#"));
   assert.deepEqual(live, ["set -euo pipefail", "cd /d", "export LIBRELANE_IMAGE_OVERRIDE=img@sha256:1",
-    "librelane --dockerized config.yaml --run-tag a1", "librelane --dockerized config.yaml --run-tag a2"]);
+    "librelane --dockerized config.yaml --run-tag a1-repro", "librelane --dockerized config.yaml --run-tag a2-repro"]);
+  // A replay must not write into the runs it replays (LibreLane appends to an existing tag).
+  assert.equal(CNM.retag("librelane c --run-tag a1 -i runs/a1/s.json"), "librelane c --run-tag a1-repro -i runs/a1/s.json");
   assert.match(s, /#   FP_CORE_UTIL 50 -> 60/);
   assert.deepEqual(CNM.configDiffLines({ set: { FP_CORE_UTIL: 60 }, remove: ["X"] }, { before: { FP_CORE_UTIL: 50 } }),
     ["FP_CORE_UTIL 50 -> 60", "X removed (back to its default)"]);

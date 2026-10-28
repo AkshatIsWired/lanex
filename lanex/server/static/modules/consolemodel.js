@@ -28,9 +28,18 @@ export function commandScript({ command, cwd, image, title } = {}) {
   return out.join("\n") + "\n";
 }
 
+// A run's command with "--run-tag T" made "--run-tag T-repro". LibreLane adds
+// to a run folder whose tag exists, so a replay under the same tag would write
+// into the run it replays (manualcmd.retag on the server does the same).
+export function retag(cmd) {
+  if (!cmd) return cmd;
+  return String(cmd).replace(/((?:^|\s)--run-tag[ =])(['"]?)([^\s'"]+)\2/, (_m, a, q, t) => a + q + t + "-repro" + q);
+}
+
 // The Journal as one script: each entry with a command becomes its line (after
 // a cd when the folder changes); config edits and the rest become comments, so
-// the script says everything that happened but runs only real commands.
+// the script says everything that happened but runs only real commands. Runs
+// replay under new tags (retag), leaving the session's own runs as they are.
 export function journalScript(entries, { title = "What LanEx ran this session" } = {}) {
   const out = ["#!/usr/bin/env bash", "# " + title, "set -euo pipefail"];
   let cwd = null, image = null;
@@ -43,7 +52,7 @@ export function journalScript(entries, { title = "What LanEx ran this session" }
       if (e.image && e.image !== image && /--dockerized\b/.test(e.command)) {
         out.push("export LIBRELANE_IMAGE_OVERRIDE=" + shq(e.image)); image = e.image;
       }
-      out.push(e.command);
+      out.push(retag(e.command));
     }
   }
   return out.join("\n") + "\n";
