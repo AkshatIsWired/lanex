@@ -139,6 +139,26 @@ def test_resumed_run_counts_reused_steps(tmp_path):
     assert child.is_dir()
 
 
+def test_fix_sheet_attributes_a_sweep_value_to_the_run_not_the_config(tmp_path):
+    from lanex.controller import branch
+    (tmp_path / "config.yaml").write_text("FP_CORE_UTIL: 55\nCLOCK_PERIOD: 10\n", encoding="utf-8")
+    run = _run(tmp_path, "dse-spm-02", CLEAN)
+    (run / "resolved.json").write_text(json.dumps({"FP_CORE_UTIL": 65, "CLOCK_PERIOD": 10}), encoding="utf-8")
+    (tmp_path / ".gui-dse-sweeps.json").write_text(json.dumps({"sweeps": [
+        {"id": "S1", "axes": [{"var": "FP_CORE_UTIL", "values": ["35", "50", "65"]}],
+         "tags": ["dse-spm-00", "dse-spm-01", "dse-spm-02"]}]}), encoding="utf-8")
+    info = branch.run_info(run)
+    cfg = {"FP_CORE_UTIL": 55, "CLOCK_PERIOD": 10}
+    o = branch.origin("FP_CORE_UTIL", info, cfg, None, "config.yaml")
+    assert o["layer"] == "run" and "sweep S1" in o["label"] and "config.yaml" not in o["label"]
+    assert branch.origin("CLOCK_PERIOD", info, cfg, None, "config.yaml")["layer"] == "config"
+    assert branch.had_run_overrides(info) is True
+    # a value the file no longer matches is not credited to the file
+    cfg2 = {"FP_CORE_UTIL": 55, "CLOCK_PERIOD": 20}
+    o2 = branch.origin("CLOCK_PERIOD", info, cfg2, None, "config.yaml")
+    assert o2["layer"] == "run" and o2["label"].startswith("not from config.yaml")
+
+
 def test_drc_report_that_contradicts_the_metric_is_said(tmp_path):
     run = _run(tmp_path, "R", CLEAN, steps=(("Magic.DRC", True),))
     rep_dir = run / "1-magic-drc" / "reports"
