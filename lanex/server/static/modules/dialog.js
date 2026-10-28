@@ -66,6 +66,29 @@ function _open({ title, bodyHtml, buttons, onMount }) {
   });
 }
 
+// Keyboard rules for a sheet or overlay a module draws itself (the sweep
+// sheet, a run's file list, the palette): Tab stays inside *root*, Esc calls
+// *onEscape* (when given), and the returned release() puts focus back where
+// it was before the sheet opened.
+export function holdFocus(root, { onEscape = null } = {}) {
+  const prev = document.activeElement;
+  const SEL = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
+  const onKey = (e) => {
+    if (e.key === "Escape" && onEscape) { e.preventDefault(); e.stopPropagation(); onEscape(); return; }
+    if (e.key !== "Tab") return;
+    const f = Array.from(root.querySelectorAll(SEL)).filter((el) => !el.disabled && el.getClientRects().length);
+    if (!f.length) return;
+    const i = f.indexOf(document.activeElement);
+    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && (i === f.length - 1 || i < 0)) { e.preventDefault(); f[0].focus(); }
+  };
+  root.addEventListener("keydown", onKey);
+  return () => {
+    root.removeEventListener("keydown", onKey);
+    try { if (prev && prev !== document.body && prev.isConnected && prev.focus) prev.focus({ preventScroll: true }); } catch (_e) {}
+  };
+}
+
 function _esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

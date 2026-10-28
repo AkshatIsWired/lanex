@@ -14,6 +14,7 @@ import { toggleDensity } from "./density.js";
 import { toggleRunMode } from "./runmode.js";
 import { icon } from "./icons.js";
 import { api } from "./api.js";
+import { holdFocus } from "./dialog.js";
 import { state, safeStorage } from "./state.js";
 import { contextRun, contextRuns, contextBaseline, contextDesign, setRun, loadRuns } from "./context.js";
 import { parseQuery, rank, oneLine, pushRecent, PREFIXES, whenLocal } from "./palettemodel.js";
@@ -306,6 +307,8 @@ export async function openPalette(initial = "") {
   _sel = 0;
   refresh();
   _el.hidden = false;
+  // Tab stays in the panel (aria-modal); closing puts focus back.
+  if (!_release) _release = holdFocus(_el.querySelector(".cmdk-panel"));
   requestAnimationFrame(() => _input.focus());
   // Settings, runs, files and the glossary arrive a moment later: fold them in.
   await loadData();
@@ -316,7 +319,9 @@ export async function openPalette(initial = "") {
 
 export function close() {
   if (_el) _el.hidden = true;
+  if (_release) { const r = _release; _release = null; r(); }
 }
+let _release = null;
 
 export function setupPalette() {
   window.addEventListener("keydown", (e) => {

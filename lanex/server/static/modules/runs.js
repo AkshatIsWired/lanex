@@ -10,7 +10,7 @@
 
 import { api, fmt } from "./api.js";
 import { state, safeStorage } from "./state.js";
-import { confirmDialog, alertDialog, checklistDialog, choiceDialog, promptDialog } from "./dialog.js";
+import { confirmDialog, alertDialog, checklistDialog, choiceDialog, promptDialog, holdFocus } from "./dialog.js";
 import { toast } from "./toast.js";
 import { gatherRunsScoped, normDir, getRunScope, setRunScope, setRun, setBaseline, contextRun, contextDesign, onContext, designLabel } from "./context.js";
 import { go } from "./nav.js";
@@ -451,7 +451,7 @@ function rowHtml(r, cols, { child = null } = {}) {
   const isBase = baselineTag(r._design) === r.tag;
   const vals = child ? pointValues(r, child) : null;
   const name = "<td class='rn-c-name'><div class='rn-name'>" +
-    "<button class='rn-exp' data-act='expand' aria-expanded='" + (_open === k) + "' title='Report and actions'>" + icon("chevron", { size: 12 }) + "</button>" +
+    "<button class='rn-exp' data-act='expand' aria-expanded='" + (_open === k) + "' title='Report and actions' aria-label='Report and actions for " + esc(r.tag) + "'>" + icon("chevron", { size: 12 }) + "</button>" +
     "<span class='rn-tag'>" + esc(r.tag) + "</span>" +
     (vals ? "<span class='rn-val'>" + esc(valuesText(vals)) + "</span>" : "") +
     (r.pinned ? "<span class='rn-pin' title='Pinned'>" + icon("star", { size: 11 }) + "</span>" : "") +
@@ -485,7 +485,7 @@ function sweepRowHtml(g, cols, gk, open) {
   const n = cols.length + 2;
   return "<tr class='rn-sweep" + (open ? " is-open" : "") + "' data-group='" + esc(gk) + "'><td class='rn-c-pick'></td><td class='rn-c-base'></td>" +
     "<td colspan='" + (n - 2) + "'><div class='rn-sw'>" +
-    "<button class='rn-exp' data-act='group' aria-expanded='" + open + "'>" + icon("chevron", { size: 12 }) + "</button>" +
+    "<button class='rn-exp' data-act='group' aria-expanded='" + open + "' aria-label='Show the runs of this sweep'>" + icon("chevron", { size: 12 }) + "</button>" +
     "<b>Sweep " + esc(axes) + "</b><span class='rn-sw-m'>" + rs.length + " run" + (rs.length === 1 ? "" : "s") +
     (running ? " · running" : "") +
     (failed.length ? " · <span class='rn-bad'>" + failed.length + " failed" + (reasons.length ? " (" + esc(reasons.join(", ")) + ")" : "") + "</span>" : "") +
@@ -1046,15 +1046,17 @@ function filesOverlay() {
   ov.className = "smodal-backdrop";
   ov.hidden = true;
   ov.innerHTML =
-    "<div class='smodal'>" +
+    "<div class='smodal' role='dialog' aria-modal='true' aria-labelledby='files-title'>" +
     "  <div class='smodal-head'><span class='smodal-title' id='files-title'>Files</span>" +
-    "  <span class='smodal-spacer'></span><button class='btn btn-ghost' id='files-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
+    "  <span class='smodal-spacer'></span><button class='btn btn-ghost' id='files-close' aria-label='Close the file list'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "  <div class='smodal-log' id='files-body' style='white-space:normal'></div>" +
     "</div>";
   document.body.appendChild(ov);
-  ov.addEventListener("click", (e) => { if (e.target === ov) ov.hidden = true; });
-  ov.querySelector("#files-close").addEventListener("click", () => { ov.hidden = true; });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !ov.hidden) ov.hidden = true; });
+  // Closing puts focus back where it was (holdFocus also keeps Tab inside).
+  const hide = () => { ov.hidden = true; if (ov._release) { const r = ov._release; ov._release = null; r(); } };
+  ov.addEventListener("click", (e) => { if (e.target === ov) hide(); });
+  ov.querySelector("#files-close").addEventListener("click", hide);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !ov.hidden) hide(); });
   _filesOverlay = ov;
   return ov;
 }
@@ -1069,6 +1071,8 @@ function fmtBytes(n) {
 async function showFilesModal(tag) {
   const ov = filesOverlay();
   ov.hidden = false;
+  if (!ov._release) ov._release = holdFocus(ov.querySelector(".smodal"));
+  ov.querySelector("#files-close").focus({ preventScroll: true });
   ov.querySelector("#files-title").textContent = "Files: " + tag;
   const body = ov.querySelector("#files-body");
   body.textContent = "loading…";
