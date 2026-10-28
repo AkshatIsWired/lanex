@@ -151,6 +151,24 @@ export function setupSetup() {
   wireSetupActions();
   import("./projectcard.js").then((m) => m.wireDesignRow()).catch(() => {});
   import("./mostused.js").then((m) => m.wireSettings()).catch(() => {});
+  // A change made elsewhere (the fix sheet's Apply or Undo, Cells) must show
+  // here at once: the Design row and the Settings card read the config again.
+  // (The Design row's own edits announce themselves without keys: it is
+  // already showing them.)
+  document.addEventListener("g:config_changed", (e) => {
+    const d = (e && e.detail) || {};
+    if (!d.keys && !d.from) return;
+    if (!state.designDir) return;
+    import("./projectcard.js").then((m) => m.paintDesignRow()).catch(() => {});
+    import("./mostused.js").then((m) => m.paintSettings()).catch(() => {});
+  });
+  // The project card's "Last run" line follows a run that just ended.
+  const lastRun = () => {
+    if (!state.designDir) return;
+    summariseFacts(state.designDir);
+  };
+  document.addEventListener("g:flow_done", () => setTimeout(lastRun, 1500));
+  document.addEventListener("g:runs_state", lastRun);
   document.getElementById("btn-set-design")?.addEventListener("click", onLoadDesign);
   document.getElementById("design-dir-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") onLoadDesign();
@@ -350,6 +368,18 @@ function paintLastRun(facts) {
   el.innerHTML = "Last run " + (last.finished ? "finished" : "didn't finish") + " " + fmt.escape(ago(last.at)) +
     " · <button type='button' class='linklike' data-open='runs'>" +
     (facts.runs === 1 ? "View it" : "View all " + facts.runs + " runs") + "</button>";
+}
+
+// Only the "Last run" line, read again (after a run ends).
+let _factsTok = 0;
+async function summariseFacts(path) {
+  const tok = ++_factsTok;
+  try {
+    const r = await fetch("/api/design-summary?path=" + encodeURIComponent(path), { headers: { "X-Requested-With": "XMLHttpRequest" } });
+    const body = await r.json();
+    if (tok !== _factsTok || path !== state.designDir || !r.ok || body.ok === false) return;
+    paintLastRun((body.data || {}).facts || null);
+  } catch (_e) { /* keep what it says */ }
 }
 
 async function summariseDir(path) {

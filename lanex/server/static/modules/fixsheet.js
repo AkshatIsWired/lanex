@@ -326,6 +326,8 @@ async function apply() {
   const v = S.variable + " = " + (c.to || S.value);
   const undo = res.undo && res.undo.backup ? { label: "Undo", run: () => undoConfig(res.undo, v, res.started) } : null;
   closeFixSheet();
+  // Saved in the project's config: pages that show it (Setup) read it again.
+  if (res.undo) document.dispatchEvent(new CustomEvent("g:config_changed", { detail: { keys: [S.variable], from: "fixsheet" } }));
   if (!res.started) {
     if (res.error) toast.show("Saved " + v + " in " + (res.undo ? res.undo.name : "the config") + ", but the run didn't start: " + res.error, "error", 0, undo);
     else toast.show("Saved " + v + " in " + (res.undo ? res.undo.name : "the config") + ".", "success", 9000, undo);
@@ -353,6 +355,7 @@ async function undoConfig(u, v, started) {
   for (let i = 0; i < 25; i++) {
     try {
       const r = await api.configUndo({ backup: u.backup, after: u.after });
+      document.dispatchEvent(new CustomEvent("g:config_changed", { detail: { keys: [v.split(" = ")[0]], from: "fixsheet-undo" } }));
       toast.show(r.name + " is back as it was." + (r.running || started ? " The run that started keeps " + v + "." : ""), "success", 8000);
       return;
     } catch (ex) {
