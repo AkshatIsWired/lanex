@@ -19,8 +19,8 @@
     "gf180mcu*": {
       "clock_period": 20.0,
       "config": {
-        "FP_CORE_UTIL": 38,
-        "PL_TARGET_DENSITY_PCT": 50
+        "FP_SIZING": "absolute",
+        "DIE_AREA": [0, 0, 300, 300]
       }
     }
   }

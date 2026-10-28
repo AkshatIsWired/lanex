@@ -55,7 +55,9 @@ def test_blank_project_sizes_its_die_from_the_design(tmp_path: Path):
     cfg = json.loads((dest / "config.json").read_text())
     assert cfg["FP_SIZING"] == "relative" and "DIE_AREA" not in cfg
     assert cfg["FP_CORE_UTIL"] == 40 and cfg["PL_TARGET_DENSITY_PCT"] > cfg["FP_CORE_UTIL"]
-    assert "DIE_AREA" not in cfg.get("pdk::gf180mcu*", {})
+    # gf180 keeps the fixed die it was verified with (until a gf180 run of
+    # the relative settings is measured), self-contained in its own section.
+    assert cfg["pdk::gf180mcu*"]["FP_SIZING"] == "absolute"
     assert cfg["DESIGN_NAME"] == "top"
 
 
