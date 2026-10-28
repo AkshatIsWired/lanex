@@ -479,7 +479,7 @@ function kpiPower() {
   })) : "";
   return kpi({
     title: "Power", heroKey: k,
-    tip: "Total power from OpenSTA after routing: internal + switching + leakage. It assumes the tool's default switching activity, so treat it as an estimate.",
+    tip: "Total power OpenSTA estimated in the OpenROAD.STAPostPNR step: internal + switching + leakage. It assumes the tool's default switching activity, so treat it as an estimate.",
     hero: vh(k), rows: stack ? "<div class='an-kpi-stack'>" + stack + "</div>" : "",
     spark: trendSpark(k), sparkLabel: "total power, recent runs",
   });
