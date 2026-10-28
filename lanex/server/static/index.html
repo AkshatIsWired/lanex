@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/static/verify.css" />
   <link rel="stylesheet" href="/static/flow.css" />
   <link rel="stylesheet" href="/static/fix.css" />
+  <link rel="stylesheet" href="/static/console.css" />
   <link rel="stylesheet" href="/static/layout.css" />
   <link rel="stylesheet" href="/static/cells.css" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
@@ -189,13 +190,10 @@
           <span class="ico"></span><span class="label">Verify</span>
         </button>
       </div>
-      <div class="rail-group rail-foot" style="--n:2">
+      <div class="rail-group rail-foot" style="--n:1">
         <span class="rail-label">System</span>
         <button class="side-tab" data-tab="tools" data-tip="Install or check EDA tools and PDKs">
           <span class="ico"></span><span class="label">Tools</span>
-        </button>
-        <button class="side-tab" data-tab="manual" data-tip="Run LibreLane commands yourself and copy the exact CLI">
-          <span class="ico"></span><span class="label">Manual</span>
         </button>
       </div>
     </nav>
@@ -932,40 +930,6 @@
       </div>
     </section>
 
-    <!-- MANUAL / ADVANCED -->
-    <section class="section" id="sec-manual">
-      <h2>Manual control <span class="cc-badge">advanced</span></h2>
-      <p class="hint">Drive LibreLane and the EDA tools yourself while the cockpit keeps watching
-        <code>runs/</code>. Copy the exact command to run in your own terminal, or run an
-        allow-listed command right here.</p>
-
-      <div class="card manual-card">
-        <div class="card-body">
-          <h3>Equivalent CLI for your current Setup</h3>
-          <p class="hint">Equivalent command-line invocation representing the current Setup parameters (PDK, SCL, flow variant, and step bounds). Executing this command in a terminal updates the GUI runs history automatically.</p>
-          <button class="btn btn-ghost" id="btn-cli-reveal">Show the command</button>
-          <div id="cli-reveal" class="cli-reveal"></div>
-        </div>
-      </div>
-
-      <div class="card manual-card">
-        <div class="card-body">
-          <h3>Run a command here</h3>
-          <p class="hint">Allowed: <code>librelane</code>, <code>openroad</code>, <code>yosys</code>,
-            <code>magic</code>, <code>klayout</code>, <code>netgen</code>, <code>iverilog</code>,
-            <code>vvp</code>, <code>verilator</code>, <code>dot</code>, <code>ciel</code>,
-            <code>docker</code>/<code>podman</code>.
-            Shell pipes, redirects, and <code>sudo</code> commands are disabled in this console; execute elevated commands in an external terminal.</p>
-          <div class="manual-input-row">
-            <input type="text" id="manual-cmd" placeholder="e.g. librelane --dockerized config.json -T floorplan" autocomplete="off" spellcheck="false"/>
-            <button class="btn btn-primary" id="btn-manual-run">Run</button>
-            <button class="btn btn-ghost" id="btn-manual-cancel" disabled>Stop</button>
-          </div>
-          <pre id="manual-output" class="manual-output" aria-live="polite"></pre>
-        </div>
-      </div>
-    </section>
-
   </main>
 
   <!-- Wafer edge: run state, what the run will use, logs, and the honest notice. -->
@@ -984,6 +948,10 @@
     <button class="st-item" id="st-engine" data-tip="Run engine (change it from the Run menu)"><span class="st-k">Engine</span><span class="st-v" id="st-engine-v">Container</span></button>
     <button class="st-item" id="st-mode" data-tip="Run mode (change it from the Run menu)"><span class="st-k">Mode</span><span class="st-v" id="st-mode-v">Full auto</span></button>
     <span class="st-spacer"></span>
+    <button class="st-item st-console" id="console-btn" aria-pressed="false" aria-controls="console" data-tip="Console: the flow log, the exact command, what LanEx ran, and a command line (Ctrl+`)">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7l4 4-4 4M11 16h7"/></svg>
+      <span>Console</span>
+    </button>
     <button class="st-item st-logs" id="logs-btn" aria-pressed="false" aria-controls="log-panel" data-tip="Install and tool output">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 11h16M4 16h10"/></svg>
       <span>Logs</span><span class="st-count" id="logs-count" hidden></span>

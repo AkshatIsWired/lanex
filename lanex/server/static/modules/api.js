@@ -46,8 +46,18 @@ async function _fetch(path, init) {
     err.body = body;
     throw err;
   }
-  return body.data !== undefined ? body.data : body;
+  const data = body.data !== undefined ? body.data : body;
+  // The Console drawer's Journal: every action with a command or config
+  // equivalent, after it succeeded (console.js reads these).
+  if (JOURNALED.has(path.split("?")[0])) {
+    let sent = null;
+    try { sent = init.body ? JSON.parse(init.body) : null; } catch (_e) {}
+    try { document.dispatchEvent(new CustomEvent("g:journal", { detail: { path: path.split("?")[0], sent, data } })); } catch (_e) {}
+  }
+  return data;
 }
+const JOURNALED = new Set(["/api/run/start", "/api/run/resume", "/api/config/set", "/api/config/undo",
+  "/api/fix/apply", "/api/dse/start", "/api/manual/run", "/api/open-in-tool", "/api/container-tools/open"]);
 
 export const api = {
   health: () => _fetch("/api/health"),
@@ -126,6 +136,7 @@ export const api = {
   getWatch: (design) => _fetch("/api/watch" + (design ? "?design=" + encodeURIComponent(design) : "")),
   setWatch: (design, rules) => _fetch("/api/watch", { method: "POST", body: JSON.stringify({ design, rules }) }),
   runGuiMeta: (tag) => _fetch("/api/run-gui-meta?tag=" + encodeURIComponent(tag)),
+  runReproduce: (tag) => _fetch("/api/run-reproduce?tag=" + encodeURIComponent(tag)),
   importRunDir: (path) => _fetch("/api/run-import-dir", { method: "POST", body: JSON.stringify({ path }) }),
   importRunBundle: (payload) => _fetch("/api/run-import-bundle", { method: "POST", body: JSON.stringify(payload) }),
   runBundleUrl: (tag, include) =>

@@ -86,6 +86,8 @@ async function boot() {
     setupZoom();
     // Wire the status-line Logs button so install output can always be reopened.
     import("./modules/logdrawer.js").then((d) => d.setupLogDrawer()).catch(() => {});
+    // The Console drawer (Ctrl+` and the status-line Console button).
+    import("./modules/console.js").then((m) => m.setupConsole()).catch((e) => console.error("console", e));
     setupPalette();
     setupRunMode();
     setupSetup();
@@ -262,7 +264,7 @@ function handle(ev) {
     state.prepPhase = "DSE config " + (((ev.index || 0) + 1)) + "/" + (ev.total || "?") + ": preparing…";
     flowEvent(ev);
   } else if (ev.type === "manual_started" || ev.type === "manual_line" || ev.type === "manual_done") {
-    import("./modules/manual.js").then((m) => m.onManualEvent(ev));
+    import("./modules/console.js").then((m) => m.onManualEvent(ev));
   } else if (ev.type === "installer_result") {
     // Final outcome of an async tool install (the POST returned "started"
     // immediately; this event carries the real result). tools.js toasts it,
@@ -578,7 +580,6 @@ const RENDER = {
   verify: () => import("./modules/verify.js").then((m) => m.renderVerify()),
   dse: () => import("./modules/dse.js").then((m) => m.renderDse()),
   cells: () => import("./modules/cells.js").then((m) => m.renderCells()),
-  manual: () => import("./modules/manual.js").then((m) => m.renderManual()),
 };
 document.addEventListener("g:tab_activated", (e) => {
   const r = RENDER[e.detail?.tab];
