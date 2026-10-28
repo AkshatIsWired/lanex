@@ -329,6 +329,16 @@ body.theme-light .hub-label { color: var(--accent); }
 .proj-note { margin: 0; display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--warn); }
 .proj-note svg { flex: 0 0 auto; margin-top: 3px; }
 .proj-note.is-fail { color: var(--fail); }
+/* A project whose folder is gone: only the notice and its two ways out. */
+.project-open-state.is-missing .proj-design,
+.project-open-state.is-missing .pd-status,
+.project-open-state.is-missing .proj-lastrun,
+.project-open-state.is-missing .proj-notes,
+.project-open-state.is-missing > .picker-actions { display: none; }
+.proj-missing { margin-top: var(--s-4); padding: var(--s-3) var(--s-4); border: 1px solid var(--fail); border-radius: 8px; max-width: 72ch; }
+.proj-missing-h { margin: 0; display: flex; gap: 8px; align-items: center; color: var(--fail); font-size: 15px; }
+.proj-missing-p { margin: 6px 0 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.proj-missing .picker-actions { margin-top: var(--s-3); }
 
 .hub-list-head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-3); }
 .hub-list-acts { margin-left: auto; display: flex; gap: 6px; }

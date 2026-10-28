@@ -216,7 +216,15 @@ export async function adoptDesignDir(designDir, opts = {}) {
   // state.designDir, the per-tab run dropdowns come back empty until the user
   // opens a run from the Runs window (which re-syncs it). Syncing here makes
   // every tab show the runs immediately, no manual Open needed.
-  try { await api.setDesignDir(designDir); } catch (_e) { /* best-effort */ }
+  try {
+    await api.setDesignDir(designDir);
+    state.designMissing = null;
+  } catch (ex) {
+    // A folder that was moved or deleted: say so plainly instead of loading
+    // a blank project, and keep Run off.
+    if (/not found/i.test((ex && ex.message) || "")) { showMissingProject(designDir); return; }
+  }
+  paintMissing();
   // The PDK the project's config names is the one LibreLane builds for: the
   // picker shows it, rather than whatever was used last.
   await syncPdkFromConfig();
@@ -239,6 +247,62 @@ export async function adoptDesignDir(designDir, opts = {}) {
     const { maybeOfferAutoConfig } = await import("./autoconfig.js");
     maybeOfferAutoConfig(designDir);
   } catch (_e) { /* non-fatal */ }
+}
+
+// A project whose folder is gone (moved, renamed or deleted): its card says
+// so, with the two ways out, and Run stays off until it is found or removed.
+export function showMissingProject(dir) {
+  state.designDir = dir;
+  state.designMissing = dir;
+  paintProjectBlock();
+  paintMissing();
+  paintRunButton();
+  paintDesignPill(fmt.shortPath(dir));
+}
+
+function paintMissing() {
+  const card = document.getElementById("project-open");
+  if (!card) return;
+  const dir = state.designMissing;
+  card.classList.toggle("is-missing", !!dir);
+  let box = document.getElementById("proj-missing");
+  if (!dir) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "proj-missing";
+    box.className = "proj-missing";
+    box.setAttribute("role", "alert");
+    card.querySelector(".proj-path")?.after(box);
+    box.addEventListener("click", async (e) => {
+      const b = e.target.closest("[data-miss]");
+      if (!b) return;
+      const gone = state.designMissing;
+      if (b.dataset.miss === "locate") {
+        (await import("./shell.js")).openFolder();
+        return;
+      }
+      try { await api.projectForget(gone); } catch (_e) { /* the local list still drops it */ }
+      try {
+        const list = JSON.parse(localStorage.getItem("ll.recentDesigns") || "[]").filter((d) => d !== gone);
+        localStorage.setItem("ll.recentDesigns", JSON.stringify(list));
+      } catch (_e) { /* storage may be off */ }
+      state.designMissing = null;
+      state.designDir = null;
+      state.runs = [];
+      paintProjectBlock();
+      paintMissing();
+      paintRunButton();
+      paintDesignPill("");
+      toast.show("Removed it from the list. Nothing on disk was touched.", "success");
+    });
+  }
+  box.innerHTML = "<p class='proj-missing-h'>" + icon("alert", { size: 15 }) + "<b>Project folder not found</b></p>" +
+    "<p class='proj-missing-p'><code>" + fmt.escape(dir) + "</code></p>" +
+    "<p class='muted proj-missing-p'>It may have been moved, renamed or deleted. Point LanEx at its new place, or take it off the list.</p>" +
+    "<div class='picker-actions'><button class='btn btn-primary' data-miss='locate'>Locate…</button>" +
+    "<button class='btn btn-ghost' data-miss='forget'>Remove from list</button></div>";
+  const sum = document.getElementById("design-summary");
+  if (sum) sum.innerHTML = "";
 }
 
 // The Project block: an empty state with the two ways in, or the open
@@ -595,14 +659,19 @@ export function paintRunButton() {
   const g = document.getElementById("btn-run-global");
   // Don't fight paintRunning while a run is live (the global button is "Stop").
   const running = state.status && state.status.running;
-  if (g && !running) g.disabled = !state.designDir;
+  const off = !state.designDir || !!state.designMissing;
+  if (g && !running) g.disabled = off;
   if (!b) return;
-  b.disabled = !state.designDir;
+  b.disabled = off;
 }
 
 async function onRunClick({ show = false, fixed = false } = {}) {
   if (!state.designDir) {
     toast.show("Pick a design folder first.", "warn");
+    return;
+  }
+  if (state.designMissing) {
+    toast.show("Project folder not found: " + state.designMissing + ". Locate it or remove it from the list on Setup.", "warn");
     return;
   }
   // Preflight: catch missing tools / PDK before a long run fails half-way.
