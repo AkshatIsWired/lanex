@@ -33,6 +33,7 @@ import { fileActionsHtml, wireFileActions } from "./fileview.js";
 import { liveLines, liveRows, onLiveLog } from "./logs.js";
 import { reportCardHtml, verdictOf, fmtDur } from "./reportcard.js";
 import { fixListHtml, problemsOf } from "./problems.js";
+import { loadingStart, pageSkeleton } from "./loading.js";
 import "./fixsheet.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
@@ -70,7 +71,25 @@ const F = {
   stepInfo: new Map(),      // id -> /api/steps entry
   rows: new Map(), heads: new Map(),   // step rows and stage headings, by id
   raf: 0,
+  loaded: false,            // the run list has come back once (before that: skeleton)
+  job: null,                // the first open's loading state (loading.js)
 };
+
+// A Run click (setup.js): "starting" paints at once, "started" makes the new
+// run the live one, "refused" says why with the way back.
+if (typeof document !== "undefined") {
+  document.addEventListener("g:run_start", (e) => {
+    if (!visible()) return;
+    if (F.job) { F.job.done(); F.job = null; }
+    const phase = e.detail && e.detail.phase;
+    if (phase === "started") { F.pinned = false; renderFlow(); } else paint();
+  });
+  // A refusal is said once: leaving Flow puts it away.
+  document.addEventListener("g:tab_activated", (e) => {
+    const tab = e.detail && e.detail.tab;
+    if (tab !== "pipeline" && state.runStart && state.runStart.error) state.runStart = null;
+  });
+}
 
 // ------------------------------------------------------------------ entry points
 
@@ -79,7 +98,16 @@ export async function renderFlow() {
   const tok = ++F.tok;
   const live = liveTag();
   if (!live) F.pinned = false;
+  // A run being started shows at once; the first open of the page shows its
+  // skeleton (after a moment) until the run list is in, never "No run yet"
+  // before it has been asked. A later open keeps what it showed meanwhile.
+  if (state.runStart && !live) paint();
+  else if (!F.loaded && !F.job) {
+    F.job = loadingStart($("sec-pipeline"), { skeleton: pageSkeleton("pipeline"), hasContent: () => !!state.runStart });
+  }
   await ctx.loadRuns().catch(() => {});
+  F.loaded = true;
+  if (F.job) { F.job.done(); F.job = null; }
   if (tok !== F.tok) return;
   const tag = (!F.pinned && live) ? live : (F.keep || ctx.contextRun());
   const wasLive = F.live;
@@ -326,9 +354,23 @@ function setHTML(el, html) {
 function paint() {
   const sec = $("sec-pipeline");
   if (!sec) return;
+  // Before the run list has come back once there is nothing true to draw
+  // ("No run yet" would be a guess): the skeleton stays.
+  if (!F.loaded && !state.runStart) return;
+  // The page draws now: the skeleton goes first (the boxes must show to be measured).
+  if (F.job) { F.job.done(); F.job = null; }
   const strip = $("fl-strip"), body = $("fl-body");
   $("fl-live").hidden = !(liveTag() && !F.live);
   F.rb?.paint();
+  if (state.runStart && !F.live && !liveTag()) {
+    // Run was pressed: starting, or refused (with why and the way back).
+    const head = $("fl-head");
+    head._key = "";
+    setHTML(head, startHtml(state.runStart));
+    if (strip._key !== "idle") { strip.innerHTML = stripIdle(); strip._key = "idle"; }
+    body.hidden = true;
+    return;
+  }
   if (!F.tag) {
     paintHead(null, null);
     if (strip._key !== "idle") { strip.innerHTML = stripIdle(); strip._key = "idle"; }
@@ -354,6 +396,29 @@ function emptyHtml() {
     "<div class='an-verdict-act'>" + (state.designDir
       ? "<button class='btn btn-primary' data-fl='run'>" + icon("play", { size: 14 }) + " Run the flow</button>"
       : "<button class='btn btn-primary' data-go='setup'>Go to Setup</button>") + "</div></div>";
+}
+
+// The head while a Run click's start request is out, or after the server
+// refused it.
+function startHtml(rs) {
+  if (rs.error) {
+    const from = rs.from && rs.from !== "pipeline" ? rs.from : "setup";
+    const label = document.querySelector('.side-tab[data-tab="' + from + '"] .label')?.textContent.trim() || "Setup";
+    return "<div class='an-verdict fl-hero is-fail' role='alert'><div class='an-verdict-main'>" +
+      "<div class='an-eyebrow'>Run</div><h2 class='an-title'>The run didn't start</h2>" +
+      "<p class='an-lede'>" + esc(rs.error.reason) + "</p></div>" +
+      "<div class='an-verdict-act'>" +
+      "<button class='btn btn-primary' data-go='" + esc(from) + "'>Back to " + esc(label) + "</button>" +
+      (rs.error.mismatch ? "" : "<button class='btn btn-ghost' data-fl='run'>" + icon("play", { size: 14 }) + " Try again</button>") +
+      "</div></div>";
+  }
+  return "<div class='an-verdict fl-hero is-live'><div class='an-verdict-main'>" +
+    "<div class='an-eyebrow'><span class='fl-live-dot'></span>Starting</div>" +
+    "<h2 class='an-title'>" + (rs.cancel ? "Stopping the run…" : "Starting the run…") + "</h2>" +
+    "<p class='an-lede'>Asking LibreLane to start. The first start of the container can take a minute.</p>" +
+    "<div class='fl-bar' role='progressbar' aria-label='Steps done' aria-valuemin='0' aria-valuemax='100' aria-valuenow='0'><span style='transform:scaleX(0)'></span></div>" +
+    "</div><div class='an-verdict-act'>" +
+    "<button class='btn btn-warn' data-fl='stop-start'" + (rs.cancel ? " disabled" : "") + ">" + icon("stop", { size: 13 }) + " Stop</button></div></div>";
 }
 
 function stripIdle() {
@@ -636,7 +701,8 @@ function paintSteps(steps, stages) {
   const key = F.tag + "|" + steps.map((s) => s.id + (s.from ? "*" : "")).join(",");
   if (host._key !== key) {
     // The same run with a new step list (it just ended) keeps its place.
-    const keep = host._key && host._key.split("|")[0] === F.tag ? host.scrollTop : 0;
+    const built = !!host._key;
+    const keep = built && host._key.split("|")[0] === F.tag ? host.scrollTop : 0;
     host._key = key;
     host.innerHTML = stages.filter((st) => st.steps.length).map((st) =>
       "<div class='fl-stage' data-grp='" + st.id + "'><div class='fl-stage-h'><span class='vf-mark'></span>" +
@@ -652,7 +718,9 @@ function paintSteps(steps, stages) {
       line.innerHTML = icon("refresh", { size: 11 }) + " <span>Resumed here · the steps above are from <b>" + esc(steps[first.i - 1].from) + "</b></span>";
       F.rows.get(first.id).before(line);
     }
-    host.scrollTop = keep;
+    // Writing scrollTop right after a rebuild forces a layout: the very first
+    // list starts at the top anyway, so it is written only after that.
+    if (built) host.scrollTop = keep;
     F.followed = "";
   }
   const shown = shownStep(steps);
@@ -989,6 +1057,7 @@ function wireOnce() {
     const act = a.dataset.fl;
     if (act === "run") document.getElementById("btn-run-global")?.click();
     else if (act === "stop") api.cancelRun().catch(() => {});
+    else if (act === "stop-start") import("./setup.js").then((m) => { if (!m.cancelStart()) api.cancelRun().catch(() => {}); paint(); });
     else if (act === "resume") api.resumeRun().catch(() => {});
     else if (act === "resume-from") {
       import("./setup.js").then((m) => m.resumeFrom(a.dataset.stage))

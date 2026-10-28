@@ -6,7 +6,9 @@ import { fmt } from "./api.js";
 import { renderConfig } from "./config.js";
 import { setupFolderBrowser, loadFilesFor } from "./fs.js";
 import { toast } from "./toast.js";
-import { renderPreflight } from "./preflight.js";
+import { renderPreflight, freshPreflight, preflightNow, runBlocker } from "./preflight.js";
+import { go } from "./nav.js";
+import { currentTab } from "./tabs.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 import { pdkFacts, stackHtml } from "./pdkinfo.js";
@@ -187,6 +189,7 @@ export function setupSetup() {
   // Global topbar Run/Stop: start the flow, or stop a running one, from any tab —
   // no need to navigate back to Setup. Reuses the same start/cancel paths.
   document.getElementById("btn-run-global")?.addEventListener("click", () => {
+    if (cancelStart()) return;   // a run is starting: stop it as soon as it has
     if (state.status && state.status.running) { api.cancelRun().catch(() => {}); }
     else { onRunClick({ show: false }); }
   });
@@ -226,6 +229,16 @@ async function onLoadDesign() {
 // `opts.explicit` (default true) records that the person chose this project,
 // as opposed to boot re-opening the last one ({explicit:false}).
 export async function adoptDesignDir(designDir, opts = {}) {
+  if (!(await openDesignQuick(designDir, opts))) return;
+  await finishAdopt(designDir, opts);
+}
+
+let _adopting = null;   // the project whose folder is being read (adoptDesignDir)
+
+// The part of opening a project every page needs before it can draw: the
+// server's active project, the project card, and the config's PDK and
+// library (a cheap read). False when the folder is gone.
+export async function openDesignQuick(designDir, opts = {}) {
   const explicit = opts.explicit !== false;
   // Another project: the last one's runs are not this one's (Setup's strip
   // ticked "Run the flow" on a new project that had never run).
@@ -236,6 +249,9 @@ export async function adoptDesignDir(designDir, opts = {}) {
   }
   state.designDir = designDir;
   state.designExplicit = explicit;
+  // Until its files are in (finishAdopt), a PDK pick doesn't repaint the
+  // Design row: the file list does, once.
+  _adopting = designDir;
   rememberDesign(designDir);
   paintOnboardChecklist();  // step 1 (project open) is now satisfied
   paintProjectBlock();
@@ -251,25 +267,43 @@ export async function adoptDesignDir(designDir, opts = {}) {
   } catch (ex) {
     // A folder that was moved or deleted: say so plainly instead of loading
     // a blank project, and keep Run off.
-    if (/not found/i.test((ex && ex.message) || "")) { showMissingProject(designDir); return; }
+    if (/not found/i.test((ex && ex.message) || "")) { _adopting = null; showMissingProject(designDir); return false; }
   }
   paintMissing();
-  // The PDK the project's config names is the one LibreLane builds for: the
-  // picker shows it, rather than whatever was used last.
-  await syncPdkFromConfig();
   paintDesignPill("loading…");
-  const summaryEl = document.getElementById("design-summary");
-  if (summaryEl) summaryEl.innerHTML = await summariseDir(designDir);
-  paintDesignPill(fmt.shortPath(designDir));
-  await loadFilesFor(designDir);
-  const { renderRuns } = await import("./runs.js");
-  try { state.runs = await api.runs(designDir); } catch (_e) { state.runs = []; }
-  paintOnboardChecklist();
   // The results pages show what this project showed last time, else its
   // newest run (context.js).
   (await import("./context.js")).openProject(designDir);
+  await readConfigPdk();
+  return true;
+}
+
+// The rest of opening a project: the folder's summary, its files and runs
+// (read side by side), the PDK picker following the config, the checklist.
+export async function finishAdopt(designDir, opts = {}) {
+  const explicit = opts.explicit !== false;
+  const stale = () => state.designDir !== designDir;
+  const summaryEl = document.getElementById("design-summary");
+  const summaryP = summariseDir(designDir).then((html) => {
+    if (stale()) return;
+    if (summaryEl) summaryEl.innerHTML = html;
+    paintDesignPill(fmt.shortPath(designDir));
+  });
+  const runsP = api.runs(designDir).catch(() => []);
+  // The PDK the project's config names is the one LibreLane builds for: the
+  // picker shows it, rather than whatever was used last. (Then the files: the
+  // Design row they paint reads the picked PDK's sections.)
+  _adopting = designDir;
+  try { await syncPdkFromConfig({ reread: false }); } finally { if (_adopting === designDir) _adopting = null; }
+  await loadFilesFor(designDir);   // paints the Design row
+  const runs = await runsP;
+  await summaryP;
+  if (stale()) return;
+  state.runs = runs;
+  paintOnboardChecklist();
   if (!state.selectedRunTag && state.runs && state.runs.length) state.selectedRunTag = state.runs[0].tag;
-  renderRuns();
+  // The Runs page lists them when it shows (it renders on every visit).
+  if (currentTab() === "runs") import("./runs.js").then((m) => m.renderRuns()).catch(() => {});
   paintRunButton();
   renderPreflight();
   // Offer to auto-generate a config when the folder has sources but no config.
@@ -499,7 +533,8 @@ async function readConfigPdk() {
   _cfgPdk = null;
   if (!state.designDir) { paintPdkSrc(); return null; }
   try {
-    const info = await api.designInfo({ keys: ["PDK", "STD_CELL_LIBRARY"] });
+    // keys_only: the config's two values, without the source scan (cheap).
+    const info = await api.designInfo({ keys: ["PDK", "STD_CELL_LIBRARY"], keys_only: true });
     const s = (info && info.settings) || {};
     const str = (v) => (typeof v === "string" ? v.trim() : "");
     _cfgPdk = {
@@ -525,8 +560,9 @@ const LIBRELANE_DEFAULT_PDK = "sky130A";
 
 // Point the picker at the PDK the open project's config names. A PDK that
 // isn't installed is still shown (and said), so the picker never pretends.
-export async function syncPdkFromConfig() {
-  const c = await readConfigPdk();
+// `reread: false` uses the config read a moment ago (openDesignQuick).
+export async function syncPdkFromConfig({ reread = true } = {}) {
+  const c = reread || !cfgFor() ? await readConfigPdk() : cfgFor();
   const sel = document.getElementById("pdk-select");
   if (c && !c.pdk && sel && hasOpt(sel, LIBRELANE_DEFAULT_PDK)) {
     // A config that names no PDK builds for LibreLane's default (sky130A, the
@@ -539,8 +575,11 @@ export async function syncPdkFromConfig() {
   if (!c || !c.pdk || !sel) return;
   const installed = (state.pdks || []).some((p) => p.name === c.pdk);
   if (!hasOpt(sel, c.pdk)) addOpt(sel, c.pdk, c.pdk + " (not installed)");
+  // The picker already shows what the config names (boot fills it after
+  // reading the config): nothing to redo.
+  const already = sel.value === c.pdk && state.selectedPdk === c.pdk && (!c.scl || state.selectedScl === c.scl);
   sel.value = c.pdk;
-  await onPdkSelected();
+  if (!already) await onPdkSelected();
   if (!installed) {
     toast.show("This project is set up for " + c.pdk + ", which isn't installed. Install it in Tools, or pick an installed PDK here " +
       "and LanEx saves it to " + c.name + ".", "warn", 10000, { label: "Open Tools", run: () => import("./nav.js").then((m) => m.go("tools")) });
@@ -653,7 +692,9 @@ async function onPdkSelected(e) {
     paintPdkAbout(sel.value);
     if (user) await saveTargetToConfig();
     if (user) document.dispatchEvent(new CustomEvent("g:pdk_confirmed", { detail: { pdk: sel.value } }));
-    import("./projectcard.js").then((m) => m.paintDesignRow()).catch(() => {});
+    // While a project opens, its file list paints the Design row once the
+    // files are in (fs.js loadFilesFor): no second read here.
+    if (_adopting !== state.designDir) import("./projectcard.js").then((m) => m.paintDesignRow()).catch(() => {});
     refreshPdkReadiness();
   } catch (ex) {
     paintPdkPill("error", "pill-fail");
@@ -696,9 +737,10 @@ async function refreshPdkReadiness() {
   renderPreflight();
 }
 
-export async function populatePdkPicker() {
+// `list`: the PDK list boot already fetched (else it is fetched here).
+export async function populatePdkPicker(list) {
   try {
-    const pdks = await api.pdks();
+    const pdks = Array.isArray(list) ? list : await api.pdks();
     const sel = document.getElementById("pdk-select");
     sel.innerHTML = "";
     if (!pdks.length) {
@@ -758,7 +800,121 @@ export function lastLintErrors(designDir, store = safeStorage) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+// ---------- Run ----------------------------------------------------------------
+//
+// A Run click answers at once: the button turns into Stop, Flow opens in a
+// "Starting the run…" state (unless the Run menu says to stay), and the start
+// request goes out in the same moment. The checks stay: the server refuses a
+// run whose folder is gone, whose path has spaces, whose PDK picker and config
+// disagree, or while another flow runs, and Flow says why with the way back.
+// Setup's "Ready to run?" check is used when it is fresh for these picks (a
+// blocker it found asks first); otherwise it runs beside the start and speaks
+// up only if it finds something.
+
+// The run being started: { from, show, cancel, error } while the start
+// request is out (state.runStart is what Flow paints from).
+let _start = null;
+
+function beginStart(from, show) {
+  _start = { at: Date.now(), from, show, cancel: false, error: null, tag: null };
+  state.runStart = _start;
+  paintStarting();
+  document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "starting" } }));
+}
+
+// The top-bar button as Stop the moment Run is pressed.
+function paintStarting() {
+  const g = document.getElementById("btn-run-global");
+  if (!g) return;
+  g.disabled = false;
+  g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>";
+  g.classList.add("is-stop");
+  g.dataset.tip = "Stop the run that is starting";
+  const b = document.getElementById("btn-run");
+  if (b) b.disabled = true;
+}
+
+// Stop pressed while the start request is still out: the run is stopped the
+// moment the server says it started.
+export function cancelStart() {
+  if (!_start) return false;
+  _start.cancel = true;
+  const g = document.getElementById("btn-run-global");
+  if (g) { g.disabled = true; const s = g.querySelector("span"); if (s) s.textContent = "Stopping…"; }
+  document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "stopping" } }));
+  return true;
+}
+
+// Plain words for the server's terse refusals.
+export function refusalText(msg) {
+  const m = String(msg || "").trim();
+  if (/^already running$/i.test(m)) return "A run is already going. Stop it, or watch it here, before starting another.";
+  if (!m || /^HTTP \d+$/.test(m)) return "LanEx didn't answer the start request (" + (m || "no reply") + "). Try again in a moment.";
+  return m;
+}
+
+function startRefused(reason, extra = {}) {
+  const s = _start;
+  _start = null;
+  paintRunning(false);
+  if (!s) return;
+  s.error = { reason: refusalText(reason), ...extra };
+  state.runStart = s;
+  document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "refused" } }));
+  // Flow says it when it shows the run; elsewhere a toast does.
+  const onFlow = document.getElementById("sec-pipeline")?.classList.contains("section-active");
+  if (!onFlow && !extra.mismatch) toast.show("Run refused: " + s.error.reason, "error");
+}
+
+// The server started it: the page shows the new run as live straight away
+// (the run's first events follow a moment later).
+function startAccepted(tag) {
+  const s = _start;
+  _start = null;
+  state.runStart = null;
+  state.pipeline = [];
+  state.stepStatuses = {};
+  state.stepTiming = {};
+  state.prepPhase = null;
+  state.prepStart = null;
+  state.lastFlow = null;
+  state.paused = false;
+  state.status.running = true;
+  if (tag) state.liveTag = tag;
+  paintRunning(true);
+  document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "started", tag } }));
+  if (s && s.cancel) api.cancelRun().catch(() => {});
+}
+
+async function confirmBlockers(blockers) {
+  const { confirmDialog } = await import("./dialog.js");
+  const ok = await confirmDialog({
+    title: "Not everything is ready",
+    body: "Blockers: " + blockers.join("; ") +
+      ". Run anyway? The flow will likely stop at the first missing piece.",
+    confirmText: "Run anyway", danger: true,
+  });
+  if (!ok) toast.show("Run cancelled. Review the 'Ready to run?' checklist for details.", "warn");
+  return ok;
+}
+
+// The check that ran beside the start found blockers: the run is already
+// going, so ask whether to stop it.
+async function offerStopFor(blockers, tag) {
+  const live = () => state.status && state.status.running && (!tag || state.liveTag === tag);
+  if (!live()) return;
+  const { choiceDialog } = await import("./dialog.js");
+  const pick = await choiceDialog({
+    title: "Not everything is ready",
+    body: "The check that ran as the run started found: " + blockers.join("; ") +
+      ". The flow will likely stop at the first missing piece.",
+    choices: [{ label: "Stop the run", value: "stop", danger: true }, { label: "Let it run", value: "keep" }],
+  });
+  if (pick === "stop" && live()) api.cancelRun().catch(() => {});
+}
+
 async function onRunClick({ show = false, fixed = false } = {}) {
+  if (_start) return;   // one is already starting (the button is Stop)
   if (!state.designDir) {
     toast.show("Pick a design folder first.", "warn");
     return;
@@ -783,24 +939,12 @@ async function onRunClick({ show = false, fixed = false } = {}) {
     if (pick !== "run") return;
   }
   // Preflight: catch missing tools / PDK before a long run fails half-way.
-  try {
-    const pf = await renderPreflight();
-    const mm = pf && pf.pdk && pf.pdk.mismatch;
-    if (mm && !fixed) { await offerPdkFix(mm, show); return; }
-    if (pf && !pf.ready) {
-      const { confirmDialog } = await import("./dialog.js");
-      const go = await confirmDialog({
-        title: "Not everything is ready",
-        body: "Blockers: " + pf.blockers.join("; ") +
-          ". Run anyway? The flow will likely stop at the first missing piece.",
-        confirmText: "Run anyway", danger: true,
-      });
-      if (!go) {
-        toast.show("Run cancelled. Review the 'Ready to run?' checklist for details.", "warn");
-        return;
-      }
-    }
-  } catch (_e) { /* preflight is best-effort; don't block the run on it */ }
+  // A fresh result for these picks is used as is: a blocker it already knows
+  // asks before anything starts. Without one, the check runs beside the start.
+  const fresh = freshPreflight();
+  const known = runBlocker(fresh);
+  if (known && known.kind === "mismatch" && !fixed) { await offerPdkFix(known.mismatch, show); return; }
+  if (known && known.kind === "blockers" && !(await confirmBlockers(known.blockers))) return;
   const payload = collectRunPayload();
   const rsel = document.getElementById("run-resume-from");
   if (rsel && rsel.value && rsel.dataset.tag) {
@@ -808,13 +952,28 @@ async function onRunClick({ show = false, fixed = false } = {}) {
     // (and starts earlier if something those stages read has changed since).
     payload.branch_from = { tag: rsel.dataset.tag, step: rsel.value };
   }
+  // Pressing Run shows the run on Flow, unless the user turned that off in
+  // the Run menu (then the status line shows it, and this says so). Setup's
+  // Run flow and the very first run always show it.
+  const first = !safeStorage.get("ll.ranOnce") && !(state.runs || []).length;
+  const showFlow = show || first || safeStorage.get("ll.showFlowOnRun") !== "0";
+  beginStart(currentTab(), showFlow);
+  if (showFlow) go("pipeline", {}, { link: false });
+  const checkP = fresh ? null : preflightNow();
+  if (checkP) checkP.catch(() => {});
   try {
     const res = await api.startRun(payload);
     if (!res.ok || res.started === false) {
-      if (res.pdk_mismatch && !fixed) { await offerPdkFix(res.pdk_mismatch, show); return; }
-      toast.show("Run refused: " + (res.reason || res.error || "unknown"), "error");
+      if (res.pdk_mismatch && !fixed) {
+        startRefused(res.reason || "The PDK picker and the config disagree.", { mismatch: true });
+        await offerPdkFix(res.pdk_mismatch, show);
+        return;
+      }
+      startRefused(res.reason || res.error || "unknown");
       return;
     }
+    startAccepted(res.tag || payload.tag || null);
+    safeStorage.set("ll.ranOnce", "1");
     if (payload.branch_from) {
       const r = res.resume;
       const asked = FS.stagesOf([{ id: payload.branch_from.step }])[0];
@@ -832,23 +991,24 @@ async function onRunClick({ show = false, fixed = false } = {}) {
       toast.show("The configuration file changed after your preview. Flow execution used the updated file on disk.", "warn");
     }
     state.previewedConfigHash = null;
-    paintRunning(true);
-    document.dispatchEvent(new CustomEvent("g:run_started", { detail: { tag: res.tag || payload.tag || null } }));
-    // Pressing Run shows the run on Flow, unless the user turned that off in
-    // the Run menu (then the status line shows it, and this says so). Setup's
-    // Run flow and the very first run always show it.
-    const first = !safeStorage.get("ll.ranOnce") && !(state.runs || []).length;
-    safeStorage.set("ll.ranOnce", "1");
-    const { go } = await import("./nav.js");
-    const { currentTab } = await import("./tabs.js");
-    if (show || first || safeStorage.get("ll.showFlowOnRun") !== "0") go("pipeline", {}, { link: false });
-    else if (currentTab() !== "pipeline") {
+    const tag = res.tag || payload.tag || null;
+    document.dispatchEvent(new CustomEvent("g:run_started", { detail: { tag } }));
+    if (!showFlow && currentTab() !== "pipeline") {
       toast.show((payload.tag ? "Run " + payload.tag + " started" : "The run started") +
         ". It keeps going in the background; the status bar shows how far it is.", "info", 7000,
         { label: "Watch it", run: () => go("pipeline") });
     }
+    // The check that ran beside the start: say so only if it found something.
+    if (checkP) {
+      checkP.then((pf) => {
+        const b = runBlocker(pf);
+        if (b && b.kind === "blockers" && b.blockers.length) offerStopFor(b.blockers, tag);
+      }).catch(() => {});
+    }
   } catch (ex) {
-    toast.show("Run failed: " + ex.message, "error");
+    // The server refused (folder gone, spaces in the path, another flow
+    // busy, PDK not ready…): its own words, on Flow.
+    startRefused(ex.message);
   }
 }
 
@@ -1028,7 +1188,7 @@ export function paintRunning(running) {
   if (running) {
     if (b) b.disabled = true;
     if (c) { c.disabled = false; c.hidden = false; }
-    if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); }
+    if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); g.dataset.tip = "Stop the run (r)"; }
     pill?.classList.remove("pill-pending");
     pill?.classList.add("pill-running");
     if (pill) pill.textContent = "running";
