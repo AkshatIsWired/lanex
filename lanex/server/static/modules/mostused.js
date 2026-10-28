@@ -43,7 +43,7 @@ const GROUPS = [
         hint: "x0 y0 x1 y1 in microns. New blank projects start at 0 0 150 150. If placement reports the design doesn't fit, make it bigger or switch to utilization." },
       { key: "PL_TARGET_DENSITY_PCT", label: "Placement density", kind: "num", unit: "%", def: null, min: 1, max: 100,
         defText: "auto",
-        hint: "How tightly cells are packed (auto: utilization + 10). Raise it if global placement fails with GPL-0302; lower it if routing is congested." },
+        hint: "How tightly cells are packed (auto: utilization + 10). Raise it if global placement fails with GPL-0301; lower it if routing is congested." },
     ],
   },
   {
