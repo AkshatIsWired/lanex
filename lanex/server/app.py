@@ -44,6 +44,24 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _ALLOW_REMOTE = False
 
 
+def host_is_loopback(host: Optional[str]) -> bool:
+    """True for a ``Host`` header that names this machine's loopback
+    (``127.0.0.1:8765``, ``localhost``, ``[::1]:8765``, ``lanex.localhost``),
+    or for no header at all. Anything else is another site's name."""
+    if host is None or not str(host).strip():
+        return True
+    name = str(host).strip().lower()
+    if name.startswith("["):
+        end = name.find("]")
+        if end < 0:
+            return False
+        name = name[1:end]
+    elif name.count(":") == 1:
+        name = name.split(":", 1)[0]
+    name = name.rstrip(".")
+    return name in _LOOPBACK_HOSTS or name.endswith(".localhost")
+
+
 # The non-finite-float sanitiser lives in a neutral module (jsonsafe.py) so both
 # the REST path here and the SSE path (sse.py) share ONE implementation without
 # the app⇄sse import cycle. Re-exported under the historical private name for
@@ -166,6 +184,25 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         host_hdr = self.headers.get("Host", "")
         return bool(netloc) and netloc == host_hdr
 
+    def _host_ok(self) -> bool:
+        """Answer only requests addressed to a loopback name (DNS rebinding).
+
+        A web page can point its own domain at 127.0.0.1; the browser then
+        treats LanEx as that page's origin, so Origin == Host and the
+        same-origin check above passes, letting the page read files and start
+        Console commands. The ``Host`` it sends still names its domain: only
+        127.0.0.1, localhost, ::1 and ``*.localhost`` are answered, unless the
+        operator opted into LAN exposure (``--allow-remote``). Clients that send
+        no Host (HTTP/1.0, raw sockets in tests) are not browsers and pass."""
+        if _ALLOW_REMOTE:
+            return True
+        return host_is_loopback(self.headers.get("Host"))
+
+    def _refuse_host(self) -> None:
+        port = self.server.server_address[1] if getattr(self, "server", None) else 8765
+        self._send_text(f"This LanEx server only answers at 127.0.0.1 or localhost. "
+                        f"Open http://127.0.0.1:{port}/ instead.", 403)
+
     # ---------- dispatch
 
     @staticmethod
@@ -188,6 +225,9 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
         return prefix == path
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._host_ok():
+            self._refuse_host()
+            return
         path = self.path.split("?", 1)[0]
         _note_page_activity(path)
         if path == "/api/events":
@@ -262,6 +302,11 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
 
         Mirror do_GET logic to compute headers, but write no body.
         """
+        if not self._host_ok():
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         path = self.path.split("?", 1)[0]
         if path == "/api/events":
             # Long-lived stream; bail to the underlying HTTP server default
@@ -317,6 +362,9 @@ class LibreLaneGUIRequestHandler(BaseHTTPRequestHandler):
     _install_rates: Dict[str, float] = {}
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._host_ok():
+            self._refuse_host()
+            return
         if self.headers.get("X-Requested-With") != "XMLHttpRequest":
             self._send_text("CSRF validation failed", 403)
             return
