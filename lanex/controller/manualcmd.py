@@ -354,3 +354,88 @@ def cli_command_for(
         "recommended": "container" if run_mode == "container" else "local",
         "cwd": design_dir,
     }
+
+
+# ---------------------------------------------------------------------------
+# Reproduce — everything needed to rerun a recorded run headless, without LanEx.
+# ---------------------------------------------------------------------------
+
+def _pdk_version(pdk_root: str) -> str:
+    """The ciel version hash in a resolved ``PDK_ROOT`` (…/versions/<hash>), or ""."""
+    import re
+    m = re.search(r"/versions/([0-9a-f]{7,64})/?$", str(pdk_root or ""))
+    return m.group(1) if m else ""
+
+
+def reproduce_info(meta: Dict[str, Any], resolved: Optional[Dict[str, Any]],
+                   run_dir: str) -> Dict[str, Any]:
+    """What a run recorded about how it was started (``gui-run.json``) and what
+    LibreLane resolved (``resolved.json``), as one reproduce record. Pure: reads
+    nothing itself, invents nothing; a fact the run did not record is None."""
+    meta = meta or {}
+    resolved = resolved or {}
+    cmd = meta.get("cli_command") if isinstance(meta.get("cli_command"), dict) else {}
+    tc = meta.get("toolchain") if isinstance(meta.get("toolchain"), dict) else {}
+    mode = cmd.get("recommended") or meta.get("run_mode") or "container"
+    line = cmd.get(mode) or cmd.get("container") or cmd.get("local") or None
+    rmeta = resolved.get("meta") if isinstance(resolved.get("meta"), dict) else {}
+    pdk_root = resolved.get("PDK_ROOT") or ""
+    resolved_path = str(Path(run_dir) / "resolved.json") if resolved else None
+    return {
+        "tag": meta.get("tag") or Path(run_dir).name,
+        "run_dir": str(run_dir),
+        "mode": mode,
+        "command": line,
+        "commands": {k: cmd.get(k) for k in ("container", "local") if cmd.get(k)},
+        "cwd": cmd.get("cwd") or None,
+        "config_file": meta.get("config_file") or None,
+        "config_hash": meta.get("config_hash") or None,
+        "resolved_config": resolved_path,
+        "pdk": meta.get("pdk") or resolved.get("PDK") or None,
+        "scl": meta.get("scl") or resolved.get("STD_CELL_LIBRARY") or None,
+        "pdk_root": pdk_root or None,
+        "pdk_version": _pdk_version(pdk_root) or None,
+        "image": tc.get("image") if mode == "container" else None,
+        "librelane_version": tc.get("librelane_version") or rmeta.get("librelane_version") or None,
+        "lanex_version": tc.get("lanex_version") or None,
+        "branched_from": meta.get("branched_from") or None,
+        "recorded": bool(line),
+    }
+
+
+def reproduce_script(info: Dict[str, Any]) -> str:
+    """A bash script that reruns *info*'s command headless, outside LanEx.
+
+    The image is pinned the way LanEx's runner pins it (``LIBRELANE_IMAGE_OVERRIDE``
+    with the digest); the PDK version and config hash are written as checks the
+    reader can see, not silently assumed."""
+    q = shlex.quote
+    out = ["#!/usr/bin/env bash",
+           f"# Reproduce LanEx run {info.get('tag') or '?'} without LanEx.",
+           "set -euo pipefail"]
+    if info.get("librelane_version"):
+        out.append(f"# LibreLane {info['librelane_version']}"
+                   + (f" (LanEx {info['lanex_version']})" if info.get("lanex_version") else ""))
+    if info.get("pdk"):
+        pv = info.get("pdk_version")
+        out.append(f"# PDK {info['pdk']}" + (f" / {info['scl']}" if info.get("scl") else "")
+                   + (f", ciel version {pv}" if pv else ""))
+        if pv:
+            fam = "gf180mcu" if str(info["pdk"]).startswith("gf180") else (
+                "ihp-sg13g2" if str(info["pdk"]).startswith("ihp") else "sky130")
+            out.append(f"#   to get exactly this PDK: ciel enable --pdk-family {fam} {pv}")
+    if info.get("resolved_config"):
+        out.append(f"# Every setting the run used: {info['resolved_config']}")
+    if info.get("cwd"):
+        out.append(f"cd {q(info['cwd'])}")
+    if info.get("config_hash") and info.get("config_file"):
+        out.append(f"# The config the run read had sha256 {info['config_hash']}:")
+        out.append(f"echo {q(info['config_hash'] + '  ' + info['config_file'])} | sha256sum -c - "
+                   "|| echo 'Note: the config changed since this run.' >&2")
+    if info.get("image"):
+        out.append(f"export LIBRELANE_IMAGE_OVERRIDE={q(info['image'])}")
+    if info.get("command"):
+        out.append(info["command"])
+    else:
+        out.append("# This run has no recorded command (it was not started from LanEx).")
+    return "\n".join(out) + "\n"
