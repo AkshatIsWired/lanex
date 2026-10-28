@@ -559,7 +559,14 @@ function maybeWarnCompat(compat) {
 
 window.addEventListener("DOMContentLoaded", () => {
   // Boot is responsible for its own failure UI (writes into #splash).
-  boot();
+  // A page opened while a run (or a sweep point) is going shows Stop and
+  // "running", not Run and "idle": the run's start event came before the page.
+  Promise.resolve(boot()).then(() => api.runStatus()).then((s) => {
+    if (!s || !s.running) return;
+    state.status.running = true;
+    if (s.run_dir) state.liveTag = String(s.run_dir).split(/[\\/]/).pop();
+    paintRunning(true);
+  }).catch(() => {});
 });
 
 // A per-tab run picker switched the active design to view a cross-design run:
