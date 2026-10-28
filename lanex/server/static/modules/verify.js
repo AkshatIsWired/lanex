@@ -683,6 +683,17 @@ function toolCard(title, c, body, rel, { sub = "" } = {}) {
     "</div>";
 }
 
+// The metric and the report file contradict each other: say so, with both
+// sources, instead of "Passed" above a list of markers.
+function disagreeHtml(d) {
+  const x = d && d.disagree;
+  if (!x) return "";
+  const nm = (k) => k === 1 ? "1 marker" : n(k) + " markers";
+  return "<p class='vf-callout is-warn'><b>The metric and the report disagree.</b> LibreLane's metric <code>" + esc(x.metric_key) + "</code> in " + esc(x.metric_file) +
+    " says " + esc(n(x.metric)) + (x.metric === 1 ? " error" : " errors") + "; the report file " + esc(x.report_file || "") + " lists " + esc(nm(x.report)) +
+    ". The report may have been edited or left over from an earlier run. The verdict uses the metric, as LibreLane did; re-run the check to be sure.</p>";
+}
+
 function renderDrc() {
   const el = document.getElementById("vf-drc");
   const d = _rep.details || {};
@@ -702,8 +713,11 @@ function renderDrc() {
       markers ? btn("Open in KLayout with markers", "data-vf-klayout='1'", { ic: "layers" }) : "") +
     drcDiag() +
     "<div class='an-grid an-grid-3'>" +
-      toolCard("Magic DRC", by.get("magic_drc"), ruleList(mg && mg.categories, { empty: "No rule broken.", rel: mg && mg.report, needle: (c) => c.description || c.name }), mg && mg.report) +
-      toolCard("KLayout DRC", by.get("klayout_drc"), ruleList(kl && kl.categories, { empty: kl && kl.rules ? "All " + kl.rules + " rules in the deck pass." : "No rule broken.", rel: kl && kl.report, needle: (c) => "\"" + c.name + "\"" }), kl && kl.report,
+      toolCard("Magic DRC", by.get("magic_drc"), disagreeHtml(mg) + ruleList(mg && mg.categories, { empty: "No rule broken.", rel: mg && mg.report, needle: (c) => c.description || c.name }), mg && mg.report) +
+      toolCard("KLayout DRC", by.get("klayout_drc"), disagreeHtml(kl) +
+        (kl && kl.disagree && kl.marker_categories && kl.marker_categories.length
+          ? ruleList(kl.marker_categories, { empty: "", rel: kl.markers, needle: (c) => "\"" + c.name + "\"" })
+          : ruleList(kl && kl.categories, { empty: kl && kl.rules ? "All " + kl.rules + " rules in the deck pass." : "No rule broken.", rel: kl && kl.report, needle: (c) => "\"" + c.name + "\"" })), kl && kl.report,
         { sub: kl && kl.rules ? kl.rules + " rules in the deck" : "" }) +
       toolCard("Router DRC", by.get("route_drc"), iterHtml + ruleList(rt && rt.categories, { empty: "Nothing left to fix.", rel: rt && rt.report, needle: (c) => "violation type: " + c.name }), rt && rt.report) +
     "</div>" +

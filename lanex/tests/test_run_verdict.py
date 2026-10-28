@@ -139,6 +139,25 @@ def test_resumed_run_counts_reused_steps(tmp_path):
     assert child.is_dir()
 
 
+def test_drc_report_that_contradicts_the_metric_is_said(tmp_path):
+    run = _run(tmp_path, "R", CLEAN, steps=(("Magic.DRC", True),))
+    rep_dir = run / "1-magic-drc" / "reports"
+    rep_dir.mkdir()
+    (rep_dir / "drc.magic.lyrdb").write_text(
+        "<report-database><categories><category><name>m1.1</name></category></categories>"
+        "<items><item><category>'m1.1'</category><values><value>box: (0,0;1,1)</value></values></item>"
+        "<item><category>'m1.1'</category><values><value>box: (2,2;3,3)</value></values></item></items>"
+        "</report-database>", encoding="utf-8")
+    rep = verify.verify_report(run)
+    d = rep["details"]["magic_drc"]["disagree"]
+    assert d["metric"] == 0 and d["report"] == 2 and d["metric_key"] == "magic__drc_error__count"
+    mg = next(c for c in rep["checks"] if c["id"] == "magic_drc")
+    assert mg["status"] == "pass" and "disagree" in mg["note"]
+    from lanex.controller import layoutview
+    src = next(s for s in layoutview.markers(run)["sources"] if s["id"] == "magic-drc")
+    assert src["disagree"] is True and src["metric"]["value"] == 0
+
+
 def test_negative_slack_in_a_warning_corner_is_never_clean(tmp_path):
     # Setup misses only in a corner outside TIMING_VIOLATION_CORNERS: LibreLane
     # warns and passes the run, but LanEx must not call it clean.

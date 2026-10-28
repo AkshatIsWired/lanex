@@ -909,6 +909,12 @@ def markers(run_dir: Path) -> Dict[str, Any]:
     run_dir = Path(run_dir)
     steps = _step_dirs(run_dir)
     out = []
+    try:
+        from . import history
+        metrics = history._load_metrics(run_dir)
+    except Exception:
+        metrics = {}
+    metrics_rel = "final/metrics.json" if (run_dir / "final" / "metrics.json").is_file() else "metrics.json"
     for src in _MARKER_SOURCES:
         hit = None
         for d in steps:
@@ -920,8 +926,25 @@ def markers(run_dir: Path) -> Dict[str, Any]:
             continue
         res = parse_rdb(hit)
         res.update({"id": src["id"], "label": src["label"], "path": hit.relative_to(run_dir).as_posix()})
+        # The metric LibreLane judged the run on (what Verify uses). A report
+        # file that disagrees with it (edited, or left over from an earlier
+        # run) is shown, and the disagreement said, never silently trusted.
+        mkey = _MARKER_METRIC.get(src["id"])
+        mval = metrics.get(mkey) if mkey else None
+        if isinstance(mval, (int, float)) and not isinstance(mval, bool):
+            res["metric"] = {"key": mkey, "value": mval, "file": metrics_rel}
+            # Counted as a disagreement only when one side is zero: the tools
+            # may count a multi-box error differently, but "no errors" next
+            # to markers (or the reverse) is a real contradiction.
+            res["disagree"] = bool(res.get("ok")) and (int(mval) == 0) != (int(res.get("total") or 0) == 0)
         out.append(res)
     return {"sources": out}
+
+
+_MARKER_METRIC = {
+    "klayout-drc": "klayout__drc_error__count",
+    "magic-drc": "magic__drc_error__count",
+}
 
 
 def viewer_commands(run_dir: Path, tag: str) -> Dict[str, str]:

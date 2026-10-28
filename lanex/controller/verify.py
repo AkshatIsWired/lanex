@@ -813,6 +813,7 @@ def _klayout_drc(run: _Run) -> Optional[Dict[str, Any]]:
     if js is None and rdb is None:
         return None
     summary = _rdb_summary(rdb) or {"ok": False, "categories": []}
+    rdb_summary = summary
     counts = _read_json(js) if js else None
     if isinstance(counts, dict):
         # The JSON is the per-rule count LibreLane totals into the metric.
@@ -824,6 +825,11 @@ def _klayout_drc(run: _Run) -> Optional[Dict[str, Any]]:
         summary = {"ok": True, "rules": len(counts), "total": sum(v for v in counts.values()
                                                                  if isinstance(v, (int, float))),
                    "categories": rules[:_MAX_CATEGORIES], "more": max(0, len(rules) - _MAX_CATEGORIES)}
+        # The marker database is read too: its count can disagree with the
+        # per-rule JSON (an edited or stale report), and that must show.
+        if rdb_summary.get("ok") and rdb_summary.get("total") is not None:
+            summary["marker_total"] = rdb_summary["total"]
+            summary["marker_categories"] = rdb_summary.get("categories", [])
     summary["report"] = _rel(run.dir, js or rdb)
     summary["markers"] = _rel(run.dir, rdb)
     return summary
@@ -1309,6 +1315,24 @@ def verify_report(run_dir: str | Path) -> Dict[str, Any]:
             details[key] = fn(run)
         except Exception:
             details[key] = None
+    # A DRC report file that contradicts the metric LibreLane judged the run
+    # on ("0 errors" next to markers, or the reverse: an edited report, or one
+    # left from an earlier run) is said, with both sources. The check keeps
+    # the metric's verdict: it is what LibreLane decided on.
+    for key, mkey in (("magic_drc", "magic__drc_error__count"), ("klayout_drc", "klayout__drc_error__count")):
+        d = details.get(key)
+        mval = _finite(run.metrics.get(mkey))
+        if not isinstance(d, dict) or mval is None:
+            continue
+        rep_n = d.get("marker_total") if d.get("marker_total") is not None else d.get("total")
+        if isinstance(rep_n, (int, float)) and (mval == 0) != (rep_n == 0):
+            d["disagree"] = {"metric_key": mkey, "metric": mval,
+                             "metric_file": "final/metrics.json" if (run.dir / "final" / "metrics.json").is_file() else "metrics.json",
+                             "report": rep_n, "report_file": d.get("markers") or d.get("report")}
+            if by.get(key):
+                by[key]["note"] = ((by[key].get("note") or "") + " The report file lists " + str(int(rep_n)) +
+                                   (" marker" if rep_n == 1 else " markers") + " but the metric says " +
+                                   str(int(mval)) + ": they disagree.").strip()
     ir_m = {k: run.metrics.get(k) for k in ("ir__drop__worst", "ir__drop__avg", "ir__voltage__worst")
             if run.metrics.get(k) is not None}
     if ir_m:

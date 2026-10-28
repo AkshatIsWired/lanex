@@ -889,7 +889,15 @@ function renderChecks() {
   if (!host) return;
   const srcs = (S.markers && S.markers.sources) || [];
   const total = srcs.reduce((a, s) => a + (s.total || 0), 0);
-  if (badge) { badge.hidden = !total; badge.textContent = total > 999 ? "999+" : String(total); }
+  // The badge counts what Verify counts: LibreLane's metric where it has one
+  // (a report file that contradicts it is listed below, and said).
+  const errs = srcs.reduce((a, s) => a + (s.metric ? (s.metric.value || 0) : (s.total || 0)), 0);
+  const odd = srcs.some((s) => s.disagree);
+  if (badge) { badge.hidden = !errs && !odd; badge.textContent = errs > 999 ? "999+" : errs ? String(errs) : "!"; badge.title = odd ? "A report file disagrees with LibreLane's metric" : ""; }
+  const disagree = (s) => s.disagree
+    ? "<p class='lx-kind-hint lx-pad lx-disagree'>The report lists " + s.total + (s.total === 1 ? " marker" : " markers") + ", but LibreLane's metric <code>" + esc(s.metric.key) +
+      "</code> says " + s.metric.value + ". They disagree; Verify's verdict uses the metric. The report may be edited or left from an earlier run.</p>"
+    : "";
   if (!srcs.length) {
     host.innerHTML = "<p class='muted lx-pad'>This run has no DRC or XOR reports, so there are no markers to show. The checks run after routing; the Verify tab says which ran.</p>";
     return;
@@ -904,9 +912,9 @@ function renderChecks() {
   host.innerHTML =
     "<label class='lx-check lx-pad'><input type='checkbox' id='lx-mk-show'" + (S.showMarkers ? " checked" : "") + "/><span>Show markers on the layout</span></label>" +
     srcs.map((s, si) => {
-      if (!s.total) return "<div class='lx-mk-src is-clean'><span class='vf-mark is-pass'></span><b>" + esc(s.label) + "</b><span class='lx-n'>0</span></div>";
+      if (!s.total) return "<div class='lx-mk-src is-clean'><span class='vf-mark is-" + (s.disagree ? "warn" : "pass") + "'></span><b>" + esc(s.label) + "</b><span class='lx-n'>0</span></div>" + disagree(s);
       return "<div class='lx-mk-src'><label class='lx-check'><input type='checkbox' data-mk-src='" + si + "'" + (s.hidden ? "" : " checked") + "/>" +
-        "<span class='vf-mark is-fail'></span><b>" + esc(s.label) + "</b></label><span class='lx-n'>" + s.total + "</span></div>" +
+        "<span class='vf-mark is-" + (s.disagree ? "warn" : "fail") + "'></span><b>" + esc(s.label) + "</b></label><span class='lx-n'>" + s.total + "</span></div>" + disagree(s) +
         s.categories.map((c) => {
           const items = (s.items || []).filter((it) => it.cat === c.name);
           return "<details class='lx-kind'><summary><b class='lx-mk-cat'>" + esc(c.name) + "</b><span class='lx-n'>" + c.count + "</span></summary>" +
