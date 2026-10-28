@@ -277,21 +277,28 @@ async function loadTrends(dir) {
   return t;
 }
 
+// The first screen (overview, timing) is drawn at once; the sections below it
+// follow one per task, so no single task builds all 9k nodes (half a second
+// on a slow laptop). A newer paint drops the rest of an older one.
+let _paintSeq = 0;
 function paint() {
   if (!_ctx) return;
+  const seq = ++_paintSeq;
+  const body = document.getElementById("an-body");
   C.resetCharts();
   renderOverview();
   renderTiming();
-  renderArea();
-  renderPower();
-  renderRouting();
-  renderFlow();
-  renderHistory();
-  renderAll();
-  const body = document.getElementById("an-body");
-  wireProvBtns(body);
   C.drawCharts(body);
-  C.watchResize(body);
+  const rest = [renderArea, renderPower, renderRouting, renderFlow, renderHistory, renderAll];
+  const next = () => {
+    if (seq !== _paintSeq || !_ctx) return;
+    const fn = rest.shift();
+    if (fn) { fn(); setTimeout(next, 0); return; }
+    wireProvBtns(body);
+    C.drawCharts(body);
+    C.watchResize(body);
+  };
+  setTimeout(next, 0);
 }
 
 // ---------- 1. Overview ---------------------------------------------------------------------
