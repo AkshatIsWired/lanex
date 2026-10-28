@@ -134,7 +134,25 @@ export function go(tab, params = {}, { link = true } = {}) {
 function onPop(e) {
   const entry = e.state && e.state.lx;
   saveScroll();
-  _cur = entry || { id: ++_seq, tab: "setup", params: {}, via: null };
+  // No entry of ours: the user typed or pasted a #tab address. Open that page
+  // (an old page name like #dse or #manual goes where go() sends it).
+  if (!entry) {
+    const t = hashTab();
+    if (t && !document.getElementById("sec-" + t)) {
+      // An old name: it replaces this entry (Back must not land on it again).
+      if (_cur) {
+        if (t === "dse") _cur = { ..._cur, tab: "runs" };
+        history.replaceState({ lx: _cur }, "", "#" + _cur.tab);
+      }
+      go(t);
+      return;
+    }
+    _cur = { id: ++_seq, tab: t || "setup", params: {}, via: null };
+    history.replaceState({ lx: _cur }, "", "#" + _cur.tab);
+    show(_cur, { fresh: true });
+    return;
+  }
+  _cur = entry;
   show(_cur, { fresh: false });
 }
 
@@ -282,7 +300,23 @@ export function setupNav() {
   });
 }
 
-// The first page: Setup, as one history entry the rest build on.
+// The page the address names (#ide, #verify…), or null: a tab with a page, or
+// an old page name go() still knows (dse, manual, console).
+export function hashTab(hash = location.hash) {
+  const t = String(hash || "").replace(/^#/, "").split(/[?&/]/)[0].trim();
+  if (!t || !/^[a-z0-9_-]+$/i.test(t)) return null;
+  if (document.getElementById("sec-" + t) || ["dse", "manual", "console"].includes(t)) return t;
+  return null;
+}
+
+// The first page as one history entry the rest build on: Setup for a bare
+// address (spec decision 6), or the page a #tab address names (a reload on
+// #ide stays on the IDE).
+export function bootTab() {
+  const t = hashTab();
+  return t && document.getElementById("sec-" + t) ? t : "setup";
+}
+
 export function startAt(tab) {
   _cur = { id: ++_seq, tab, params: {}, via: null };
   history.replaceState({ lx: _cur }, "", "#" + tab);

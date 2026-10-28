@@ -3,7 +3,7 @@
 import { api, sse, fmt } from "./modules/api.js";
 import { state, safeStorage } from "./modules/state.js";
 import { setupTabs } from "./modules/tabs.js";
-import { setupNav, startAt, go } from "./modules/nav.js";
+import { setupNav, startAt, go, bootTab, hashTab } from "./modules/nav.js";
 import { noteRunStarted, noteRunFinished, loadRuns as loadContextRuns } from "./modules/context.js";
 import { setupSetup, populatePdkPicker, paintRunning, paintDesignPill, paintPdkPill, paintOnboardChecklist } from "./modules/setup.js";
 import { setupTheme, toggleTheme } from "./modules/theme.js";
@@ -191,9 +191,12 @@ async function boot() {
 
     paintOnboardChecklist();  // E5.1 — reflect the real design/PDK/run state now
 
-    // Always open on Setup (the design/PDK/run entry point), regardless of which
-    // tab was last visited — boot should land the user at the start of the flow.
-    startAt("setup");
+    // Open on Setup (the design/PDK/run entry point) for a bare address,
+    // whatever tab was last visited; an address that names a page (#ide after
+    // a reload, a pasted #verify) opens that page instead.
+    const asked = hashTab();
+    startAt(bootTab());
+    if (asked && !document.getElementById("sec-" + asked)) go(asked);
 
     // Hide splash and reveal the app.
     setStatus("ready");
