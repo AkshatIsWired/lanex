@@ -11,14 +11,16 @@
   "testbench": null,
   "kind": "blank",
   "config": {
-    "FP_SIZING": "absolute",
-    "DIE_AREA": [0, 0, 150, 150]
+    "FP_SIZING": "relative",
+    "FP_CORE_UTIL": 40,
+    "PL_TARGET_DENSITY_PCT": 55
   },
   "pdk": {
     "gf180mcu*": {
       "clock_period": 20.0,
       "config": {
-        "DIE_AREA": [0, 0, 300, 300]
+        "FP_CORE_UTIL": 38,
+        "PL_TARGET_DENSITY_PCT": 50
       }
     }
   }
