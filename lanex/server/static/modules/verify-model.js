@@ -317,8 +317,8 @@ export function verdictCopy(rep) {
   const gates = v.warning_ids.map((id) => (by.get(id) || {}).gate_note).filter(Boolean);
   const n = w + (w === 1 ? " warning" : " warnings");
   return { tone: "warn", title: "Clean, with " + n, short: "clean, " + n, warned,
-    sub: "Every check that fails a run passed. " + warned.join(", ") + (w === 1 ? " warns" : " warn") +
-      " instead of failing it" + (gates.length ? " (" + gates.join("; ") + ")" : "") + ": worth a look before tape-out." + ddSub, drc: dd };
+    sub: "Every check that fails a run passed. LibreLane only warned about " + warned.join(", ") +
+      " instead of failing the run" +(gates.length ? " (" + gates.join("; ") + ")" : "") + ": worth a look before tape-out." + ddSub, drc: dd };
 }
 
 export function isNum(v) { return typeof v === "number" && Number.isFinite(v); }
