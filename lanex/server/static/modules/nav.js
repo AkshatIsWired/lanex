@@ -322,6 +322,9 @@ export function startAt(tab) {
   history.replaceState({ lx: _cur }, "", "#" + tab);
   activate(tab);
   remember(_cur);
+  // The first page renders like any page it is shown: a reload on #tools
+  // otherwise sat on its loading skeleton for good.
+  document.dispatchEvent(new CustomEvent("g:tab_activated", { detail: { tab } }));
 }
 
 // [key, tab] in rail order: 1–9 then 0.
