@@ -154,6 +154,7 @@ function switchProject(dir) {
   else state.simRun = null;
   if (state.wave) state.wave.clear();
   setWavePartial(false);
+  note("");
   byId("ide-log", (el) => { el.innerHTML = ""; });
   byId("ide-top", (x) => { x.value = ""; });
   byId("ide-sim-status", (el) => { el.hidden = true; });
@@ -1675,6 +1676,10 @@ function finishSim(ev) {
     : !ev.vcd ? "nowave"
     : run.passes ? "passed" : "ran";
   run.buildErrors = buildErrors;
+  // It ran, but the testbench doesn't connect some of the module's inputs
+  // (ports added since it was written): say so, with the rewrite offer.
+  run.floating = ["ran", "passed", "nowave", "reported-fail"].includes(run.verdict)
+    ? floatingPorts(state.simDiags, (file) => isTestbenchFile(file)) : [];
   simStatus(run);
   if (!ev.vcd && state.wave && state.wave.vcd) setWavePartial("old");
   if (ev.cancelled) note("Simulation stopped.", true);
@@ -1711,6 +1716,22 @@ const PORT_RX = /is not a port of|port .* not found|unknown port|PINNOTFOUND/i;
 export function isPortMismatch(diags, tbRel, isTb = (f) => f === tbRel) {
   const errs = (diags || []).filter((d) => d.severity === "error");
   return errs.length > 0 && errs.every((d) => (d.code === "PINNOTFOUND" || PORT_RX.test(d.msg || "")) && isTb(d.file));
+}
+// The module's inputs a testbench leaves unconnected (Verilator PINMISSING
+// "Cell has missing pin: 'b'", Icarus "dangling input port 3 (op) floating"),
+// warnings only in testbench files: the build passes and the simulation runs,
+// but those inputs float at z. -> port names, in order, each once.
+const FLOAT_RX = /missing pin:?\s*'?([A-Za-z_][\w$]*)'?|dangling input port \d+ \(([A-Za-z_][\w$]*)\)/i;
+export function floatingPorts(diags, isTb = () => true) {
+  const out = [];
+  for (const d of diags || []) {
+    if (d.severity === "error" || !isTb(d.file)) continue;
+    if (d.code !== "PINMISSING" && !FLOAT_RX.test(d.msg || "")) continue;
+    const m = (d.msg || "").match(FLOAT_RX);
+    const name = m ? (m[1] || m[2]) : "";
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
 }
 function portMismatch(r) {
   if (r.verdict !== "build" || !r.tb) return false;
@@ -1801,6 +1822,14 @@ function simStatus(run) {
     refused: ["fail", "Couldn't start the simulation", fmt.escape(r.error || ""), ""],
     none: ["info", "No testbench yet", "A testbench drives your design with inputs and shows what comes out.", "<button class='btn btn-primary btn-sm' data-ss='new-tb'>Write a testbench</button>"],
   }[r.verdict] || null;
+  if (V && r.floating && r.floating.length) {
+    const ports = r.floating.slice(0, 4).join(", ") + (r.floating.length > 4 ? "…" : "");
+    V[0] = "warn";
+    V[1] = "The testbench doesn't drive " + (r.floating.length === 1 ? "port " : "ports ") + ports + " (" + (r.floating.length === 1 ? "it floats" : "they float") + " at z)";
+    V[2] = (r.verdict === "passed" ? "It printed PASS, but those inputs were never set, so the result doesn't test them. " : "It ran to the end, but those inputs were never set. ") +
+      "The module's ports changed since " + (tbName || "the testbench") + " was written. LanEx can write it again for the current ports and keep yours as a backup." + (facts ? " " + facts : "");
+    V[3] = "<button class='btn btn-primary btn-sm' data-ss='rewrite-tb'>Rewrite the testbench for these ports</button>" + wave;
+  }
   if (!V) { el.hidden = true; return; }
   el.hidden = false;
   el.className = "ide-sim-status ss-" + V[0];
@@ -1809,7 +1838,8 @@ function simStatus(run) {
   if (badge) {
     const b = { build: ["build failed", "pcount-err"], failed: ["failed", "pcount-err"], timeout: ["timed out", "pcount-err"],
       "timeout-partial": ["partial", "pcount-warn"], "reported-fail": [plural(r.fails || 0, "fail"), "pcount-warn"],
-      nowave: ["no wave", "pcount-warn"], running: ["running", ""] }[r.verdict];
+      nowave: ["no wave", "pcount-warn"], running: ["running", ""] }[r.verdict] ||
+      (r.floating && r.floating.length ? ["inputs float", "pcount-warn"] : null);
     badge.textContent = b ? b[0] : "";
     badge.className = "pcount" + (b && b[1] ? " " + b[1] : "");
   }
@@ -1998,7 +2028,11 @@ async function loadWaveform(vcdRel, partial) {
     if (state.wave) state.wave.load(vcd);
     // A full (non-partial) load clears any prior badge; a partial load pins it.
     setWavePartial(!!partial);
-    note("Waveform: " + vcd.signals.length + " signals over " + formatTime(vcd.end, vcd.tick) + ".");
+    // Count what the panel lists (its lanes, of the dump's variables), not the dump's raw ids.
+    const shown = state.wave ? state.wave.rows.length : vcd.signals.length;
+    const all = state.wave ? state.wave.vars.length : vcd.signals.length;
+    note("Waveform: " + (shown === all ? shown + (shown === 1 ? " signal" : " signals") : shown + " of " + all + " signals shown") +
+      " over " + formatTime(vcd.end, vcd.tick) + ".");
   } catch (ex) {
     note("Could not load waveform: " + (ex.message || ex), true);
   }
