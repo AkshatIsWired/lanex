@@ -24,6 +24,14 @@ LanEx ships CodeMirror 6 (https://codemirror.net, MIT License, Copyright (C)
 2018-2021 Marijn Haverbeke and others) as lanex/server/static/vendor/codemirror.js
 for its RTL editor; the licence text is in vendor/codemirror.LICENSE.
 
+LanEx ships Driver.js 1.9.0 (https://driverjs.com, MIT License, Copyright (c)
+Kamran Ahmed) as lanex/server/static/vendor/driverjs/driver.js.mjs and
+driver.css, unmodified from the npm package driver.js@1.9.0 (tarball SHA-256
+963c181c3aad6a478c4def7206c4fe9bb57c6df769da3f7df37c71c36db189e5;
+driver.js.mjs SHA-256
+226faa224a70df5bbe5a637c489941c004f840526359a468d7d23f8774d44a86), for the
+first-run guide and the app tour; the licence text is in vendor/driverjs/LICENSE.
+
 --------------------------------------------------------------------------------
 Disclaimer
 --------------------------------------------------------------------------------
