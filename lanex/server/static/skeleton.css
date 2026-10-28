@@ -43,7 +43,7 @@
 .ld-pic { display: block; aspect-ratio: 16 / 10; border-radius: var(--r-sm); background: var(--surface-2); margin-bottom: var(--s-2); }
 
 .ld-rows { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
-.ld-row { display: grid; grid-template-columns: 2fr repeat(auto-fit, minmax(60px, 1fr)); gap: var(--s-4); align-items: center; padding: 14px var(--s-4); border-top: 1px solid var(--border); }
+.ld-row { display: grid; grid-template-columns: 2fr repeat(var(--cols, 3), minmax(0, 1fr)); gap: var(--s-4); align-items: center; padding: 14px var(--s-4); border-top: 1px solid var(--border); }
 .ld-row:first-child { border-top: 0; }
 .ld-row .ld-line + .ld-line { margin-top: 0; }
 

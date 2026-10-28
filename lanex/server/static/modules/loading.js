@@ -41,7 +41,7 @@ export const skel = {
   tiles: (n = 7) => "<div class='ld-tiles' style='--n:" + n + "'>" +
     Array.from({ length: n }, () => "<div class='ld-tile'><span class='ld-pic'></span>" + line(70) + line(45) + "</div>").join("") + "</div>",
   // Table-like rows.
-  rows: (n = 6, cols = 4) => "<div class='ld-rows'>" + Array.from({ length: n }, (_, r) =>
+  rows: (n = 6, cols = 4) => "<div class='ld-rows' style='--cols:" + Math.max(0, cols - 1) + "'>" + Array.from({ length: n }, (_, r) =>
     "<div class='ld-row'>" + Array.from({ length: cols }, (_, c) => line(c ? 40 + ((r * 7 + c * 13) % 45) : 90)).join("") + "</div>").join("") + "</div>",
   // Cards in a grid, each a title and a few lines.
   cards: (n = 3) => "<div class='ld-cards'>" + Array.from({ length: n }, (_, i) =>
