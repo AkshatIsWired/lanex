@@ -12,6 +12,7 @@ import { api, fmt } from "./api.js";
 import { icon } from "./icons.js";
 import * as FS from "./flowstages.js";
 import * as ctx from "./context.js";
+import { state } from "./state.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const _cache = new Map();          // tag -> { p: Promise, at }
@@ -61,7 +62,7 @@ export function fixRowHtml(f, { tag, title, n = 0, primary = false } = {}) {
     return "<li class='px-fix is-open'>" + (n ? "<span class='px-fix-n'>" + n + "</span>" : "") +
       "<div class='px-fix-main'><div class='px-fix-what'><b>" + esc(f.label) + "</b></div>" +
       (f.why ? "<div class='px-fix-why'>" + esc(f.why) + "</div>" : "") + "</div>" +
-      "<button class='btn btn-ghost btn-sm' " + attrs + ">" + esc(shortOpen(f.label)) + " " + icon("chevron", { size: 12 }) + "</button></li>";
+      "<button class='btn " + (primary ? "btn-primary" : "btn-ghost") + " btn-sm' " + attrs + ">" + esc(shortOpen(f.label)) + " " + icon("chevron", { size: 12 }) + "</button></li>";
   }
   return "";
 }
@@ -69,19 +70,30 @@ const shortOpen = (label) => (/layout/i.test(label) ? "Show" : /paths/i.test(lab
 
 export function fixListHtml(fixes, { tag, title } = {}) {
   const set = (fixes || []).filter((f) => f.kind === "setting");
-  const firstSetting = set.length ? fixes.indexOf(set[0]) : -1;
+  // The fix to try first is the primary button: the first setting, else the
+  // first place to look.
+  const firstSetting = set.length ? fixes.indexOf(set[0]) : (fixes || []).findIndex((f) => f.kind === "open" && f.go);
   let n = 0;
   return "<ol class='px-fixes'>" + (fixes || []).map((f, i) =>
     fixRowHtml(f, { tag, title, n: f.kind === "setting" ? ++n : 0, primary: i === firstSetting })).join("") + "</ol>";
 }
 
 // A setting fix as one button that opens the sheet ("Slow the clock 1.5 → 2.4").
+// A setting's unit (LibreLane's variable catalogue: ns, %, µm…), or "".
+function unitOf(name) {
+  const v = (state.variables || []).find((x) => x.name === name);
+  const u = v && v.units ? String(v.units).trim() : "";
+  return u ? (u === "%" ? "%" : " " + u) : "";
+}
+
 export function fixChipHtml(f, { tag, title, primary = false } = {}) {
   if (f.kind !== "setting") return "";
+  const u = unitOf(f.var);
+  const withU = (x) => (x == null || x === "" ? "unset" : String(x) + (u && /^-?[\d.]+$/.test(String(x)) ? u : ""));
   return "<button class='px-chip" + (primary ? " is-primary" : "") + "' data-fix-tag='" + esc(tag) + "' data-fix-var='" + esc(f.var) +
     "' data-fix-to='" + esc(f.to) + "' data-fix-title='" + esc(title || "") + "' data-fix-why='" + esc(f.why || "") +
-    "' title='" + esc(f.var + ": " + (f.from || "unset") + " → " + f.to + ". " + (f.why || "") + " (" + resumeText(f.resume) + ")") + "'>" +
-    "<b>" + esc(f.label || f.var) + "</b><span class='px-chip-v'>" + esc(f.from || "unset") + " → " + esc(f.to) + "</span></button>";
+    "' title='" + esc(f.var + ": " + withU(f.from) + " → " + withU(f.to) + ". " + (f.why || "") + " (" + resumeText(f.resume) + ")") + "'>" +
+    "<b>" + esc(f.label || f.var) + "</b><span class='px-chip-v'>" + esc(withU(f.from)) + " → " + esc(withU(f.to)) + "</span></button>";
 }
 
 const ns = (v) => (typeof v === "number" ? (v < 0 ? "−" : "+") + Math.abs(v).toFixed(2) + " ns" : "");
@@ -116,6 +128,24 @@ export function countText(res) {
   return n ? n + " problem" + (n === 1 ? "" : "s") : "";
 }
 
+// The status bar badge for a run, from its verdict ({state, label, blockers,
+// warnings}): {tone: fail|warn, text} or null (nothing to show). Without a
+// verdict, the problems' own counts.
+export function badgeOf(v, res) {
+  const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+  if (v && v.state) {
+    if (v.state === "failed") return { tone: "fail", text: v.blockers ? plural(v.blockers, "check") + " failed" : (v.label || "Failed") };
+    if (v.state === "warning") return { tone: "warn", text: v.timing_miss ? "Timing misses" : (v.label || "Warnings") };
+    if (v.state === "passed") return v.warnings ? { tone: "warn", text: plural(v.warnings, "warning") } : null;
+    if (v.state === "incomplete") return { tone: "warn", text: v.label || "Not enough to call it" };
+    return null;   // running, stopped: no problems to count
+  }
+  const c = (res && res.counts) || {};
+  if (c.fail) return { tone: "fail", text: plural(c.fail, "problem") };
+  if (c.warn) return { tone: "warn", text: plural(c.warn, "warning") };
+  return null;
+}
+
 // The status bar's count for the run on the results pages: "3 problems in
 // try-2", a link to Verify filtered to them. Hidden when there are none.
 export function wireProblemCount() {
@@ -128,12 +158,16 @@ export function wireProblemCount() {
     if (!tag) { b.hidden = true; return; }
     const res = await problemsOf(tag, { fresh });
     if (my !== tok) return;
-    const text = countText(res);
-    b.hidden = !text;
-    if (!text) return;
-    const fail = (res.counts || {}).fail > 0;
-    b.className = "st-item st-problems is-" + (fail ? "fail" : "warn");
-    b.querySelector(".st-problems-t").textContent = text + " in " + tag;
+    // The count and colour follow the shared run verdict (the one Flow's card
+    // and Verify show): blockers in red, warnings only in amber.
+    const row = ctx.contextRow(tag);
+    const vb = badgeOf(row && row.verdict, res);
+    b.hidden = !vb;
+    if (!vb) return;
+    b.className = "st-item st-problems is-" + vb.tone;
+    const mk = b.querySelector(".vf-mark");
+    if (mk) mk.className = "vf-mark is-" + vb.tone;
+    b.querySelector(".st-problems-t").textContent = vb.text + " in " + tag;
     const top = (res.problems || [])[0];
     b.dataset.tip = (top ? top.title + ". " : "") + "Open them in Verify.";
   };

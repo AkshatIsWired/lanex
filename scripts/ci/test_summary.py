@@ -28,6 +28,12 @@ from typing import Dict, List, Tuple
 # What each test file protects — the "implication" column. A file not listed
 # gets the generic regression note (still counted, never hidden).
 IMPLICATIONS: Dict[str, str] = {
+    "test_local_time": "Run names and times match the Windows clock, not the WSL distro's UTC.",
+    "test_run_verdict": "Every tab reads one verdict from Verify's logic: running, stopped, warning and failed runs are never shown as clean, and pinning a run never reorders the list.",
+    "test_console_reproduce": "The Console's Reproduce block gives the exact command, config and image a run used, so it reruns headless without LanEx.",
+    "test_harden": "A web page can't drive LanEx through a rebound domain; Console commands, reproduce scripts and sweep values can't smuggle in shell commands; nothing runs into a missing project folder; 300 runs list fast.",
+    "test_sweeps":"A sweep point that failed is shown as failed with its reason, points are named by their value, and stop-early halts the queue.",
+    "test_tools_tab_facts": "The Tools page reports installed versus LanEx-tested versions honestly and labels anything else Custom.",
     "test_pdkfeed": "PDK files are fetched from the mirror first, resumed, and used only when their SHA-256 matches the pin.",
     "test_goldens": "Metric passthrough is byte/value-faithful; non-finite metrics never reach the wire raw (Fear A).",
     "test_failing_run": "A run that FAILED signoff (real DRC/LVS/timing) is never shown as tape-out ready (Fear A, known-bad).",
@@ -66,6 +72,8 @@ IMPLICATIONS: Dict[str, str] = {
     "test_projectfiles": "New project files (modules, testbenches, SDC, pin order) are valid for LibreLane (pin files pass its own parser, every port matched once) and point the config at themselves.",
     "test_project_shell": "Projects land in a space-free folder, Windows paths are accepted, and only LanEx's own project folders can be deleted.",
     "test_server": "HTTP routing, CSRF, and traversal confinement hold (no arbitrary file read).",
+    "test_perf_server": "The fast paths (pruned folder walks, cached run summaries and tool probes, bounded library cache) give exactly the answers the slow ones gave.",
+    "test_perf_transport": "Kept-alive connections, gzip and 304s never garble or stall an answer: every answer type leaves the connection usable or closes it.",
     "test_tools": "Tool/engine detection is accurate and its probes can't hang the UI.",
     "test_fsbrowser": "The file browser stays confined to allowed roots (no path traversal).",
     "test_presence": "Closing the last LanEx window quits LanEx, but a window that only went quiet (sleep, Wi-Fi, a frozen background tab) keeps it running: its heartbeat counts until it says goodbye.",
@@ -75,6 +83,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_layout_pdk_stacks": "Layout and 3D work on sky130, gf180mcu and ihp-sg13g2: each PDK gets LanEx's own GDS3D process file at real heights, gf180's .lyp layer names are read, every layer stacks in order, and every viewer launch path forces the WSL display env that avoids blank COPY MODE windows.",
     "test_layoutview":"The Layout tab draws what the run wrote: the right step for each flow stage, the PDK's layer names and colours, every DRC/XOR marker where the report puts it, and the 3D stack at the process file's heights.",
     "test_runexplain": "When a run stops, Flow says why in plain words with the log's own numbers and what to change (GPL-0301 is the placement failure; GPL-0302 only a warning), and a run you stopped never reads as failed.",
+    "test_missing_project_folder": "A project folder renamed or deleted while LanEx is open can't be run, resumed from the fix sheet or swept: the server refuses with one plain message and Setup shows the folder as missing.",
     "test_flowstages": "Every page names the flow's seven stages the same way (Synthesis to Sign-off), and LibreLane's Classic steps fall into them in flow order.",
     "test_file_rename": "Renaming a file in the RTL IDE never overwrites or escapes the project, and the config keeps building it.",
     "test_fixloop": "A fix names the first step that reads its setting and resumes the run there; config edits land in the right section and Undo restores the file byte for byte; timing and DRC diagnoses say only what LibreLane's reports support.",
@@ -92,6 +101,8 @@ IMPLICATIONS: Dict[str, str] = {
     "test_macos_install": "The macOS install paths (GDS3D app, engines, XQuartz display detection, arch/version guards) stay correct without a Mac in CI.",
     "test_appwindow": "The standalone app-window launcher picks a real browser per platform and can never leave the user with no UI.",
     "test_runner": "The flow runner streams librelane's own per-step events and full-detail logs (the __librelane__/SUBPROCESS bridge) — local runs stay first-class.",
+    "test_perf_shell": "The project design-info call can answer with only the config keys, so boot and the Run button don't wait on a full project scan.",
+    "test_runresources": "Runs size LibreLane's thread counts to the PC without overriding the user's config, record and reproduce them, warn on low memory, and stream log lines in complete, ordered batches.",
     "test_tools_container_grid": "The Tools grid only advertises container launches the engine+image can actually deliver.",
     "test_fixes_gf180": "gf180/non-sky130 PDKs keep working: root-owned ciel store recovery and the generalized KLayout .lyp lookup.",
     "test_fixes_audit": "The audited round-19 fixes stay fixed: security confinement, DSE sweep manifests, SSE robustness.",

@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import configedit
 from .editor import EDITABLE_EXTS, _resolve_inside
+from .fastscan import iter_entries, prune_names
 
 _SKIP_DIRS = {".git", "runs", "tmp", "__pycache__", "build", "node_modules", "sim_build", "obj_dir"}
 _TB_DIR_RX = re.compile(r"(^|/)(verify|tb|tbs|test|tests|sim|testbench|testbenches)/", re.I)
@@ -302,12 +303,19 @@ def module_is_empty(text: str, module: str) -> Optional[bool]:
     return not _DECL_ONLY_RX.sub(keep, body).strip()
 
 
+def _project_verilog(d: Path) -> List[Path]:
+    """Every .v/.sv under *d* outside ``runs/``, sorted. ``runs/`` folders are
+    never entered (they hold ~800 files a run, slow on /mnt/c)."""
+    return sorted(
+        p for p in iter_entries(d, prune_names({"runs"}))
+        if p.suffix.lower() in (".v", ".sv") and "runs" not in p.relative_to(d).parts)
+
+
 def find_module_file(design_dir: str | Path, module: str, files: Optional[List[str]] = None) -> Optional[Path]:
     """The first source file (of *files*, or every .v/.sv in the project)
     that declares *module*."""
     d = Path(design_dir)
-    cands = [Path(f) for f in files] if files else sorted(
-        p for p in d.rglob("*") if p.suffix.lower() in (".v", ".sv") and "runs" not in p.relative_to(d).parts)
+    cands = [Path(f) for f in files] if files else _project_verilog(d)
     for f in cands:
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
@@ -320,8 +328,7 @@ def find_module_file(design_dir: str | Path, module: str, files: Optional[List[s
 
 def find_module_ports(design_dir: str | Path, module: str, files: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     d = Path(design_dir)
-    cands = [Path(f) for f in files] if files else sorted(
-        p for p in d.rglob("*") if p.suffix.lower() in (".v", ".sv") and "runs" not in p.relative_to(d).parts)
+    cands = [Path(f) for f in files] if files else _project_verilog(d)
     for f in cands:
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
@@ -540,17 +547,24 @@ _FILE_RX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*$")
 
 
 def new_file(design_dir: str | Path, kind: str, name: str, *, top: Optional[str] = None,
-             clock: Optional[str] = None, use: bool = True) -> Dict[str, Any]:
+             clock: Optional[str] = None, use: bool = True,
+             folder: Optional[str] = None) -> Dict[str, Any]:
     """Create a starter file of *kind* named *name* and, with *use*, point the
     config at it: a new design module joins VERILOG_FILES (unless a glob
     already covers it), an SDC becomes PNR_SDC_FILE and SIGNOFF_SDC_FILE,
     a pin file becomes IO_PIN_ORDER_CFG.
 
+    *folder* (project-relative, ``""`` for the project root) puts a testbench
+    somewhere other than ``verify/``: a rewritten testbench goes back where
+    the old one was.
+
     Returns ``{ok, rel, abs, config: {changed, name}|None, config_error}``.
     """
     if kind not in KINDS:
         return {"ok": False, "error": f"unknown kind '{kind}'"}
-    folder, ext = KINDS[kind]
+    sub, ext = KINDS[kind]
+    if folder is not None and kind.startswith("tb"):
+        sub = str(folder).replace("\\", "/").strip().strip("/")
     name = (name or "").strip()
     if kind.startswith(("module", "tb")):
         if not _NAME_RX.match(name):
@@ -563,7 +577,7 @@ def new_file(design_dir: str | Path, kind: str, name: str, *, top: Optional[str]
         if not _FILE_RX.match(fname) or (ext is None and Path(fname).suffix.lower() not in EDITABLE_EXTS):
             return {"ok": False, "error": "Use letters, digits, - _ and . in the file name"
                     + ("" if ext else ", with an extension LanEx can edit (.txt, .md, .tcl, .json, .yaml …).")}
-    rel = f"{folder}/{fname}" if folder else fname
+    rel = f"{sub}/{fname}" if sub else fname
     target = _resolve_inside(design_dir, rel)
     if target is None:
         return {"ok": False, "error": "That path is outside the project."}

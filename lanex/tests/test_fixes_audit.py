@@ -68,6 +68,22 @@ def test_manual_docker_subcommand_allowlist(cmd, ok):
     assert manualcmd.validate(cmd)["ok"] is ok
 
 
+@pytest.mark.parametrize("cmd,ok", [
+    ("ciel ls --pdk-family sky130", True),
+    ("ciel --version", True),
+    ("ciel path", True),
+    # These change the PDK store every LanEx run reads.
+    ("ciel rm --pdk-family sky130 8afc8346", False),
+    ("ciel prune --pdk-family gf180mcu", False),
+    ("ciel enable --pdk-family sky130 abc", False),
+    # yosys runs "!cmd" through the shell.
+    ("yosys -p '!id'", False),
+    ("yosys -p 'read_verilog a.v'", True),
+])
+def test_manual_pdk_store_and_yosys_shell_escape(cmd, ok):
+    assert manualcmd.validate(cmd)["ok"] is ok
+
+
 def test_manual_still_blocks_sudo_and_shell_ops():
     assert manualcmd.validate("sudo rm -rf /")["ok"] is False
     assert manualcmd.validate("yosys -version | grep x")["ok"] is False

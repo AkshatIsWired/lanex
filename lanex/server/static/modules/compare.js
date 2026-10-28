@@ -5,11 +5,26 @@ import { api, fmt } from "./api.js";
 import { state } from "./state.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
 import { gatherRunsScoped, designLabel } from "./context.js";
+import { icon } from "./icons.js";
+import { localeNum } from "./intlcache.js";
+
+// The run's verdict as the Runs page reads it: a run that finished with a
+// timing warning is not a failure.
+function verdictMark(r) {
+  const st = (r.verdict && r.verdict.state) || (r.success ? "passed" : "failed");
+  const [name, color] = { passed: ["check", "var(--pass)"], warning: ["alert", "var(--warn)"], failed: ["x", "var(--fail)"] }[st] || ["minus", "var(--text-muted)"];
+  return "<span title='" + fmt.escape((r.verdict && r.verdict.label) || st) + "' style='color:" + color + "'>" + icon(name, { size: 12 }) + "</span>";
+}
 
 // tag -> run row (carries run_dir + _design) so Compare can pass absolute
 // run_dirs to the backend — robust even when a picked run lives in another
 // design (the per-tab pickers can surface cross-design runs).
 let _runIndex = {};
+
+// Runs picked on the Runs page (by run_dir): the next render ticks them and
+// compares straight away, so Runs' "Compare" lands on the answer.
+let _preselect = null;
+export function preselectCompare(runDirs) { _preselect = (runDirs || []).slice(0, 6); }
 
 export async function renderCompare() {
   const root = document.getElementById("compare-body");
@@ -39,10 +54,16 @@ export async function renderCompare() {
       "<label class='cmp-check'><input type='checkbox' value='" + fmt.escape(r.tag) +
       "' data-rundir='" + fmt.escape(r.run_dir || "") + "'/> " +
       (multi ? "<span class='muted'>" + fmt.escape(designLabel(r._design)) + " · </span>" : "") +
-      fmt.escape(r.tag) + (r.success ? " <svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M5 13l4 4L19 7'/></svg>" : " <svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg>") + "</label>").join("") +
+      fmt.escape(r.tag) + " " + verdictMark(r) + "</label>").join("") +
     "</div><button class='btn btn-primary' id='cmp-go'>Compare</button></div>" +
     "<div id='cmp-out'></div>";
   root.querySelector("#cmp-go").addEventListener("click", () => doCompare(root));
+  if (_preselect && _preselect.length) {
+    const want = new Set(_preselect);
+    _preselect = null;
+    root.querySelectorAll(".cmp-check input").forEach((c) => { c.checked = want.has(c.dataset.rundir); });
+    doCompare(root);
+  }
 }
 
 async function doCompare(root) {
@@ -217,7 +238,7 @@ export function summaryCellHtml(row) {
 function shortMetric(v) {
   const r = fmt.metric(v);
   if (typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 100 && Number(r) === v) {
-    return v.toLocaleString("en-US", { maximumFractionDigits: 3 });
+    return localeNum(v, "en-US", { maximumFractionDigits: 3 });
   }
   return r;
 }
@@ -234,8 +255,19 @@ const _CHART_METRICS = [
   ["route__wirelength__estimated", "Wirelength"],
 ];
 
+// The chart instances of the last render (disposed when it is replaced) and
+// one ResizeObserver for all of them (was a new window listener per render).
+let _charts = [];
+let _chartRO = null;
+function disposeCharts() {
+  for (const c of _charts) { try { c.dispose(); } catch (_e) { /* already gone */ } }
+  _charts = [];
+}
+
 async function renderCompareCharts(host, data, cols) {
   if (!host) return;
+  disposeCharts();
+  if (typeof window.echarts === "undefined") await import("./loading.js").then((m) => m.loadECharts()).catch(() => null);
   if (typeof window.echarts === "undefined") { host.innerHTML = "<p class='muted'>Charts need ECharts.</p>"; return; }
   const { runBarsOption, runBarsHeight } = await import("./barchart.js");
   const table = data.metric_table || {};
@@ -266,8 +298,16 @@ async function renderCompareCharts(host, data, cols) {
     el.setAttribute("role", "img");
     el.setAttribute("aria-label", name + " comparison across selected runs, matching the values in the comparison tables above.");
     chart.setOption(opt);
+    _charts.push(chart);
   }
-  window.addEventListener("resize", () => host.querySelectorAll(".cmp-chart").forEach((el) => {
-    const inst = window.echarts.getInstanceByDom(el); if (inst) inst.resize();
-  }));
+  if (typeof ResizeObserver === "undefined") return;
+  if (!_chartRO) {
+    let t = 0;
+    _chartRO = new ResizeObserver(() => {
+      clearTimeout(t);
+      t = setTimeout(() => { for (const c of _charts) { if (!c.isDisposed()) c.resize(); } }, 60);
+    });
+  }
+  _chartRO.disconnect();
+  _chartRO.observe(host);
 }

@@ -350,10 +350,38 @@ def h_runs(handler: Any) -> None:
         _respond(handler, [])
         return
     try:
-        _respond(handler, history.list_runs(design_dir))
+        _respond(handler, history.mark_live(history.list_runs(design_dir), _live_run_dir()))
     except Exception as ex:
         _log.exception("list_runs failed")
         _respond(handler, str(ex), 500)
+
+
+def _live_run_dir() -> Optional[str]:
+    """The run folder of the flow running right now, or None."""
+    try:
+        from ..server.app import get_runner
+        r = get_runner()
+        return r.run_dir if r.running else None
+    except Exception:
+        return None
+
+
+def _live_probe() -> Optional[str]:
+    """:func:`_live_run_dir` for history's caches: lets them trust a finished
+    run's quick signature while always re-reading the live one. A runner that
+    was never created runs nothing; one whose run folder is not known yet
+    makes every run count as possibly live."""
+    from ..server import app as _app
+    r = _app._RUNNER
+    if r is None or not r.running:
+        return None
+    rd = r.run_dir
+    if not rd:
+        raise RuntimeError("live run folder not known yet")
+    return rd
+
+
+history.set_live_probe(_live_probe)
 
 
 def h_run_step_log(handler: Any) -> None:
@@ -407,7 +435,7 @@ def h_run(handler: Any) -> None:
         _respond(handler, f"run '{tag}' not found", 404)
         return
     try:
-        _respond(handler, history.get_run(run_path))
+        _respond(handler, history.cached_run_result("run", run_path, lambda: history.get_run(run_path)))
     except Exception as ex:
         _log.exception("get_run failed")
         _respond(handler, str(ex), 500)
@@ -541,7 +569,9 @@ def h_run_reports(handler: Any) -> None:
         _respond(handler, "missing design_dir or run_tag", 400)
         return
     try:
-        _respond(handler, fsbrowser.list_run_reports(design_dir, run_tag))
+        _respond(handler, history.cached_run_result(
+            "reports", os.path.join(design_dir, "runs", run_tag),
+            lambda: fsbrowser.list_run_reports(design_dir, run_tag)))
     except Exception as ex:
         _log.exception("list_run_reports failed")
         _respond(handler, str(ex), 500)
@@ -864,18 +894,24 @@ _PREFLIGHT_TOOLS_CACHE: Dict[str, Any] = {"t": 0.0, "v": None}
 
 
 def _preflight_tools_cached(ttl: float = 8.0) -> Dict[str, Any]:
-    import time
-    now = time.time()
-    cached = _PREFLIGHT_TOOLS_CACHE
-    if cached["v"] is not None and (now - cached["t"]) < ttl:
-        return cached["v"]
+    # check_tools() is session-cached (cleared by installs, pulls and
+    # Recheck; refreshed in the background), so this is a dict lookup after
+    # the first call and an install shows at once, not up to 8 s later.
     try:
-        v = tools_mod.check_tools()
+        return tools_mod.check_tools()
     except Exception:
-        v = {}
-    cached["t"] = now
-    cached["v"] = v
-    return v
+        return {}
+
+
+def _preflight_container_tools() -> Dict[str, Any]:
+    """Container mode needs only the engine and image, not the host tool
+    probes: those warm up in the background for the Tools tab."""
+    try:
+        cont = tools_mod.container_status()
+        tools_mod.warm_check_tools()
+        return {"container": cont}
+    except Exception:
+        return {}
 
 
 def h_preflight(handler: Any) -> None:
@@ -904,7 +940,8 @@ def h_preflight(handler: Any) -> None:
         (lambda: pdk_mod.check_pdk_ready(pdk, scl or None, run_mode)) if pdk
         else (lambda: {"ready": False, "missing": ["no PDK selected"]})
     )
-    _tools_future = _pool.submit(_preflight_tools_cached)
+    _tools_future = _pool.submit(_preflight_container_tools if run_mode == "container"
+                                 else _preflight_tools_cached)
 
     # 1) Design folder + config + sources.
     design_ok = bool(design_dir) and Path(design_dir).is_dir()
@@ -1059,6 +1096,18 @@ def h_preflight(handler: Any) -> None:
             )
         tools_block = {"ok": not missing_tools, "mode": "local", "tools": tool_rows, "missing": missing_tools}
 
+    # 4) Memory: a heads-up (never a blocker) when free memory looks too small
+    #    for this design (its last run's biggest step, else a small-design rule).
+    try:
+        from ..controller import dse, runresources
+        _res = dse.system_resources()
+        resources_block = runresources.memory_check(
+            _res.get("available_gb"), _res.get("total_gb"),
+            runresources.last_run_peak_gb(design_dir) if design_ok else None)
+        resources_block["cores"] = runresources.usable_cores() or _res.get("cores")
+    except Exception:
+        resources_block = {"warn": False}
+
     _respond(
         handler,
         {
@@ -1068,6 +1117,7 @@ def h_preflight(handler: Any) -> None:
             "design": design_block,
             "pdk": pdk_block,
             "tools": tools_block,
+            "resources": resources_block,
         },
     )
 
@@ -1164,6 +1214,19 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
     overrides = dict(body.get("overrides") or {})
     pdk = overrides.pop("PDK", None) or body.get("pdk") or None
     scl = overrides.pop("STD_CELL_LIBRARY", None) or body.get("scl") or None
+    # No PDK in the request: take the config file's. LibreLane's CLI fetches and
+    # mounts the ciel version of the family named by -p (default sky130A), so a
+    # gf180/IHP config run without -p stops with "The PDK gf180mcuD was not
+    # found" (the PDK_ROOT it gets is the sky130 version folder).
+    if not pdk or not scl:
+        try:
+            from ..controller import configedit
+            named = configedit.config_pdk(design_dir)
+            pdk = pdk or named.get("pdk") or None
+            if not scl and pdk and pdk == named.get("pdk"):
+                scl = named.get("scl") or None
+        except Exception:
+            _log.debug("config PDK lookup failed", exc_info=True)
     # Strip blank/None overrides so a left-empty constraint field never becomes a
     # bare ``KEY=`` the engine can't type-parse (issue #11); real 0/False kept.
     overrides = _clean_overrides(overrides)
@@ -1192,15 +1255,35 @@ def _assemble_overrides(design_dir: str, body: Dict[str, Any], *,
             macro_warning = custommacros.merge_warning(design_dir)
     except Exception:
         _log.exception("custom-macro overlay failed (continuing without it)")
+    # Thread counts sized to this PC, for the thread variables the config and
+    # these overrides leave unset (theirs win). Kept apart from ``overrides``
+    # (the user's own settings, which gui-run.json and "Load into Setup" keep);
+    # callers send ``{**overrides, **threads}`` to LibreLane and the command.
+    from ..controller import runresources
+    _cf = _resolve_config_file(design_dir)
+    sized = runresources.plan(
+        design_dir=design_dir,
+        config_files=([str(_cf)] if _cf else []) + list(extra_config_files),
+        flow_factory=_flow_factory_or_none(body.get("flow") or "Classic"),
+        overrides=overrides, pdk=pdk)
     return {
         "pdk": pdk,
         "scl": scl,
         "overrides": overrides,
+        "threads": sized["overrides"],
+        "resources": sized["record"],
         "extra_sources": body.get("sources") or None,
         "extra_extras": body.get("extras") or None,
         "extra_config_files": extra_config_files or None,
         "macro_warning": macro_warning,
     }
+
+
+def _flow_factory_or_none(name: str) -> Any:
+    try:
+        return _flow_factory(name)
+    except Exception:
+        return None
 
 
 def _hash_files(paths: Optional[List[str]]) -> Optional[str]:
@@ -1219,6 +1302,22 @@ def _hash_files(paths: Optional[List[str]]) -> Optional[str]:
         except Exception:
             h.update(b"\0missing\0")
     return h.hexdigest()
+
+
+MISSING_DESIGN_PREFIX = "Project folder not found: "
+
+
+def _missing_design_error(design_dir: str) -> Optional[str]:
+    """Refuse to start or resume a run of a project whose folder is gone.
+
+    The folder can be renamed, moved or deleted on disk while LanEx is open;
+    without this a run fails with "no config found" and a resume tries to read
+    steps from a run folder that no longer exists. The UI matches the prefix
+    to show the project as missing (Locate / Remove)."""
+    if design_dir and not os.path.isdir(design_dir):
+        return (MISSING_DESIGN_PREFIX + design_dir + ". It is not there any more (moved, renamed "
+                "or deleted). Nothing was started. Locate it or remove it from the list on Setup.")
+    return None
 
 
 def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None,
@@ -1256,8 +1355,95 @@ def _whitespace_path_error(design_dir: str, pdk_root: Optional[str] = None,
     return None
 
 
+_TAG_RX = re.compile(r"[A-Za-z0-9._-]{1,120}")
+
+
+def _bad_tag(tag: Any) -> Optional[str]:
+    """A plain refusal for a run name LibreLane would turn into a folder
+    outside ``runs/`` (``../x``, ``a/b``) or one a shell would split; None when
+    *tag* is empty (LanEx names the run) or fine."""
+    if tag in (None, ""):
+        return None
+    t = str(tag)
+    if not _TAG_RX.fullmatch(t) or t in (".", "..") or t.startswith("-"):
+        return (f"The run name '{t[:60]}' can't be used: use letters, digits and . _ - "
+                "(up to 120), not starting with '-'.")
+    return None
+
+
+def _design_refusal(handler: Any, design_dir: Optional[str]) -> Optional[str]:
+    """Why a run, sweep or Console command must not start in *design_dir*,
+    in plain words, or None.
+
+    Two cases: the open project's folder is gone (moved, renamed or deleted
+    while LanEx had it open), or the window that asked shows another project
+    (``X-LanEx-Design``, sent by api.js): a window showing a missing project
+    keeps the previous one active on the server, and a second window may have
+    switched projects. Either way the run would land in a folder the person
+    is not looking at."""
+    gone = _missing_design_error(design_dir or "")
+    if gone:
+        return gone
+    headers = getattr(handler, "headers", None)
+    raw = headers.get("X-LanEx-Design") if headers is not None else None
+    if not raw:
+        return None
+    try:
+        from urllib.parse import unquote
+        shown = platform_env.to_host_path(unquote(str(raw))) or ""
+    except Exception:
+        return None
+    if not shown:
+        return None
+    if not Path(shown).expanduser().is_dir():
+        return _missing_design_error(shown)
+    if not design_dir:
+        return None
+    try:
+        same = Path(shown).expanduser().resolve() == Path(design_dir).resolve()
+    except OSError:
+        same = True
+    if not same:
+        return (f"This window shows {shown}, but LanEx has {design_dir} open (another window "
+                "may have opened it). Nothing was started. Reload this page, or open the project again, then retry.")
+    return None
+
+
+def _other_flow_busy(*, sweep_ok: bool = False, runner_ok: bool = False) -> Optional[str]:
+    """Another flow already has the machine: a sweep's queue (which starts its
+    next point the moment the runner goes idle), a flow run, or a ``librelane``
+    command from the Console. Two flows at once double the memory a full run
+    needs and can write into the same run folder. A plain refusal, or None."""
+    try:
+        from ..controller import dse
+        if not sweep_ok and dse.job.active:
+            return ("A sweep is running. Wait for it to finish, or stop it in Runs, then try again.")
+    except Exception:
+        pass
+    if not runner_ok:
+        try:
+            from ..server.app import get_runner
+            if get_runner().running:
+                return "A run is in progress. Wait for it to finish, or stop it, then try again."
+        except Exception:
+            pass
+    try:
+        from ..controller import manualcmd
+        job = manualcmd.get_job()
+        if job.running and job.running_base == "librelane":
+            return ("A librelane command is running in the Console. Wait for it to finish, "
+                    "or press Stop there, then try again.")
+    except Exception:
+        pass
+    return None
+
+
 def h_run_start(handler: Any) -> None:
     body = getattr(handler, "_body", {}) or {}
+    why = _design_refusal(handler, _get_active_design_dir())
+    if why:
+        _respond(handler, why, 409)
+        return
     if body.get("branch_from"):
         # "Resume from <stage>" (Run menu): a new run from a step of another
         # run, with nothing changed. The fix route plans and starts it.
@@ -1281,7 +1467,13 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
     from ..server.app import get_runner
     design_dir = _get_active_design_dir()
     if not design_dir:
-        return "no active design dir", 400
+        return "No project is open. Open or create one on Setup, then run.", 400
+    gone = _design_refusal(None, design_dir)
+    if gone:
+        return gone, 409
+    tag_err = _bad_tag(body.get("tag"))
+    if tag_err:
+        return tag_err, 400
     ws_err = _whitespace_path_error(design_dir)
     if ws_err:
         return ws_err, 400
@@ -1292,6 +1484,9 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
     r = get_runner()
     if r.running:
         return "already running", 400
+    busy = _other_flow_busy(runner_ok=True)
+    if busy:
+        return busy, 409
     try:
         from librelane.flows import Flow
         flow_name = body.get("flow") or "Classic"
@@ -1314,6 +1509,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
         _asm = _assemble_overrides(design_dir, body, custom_cells=not overrides_ready)
         pdk, scl = _asm["pdk"], _asm["scl"]
         overrides = _asm["overrides"]
+        run_overrides = {**overrides, **_asm["threads"]}  # + threads sized to this PC
         extra_config_files: List[str] = list(_asm["extra_config_files"] or [])
 
         # LibreLane builds for the PDK/library the config file names, whatever
@@ -1378,6 +1574,9 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             # Final-settings preview detect that the file was edited between
             # preview and Run (TOCTOU, N7).
             "config_hash": _hash_files([str(config_file)]),
+            # Thread counts LanEx sized to this PC (and why); they ride the
+            # command below, so Reproduce runs with the same numbers.
+            "resources": _asm["resources"],
         }
         if branched_from:
             # Resumed from another run: its steps before ``frm`` are this run's
@@ -1390,7 +1589,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
                 flow=flow_name, pdk=pdk, scl=scl, pdk_root=pdk_root,
                 run_mode=run_mode, tag=body.get("tag") or None,
                 frm=body.get("frm") or None, to=body.get("to") or None,
-                skip=body.get("skip") or [], overrides=overrides,
+                skip=body.get("skip") or [], overrides=run_overrides,
                 extra_sources=body.get("sources") or None,
                 extra_extras=body.get("extras") or None,
                 extra_config_files=extra_config_files or None,
@@ -1409,7 +1608,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             frm=body.get("frm") or None,
             to=body.get("to") or None,
             skip=body.get("skip"),
-            config_overrides=overrides,
+            config_overrides=run_overrides,
             extra_sources=body.get("sources"),
             extra_extras=body.get("extras"),
             extra_config_files=extra_config_files or None,
@@ -1428,6 +1627,7 @@ def _start_run(body: Dict[str, Any], *, initial_state: Optional[str] = None,
             # hash it previewed in Final-settings to catch a mid-flight edit (N7).
             result["config_hash"] = gui_meta.get("config_hash")
             result["command"] = gui_meta.get("cli_command")
+            result["resources"] = gui_meta.get("resources")
         return result, 200
     except Exception as ex:
         _log.exception("run start failed")
@@ -1541,10 +1741,19 @@ def h_cli_command(handler: Any) -> None:
         flow=body.get("flow") or "Classic", pdk=pdk, scl=scl, pdk_root=pdk_root,
         run_mode=run_mode, tag=body.get("tag") or None,
         frm=body.get("frm") or None, to=body.get("to") or None,
-        skip=body.get("skip") or [], overrides=asm["overrides"],
+        skip=body.get("skip") or [], overrides={**asm["overrides"], **asm["threads"]},
         extra_sources=asm["extra_sources"], extra_extras=asm["extra_extras"],
         extra_config_files=asm["extra_config_files"],
     )
+    cmd["resources"] = asm["resources"]  # threads sized to this PC, as Run would now
+    # The image the runner pins with LIBRELANE_IMAGE_OVERRIDE, so a copied
+    # script runs the same tools (Console drawer).
+    if run_mode == "container":
+        try:
+            from ..controller import container_run
+            cmd["image"] = container_run.image_ref() or None
+        except Exception:
+            pass
     _respond(handler, cmd)
 
 
@@ -1555,7 +1764,23 @@ def h_manual_run(handler: Any) -> None:
     from ..controller import manualcmd
     body = getattr(handler, "_body", {})
     command = body.get("command", "")
+    if not isinstance(command, str):
+        _respond(handler, "The command must be text.", 400)
+        return
     cwd = _get_active_design_dir()
+    why = _design_refusal(handler, cwd)
+    if why:
+        _respond(handler, why.replace("Nothing was started.", "The command was not run."), 409)
+        return
+    v = manualcmd.validate(command)
+    _info_only = {"--version", "--help", "-h", "--list-steps", "--list-flows"}
+    if v.get("ok") and v.get("base") == "librelane" and not (_info_only & set(v.get("argv") or [])):
+        # A second flow next to a live run or sweep: double the memory, and a
+        # copied command may name the same run folder.
+        busy = _other_flow_busy()
+        if busy:
+            _respond(handler, busy.replace("try again", "run the command"), 409)
+            return
     result = manualcmd.get_job().start(command, cwd=cwd)
     if not result.get("ok"):
         _respond(handler, result.get("error", "could not run"), 400)
@@ -1575,9 +1800,15 @@ def h_manual_result(handler: Any) -> None:
 
 
 def h_run_cancel(handler: Any) -> None:
+    from ..controller import dse
     from ..server.app import get_runner
+    # Stop during a sweep stops the sweep: otherwise the queue would start
+    # the next point the moment this run ends.
+    sweep = dse.job.active
+    if sweep:
+        dse.job.cancel()
     get_runner().cancel()
-    _respond(handler, {"status": "cancelled"})
+    _respond(handler, {"status": "cancelled", "sweep_stopped": sweep})
 
 
 def h_run_resume(handler: Any) -> None:
@@ -1884,15 +2115,15 @@ _CONTENT_TYPE_MAP = {
 
 
 def _read_view_file(path: Path) -> Optional[Dict[str, Any]]:
+    """``{path, content_type}`` of a servable file. The transport streams it
+    (a final GDS or a long log is tens of MB, never read into memory)."""
     if not path.is_file():
         return None
     ext = path.suffix.lower()
     content_type = _CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
-    try:
-        blob = path.read_bytes()
-        return {"blob": blob, "content_type": content_type}
-    except Exception:
+    if not os.access(path, os.R_OK):
         return None
+    return {"path": str(path), "content_type": content_type}
 
 
 def _resolve_run_dir(tag: Optional[str]) -> Optional[Path]:
@@ -1930,7 +2161,8 @@ def h_run_files(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, {"tag": tag, "files": history.list_run_files(run_dir)})
+        _respond(handler, {"tag": tag, "files": history.cached_run_result(
+            "files", run_dir, lambda: history.list_run_files(run_dir))})
     except Exception as ex:
         _log.exception("list_run_files failed")
         _respond(handler, str(ex), 500)
@@ -1944,7 +2176,8 @@ def h_run_images(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, {"tag": tag, "images": history.list_run_images(run_dir)})
+        _respond(handler, {"tag": tag, "images": history.cached_run_result(
+            "images", run_dir, lambda: history.list_run_images(run_dir))})
     except Exception as ex:
         _log.exception("list_run_images failed")
         _respond(handler, str(ex), 500)
@@ -2256,6 +2489,9 @@ def h_layout_sources(handler: Any) -> None:
     from ..controller import layoutview
     tag = _query_param(handler.path, "tag")
     run_dir = _resolve_run_dir(tag)
+    if run_dir is None and _live_tag_pending(tag):
+        _respond(handler, {"tag": tag, "stages": [], "pending": True, "engine": layoutview.available()})
+        return
     if run_dir is None:
         _respond(handler, "run not found", 404)
         return
@@ -2500,6 +2736,27 @@ def h_run_gui_meta(handler: Any) -> None:
     except Exception as ex:
         _log.exception("reading gui-run.json failed")
         _respond(handler, str(ex), 500)
+
+
+def h_run_reproduce(handler: Any) -> None:
+    """How to rerun a run headless without LanEx (Console drawer, Command tab):
+    the recorded command, config, PDK version, image digest and LibreLane
+    version, plus a bash script. Read-only; from gui-run.json + resolved.json."""
+    from ..controller import manualcmd
+    tag = _query_param(handler.path, "tag")
+    run_dir = _resolve_run_dir(tag)
+    if run_dir is None:
+        _respond(handler, "run not found", 404)
+        return
+    def _load(name: str) -> Optional[Dict[str, Any]]:
+        p = run_dir / name
+        try:
+            return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
+        except Exception:
+            return None
+    info = manualcmd.reproduce_info(_load("gui-run.json") or {}, _load("resolved.json"), str(run_dir))
+    info["script"] = manualcmd.reproduce_script(info)
+    _respond(handler, info)
 
 
 def h_run_import_dir(handler: Any) -> None:
@@ -2753,7 +3010,7 @@ def h_templates(handler: Any) -> None:
 def h_project_defaults(handler: Any) -> None:
     """Where New project suggests putting a design, whether it exists yet, and
     what the UI needs to show paths the way the person's OS does."""
-    proj = platform_env.projects_dir()
+    proj, linux_reason = platform_env.projects_dir_info()
     # Create it up front: the Windows folder picker opens in Documents when its
     # start folder doesn't exist, so "Change..." would land somewhere else.
     try:
@@ -2761,6 +3018,7 @@ def h_project_defaults(handler: Any) -> None:
     except OSError:
         pass
     _respond(handler, {"projects_dir": str(proj), "exists": proj.is_dir(),
+                       "linux_home_reason": linux_reason,
                        "wsl": platform_env.is_wsl(),
                        "distro": os.environ.get("WSL_DISTRO_NAME") or None})
 
@@ -2909,7 +3167,13 @@ def h_verify(handler: Any) -> None:
         _respond(handler, "no run to verify", 404)
         return
     try:
-        _respond(handler, verify_mod.verify_report(run_dir))
+        # Shallow copy: the cached report is shared; only run_verdict changes.
+        rep = dict(history.cached_run_result("verify", run_dir, lambda: verify_mod.verify_report(run_dir)))
+        rv = rep.get("run_verdict")
+        if rv is not None:
+            rep["run_verdict"] = history.mark_live([{"run_dir": rep.get("run_dir"), "verdict": rv}],
+                                                   _live_run_dir())[0]["verdict"]
+        _respond(handler, rep)
     except Exception as ex:
         _log.exception("verify_report failed")
         _respond(handler, str(ex), 500)
@@ -2971,7 +3235,8 @@ def h_timing_paths(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, timing.timing_paths(run_dir, kind=kind, limit=limit))
+        _respond(handler, history.cached_run_result(
+            f"timing:{kind}:{limit}", run_dir, lambda: timing.timing_paths(run_dir, kind=kind, limit=limit)))
     except Exception as ex:
         _log.exception("timing_paths failed")
         _respond(handler, str(ex), 500)
@@ -3009,15 +3274,26 @@ def h_run_explain(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def _live_tag_pending(tag: Optional[str]) -> bool:
+    """True when *tag* is the run starting right now whose folder LibreLane
+    hasn't made yet: pages that load it on the run's first event get an empty
+    answer instead of a 404 (a console error at every run start)."""
+    live = _live_run_dir()
+    return bool(tag and live and Path(live).name == tag and not Path(live).is_dir())
+
+
 def h_run_stages(handler: Any) -> None:
     """Per-step metrics, runtime and peak memory for a run (Analytics)."""
     tag = _query_param(handler.path, "tag")
     run_dir = _resolve_run_dir(tag) if tag else _latest_run_dir()
+    if run_dir is None and _live_tag_pending(tag):
+        _respond(handler, {"tag": tag, "steps": [], "pending": True})
+        return
     if run_dir is None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, history.run_stages(run_dir))
+        _respond(handler, history.cached_run_result("stages", run_dir, lambda: history.run_stages(run_dir)))
     except Exception as ex:
         _log.exception("run_stages failed")
         _respond(handler, str(ex), 500)
@@ -3097,6 +3373,14 @@ def h_verify_rerun(handler: Any) -> None:
         except Exception:
             pass
     kwargs = reverify.reverify_kwargs(run_dir, step_id, overrides=overrides)
+    try:  # the re-run step gets threads sized to this PC too (its config/overrides win)
+        from ..controller import runresources
+        kwargs["config_overrides"] = {**runresources.plan(
+            design_dir=design_dir, config_files=[str(config_file)],
+            flow_factory=_flow_factory_or_none(body.get("flow") or "Classic"),
+            overrides=overrides, pdk=pdk)["overrides"], **kwargs["config_overrides"]}
+    except Exception:
+        _log.debug("thread sizing for the re-run failed", exc_info=True)
     extra_config_files = []
     try:
         from ..controller import custommacros
@@ -3122,9 +3406,54 @@ def h_verify_rerun(handler: Any) -> None:
         _respond(handler, str(ex), 500)
 
 
+def _sweep_point_meta(design_dir: str, config_file: Path, flow_name: str, run_mode: str, tag: str,
+                      pdk: Optional[str], scl: Optional[str], pdk_root: Optional[str],
+                      asm: Dict[str, Any], sweep_id: Optional[str],
+                      values: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``gui-run.json`` a sweep point records, like a Setup run's: what was
+    launched, and the exact CLI command with the point's own ``-c`` values, so
+    Reproduce works for every point."""
+    overrides = asm.get("overrides") or {}
+    extra_config_files = list(asm.get("extra_config_files") or [])
+    meta: Dict[str, Any] = {
+        "flow": flow_name,
+        "pdk": pdk,
+        "scl": scl,
+        "run_mode": run_mode,
+        "mode": "full",
+        "overrides": overrides,
+        "frm": None,
+        "to": None,
+        "skip": [],
+        "sources": list(asm.get("extra_sources") or []),
+        "extras": list(asm.get("extra_extras") or []),
+        "extra_config_files": extra_config_files,
+        "extra_config_hash": _hash_files(extra_config_files),
+        "config_file": str(config_file),
+        "config_hash": _hash_files([str(config_file)]),
+        "resources": asm.get("resources") or {},
+    }
+    if sweep_id:
+        meta["sweep"] = {"id": sweep_id, "values": dict(values)}
+    try:
+        from ..controller import manualcmd
+        meta["cli_command"] = manualcmd.cli_command_for(
+            design_dir=design_dir, config_file=str(config_file),
+            flow=flow_name, pdk=pdk, scl=scl, pdk_root=pdk_root,
+            run_mode=run_mode, tag=tag, overrides={**overrides, **(asm.get("threads") or {})},
+            extra_sources=asm.get("extra_sources") or None,
+            extra_extras=asm.get("extra_extras") or None,
+            extra_config_files=extra_config_files or None,
+        )
+    except Exception:
+        _log.debug("cli_command_for failed for a sweep point", exc_info=True)
+    return meta
+
+
 def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
                           run_mode: str, base_overrides: Dict[str, Any],
-                          dse_body: Optional[Dict[str, Any]] = None):
+                          dse_body: Optional[Dict[str, Any]] = None,
+                          sweep_id: Optional[str] = None):
     """Return a ``start_one(tag, overrides)`` closure for the DSE queue that
     starts a run through the shared runner and blocks until it finishes.
 
@@ -3135,7 +3464,7 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
     import time
     from ..server.app import get_runner
 
-    def start_one(tag: str, overrides: Dict[str, Any]) -> bool:
+    def start_one(tag: str, overrides: Dict[str, Any]) -> Dict[str, Any]:
         r = get_runner()
         # Wait for any prior run to clear (defensive; queue is sequential).
         for _ in range(600):
@@ -3160,30 +3489,46 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
                 pdk_root = pf.get("pdk_root") or pdk_root
             except Exception:
                 pass
+        # Stop may have landed while this point was being prepared: launching
+        # it now would run a point the person already stopped.
+        from ..controller import dse as _dse
+        if _dse.job.cancelled:
+            return {"ok": False, "kind": "stopped", "reason": "stopped"}
+        gui_meta = _sweep_point_meta(design_dir, config_file, flow_name, run_mode, tag, pdk, scl,
+                                     pdk_root, asm, sweep_id, overrides)
         res = r.start(
             flow_factory=_flow_factory(flow_name),
             config_files=[str(config_file)],
             design_dir=design_dir,
             pdk=pdk, scl=scl, pdk_root=pdk_root,
             tag=tag, overwrite=True,
-            config_overrides=asm["overrides"],
+            config_overrides={**asm["overrides"], **asm["threads"]},
             extra_sources=asm["extra_sources"],
             extra_extras=asm["extra_extras"],
             extra_config_files=asm["extra_config_files"],
             run_mode=run_mode, flow_name=flow_name,
+            gui_meta=gui_meta,
         )
         if not res.get("ok"):
-            return False
+            return {"ok": False, "kind": "error",
+                    "reason": "did not start: " + str(res.get("error") or res.get("message") or "the runner refused")}
         # Block until this run completes.
         time.sleep(0.5)
         for _ in range(86400 * 2):  # generous upper bound; ~12h at 0.5s
             if not r.running:
                 break
             time.sleep(0.5)
-        # r.error is the real per-run failure signal (the old getattr(r,"error")
-        # always read None because there was no such attribute → every run was
-        # marked "done"). The `error` property now returns the last run's error.
-        return not bool(r.error)
+        from ..controller import dse
+        run_dir = Path(design_dir) / "runs" / tag
+        if sweep_id:
+            dse.stamp_run(run_dir, sweep_id, overrides)
+        # How the point really ended, read from its folder the way Flow reads
+        # it: a container run that exits non-zero leaves r.error unset, so
+        # "launched and the runner went idle" used to count as passed.
+        out = dse.point_outcome(run_dir)
+        if out.get("ok") and r.error:
+            out = {**out, "ok": False, "kind": "error", "reason": str(r.error)}
+        return out
 
     return start_one
 
@@ -3194,7 +3539,15 @@ def h_dse_start(handler: Any) -> None:
     body = getattr(handler, "_body", {})
     design_dir = _get_active_design_dir()
     if not design_dir:
-        _respond(handler, "no active design dir", 400)
+        _respond(handler, "No project is open. Open one on Setup, then start the sweep.", 400)
+        return
+    why = _design_refusal(handler, design_dir)
+    if why:
+        _respond(handler, why, 409)
+        return
+    busy = _other_flow_busy()
+    if busy:
+        _respond(handler, busy, 409)
         return
     ws_err = _whitespace_path_error(design_dir)
     if ws_err:
@@ -3202,7 +3555,8 @@ def h_dse_start(handler: Any) -> None:
         return
     config_file = _config_file_for(design_dir)
     if config_file is None:
-        _respond(handler, "no config file in design dir", 400)
+        _respond(handler, "This project has no config file (config.json or config.yaml). "
+                 "Create one on Setup, then start the sweep.", 400)
         return
     spec = {"axes": body.get("axes") or [], "mode": body.get("mode") or "grid"}
     try:
@@ -3225,29 +3579,40 @@ def h_dse_start(handler: Any) -> None:
     base_tag = body.get("base_tag") or Path(design_dir).name
     # Don't clobber a prior sweep: bump the base until the target run dirs are
     # free (unless the caller explicitly opts into replacing them).
-    if not body.get("replace"):
-        base_tag = dse.unique_base_tag(design_dir, base_tag, len(overrides_list))
-    tags = dse.dse_run_tags(base_tag, len(overrides_list))
-    start_one = _dse_run_one_blocking(design_dir, config_file, flow_name, run_mode, base_overrides, body)
-    result = dse.job.start(start_one=start_one, overrides_list=overrides_list, tags=tags)
-    if not result.get("ok"):
-        _respond(handler, result.get("error") or "could not start DSE", 400)
+    # Each point is named by the values it tries (sweep-util-65), never
+    # overwriting an earlier run of the same name.
+    tags = dse.sweep_run_tags(design_dir, overrides_list)
+    sweep_id = dse.new_sweep_id(design_dir)
+    start_one = _dse_run_one_blocking(design_dir, config_file, flow_name, run_mode, base_overrides, body,
+                                      sweep_id=sweep_id)
+    if dse.job.active:
+        _respond(handler, "a sweep is already running", 400)
         return
-    # Persist a manifest so the sweep is recoverable after a restart and the DSE
-    # tab can list past sweeps without parsing run-tag regexes.
-    sweep_id = dse.new_sweep_id()
+    # Persist a manifest so the sweep is recoverable after a restart and Runs
+    # can group its runs without parsing run-tag regexes. Written BEFORE the
+    # worker starts, so a point that ends at once still finds its sweep.
     dse.record_sweep(design_dir, {
         "id": sweep_id,
         "base": base_tag,
-        "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "created_at": platform_env.local_now().isoformat(timespec="seconds"),
         "axes": spec["axes"],
         "mode": spec["mode"],
         "run_mode": run_mode,
         "flow": flow_name,
         "base_overrides": base_overrides,
         "tags": tags,
+        "points": overrides_list,
         "count": len(tags),
+        "goal": str(body.get("goal") or "")[:40],
+        "stop_when_good": bool(body.get("stop_when_good")),
     })
+    result = dse.job.start(start_one=start_one, overrides_list=overrides_list, tags=tags,
+                           sweep_id=sweep_id, stop_when_good=bool(body.get("stop_when_good")),
+                           on_point=lambda tag, res: dse.record_point(design_dir, sweep_id, tag, res))
+    if not result.get("ok"):
+        dse.forget_sweep(design_dir, sweep_id)
+        _respond(handler, result.get("error") or "could not start the sweep", 400)
+        return
     result = dict(result)
     result["sweep_id"] = sweep_id
     result["base_tag"] = base_tag
@@ -3569,8 +3934,10 @@ def h_waveform(handler: Any) -> None:
         _respond(handler, "not found", 404)
         return
     try:
-        handler._send_bytes(target.read_bytes(), 200, "application/octet-stream")
+        handler._send_file(str(target), "application/octet-stream")
     except Exception as ex:
+        if handler._is_conn_error(ex):
+            raise
         _respond(handler, str(ex), 500)
 
 
@@ -3995,6 +4362,15 @@ def h_design_info(handler: Any) -> None:
     try:
         info = configedit.read_config(d)
         data = info["data"]
+        keys = [k for k in (body.get("keys") or []) if isinstance(k, str) and re.match(r"^[A-Z][A-Z0-9_]*$", k)]
+        if body.get("keys_only"):
+            # Only the config's values for `keys` (Setup's PDK picker at boot):
+            # no source scan, which walks the whole project tree.
+            _respond(handler, {
+                "settings": {k: data.get(k) for k in keys},
+                "config": {k: info[k] for k in ("name", "format", "editable", "reason")},
+            })
+            return
         scan = autoconfig.scan_sources(d, only_files=files or None)
         modules = [m for m in scan.get("modules", []) if m not in set(scan.get("testbench_modules", []))]
         top = body.get("top") or data.get("DESIGN_NAME") or scan.get("top")
@@ -4003,7 +4379,6 @@ def h_design_info(handler: Any) -> None:
         # The Setup page's Settings card asks for a few more keys: their
         # top-level values as the config writes them, and any pdk::/scl::
         # section that sets them too.
-        keys = [k for k in (body.get("keys") or []) if isinstance(k, str) and re.match(r"^[A-Z][A-Z0-9_]*$", k)]
         settings_scoped = {k: configedit.scoped_values(data, k) for k in keys}
         _respond(handler, {
             "settings": {k: data.get(k) for k in keys},
@@ -4076,7 +4451,8 @@ def h_project_new_file(handler: Any) -> None:
     if use and _refuse_while_running(handler):
         return
     res = projectfiles.new_file(d, str(body.get("kind") or ""), str(body.get("name") or ""),
-                                top=body.get("top") or None, clock=body.get("clock") or None, use=use)
+                                top=body.get("top") or None, clock=body.get("clock") or None, use=use,
+                                folder=(str(body["folder"]) if body.get("folder") is not None else None))
     if not res.get("ok"):
         _respond(handler, res.get("error") or "could not create the file", 400)
         return
@@ -4108,6 +4484,9 @@ def _fix_plan(body: Dict[str, Any]) -> Tuple[Any, int]:
     design_dir = _get_active_design_dir()
     if not design_dir:
         return "no active design dir", 400
+    gone = _missing_design_error(design_dir)
+    if gone:
+        return gone, 409
     sets = body.get("sets") or {}
     if not isinstance(sets, dict):
         return "sets must be an object", 400
@@ -4151,6 +4530,10 @@ def h_fix_apply(handler: Any) -> None:
     """Apply a fix: save it (config file or this run only), then start a run
     resumed from the old one at the first step that reads it (or the whole
     flow). Returns the new run's tag and the Undo token of a config change."""
+    why = _design_refusal(handler, _get_active_design_dir())
+    if why:
+        _respond(handler, why, 409)
+        return
     _apply_fix(handler, getattr(handler, "_body", {}) or {})
 
 
@@ -4343,6 +4726,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/watch", h_watch),
     ("/api/run-pin", h_run_pin),
     ("/api/run-gui-meta", h_run_gui_meta),
+    ("/api/run-reproduce", h_run_reproduce),
     ("/api/run-import-dir", h_run_import_dir),
     ("/api/run-import-bundle", h_run_import_bundle),
     ("/api/run-bundle", h_run_bundle),

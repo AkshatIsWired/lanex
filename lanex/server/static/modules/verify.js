@@ -341,7 +341,7 @@ function renderOverview() {
     _rep.pdk ? esc(_rep.pdk) + (_rep.scl ? " / " + esc(_rep.scl) : "") : "",
     _rep.flow ? esc(_rep.flow) + " flow" : "",
     _rep.librelane_version ? "LibreLane " + esc(_rep.librelane_version) : "",
-    f.steps_total ? esc(f.steps_done + " / " + f.steps_total + " steps") : "",
+    V.stepTotals(f) ? esc(V.stepTotals(f).done + " of " + V.stepTotals(f).total + " steps done") : "",
   ].filter(Boolean).join("<span class='sep'>/</span>");
   let flowNote = "";
   if (f.partial) flowNote = "<p class='vf-note'>Partial run (" + esc((f.frm ? "from " + f.frm : "") + (f.to ? " to " + f.to : "")) + "): only the steps in that range ran.</p>";
@@ -389,7 +389,7 @@ function pillar(p) {
   const cs = p.checks.map((id) => by.get(id)).filter(Boolean);
   const st = V.worstStatus(cs.filter((c) => c.gate !== "info"));
   const d = _rep.details || {};
-  let hero = "", rows = [];
+  let hero = "", rows = [], drcFlag = "";
   if (p.id === "timing") {
     const s = by.get("setup"), h = by.get("hold");
     const corners = (d.timing && d.timing.source === "signoff" && d.timing.corners) || [];
@@ -406,6 +406,11 @@ function pillar(p) {
     const vals = [mg, kl, rt].filter((c) => c && V.isNum(c.value)).map((c) => c.value);
     hero = vals.length ? "<span class='vf-hero-v'>" + esc(n(vals.reduce((a, b) => a + b, 0))) + "</span><span class='an-u'>errors</span>" : "<span class='vf-hero-v'>—</span>";
     rows = [["Magic", mg ? valueText(mg) : "—", mg], ["KLayout", kl ? valueText(kl) : "—", kl], ["Router", rt ? valueText(rt) : "—", rt]];
+    // The metric is what LibreLane judged on; a report that lists markers
+    // anyway is flagged here, not hidden in the DRC section.
+    const dd = V.drcDisagree(_rep.run_verdict);
+    if (dd) rows.push(["Report files", dd.markers + (dd.markers === 1 ? " marker" : " markers") + ": they disagree, check", { status: "warn" }, ""]);
+    if (dd) drcFlag = " · " + dd.short;
   } else if (p.id === "lvs") {
     const lv = by.get("lvs"), x = by.get("xor"), dp = by.get("disc_pin");
     const res = d.lvs && d.lvs.result;
@@ -421,12 +426,15 @@ function pillar(p) {
     const worstIr = ir.filter((r) => V.isNum(r.pct)).reduce((m, r) => (!m || r.pct > m.pct ? r : m), null);
     const pins = an && an.breakdown && an.breakdown[1];
     hero = an && an.value != null ? "<span class='vf-hero-v'>" + esc(n(an.value)) + "</span><span class='an-u'>antenna nets</span>" + provFor(an) : "<span class='vf-hero-v'>—</span>";
-    rows = [["Antenna pins", pins ? n(pins.value) : "—", null, pins ? mprov(pins.metric) : ""],
+    // A run cut off before the antenna check after detailed routing has only
+    // the global-routing estimate: say so rather than show it as the result.
+    const est = an && an.status === "not_run" && an.interim != null;
+    rows = [["Antenna pins", pins ? n(pins.value) + (est ? " (estimate)" : "") : "—", null, pins ? mprov(pins.metric) : ""],
       ["Power-grid issues", pd ? valueText(pd) : "—", pd],
       ["Worst IR drop", worstIr ? worstIr.pct + " % of supply" : "—", null,
         worstIr ? mprov("design_powergrid__drop__worst__net:" + worstIr.net, "Show the worst drop on " + worstIr.net + " in this run's metrics.json") : ""]];
   }
-  const stLabel = { pass: "Clean", partial: "Clean so far", fail: "Failing", warn: "Warnings", not_run: "Not checked", skipped: "Turned off" }[st] || "";
+  const stLabel = ({ pass: "Clean", partial: "Clean so far", fail: "Failing", warn: "Warnings", not_run: "Not checked", skipped: "Turned off" }[st] || "") + drcFlag;
   // A card that jumps to its section; its title is the keyboard target, so
   // the source buttons inside can be real buttons too.
   return "<div class='vf-pillar is-" + esc(st) + "' data-vf-jump='" + p.jump + "'>" +
@@ -451,7 +459,9 @@ function renderChecks() {
   const el = document.getElementById("vf-checks");
   const checks = _rep.checks || [];
   const count = (f) => { const keep = _filter; _filter = f; const k = checks.filter(filterMatch).length; _filter = keep; return k; };
-  const seg = [["all", "All"], ["problems", "Problems"], ["passed", "Passed"], ["unchecked", "Not checked"]]
+  // Each filter names what it counts, so it adds up with the overview tally
+  // ("21 passed, 1 info" is "Passed or info 22").
+  const seg = [["all", "All"], ["problems", "Problems"], ["passed", "Passed or info"], ["unchecked", "Not checked or off"]]
     .map(([f, l]) => "<button class='seg-btn" + (_filter === f ? " is-active" : "") + "' data-vf-filter='" + f + "' aria-pressed='" + (_filter === f) + "'>" +
       esc(l) + " <span class='vf-seg-n'>" + count(f) + "</span></button>").join("");
   const groups = (_rep.groups || []).map((g) => {
@@ -683,6 +693,17 @@ function toolCard(title, c, body, rel, { sub = "" } = {}) {
     "</div>";
 }
 
+// The metric and the report file contradict each other: say so, with both
+// sources, instead of "Passed" above a list of markers.
+function disagreeHtml(d) {
+  const x = d && d.disagree;
+  if (!x) return "";
+  const nm = (k) => k === 1 ? "1 marker" : n(k) + " markers";
+  return "<p class='vf-callout is-warn'><b>The metric and the report disagree.</b> LibreLane's metric <code>" + esc(x.metric_key) + "</code> in " + esc(x.metric_file) +
+    " says " + esc(n(x.metric)) + (x.metric === 1 ? " error" : " errors") + "; the report file " + esc(x.report_file || "") + " lists " + esc(nm(x.report)) +
+    ". The report may have been edited or left over from an earlier run. The verdict uses the metric, as LibreLane did; re-run the check to be sure.</p>";
+}
+
 function renderDrc() {
   const el = document.getElementById("vf-drc");
   const d = _rep.details || {};
@@ -702,8 +723,11 @@ function renderDrc() {
       markers ? btn("Open in KLayout with markers", "data-vf-klayout='1'", { ic: "layers" }) : "") +
     drcDiag() +
     "<div class='an-grid an-grid-3'>" +
-      toolCard("Magic DRC", by.get("magic_drc"), ruleList(mg && mg.categories, { empty: "No rule broken.", rel: mg && mg.report, needle: (c) => c.description || c.name }), mg && mg.report) +
-      toolCard("KLayout DRC", by.get("klayout_drc"), ruleList(kl && kl.categories, { empty: kl && kl.rules ? "All " + kl.rules + " rules in the deck pass." : "No rule broken.", rel: kl && kl.report, needle: (c) => "\"" + c.name + "\"" }), kl && kl.report,
+      toolCard("Magic DRC", by.get("magic_drc"), disagreeHtml(mg) + ruleList(mg && mg.categories, { empty: "No rule broken.", rel: mg && mg.report, needle: (c) => c.description || c.name }), mg && mg.report) +
+      toolCard("KLayout DRC", by.get("klayout_drc"), disagreeHtml(kl) +
+        (kl && kl.disagree && kl.marker_categories && kl.marker_categories.length
+          ? ruleList(kl.marker_categories, { empty: "", rel: kl.markers, needle: (c) => "\"" + c.name + "\"" })
+          : ruleList(kl && kl.categories, { empty: kl && kl.rules ? "All " + kl.rules + " rules in the deck pass." : "No rule broken.", rel: kl && kl.report, needle: (c) => "\"" + c.name + "\"" })), kl && kl.report,
         { sub: kl && kl.rules ? kl.rules + " rules in the deck" : "" }) +
       toolCard("Router DRC", by.get("route_drc"), iterHtml + ruleList(rt && rt.categories, { empty: "Nothing left to fix.", rel: rt && rt.report, needle: (c) => "violation type: " + c.name }), rt && rt.report) +
     "</div>" +

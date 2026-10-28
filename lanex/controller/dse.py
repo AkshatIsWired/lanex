@@ -23,6 +23,7 @@ shared bus. No new dependency; no new run engine.
 from __future__ import annotations
 
 import itertools
+import re
 import json
 import os
 import threading
@@ -47,39 +48,173 @@ def _sweeps_path(design_dir: str | Path) -> Path:
     return Path(design_dir) / _SWEEPS_FILE
 
 
-def load_sweeps(design_dir: str | Path) -> List[Dict[str, Any]]:
-    """All recorded sweep manifests for a design, newest first."""
-    p = _sweeps_path(design_dir)
+def _read_sweeps_file(p: Path) -> Optional[List[Dict[str, Any]]]:
+    """The manifests in *p*: [] when there is no file, None when it is there
+    but unreadable (so a writer can keep it aside instead of overwriting it)."""
     if not p.is_file():
         return []
     try:
         doc = json.loads(p.read_text(encoding="utf-8", errors="replace"))
     except Exception:
-        return []
+        return None
     sweeps = doc.get("sweeps") if isinstance(doc, dict) else doc
     if not isinstance(sweeps, list):
-        return []
-    sweeps.sort(key=lambda s: s.get("created_at", ""), reverse=True)
-    return sweeps
+        return None
+    return [s for s in sweeps if isinstance(s, dict)]
 
 
-def new_sweep_id() -> str:
-    """A sortable, collision-resistant sweep id (``YYYYMMDD-HHMMSS``)."""
-    return time.strftime("%Y%m%d-%H%M%S", time.localtime())
+def _assume_zone(created_at: Any) -> tuple:
+    """``(iso, assumed, epoch)`` for a manifest's ``created_at``.
+
+    Sweeps recorded before 2026-10-28 wrote ``datetime.now().isoformat()``:
+    no offset, in the LanEx machine's own clock (the distro runs on UTC). A
+    browser would read such a string as ITS local time and shift it by the
+    person's offset, so it is read here the way it was written (this
+    machine's zone), given an offset, and flagged as assumed."""
+    from datetime import datetime
+    if not isinstance(created_at, str) or not created_at:
+        return created_at, False, 0.0
+    try:
+        dt = datetime.fromisoformat(created_at)
+    except ValueError:
+        return created_at, False, 0.0
+    assumed = dt.tzinfo is None
+    if assumed:
+        dt = dt.astimezone()          # naive -> this machine's local zone
+    try:
+        ts = dt.timestamp()
+    except (OverflowError, OSError, ValueError):
+        ts = 0.0
+    return dt.isoformat(timespec="seconds"), assumed, ts
+
+
+def load_sweeps(design_dir: str | Path) -> List[Dict[str, Any]]:
+    """All recorded sweep manifests for a design, newest first (by the real
+    instant: old offset-less and new offset-carrying times sort together).
+
+    A ``created_at`` without an offset gets this machine's offset and
+    ``created_at_note`` saying so (see :func:`_assume_zone`)."""
+    sweeps = _read_sweeps_file(_sweeps_path(design_dir)) or []
+    keyed = []
+    for s in sweeps:
+        iso, assumed, ts = _assume_zone(s.get("created_at"))
+        if assumed:
+            from datetime import datetime
+            zone = datetime.now().astimezone().tzname() or "this machine's zone"
+            s["created_at"] = iso
+            s["created_at_note"] = (f"Recorded by an older LanEx without a time zone; read as {zone} "
+                                    "(the LanEx machine's clock) and shown in your time.")
+        keyed.append((ts, str(s.get("id") or ""), s))
+    keyed.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [s for _, _, s in keyed]
+
+
+def new_sweep_id(design_dir: str | Path | None = None) -> str:
+    """A sortable, collision-resistant sweep id (``YYYYMMDD-HHMMSS``), in the
+    person's own time zone (the distro's clock runs on UTC). With
+    ``design_dir``, an id already recorded there gets ``-2``, ``-3``..."""
+    from . import platform_env
+    base = platform_env.local_now().strftime("%Y%m%d-%H%M%S")
+    if design_dir is None:
+        return base
+    taken = {s.get("id") for s in load_sweeps(design_dir)}
+    sid, k = base, 1
+    while sid in taken:
+        k += 1
+        sid = f"{base}-{k}"
+    return sid
+
+
+# Serialises every load-modify-write of a sweeps file: the sweep worker
+# records each point while a request thread may be recording the manifest.
+_sweeps_lock = threading.RLock()
+
+
+def _write_sweeps(p: Path, sweeps: List[Dict[str, Any]]) -> None:
+    # A file that is there but unreadable (hand-edited, a disk hiccup) is
+    # kept aside, never overwritten with only the new sweep: its history may
+    # still be recoverable by hand.
+    if _read_sweeps_file(p) is None:
+        try:
+            p.replace(p.with_name(f"{p.name}.unreadable-{int(time.time())}"))
+        except OSError:
+            pass
+    # A unique temp name per write, so two writers never share one file.
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps({"sweeps": sweeps}, indent=2), encoding="utf-8")
+        tmp.replace(p)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def record_sweep(design_dir: str | Path, sweep: Dict[str, Any]) -> None:
-    """Append (or replace by id) a sweep manifest. Best-effort; never raises."""
+    """Append (or replace by id) a sweep manifest. Best-effort; never raises.
+    Point results already recorded under the same id are kept when ``sweep``
+    brings none of its own."""
     try:
-        p = _sweeps_path(design_dir)
-        existing = load_sweeps(design_dir)
-        sid = sweep.get("id")
-        existing = [s for s in existing if s.get("id") != sid]
-        existing.insert(0, sweep)
-        # Keep the file bounded.
-        existing = existing[:200]
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(json.dumps({"sweeps": existing}, indent=2), encoding="utf-8")
+        with _sweeps_lock:
+            p = _sweeps_path(design_dir)
+            existing = load_sweeps(design_dir)
+            sid = sweep.get("id")
+            prior = next((s for s in existing if s.get("id") == sid), None)
+            sweep = dict(sweep)
+            if prior and prior.get("results") and "results" not in sweep:
+                sweep["results"] = prior["results"]
+            existing = [s for s in existing if s.get("id") != sid]
+            existing.insert(0, sweep)
+            # Keep the file bounded.
+            existing = existing[:200]
+            _write_sweeps(p, existing)
+    except Exception:
+        pass
+
+
+def forget_sweep(design_dir: str | Path, sweep_id: str) -> None:
+    """Drop the manifest of a sweep that never started. Best-effort."""
+    try:
+        with _sweeps_lock:
+            existing = load_sweeps(design_dir)
+            kept = [s for s in existing if s.get("id") != sweep_id]
+            if len(kept) != len(existing):
+                _write_sweeps(_sweeps_path(design_dir), kept)
+    except Exception:
+        pass
+
+
+def record_point(design_dir: str | Path, sweep_id: str, tag: str, result: Dict[str, Any]) -> None:
+    """Note how one point of a sweep ended in its manifest (``results``), so
+    the outcome survives a reload and a restart. Best-effort; never raises."""
+    try:
+        with _sweeps_lock:
+            for s in load_sweeps(design_dir):
+                if s.get("id") == sweep_id:
+                    res = dict(s.get("results") or {})
+                    res[tag] = dict(result)
+                    s["results"] = res
+                    record_sweep(design_dir, s)
+                    return
+    except Exception:
+        pass
+
+
+def stamp_run(run_dir: str | Path, sweep_id: str, values: Dict[str, Any]) -> None:
+    """Mark a run folder as a sweep point (``gui-run.json`` ``sweep``), so the
+    Runs table can group it and name its origin. Best-effort."""
+    try:
+        p = Path(run_dir) / "gui-run.json"
+        if not p.parent.is_dir():
+            return
+        doc = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+        if not isinstance(doc, dict):
+            doc = {}
+        doc["sweep"] = {"id": sweep_id, "values": dict(values)}
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
         tmp.replace(p)
     except Exception:
         pass
@@ -162,6 +297,9 @@ def _known_var_names() -> frozenset:
     return frozenset(v["name"] for v in introspect.list_variables())
 
 
+_VAR_RX = re.compile(r"[A-Z][A-Z0-9_]{0,79}")
+
+
 def _format_value(v: Any) -> str:
     """Format a sweep value as a LibreLane override string (permissive)."""
     if isinstance(v, bool):
@@ -181,27 +319,50 @@ def expand_sweep(spec: Dict[str, Any]) -> List[Dict[str, str]]:
     axes = spec.get("axes") or []
     mode = spec.get("mode") or "grid"
     if not axes:
-        raise ValueError("sweep has no axes")
+        raise ValueError("The sweep has no settings to vary. Add one, then start it.")
+    if not isinstance(axes, list) or not all(isinstance(ax, dict) for ax in axes):
+        raise ValueError("The sweep's settings are not in the expected form (a list of {var, values}).")
     names = _known_var_names()
+    seen = set()
     for ax in axes:
         var = ax.get("var")
-        if not var:
-            raise ValueError("an axis is missing 'var'")
+        if not var or not isinstance(var, str):
+            raise ValueError("A swept setting has no name. Pick one from the list.")
+        # Every value becomes ``-c VAR=value`` on LibreLane's command line:
+        # only a real variable name, never text that could read as more.
+        if not _VAR_RX.fullmatch(var):
+            raise ValueError(f"'{var[:40]}' is not a LibreLane setting name (capitals, digits and _).")
         if names and var not in names:
             raise ValueError(f"unknown config variable '{var}'")
-        if not ax.get("values"):
+        if var in seen:
+            raise ValueError(f"{var} is swept twice. Keep one row for it.")
+        seen.add(var)
+        vals = ax.get("values")
+        if not vals or not isinstance(vals, list):
             raise ValueError(f"axis '{var}' has no values")
+        for v in vals:
+            if isinstance(v, (dict, list)) or v is None:
+                raise ValueError(f"{var}: each value must be a number or a word.")
+            if any(ch in str(v) for ch in "\r\n\0") or len(str(v)) > 200:
+                raise ValueError(f"{var}: a value has a line break or is too long.")
 
     if mode == "list":
         n = len(axes[0]["values"])
         if any(len(ax["values"]) != n for ax in axes):
             raise ValueError("list mode requires every axis to have the same number of values")
-        combos = [[ax["values"][i] for ax in axes] for i in range(n)]
+        count = n
+    else:
+        count = 1
+        for ax in axes:
+            count *= len(ax["values"])
+    # Counted before anything is built: a product of long value lists would
+    # otherwise be materialised (and hang the server) before being refused.
+    if count > MAX_COMBOS:
+        raise ValueError(f"sweep expands to {count} runs (max {MAX_COMBOS}); narrow it down")
+    if mode == "list":
+        combos = [[ax["values"][i] for ax in axes] for i in range(count)]
     else:
         combos = list(itertools.product(*[ax["values"] for ax in axes]))
-
-    if len(combos) > MAX_COMBOS:
-        raise ValueError(f"sweep expands to {len(combos)} runs (max {MAX_COMBOS}); narrow it down")
 
     out: List[Dict[str, str]] = []
     for combo in combos:
@@ -213,6 +374,86 @@ def dse_run_tags(base_tag: str, n: int) -> List[str]:
     """Deterministic, unique per-config run tags: ``dse-<base>-<NN>``."""
     base = base_tag or "sweep"
     return [f"dse-{base}-{i:02d}" for i in range(n)]
+
+
+# Short names for the variables people sweep most, so a point's run is named by
+# what it tried: sweep-util-65, sweep-clk-12.5, sweep-synth-AREA_0.
+_SHORT = {
+    "FP_CORE_UTIL": "util",
+    "CLOCK_PERIOD": "clk",
+    "PL_TARGET_DENSITY_PCT": "density",
+    "SYNTH_STRATEGY": "synth",
+    "FP_ASPECT_RATIO": "aspect",
+    "GRT_ADJUSTMENT": "grtadj",
+}
+
+
+def _slug(v: Any) -> str:
+    out = "".join(c if (c.isalnum() or c in ".-") else "_" for c in str(v).strip())
+    return out.strip("_") or "x"
+
+
+def sweep_run_tags(design_dir: str | Path, overrides_list: Sequence[Dict[str, Any]]) -> List[str]:
+    """One run name per sweep point, named by the values it tries
+    (``sweep-util-65``; two variables: ``sweep-util-50-clk-10``). A name that
+    already has a run folder, or repeats within the sweep, gets ``-2``, ``-3``…
+    so an earlier sweep's runs are never overwritten."""
+    runs_root = Path(design_dir) / "runs"
+    used: set = set()
+    tags: List[str] = []
+    for ov in overrides_list:
+        parts = []
+        for var, val in ov.items():
+            parts.append(_SHORT.get(var) or _slug(str(var).lower()))
+            parts.append(_slug(val))
+        base = ("sweep-" + "-".join(parts))[:80]
+        tag, k = base, 1
+        while tag in used or (runs_root / tag).exists():
+            k += 1
+            tag = f"{base}-{k}"
+        used.add(tag)
+        tags.append(tag)
+    return tags
+
+
+def point_outcome(run_dir: str | Path) -> Dict[str, Any]:
+    """How one sweep point really ended, from the run folder (the same reading
+    the Flow page uses, runexplain): ``{ok, kind, stage, step, reason}``.
+    ``ok`` only for a run that reached the end with nothing raised; a run that
+    merely launched is not a pass."""
+    try:
+        from . import runexplain
+        rx = runexplain.explain_run(run_dir)
+    except Exception as ex:  # pragma: no cover - unreadable folder
+        return {"ok": False, "kind": "unknown", "stage": None, "step": None,
+                "reason": f"could not read the run: {ex}"}
+    kind = rx.get("kind")
+    card = rx.get("card") or {}
+    step = rx.get("step") or {}
+    reason = None
+    if kind == "halted":
+        reason = card.get("title") or ((rx.get("errors") or [None])[0])
+    elif kind == "checks-failed":
+        rc = rx.get("raised_checkers") or []
+        names = [str((r.get("id") if isinstance(r, dict) else r) or "").replace("Checker.", "") for r in rc[:3]]
+        reason = "sign-off checks failed" + (": " + ", ".join(n for n in names if n) if names else "")
+    elif kind == "stopped":
+        reason = "stopped"
+    elif kind == "incomplete":
+        reason = "ended before the last step"
+    # "Good enough to stop the sweep" is Verify's passed verdict: a run that
+    # finished with timing missed in a corner LibreLane only warns about is
+    # "clean" to runexplain but not timing met.
+    verdict = None
+    if kind == "clean":
+        try:
+            from . import verify
+            verdict = (verify.run_verdict(run_dir) or {}).get("state")
+        except Exception:  # pragma: no cover - unreadable folder
+            verdict = None
+    return {"ok": kind == "clean", "kind": kind, "stage": rx.get("stage"),
+            "step": step.get("id") or step.get("dir"), "reason": reason,
+            "verdict": verdict, "good": kind == "clean" and verdict == "passed"}
 
 
 class DseJob:
@@ -233,6 +474,14 @@ class DseJob:
         self.running_tag: Optional[str] = None
         self.done: List[str] = []
         self.failed: List[str] = []
+        # tag -> {ok, kind, stage, step, reason, values}: how each point ended.
+        self.results: Dict[str, Dict[str, Any]] = {}
+        self.sweep_id: Optional[str] = None
+        self.total = 0
+        self.started_at: Optional[float] = None
+        self._on_point = None
+        self.stop_when_good = False
+        self.stopped_early = False
 
     @property
     def active(self) -> bool:
@@ -246,21 +495,36 @@ class DseJob:
                 "running": self.running_tag,
                 "done": list(self.done),
                 "failed": list(self.failed),
+                "results": {k: dict(v) for k, v in self.results.items()},
+                "sweep_id": self.sweep_id,
+                "total": self.total,
+                "started_at": self.started_at,
+                "stopped_early": self.stopped_early,
             }
 
     def start(self, *, start_one, overrides_list: Sequence[Dict[str, str]],
-              tags: Sequence[str]) -> Dict[str, Any]:
-        """Begin the queue. ``start_one(tag, overrides) -> bool`` starts a single
-        run through the runner (returns whether it started). ``wait_idle`` is
-        polled by the worker via ``start_one`` semantics (the caller wires the
-        runner). Returns ``{ok, count, run_tags}``."""
+              tags: Sequence[str], sweep_id: Optional[str] = None,
+              on_point=None, stop_when_good: bool = False) -> Dict[str, Any]:
+        """Begin the queue. ``start_one(tag, overrides)`` runs one point through
+        the runner and blocks until it ends; it returns the point's outcome
+        (``{ok, kind, stage, step, reason}``, see :func:`point_outcome`) or a
+        bare bool. ``on_point(tag, result)`` is called after each point (the
+        route persists results into the sweep manifest with it). Returns
+        ``{ok, count, run_tags}``."""
         with self._lock:
             if self.active:
-                return {"ok": False, "error": "a DSE job is already running"}
+                return {"ok": False, "error": "a sweep is already running"}
             self._cancel.clear()
             self.queued = list(tags)
             self.done = []
             self.failed = []
+            self.results = {}
+            self.sweep_id = sweep_id
+            self.total = len(tags)
+            self.started_at = time.time()
+            self._on_point = on_point
+            self.stop_when_good = bool(stop_when_good)
+            self.stopped_early = False
             self.running_tag = None
             self._thread = threading.Thread(
                 target=self._run, args=(start_one, list(overrides_list), list(tags)),
@@ -272,6 +536,11 @@ class DseJob:
     def cancel(self) -> None:
         self._cancel.set()
 
+    @property
+    def cancelled(self) -> bool:
+        """Stop was asked for the current queue."""
+        return self._cancel.is_set()
+
     def _run(self, start_one, overrides_list, tags) -> None:
         for i, tag in enumerate(tags):
             if self._cancel.is_set():
@@ -282,20 +551,49 @@ class DseJob:
                     self.queued.remove(tag)
             events.publish("dse_config_started", {"tag": tag, "index": i, "total": len(tags),
                                                   "overrides": overrides_list[i]})
-            ok = False
+            res: Dict[str, Any]
             try:
-                ok = bool(start_one(tag, overrides_list[i]))
+                out = start_one(tag, overrides_list[i])
+                # A launched run is not a passed run: the closure reports how
+                # the point really ended. A bare bool is accepted for callers
+                # that only know whether it ran.
+                res = dict(out) if isinstance(out, dict) else {"ok": bool(out), "kind": None,
+                                                               "reason": None if out else "did not start"}
             except Exception as ex:  # pragma: no cover - depends on live runner
-                events.publish("log", {"message": f"DSE: failed to start {tag}: {ex}"})
-                ok = False
+                events.publish("log", {"message": f"Sweep: could not run {tag}: {ex}"})
+                res = {"ok": False, "kind": "error", "reason": f"could not start: {ex}"}
+            if self._cancel.is_set() and not res.get("ok"):
+                res.setdefault("kind", "stopped")
+                res["reason"] = res.get("reason") or "stopped"
+            res["values"] = dict(overrides_list[i])
+            ok = bool(res.get("ok"))
             with self._lock:
                 (self.done if ok else self.failed).append(tag)
+                self.results[tag] = res
                 self.running_tag = None
-            events.publish("dse_config_done", {"tag": tag, "ok": ok, "index": i, "total": len(tags)})
+            if self._on_point:
+                try:
+                    self._on_point(tag, res)
+                except Exception:  # pragma: no cover - persistence is best effort
+                    pass
+            events.publish("dse_config_done", {"tag": tag, "ok": ok, "index": i, "total": len(tags),
+                                               "kind": res.get("kind"), "stage": res.get("stage"),
+                                               "reason": res.get("reason")})
+            good = bool(res.get("good", ok))
+            if good and self.stop_when_good and i + 1 < len(tags):
+                # "Stop when one is good enough": timing met in every corner
+                # and every check clean (Verify's passed verdict, not only a
+                # flow that finished); the rest are dropped, not run.
+                with self._lock:
+                    self.stopped_early = True
+                    self.queued = []
+                break
         events.publish("dse_done", {"done": list(self.done), "failed": list(self.failed),
-                                    "cancelled": self._cancel.is_set()})
+                                    "cancelled": self._cancel.is_set(), "sweep_id": self.sweep_id,
+                                    "stopped_early": self.stopped_early})
         with self._lock:
             self.running_tag = None
+            self.queued = []
 
 
 # Process-wide singleton (one engine -> one queue at a time).

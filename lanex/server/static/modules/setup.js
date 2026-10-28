@@ -6,7 +6,9 @@ import { fmt } from "./api.js";
 import { renderConfig } from "./config.js";
 import { setupFolderBrowser, loadFilesFor } from "./fs.js";
 import { toast } from "./toast.js";
-import { renderPreflight } from "./preflight.js";
+import { renderPreflight, freshPreflight, preflightNow, runBlocker } from "./preflight.js";
+import { go } from "./nav.js";
+import { currentTab } from "./tabs.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 import { pdkFacts, stackHtml } from "./pdkinfo.js";
@@ -151,6 +153,28 @@ export function setupSetup() {
   wireSetupActions();
   import("./projectcard.js").then((m) => m.wireDesignRow()).catch(() => {});
   import("./mostused.js").then((m) => m.wireSettings()).catch(() => {});
+  // A change made elsewhere (the fix sheet's Apply or Undo, Cells) must show
+  // here at once: the Design row and the Settings card read the config again.
+  // (The Design row's own edits announce themselves without keys: it is
+  // already showing them.)
+  document.addEventListener("g:config_changed", (e) => {
+    const d = (e && e.detail) || {};
+    if (!d.keys && !d.from) return;
+    if (!state.designDir) return;
+    import("./projectcard.js").then((m) => m.paintDesignRow()).catch(() => {});
+    import("./mostused.js").then((m) => m.paintSettings()).catch(() => {});
+  });
+  // The project card's "Last run" line follows a run that just ended.
+  const lastRun = () => {
+    if (!state.designDir) return;
+    summariseFacts(state.designDir);
+  };
+  document.addEventListener("g:flow_done", () => setTimeout(lastRun, 1500));
+  document.addEventListener("g:runs_state", lastRun);
+  // The server refused a run, resume or sweep: the folder is gone (api.js).
+  document.addEventListener("g:design_missing", () => {
+    if (state.designDir && state.designMissing !== state.designDir) showMissingProject(state.designDir);
+  });
   document.getElementById("btn-set-design")?.addEventListener("click", onLoadDesign);
   document.getElementById("design-dir-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") onLoadDesign();
@@ -165,6 +189,7 @@ export function setupSetup() {
   // Global topbar Run/Stop: start the flow, or stop a running one, from any tab —
   // no need to navigate back to Setup. Reuses the same start/cancel paths.
   document.getElementById("btn-run-global")?.addEventListener("click", () => {
+    if (cancelStart()) return;   // a run is starting: stop it as soon as it has
     if (state.status && state.status.running) { api.cancelRun().catch(() => {}); }
     else { onRunClick({ show: false }); }
   });
@@ -204,9 +229,29 @@ async function onLoadDesign() {
 // `opts.explicit` (default true) records that the person chose this project,
 // as opposed to boot re-opening the last one ({explicit:false}).
 export async function adoptDesignDir(designDir, opts = {}) {
+  if (!(await openDesignQuick(designDir, opts))) return;
+  await finishAdopt(designDir, opts);
+}
+
+let _adopting = null;   // the project whose folder is being read (adoptDesignDir)
+
+// The part of opening a project every page needs before it can draw: the
+// server's active project, the project card, and the config's PDK and
+// library (a cheap read). False when the folder is gone.
+export async function openDesignQuick(designDir, opts = {}) {
   const explicit = opts.explicit !== false;
+  // Another project: the last one's runs are not this one's (Setup's strip
+  // ticked "Run the flow" on a new project that had never run).
+  if (state.designDir !== designDir) {
+    state.runs = [];
+    // Nor is the last run's result in the status bar and window title.
+    if (state.designDir) import("./runend.js").then((m) => m.clearRunResult()).catch(() => {});
+  }
   state.designDir = designDir;
   state.designExplicit = explicit;
+  // Until its files are in (finishAdopt), a PDK pick doesn't repaint the
+  // Design row: the file list does, once.
+  _adopting = designDir;
   rememberDesign(designDir);
   paintOnboardChecklist();  // step 1 (project open) is now satisfied
   paintProjectBlock();
@@ -216,22 +261,49 @@ export async function adoptDesignDir(designDir, opts = {}) {
   // state.designDir, the per-tab run dropdowns come back empty until the user
   // opens a run from the Runs window (which re-syncs it). Syncing here makes
   // every tab show the runs immediately, no manual Open needed.
-  try { await api.setDesignDir(designDir); } catch (_e) { /* best-effort */ }
-  // The PDK the project's config names is the one LibreLane builds for: the
-  // picker shows it, rather than whatever was used last.
-  await syncPdkFromConfig();
+  try {
+    await api.setDesignDir(designDir);
+    state.designMissing = null;
+  } catch (ex) {
+    // A folder that was moved or deleted: say so plainly instead of loading
+    // a blank project, and keep Run off.
+    if (/not found/i.test((ex && ex.message) || "")) { _adopting = null; showMissingProject(designDir); return false; }
+  }
+  paintMissing();
   paintDesignPill("loading…");
-  const summaryEl = document.getElementById("design-summary");
-  if (summaryEl) summaryEl.innerHTML = await summariseDir(designDir);
-  paintDesignPill(fmt.shortPath(designDir));
-  await loadFilesFor(designDir);
-  const { renderRuns } = await import("./runs.js");
-  try { state.runs = await api.runs(designDir); } catch (_e) { state.runs = []; }
   // The results pages show what this project showed last time, else its
   // newest run (context.js).
   (await import("./context.js")).openProject(designDir);
+  await readConfigPdk();
+  return true;
+}
+
+// The rest of opening a project: the folder's summary, its files and runs
+// (read side by side), the PDK picker following the config, the checklist.
+export async function finishAdopt(designDir, opts = {}) {
+  const explicit = opts.explicit !== false;
+  const stale = () => state.designDir !== designDir;
+  const summaryEl = document.getElementById("design-summary");
+  const summaryP = summariseDir(designDir).then((html) => {
+    if (stale()) return;
+    if (summaryEl) summaryEl.innerHTML = html;
+    paintDesignPill(fmt.shortPath(designDir));
+  });
+  const runsP = api.runs(designDir).catch(() => []);
+  // The PDK the project's config names is the one LibreLane builds for: the
+  // picker shows it, rather than whatever was used last. (Then the files: the
+  // Design row they paint reads the picked PDK's sections.)
+  _adopting = designDir;
+  try { await syncPdkFromConfig({ reread: false }); } finally { if (_adopting === designDir) _adopting = null; }
+  await loadFilesFor(designDir);   // paints the Design row
+  const runs = await runsP;
+  await summaryP;
+  if (stale()) return;
+  state.runs = runs;
+  paintOnboardChecklist();
   if (!state.selectedRunTag && state.runs && state.runs.length) state.selectedRunTag = state.runs[0].tag;
-  renderRuns();
+  // The Runs page lists them when it shows (it renders on every visit).
+  if (currentTab() === "runs") import("./runs.js").then((m) => m.renderRuns()).catch(() => {});
   paintRunButton();
   renderPreflight();
   // Offer to auto-generate a config when the folder has sources but no config.
@@ -239,6 +311,68 @@ export async function adoptDesignDir(designDir, opts = {}) {
     const { maybeOfferAutoConfig } = await import("./autoconfig.js");
     maybeOfferAutoConfig(designDir);
   } catch (_e) { /* non-fatal */ }
+  // The person opened a project (not boot re-opening the last one). After the
+  // caller's own page change (the wizard goes to Setup when this returns).
+  if (explicit) setTimeout(() => document.dispatchEvent(new CustomEvent("g:project_opened", { detail: { dir: designDir } })), 0);
+}
+
+// A project whose folder is gone (moved, renamed or deleted): its card says
+// so, with the two ways out, and Run stays off until it is found or removed.
+export function showMissingProject(dir) {
+  state.designDir = dir;
+  state.designMissing = dir;
+  paintProjectBlock();
+  paintMissing();
+  paintRunButton();
+  paintOnboardChecklist();
+  paintDesignPill(fmt.shortPath(dir));
+}
+
+function paintMissing() {
+  const card = document.getElementById("project-open");
+  if (!card) return;
+  const dir = state.designMissing;
+  card.classList.toggle("is-missing", !!dir);
+  let box = document.getElementById("proj-missing");
+  if (!dir) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "proj-missing";
+    box.className = "proj-missing";
+    box.setAttribute("role", "alert");
+    card.querySelector(".proj-path")?.after(box);
+    box.addEventListener("click", async (e) => {
+      const b = e.target.closest("[data-miss]");
+      if (!b) return;
+      const gone = state.designMissing;
+      if (b.dataset.miss === "locate") {
+        (await import("./shell.js")).openFolder();
+        return;
+      }
+      try { await api.projectForget(gone); } catch (_e) { /* the local list still drops it */ }
+      try {
+        const list = JSON.parse(localStorage.getItem("ll.recentDesigns") || "[]").filter((d) => d !== gone);
+        localStorage.setItem("ll.recentDesigns", JSON.stringify(list));
+      } catch (_e) { /* storage may be off */ }
+      state.designMissing = null;
+      state.designDir = null;
+      state.runs = [];
+      paintProjectBlock();
+      paintMissing();
+      paintRunButton();
+      paintDesignPill("");
+      toast.show("Removed it from the list. Nothing on disk was touched.", "success");
+    });
+  }
+  box.innerHTML = "<p class='proj-missing-h'>" + icon("alert", { size: 15 }) + "<b>Project folder not found</b></p>" +
+    "<p class='proj-missing-p'><code class='proj-missing-path'>" + fmt.escape(dir) + "</code></p>" +
+    "<p class='muted proj-missing-p'>It may have been moved, renamed or deleted. Point LanEx at its new place, or take it off the list.</p>" +
+    "<div class='picker-actions'><button class='btn btn-primary' data-miss='locate'>Locate…</button>" +
+    "<button class='btn btn-ghost' data-miss='forget'>Remove from list</button></div>";
+  // The path as the person's OS shows it (the card's own path line does the same).
+  import("./shell.js").then((m) => { const c = box.querySelector(".proj-missing-path"); if (c) { c.textContent = m.displayPath(dir); c.title = dir; } }).catch(() => {});
+  const sum = document.getElementById("design-summary");
+  if (sum) sum.innerHTML = "";
 }
 
 // The Project block: an empty state with the two ways in, or the open
@@ -280,9 +414,24 @@ function paintLastRun(facts) {
   if (!el) return;
   const last = facts && facts.last_run;
   if (!facts || !facts.runs || !last) { el.innerHTML = "No runs yet."; return; }
-  el.innerHTML = "Last run " + (last.finished ? "finished" : "didn't finish") + " " + fmt.escape(ago(last.at)) +
+  // The newest folder of a run still going has no final/ yet: that is not
+  // "didn't finish".
+  const going = state.status && state.status.running;
+  el.innerHTML = (going ? "A run is going now" : "Last run " + (last.finished ? "finished" : "didn't finish") + " " + fmt.escape(ago(last.at))) +
     " · <button type='button' class='linklike' data-open='runs'>" +
     (facts.runs === 1 ? "View it" : "View all " + facts.runs + " runs") + "</button>";
+}
+
+// Only the "Last run" line, read again (after a run ends).
+let _factsTok = 0;
+async function summariseFacts(path) {
+  const tok = ++_factsTok;
+  try {
+    const r = await fetch("/api/design-summary?path=" + encodeURIComponent(path), { headers: { "X-Requested-With": "XMLHttpRequest" } });
+    const body = await r.json();
+    if (tok !== _factsTok || path !== state.designDir || !r.ok || body.ok === false) return;
+    paintLastRun((body.data || {}).facts || null);
+  } catch (_e) { /* keep what it says */ }
 }
 
 async function summariseDir(path) {
@@ -337,6 +486,25 @@ export function paintOnboardChecklist() {
   const first = list.querySelector('[data-step-act="project"]');
   if (first) first.textContent = state.designDir ? "View project" : "New project";
   first?.classList.toggle("btn-ghost", !!state.designDir);
+  // Live progress for the open project: a tick on what's done, the next step
+  // marked (the same progress the first-chip guide follows). The simulation
+  // tick is set by guide.js when a simulation of this project runs to the end.
+  // A project whose folder is gone has nothing done yet (its card says so).
+  const dd = state.designMissing ? null : state.designDir;
+  const done = {
+    design: !!dd,
+    rtl: !!dd && safeStorage.get("ll.simok." + dd, "") === "1",
+    pdk: !!dd && !!document.getElementById("pdk-readiness")?.classList.contains("pill-pass"),
+    run: !!dd && (state.runs || []).length > 0,
+  };
+  let next = null;
+  list.querySelectorAll("li[data-ck]").forEach((li) => {
+    const ok = !!done[li.dataset.ck];
+    li.classList.toggle("is-done", ok);
+    li.classList.remove("is-next");
+    if (!ok && !next) next = li;
+  });
+  next?.classList.add("is-next");
 }
 
 // ---------- the project's PDK ---------------------------------------------------
@@ -365,7 +533,8 @@ async function readConfigPdk() {
   _cfgPdk = null;
   if (!state.designDir) { paintPdkSrc(); return null; }
   try {
-    const info = await api.designInfo({ keys: ["PDK", "STD_CELL_LIBRARY"] });
+    // keys_only: the config's two values, without the source scan (cheap).
+    const info = await api.designInfo({ keys: ["PDK", "STD_CELL_LIBRARY"], keys_only: true });
     const s = (info && info.settings) || {};
     const str = (v) => (typeof v === "string" ? v.trim() : "");
     _cfgPdk = {
@@ -386,16 +555,31 @@ function paintPdkSrc() {
 
 const cfgFor = () => (_cfgPdk && _cfgPdk.dir === state.designDir ? _cfgPdk : null);
 
+// LibreLane's CLI default for -p/--pdk (librelane/flows/cli.py).
+const LIBRELANE_DEFAULT_PDK = "sky130A";
+
 // Point the picker at the PDK the open project's config names. A PDK that
 // isn't installed is still shown (and said), so the picker never pretends.
-export async function syncPdkFromConfig() {
-  const c = await readConfigPdk();
+// `reread: false` uses the config read a moment ago (openDesignQuick).
+export async function syncPdkFromConfig({ reread = true } = {}) {
+  const c = reread || !cfgFor() ? await readConfigPdk() : cfgFor();
   const sel = document.getElementById("pdk-select");
+  if (c && !c.pdk && sel && hasOpt(sel, LIBRELANE_DEFAULT_PDK)) {
+    // A config that names no PDK builds for LibreLane's default (sky130A, the
+    // -p default), as a terminal run of the folder would. Keeping the picker
+    // from the project opened before built spm on sky130B after a sky130B
+    // project: a project's target must not depend on what was open before.
+    if (sel.value !== LIBRELANE_DEFAULT_PDK) { sel.value = LIBRELANE_DEFAULT_PDK; await onPdkSelected(); }
+    return;
+  }
   if (!c || !c.pdk || !sel) return;
   const installed = (state.pdks || []).some((p) => p.name === c.pdk);
   if (!hasOpt(sel, c.pdk)) addOpt(sel, c.pdk, c.pdk + " (not installed)");
+  // The picker already shows what the config names (boot fills it after
+  // reading the config): nothing to redo.
+  const already = sel.value === c.pdk && state.selectedPdk === c.pdk && (!c.scl || state.selectedScl === c.scl);
   sel.value = c.pdk;
-  await onPdkSelected();
+  if (!already) await onPdkSelected();
   if (!installed) {
     toast.show("This project is set up for " + c.pdk + ", which isn't installed. Install it in Tools, or pick an installed PDK here " +
       "and LanEx saves it to " + c.name + ".", "warn", 10000, { label: "Open Tools", run: () => import("./nav.js").then((m) => m.go("tools")) });
@@ -507,7 +691,10 @@ async function onPdkSelected(e) {
     state.selectedScl = sclSel.value || "";
     paintPdkAbout(sel.value);
     if (user) await saveTargetToConfig();
-    import("./projectcard.js").then((m) => m.paintDesignRow()).catch(() => {});
+    if (user) document.dispatchEvent(new CustomEvent("g:pdk_confirmed", { detail: { pdk: sel.value } }));
+    // While a project opens, its file list paints the Design row once the
+    // files are in (fs.js loadFilesFor): no second read here.
+    if (_adopting !== state.designDir) import("./projectcard.js").then((m) => m.paintDesignRow()).catch(() => {});
     refreshPdkReadiness();
   } catch (ex) {
     paintPdkPill("error", "pill-fail");
@@ -550,9 +737,10 @@ async function refreshPdkReadiness() {
   renderPreflight();
 }
 
-export async function populatePdkPicker() {
+// `list`: the PDK list boot already fetched (else it is fetched here).
+export async function populatePdkPicker(list) {
   try {
-    const pdks = await api.pdks();
+    const pdks = Array.isArray(list) ? list : await api.pdks();
     const sel = document.getElementById("pdk-select");
     sel.innerHTML = "";
     if (!pdks.length) {
@@ -595,35 +783,176 @@ export function paintRunButton() {
   const g = document.getElementById("btn-run-global");
   // Don't fight paintRunning while a run is live (the global button is "Stop").
   const running = state.status && state.status.running;
-  if (g && !running) g.disabled = !state.designDir;
+  const off = !state.designDir || !!state.designMissing;
+  if (g && !running) g.disabled = off;
   if (!b) return;
-  b.disabled = !state.designDir;
+  b.disabled = off;
+}
+
+// Errors the RTL IDE's last syntax check found in a project's design files (ide/main.js
+// recordRtlStatus keeps it per project), or 0 when it wasn't checked.
+export function lastLintErrors(designDir, store = safeStorage) {
+  if (!designDir) return 0;
+  let st = null;
+  try { st = JSON.parse(store.get("ll.rtl:" + designDir, "") || "null"); } catch (_e) { st = null; }
+  // Design files only: the flow never lints testbenches.
+  const n = st && st.lint && Number(st.lint.design_errors);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+// ---------- Run ----------------------------------------------------------------
+//
+// A Run click answers at once: the button turns into Stop, Flow opens in a
+// "Starting the run…" state (unless the Run menu says to stay), and the start
+// request goes out in the same moment. The checks stay: the server refuses a
+// run whose folder is gone, whose path has spaces, whose PDK picker and config
+// disagree, or while another flow runs, and Flow says why with the way back.
+// Setup's "Ready to run?" check is used when it is fresh for these picks (a
+// blocker it found asks first); otherwise it runs beside the start and speaks
+// up only if it finds something.
+
+// The run being started: { from, show, cancel, error } while the start
+// request is out (state.runStart is what Flow paints from).
+let _start = null;
+
+function beginStart(from, show) {
+  _start = { at: Date.now(), from, show, cancel: false, error: null, tag: null };
+  state.runStart = _start;
+  paintStarting();
+  document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "starting" } }));
+}
+
+// The top-bar button as Stop the moment Run is pressed.
+function paintStarting() {
+  const g = document.getElementById("btn-run-global");
+  if (!g) return;
+  g.disabled = false;
+  g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>";
+  g.classList.add("is-stop");
+  g.dataset.tip = "Stop the run that is starting";
+  const b = document.getElementById("btn-run");
+  if (b) b.disabled = true;
+}
+
+// Stop pressed while the start request is still out: the run is stopped the
+// moment the server says it started.
+export function cancelStart() {
+  if (!_start) return false;
+  _start.cancel = true;
+  const g = document.getElementById("btn-run-global");
+  if (g) { g.disabled = true; const s = g.querySelector("span"); if (s) s.textContent = "Stopping…"; }
+  document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "stopping" } }));
+  return true;
+}
+
+// Plain words for the server's terse refusals.
+export function refusalText(msg) {
+  const m = String(msg || "").trim();
+  if (/^already running$/i.test(m)) return "A run is already going. Stop it, or watch it here, before starting another.";
+  if (!m || /^HTTP \d+$/.test(m)) return "LanEx didn't answer the start request (" + (m || "no reply") + "). Try again in a moment.";
+  return m;
+}
+
+function startRefused(reason, extra = {}) {
+  const s = _start;
+  _start = null;
+  paintRunning(false);
+  if (!s) return;
+  s.error = { reason: refusalText(reason), ...extra };
+  state.runStart = s;
+  document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "refused" } }));
+  // Flow says it when it shows the run; elsewhere a toast does.
+  const onFlow = document.getElementById("sec-pipeline")?.classList.contains("section-active");
+  if (!onFlow && !extra.mismatch) toast.show("Run refused: " + s.error.reason, "error");
+}
+
+// The server started it: the page shows the new run as live straight away
+// (the run's first events follow a moment later).
+function startAccepted(tag) {
+  const s = _start;
+  _start = null;
+  state.runStart = null;
+  // The run's own first events can arrive before this reply (app.js then
+  // already holds its step graph): only a run not heard from yet is reset.
+  const heard = !!tag && state.liveTag === tag && state.status.running;
+  if (!heard) {
+    state.pipeline = [];
+    state.stepStatuses = {};
+    state.stepTiming = {};
+    state.prepPhase = null;
+    state.prepStart = null;
+    state.lastFlow = null;
+    state.paused = false;
+    state.status.running = true;
+    if (tag) state.liveTag = tag;
+    // Flow's elapsed clock starts now (app.js keeps it when this run's first event comes).
+    state.runStartedAt = Date.now();
+    state.runStartedFor = tag || "";
+  }
+  paintRunning(true);
+  document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "started", tag } }));
+  if (s && s.cancel) api.cancelRun().catch(() => {});
+}
+
+async function confirmBlockers(blockers) {
+  const { confirmDialog } = await import("./dialog.js");
+  const ok = await confirmDialog({
+    title: "Not everything is ready",
+    body: "Blockers: " + blockers.join("; ") +
+      ". Run anyway? The flow will likely stop at the first missing piece.",
+    confirmText: "Run anyway", danger: true,
+  });
+  if (!ok) toast.show("Run cancelled. Review the 'Ready to run?' checklist for details.", "warn");
+  return ok;
+}
+
+// The check that ran beside the start found blockers: the run is already
+// going, so ask whether to stop it.
+async function offerStopFor(blockers, tag) {
+  const live = () => state.status && state.status.running && (!tag || state.liveTag === tag);
+  if (!live()) return;
+  const { choiceDialog } = await import("./dialog.js");
+  const pick = await choiceDialog({
+    title: "Not everything is ready",
+    body: "The check that ran as the run started found: " + blockers.join("; ") +
+      ". The flow will likely stop at the first missing piece.",
+    choices: [{ label: "Stop the run", value: "stop", danger: true }, { label: "Let it run", value: "keep" }],
+  });
+  if (pick === "stop" && live()) api.cancelRun().catch(() => {});
 }
 
 async function onRunClick({ show = false, fixed = false } = {}) {
+  if (_start) return;   // one is already starting (the button is Stop)
   if (!state.designDir) {
     toast.show("Pick a design folder first.", "warn");
     return;
   }
+  if (state.designMissing) {
+    toast.show("Project folder not found: " + state.designMissing + ". Locate it or remove it from the list on Setup.", "warn");
+    return;
+  }
+  // The RTL IDE's last syntax check of this project found errors: LibreLane's
+  // first step (Verilator lint) stops on them, so say so before the run.
+  const rselNow = document.getElementById("run-resume-from");
+  const lintErrs = rselNow && rselNow.value ? 0 : lastLintErrors(state.designDir);
+  if (lintErrs > 0) {
+    const { choiceDialog } = await import("./dialog.js");
+    const pick = await choiceDialog({
+      title: "The RTL has " + lintErrs + (lintErrs === 1 ? " error" : " errors"),
+      body: "The last syntax check in the RTL IDE found " + (lintErrs === 1 ? "an error" : lintErrs + " errors") +
+        " in this project's design files. The flow's first step runs the same check (Verilator lint) and stops on it.",
+      choices: [{ label: "Show them", value: "show" }, { label: "Run anyway", value: "run", danger: true }],
+    });
+    if (pick === "show") { (await import("./nav.js")).go("ide"); return; }
+    if (pick !== "run") return;
+  }
   // Preflight: catch missing tools / PDK before a long run fails half-way.
-  try {
-    const pf = await renderPreflight();
-    const mm = pf && pf.pdk && pf.pdk.mismatch;
-    if (mm && !fixed) { await offerPdkFix(mm, show); return; }
-    if (pf && !pf.ready) {
-      const { confirmDialog } = await import("./dialog.js");
-      const go = await confirmDialog({
-        title: "Not everything is ready",
-        body: "Blockers: " + pf.blockers.join("; ") +
-          ". Run anyway? The flow will likely stop at the first missing piece.",
-        confirmText: "Run anyway", danger: true,
-      });
-      if (!go) {
-        toast.show("Run cancelled. Review the 'Ready to run?' checklist for details.", "warn");
-        return;
-      }
-    }
-  } catch (_e) { /* preflight is best-effort; don't block the run on it */ }
+  // A fresh result for these picks is used as is: a blocker it already knows
+  // asks before anything starts. Without one, the check runs beside the start.
+  const fresh = freshPreflight();
+  const known = runBlocker(fresh);
+  if (known && known.kind === "mismatch" && !fixed) { await offerPdkFix(known.mismatch, show); return; }
+  if (known && known.kind === "blockers" && !(await confirmBlockers(known.blockers))) return;
   const payload = collectRunPayload();
   const rsel = document.getElementById("run-resume-from");
   if (rsel && rsel.value && rsel.dataset.tag) {
@@ -631,13 +960,31 @@ async function onRunClick({ show = false, fixed = false } = {}) {
     // (and starts earlier if something those stages read has changed since).
     payload.branch_from = { tag: rsel.dataset.tag, step: rsel.value };
   }
+  // Pressing Run shows the run on Flow, unless the user turned that off in
+  // the Run menu (then the status line shows it, and this says so). Setup's
+  // Run flow and the very first run always show it.
+  const first = !safeStorage.get("ll.ranOnce") && !(state.runs || []).length;
+  const showFlow = show || first || safeStorage.get("ll.showFlowOnRun") !== "0";
+  // The page first (it reads the scroll position while nothing has changed
+  // yet, so no forced layout), then the button and Flow's "Starting".
+  const from = currentTab();
+  if (showFlow) go("pipeline", {}, { link: false });
+  beginStart(from, showFlow);
+  const checkP = fresh ? null : preflightNow();
+  if (checkP) checkP.catch(() => {});
   try {
     const res = await api.startRun(payload);
     if (!res.ok || res.started === false) {
-      if (res.pdk_mismatch && !fixed) { await offerPdkFix(res.pdk_mismatch, show); return; }
-      toast.show("Run refused: " + (res.reason || res.error || "unknown"), "error");
+      if (res.pdk_mismatch && !fixed) {
+        startRefused(res.reason || "The PDK picker and the config disagree.", { mismatch: true });
+        await offerPdkFix(res.pdk_mismatch, show);
+        return;
+      }
+      startRefused(res.reason || res.error || "unknown");
       return;
     }
+    startAccepted(res.tag || payload.tag || null);
+    safeStorage.set("ll.ranOnce", "1");
     if (payload.branch_from) {
       const r = res.resume;
       const asked = FS.stagesOf([{ id: payload.branch_from.step }])[0];
@@ -655,22 +1002,24 @@ async function onRunClick({ show = false, fixed = false } = {}) {
       toast.show("The configuration file changed after your preview. Flow execution used the updated file on disk.", "warn");
     }
     state.previewedConfigHash = null;
-    paintRunning(true);
-    // Pressing Run shows the run on Flow, unless the user turned that off in
-    // the Run menu (then the status line shows it, and this says so). Setup's
-    // Run flow and the very first run always show it.
-    const first = !safeStorage.get("ll.ranOnce") && !(state.runs || []).length;
-    safeStorage.set("ll.ranOnce", "1");
-    const { go } = await import("./nav.js");
-    const { currentTab } = await import("./tabs.js");
-    if (show || first || safeStorage.get("ll.showFlowOnRun") !== "0") go("pipeline", {}, { link: false });
-    else if (currentTab() !== "pipeline") {
+    const tag = res.tag || payload.tag || null;
+    document.dispatchEvent(new CustomEvent("g:run_started", { detail: { tag } }));
+    if (!showFlow && currentTab() !== "pipeline") {
       toast.show((payload.tag ? "Run " + payload.tag + " started" : "The run started") +
         ". It keeps going in the background; the status bar shows how far it is.", "info", 7000,
         { label: "Watch it", run: () => go("pipeline") });
     }
+    // The check that ran beside the start: say so only if it found something.
+    if (checkP) {
+      checkP.then((pf) => {
+        const b = runBlocker(pf);
+        if (b && b.kind === "blockers" && b.blockers.length) offerStopFor(b.blockers, tag);
+      }).catch(() => {});
+    }
   } catch (ex) {
-    toast.show("Run failed: " + ex.message, "error");
+    // The server refused (folder gone, spaces in the path, another flow
+    // busy, PDK not ready…): its own words, on Flow.
+    startRefused(ex.message);
   }
 }
 
@@ -808,6 +1157,21 @@ async function fillResume() {
   paintRunLabel();
 }
 
+// Resume the run on the results pages from a stage, through the Run menu's own
+// "Resume from" path (so the server plans it the same way). Returns why it
+// can't, or "" once the run is asked to start.
+export async function resumeFrom(stage) {
+  await fillResume();
+  const sel = document.getElementById("run-resume-from");
+  const opt = sel && [...sel.options].find((o) => o.dataset.stage === stage);
+  if (!opt) return "LanEx can't resume this run from " + FS.stageLabel(stage) + ".";
+  if (opt.disabled) return opt.textContent.replace(/^\d+\.\s*/, "");
+  sel.value = opt.value;
+  paintRunLabel();
+  document.getElementById("btn-run-global")?.click();
+  return "";
+}
+
 // "Run", "Run to Placement" or "Resume from Placement": the button says what
 // it will do.
 function paintRunLabel() {
@@ -835,14 +1199,14 @@ export function paintRunning(running) {
   if (running) {
     if (b) b.disabled = true;
     if (c) { c.disabled = false; c.hidden = false; }
-    if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); }
+    if (g) { g.disabled = false; g.innerHTML = icon("stop", { size: 15 }) + "<span>Stop</span>"; g.classList.add("is-stop"); g.dataset.tip = "Stop the run (r)"; }
     pill?.classList.remove("pill-pending");
     pill?.classList.add("pill-running");
     if (pill) pill.textContent = "running";
   } else {
-    if (b) b.disabled = !state.designDir;
+    if (b) b.disabled = !state.designDir || !!state.designMissing;
     if (c) { c.disabled = true; c.hidden = true; }   // Stop shows only while a run is live
-    if (g) { g.disabled = !state.designDir; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); paintRunLabel(); }
+    if (g) { g.disabled = !state.designDir || !!state.designMissing; g.innerHTML = icon("play", { size: 15 }) + "<span>Run</span>"; g.classList.remove("is-stop"); paintRunLabel(); }
     pill?.classList.add("pill-pending");
     pill?.classList.remove("pill-running");
     if (pill) pill.textContent = "idle";

@@ -13,7 +13,9 @@
 //   byId: { <id>: { id, name, width, changes:[[t, value], ...] } },
 //   scopes: { name, kind, children:[...], signals:[...] }   // tree for the signal picker
 // }
-export function parseVCD(text) {
+// opts.onProgress(fraction): called every 64k lines (the worker reports it).
+export function parseVCD(text, opts = {}) {
+  const onProgress = opts.onProgress || null;
   const out = {
     timescale: "",
     tick: { mult: 1, unit: "s", exp: 0 },
@@ -31,6 +33,7 @@ export function parseVCD(text) {
   const tokensOf = (line) => line.trim().split(/\s+/).filter(Boolean);
 
   for (let i = 0; i < lines.length; i++) {
+    if (onProgress && (i & 0xffff) === 0 && i) onProgress(i / lines.length);
     const t = lines[i].trim();
     if (!t) continue;
 
@@ -131,6 +134,100 @@ function pushChange(out, id, time, value) {
   else if (!last || last[1] !== value) sig.changes.push([time, value]);
 }
 
+// ---------- parsing off the main thread ---------------------------------------
+// A big dump (a 14 MB VCD took 1.9 s on a slow laptop) is parsed in a module
+// worker (vcdworker.js). Handing the parsed object back would cost the main
+// thread about as long again (structured clone of 600k [t, v] pairs), so each
+// signal travels packed: its times as a Float64Array, its values as one string,
+// and its `changes` array is built the first time something reads it (only the
+// lanes on screen). Small dumps, or a browser without module workers, parse here.
+
+const WORKER_MIN_BYTES = 256 * 1024;
+
+// One signal's changes -> { t: Float64Array, v: "v0\nv1…" } (values never hold whitespace).
+export function packVCD(vcd) {
+  const packed = Object.create(null);
+  const transfer = [];
+  for (const id of Object.keys(vcd.byId)) {
+    const s = vcd.byId[id];
+    const n = s.changes.length;
+    const t = new Float64Array(n);
+    const v = new Array(n);
+    for (let i = 0; i < n; i++) { t[i] = s.changes[i][0]; v[i] = s.changes[i][1]; }
+    packed[id] = { name: s.name, width: s.width, t, v: v.join("\n") };
+    transfer.push(t.buffer);
+  }
+  return { msg: { timescale: vcd.timescale, tick: vcd.tick, end: vcd.end, signals: vcd.signals, vars: vcd.vars, scopes: vcd.scopes, packed }, transfer };
+}
+
+// The packed form back to parseVCD's shape; `changes` is made on first read.
+export function unpackVCD(m) {
+  const byId = Object.create(null);
+  for (const id of Object.keys(m.packed)) {
+    const p = m.packed[id];
+    const sig = { id, name: p.name, width: p.width };
+    let ch = null;
+    Object.defineProperty(sig, "changes", {
+      enumerable: true, configurable: true,
+      get() {
+        if (!ch) {
+          const n = p.t.length, v = n ? p.v.split("\n") : [];
+          ch = new Array(n);
+          for (let i = 0; i < n; i++) ch[i] = [p.t[i], v[i]];
+        }
+        return ch;
+      },
+      set(x) { ch = x; },
+    });
+    byId[id] = sig;
+  }
+  return { timescale: m.timescale, tick: m.tick, end: m.end, signals: m.signals, vars: m.vars, byId, scopes: m.scopes };
+}
+
+function parseInWorker(bytes, onProgress) {
+  return new Promise((resolve, reject) => {
+    let w;
+    try { w = new Worker(new URL("./vcdworker.js", import.meta.url), { type: "module" }); }
+    catch (e) { reject(e); return; }
+    w.onmessage = (e) => {
+      const d = e.data || {};
+      if (d.type === "progress") { if (onProgress) onProgress("parse", d.p); return; }
+      w.terminate();
+      if (d.type === "done") resolve(unpackVCD(d.vcd));
+      else reject(new Error(d.error || "the waveform worker failed"));
+    };
+    w.onerror = (e) => { w.terminate(); reject(new Error((e && e.message) || "the waveform worker failed")); };
+    w.postMessage({ bytes });          // copied, not transferred: the fallback still has them
+  });
+}
+
+// A fetch Response of a .vcd -> the parsed dump (parseVCD's shape).
+// onProgress(phase, fraction): "download" while the bytes arrive, then "parse".
+export async function readVCD(resp, { onProgress = null } = {}) {
+  const total = +(resp.headers.get("Content-Length") || 0);
+  let bytes;
+  if (resp.body && typeof resp.body.getReader === "function") {
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let got = 0, shown = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      got += value.length;
+      if (onProgress && total && got / total - shown >= 0.02) { shown = got / total; onProgress("download", Math.min(1, shown)); }
+    }
+    bytes = new Uint8Array(got);
+    let at = 0;
+    for (const c of chunks) { bytes.set(c, at); at += c.length; }
+  } else bytes = new Uint8Array(await resp.arrayBuffer());
+  if (bytes.length >= WORKER_MIN_BYTES && typeof Worker !== "undefined") {
+    try { return await parseInWorker(bytes, onProgress); }
+    catch (_e) { /* no module workers here: parse on this thread */ }
+  }
+  return parseVCD(new TextDecoder().decode(bytes));
+}
+
 const UNIT_EXP = { s: 0, ms: -3, us: -6, ns: -9, ps: -12, fs: -15 };
 
 // "1ns", "10 ps", "100fs" -> { mult, unit, exp } (exp: the unit's power of ten).
@@ -145,9 +242,15 @@ export function parseTimescale(ts) {
 // 87402 ticks of 1ps -> "87.402 ns". `step` (ticks) sets how many decimals are
 // worth showing, so ruler labels stay short.
 const UNITS = [["s", 0], ["ms", -3], ["us", -6], ["ns", -9], ["ps", -12], ["fs", -15]];
+// Icarus writes "$timescale 1s" when no source file sets a `timescale: those
+// ticks are plain simulation time units, not seconds (no real design uses 1 s).
+export function plainTicks(tick) {
+  return !!tick && tick.unit === "s" && tick.mult === 1;
+}
 export function formatTime(ticks, tick, step) {
   const t = tick || { mult: 1, exp: 0 };
   if (!ticks) return "0";
+  if (plainTicks(tick)) return String(Math.round(ticks * 1e6) / 1e6);
   // The largest unit in which the amount is at least 1.
   const ref = Math.abs(ticks) * t.mult;
   let pick = UNITS[UNITS.length - 1];

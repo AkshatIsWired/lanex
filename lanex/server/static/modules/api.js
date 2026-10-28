@@ -3,7 +3,18 @@
 // EventSource so we don't poll. The bus of installer events is folded into
 // the same stream by the server.
 
+import { state } from "./state.js";
+
 const base = "";
+
+// The project this window shows, on every POST: the server refuses to start a
+// run, sweep or Console command when it differs from the project it has open
+// (a window showing a missing folder keeps the previous project active there;
+// another window may have switched). Encoded: a header can't carry "é" or "₹".
+function shownDesign() {
+  const d = state.designMissing || state.designDir || "";
+  return d ? encodeURIComponent(d) : "";
+}
 
 // Default request timeout. A hung/slow server must not freeze the UI forever:
 // AbortController fires after this and the call rejects with a clear message.
@@ -13,8 +24,15 @@ async function _fetch(path, init) {
   init = init || {};
   const headers = Object.assign({
     "Content-Type": "application/json",
-    "X-Requested-With": "XMLHttpRequest"
+    "X-Requested-With": "XMLHttpRequest",
+    // The browser's UTC offset (minutes east): the distro's clock is UTC, and
+    // run names should read in the person's own time.
+    "X-LanEx-UTC-Offset": String(-new Date().getTimezoneOffset())
   }, init.headers || {});
+  if (init.method === "POST" && !headers["X-LanEx-Design"]) {
+    const d = shownDesign();
+    if (d) headers["X-LanEx-Design"] = d;
+  }
   // Per-call AbortController + timeout (init.timeout overrides; timeout: 0
   // disables the abort entirely; init.signal still honoured).
   const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
@@ -44,10 +62,45 @@ async function _fetch(path, init) {
     const err = new Error(body.error || "HTTP " + resp.status);
     err.status = resp.status;
     err.body = body;
+    // A run, resume or sweep refused because the project folder is gone
+    // (moved, renamed or deleted while LanEx was open): Setup shows it as
+    // missing and turns Run off (setup.js).
+    if ((resp.status === 404 || resp.status === 409) && /^Project folder not found: /.test(err.message)) {
+      try { document.dispatchEvent(new CustomEvent("g:design_missing", { detail: { message: err.message } })); } catch (_e) {}
+    }
     throw err;
   }
-  return body.data !== undefined ? body.data : body;
+  const data = body.data !== undefined ? body.data : body;
+  // The Console drawer's Journal: every action with a command or config
+  // equivalent, after it succeeded (console.js reads these).
+  if (JOURNALED.has(path.split("?")[0])) {
+    let sent = null;
+    try { sent = init.body ? JSON.parse(init.body) : null; } catch (_e) {}
+    try { document.dispatchEvent(new CustomEvent("g:journal", { detail: { path: path.split("?")[0], sent, data } })); } catch (_e) {}
+  }
+  return data;
 }
+// One request for identical calls in flight at the same time (keyed by the
+// project shown too: the server answers for its active project). Nothing is
+// kept once it has answered.
+const _shared = new Map();
+export function shared(name, body, run) {
+  const key = name + "\0" + shownDesign() + "\0" + body;
+  const hit = _shared.get(key);
+  if (hit) return hit;
+  const p = Promise.resolve().then(() => run(body));
+  _shared.set(key, p);
+  const drop = () => { if (_shared.get(key) === p) _shared.delete(key); };
+  p.then(drop, drop);
+  return p;
+}
+// A run that just ended, or a config edit, changes the answers: a request
+// already on its way may predate it, so nothing is shared across that moment.
+if (typeof document !== "undefined") {
+  for (const ev of ["g:flow_done", "g:config_changed"]) document.addEventListener(ev, () => _shared.clear());
+}
+const JOURNALED = new Set(["/api/run/start", "/api/run/resume", "/api/config/set", "/api/config/undo",
+  "/api/fix/apply", "/api/dse/start", "/api/manual/run", "/api/open-in-tool", "/api/container-tools/open"]);
 
 export const api = {
   health: () => _fetch("/api/health"),
@@ -78,7 +131,9 @@ export const api = {
   runStatus: () => _fetch("/api/run/status"),
   // The first listing of a big project on /mnt/c summarises every run once
   // (later ones come from the server's cache): give it time.
-  runs:  (designDir) => _fetch("/api/runs" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : ""), { timeout: 120000 }),
+  // (Opening a project and the shared run list ask at the same moment: one request.)
+  runs:  (designDir) => shared("runs", designDir || "", () =>
+    _fetch("/api/runs" + (designDir ? "?design_dir=" + encodeURIComponent(designDir) : ""), { timeout: 120000 })),
   knownDesigns: () => _fetch("/api/known-designs"),
   run:   (tag) => _fetch("/api/runs/" + encodeURIComponent(tag)),
   runStepLog: (step, tag) =>
@@ -126,6 +181,7 @@ export const api = {
   getWatch: (design) => _fetch("/api/watch" + (design ? "?design=" + encodeURIComponent(design) : "")),
   setWatch: (design, rules) => _fetch("/api/watch", { method: "POST", body: JSON.stringify({ design, rules }) }),
   runGuiMeta: (tag) => _fetch("/api/run-gui-meta?tag=" + encodeURIComponent(tag)),
+  runReproduce: (tag) => _fetch("/api/run-reproduce?tag=" + encodeURIComponent(tag)),
   importRunDir: (path) => _fetch("/api/run-import-dir", { method: "POST", body: JSON.stringify({ path }) }),
   importRunBundle: (payload) => _fetch("/api/run-import-bundle", { method: "POST", body: JSON.stringify(payload) }),
   runBundleUrl: (tag, include) =>
@@ -207,8 +263,10 @@ export const api = {
   templates: () => _fetch("/api/templates"),
   projectDefaults: () => _fetch("/api/project/defaults"),
   projectFiles: (path) => _fetch("/api/project/files" + (path ? "?path=" + encodeURIComponent(path) : "")),
-  designInfo: (payload) =>
-    _fetch("/api/project/design-info", { method: "POST", body: JSON.stringify(payload || {}) }),
+  // Callers asking the same thing at the same moment (the Design row and the
+  // Settings card, the IDE opening twice) share one request.
+  designInfo: (payload) => shared("design-info", JSON.stringify(payload || {}), (body) =>
+    _fetch("/api/project/design-info", { method: "POST", body })),
   newProjectFile: (payload) =>
     _fetch("/api/project/new-file", { method: "POST", body: JSON.stringify(payload) }),
   configSet: (set, remove, extra) =>

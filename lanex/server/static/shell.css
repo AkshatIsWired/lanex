@@ -173,6 +173,8 @@ body.theme-light .logo--light { display: block !important; }
 .run-main:disabled + .run-opts { background: var(--surface-2); color: var(--text-muted); border-color: var(--border); }
 .run-main:disabled + .run-opts:hover { background: var(--surface-3); color: var(--text); }
 .run-main.is-stop, .run-main.is-stop + .run-opts { background: var(--fail); border-color: var(--fail); color: var(--on-accent); }
+/* Run turns into Stop under the pointer that pressed it: hovered, it stays red. */
+.run-main.is-stop:hover:not(:disabled), .run-main.is-stop + .run-opts:hover { background: var(--fail); filter: brightness(1.08); }
 .run-split:has(.is-stop) { box-shadow: 0 6px 16px var(--fail-soft); }
 
 /* Icon buttons: the original raised square, accent on hover. */
@@ -297,7 +299,8 @@ body.theme-light #theme-btn .ico-moon { display: none; }
 .rb-mark { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 2px; background: var(--text-muted); }
 .rb-mark.is-pass { background: var(--pass); }
 .rb-mark.is-fail { background: var(--fail); }
-.rb-mark.is-run { background: var(--accent); animation: rb-pulse 1.4s ease-in-out infinite; }
+.rb-mark.is-warn { background: var(--warn); }
+.rb-mark.is-run { background: var(--accent); animation: rb-pulse 1.4s ease-in-out infinite; will-change: opacity; }
 .rb-mark.is-none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-muted); }
 @keyframes rb-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .rb-mark.is-run { animation: none; } }
@@ -472,7 +475,7 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .pill-fail { background: var(--fail-soft); border-color: var(--fail); color: var(--text-strong); }
 .pill-info { background: var(--accent-soft); border-color: var(--accent); color: var(--text-strong); }
 .pill-pending { color: var(--text-muted); }
-.pill-running { background: var(--accent-soft); border-color: var(--accent); color: var(--text-strong); animation: pulse 1.5s ease-in-out infinite; }
+.pill-running { background: var(--accent-soft); border-color: var(--accent); color: var(--text-strong); animation: pulse 1.5s ease-in-out infinite; will-change: opacity; }
 @keyframes pulse { 50% { opacity: 0.6; } }
 
 /* ------------------------------------------------------------ wafer edge (status) */
@@ -487,6 +490,11 @@ body:not(.nav-painted) .side-tab .ico { font-size: 0; }
 .st-run .pill { height: 20px; padding: 0 7px; font-size: 12.5px; background: transparent; border-color: transparent; }
 .status-progress { font-family: var(--mono); font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: calc(42vw / var(--ll-zoom, 1)); }
 .status-progress:empty { display: none; }
+.st-run .pill { flex-shrink: 0; }
+/* How the last run ended (runend.js), in the verdict's colour. */
+.status-progress[data-tone="pass"] { color: color-mix(in srgb, var(--pass) 70%, var(--text-strong)); }
+.status-progress[data-tone="warn"] { color: color-mix(in srgb, var(--warn) 70%, var(--text-strong)); }
+.status-progress[data-tone="fail"] { color: color-mix(in srgb, var(--fail) 70%, var(--text-strong)); }
 /* Overall progress: one met1 band along the wafer edge. */
 .st-bar { position: absolute; left: 0; right: 0; top: -1px; height: 2px; pointer-events: none; }
 .st-bar-fill { display: block; height: 100%; width: 100%; background: var(--met1); box-shadow: 0 0 8px var(--accent-glow); transform: scaleX(0); transform-origin: left; transition: transform var(--dur-3) var(--ease-out); }

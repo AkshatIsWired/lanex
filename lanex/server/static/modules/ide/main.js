@@ -8,8 +8,8 @@
 // RTL-to-GDS run. Shares api.js + SSE; no bundler.
 import { api, sse, fmt } from "../api.js";
 import { Editor } from "./editor.js";
-import { parseVCD, formatTime, parseTimescale, valueAt } from "./vcd.js";
-import { explain, TESTBENCH_STYLE } from "./lintinfo.js";
+import { readVCD, formatTime, parseTimescale, valueAt, plainTicks } from "./vcd.js";
+import { explain, explainMessage, TESTBENCH_STYLE } from "./lintinfo.js";
 import { WaveView } from "./waves.js";
 import { setupFullscreen } from "../fullscreen.js";
 import { applyZoom, currentZoom, isAutoZoom } from "../zoom.js";
@@ -154,6 +154,7 @@ function switchProject(dir) {
   else state.simRun = null;
   if (state.wave) state.wave.clear();
   setWavePartial(false);
+  note("");
   byId("ide-log", (el) => { el.innerHTML = ""; });
   byId("ide-top", (x) => { x.value = ""; });
   byId("ide-sim-status", (el) => { el.hidden = true; });
@@ -1216,9 +1217,18 @@ function isTestbenchFile(file) {
 function isNoise(d) {
   return d.severity === "warning" && TESTBENCH_STYLE.has(d.code) && isTestbenchFile(d.file);
 }
+// The lint check and a Verilator simulation build report the same problem on
+// the same line: each is counted and listed once (the badge said "4 · 2"
+// while the build said 2 errors).
+export function mergeDiags(lint, sim, simLabel = "Simulator") {
+  const key = (d) => d.file + ":" + d.line + ":" + (d.code || d.msg);
+  const seen = new Set((lint || []).map(key));
+  return (lint || []).map((d) => ({ ...d, src: "Verilator" }))
+    .concat((sim || []).filter((d) => !seen.has(key(d))).map((d) => ({ ...d, src: simLabel })));
+}
+
 function allDiags() {
-  return (state.diags || []).map((d) => ({ ...d, src: "Verilator" }))
-    .concat((state.simDiags || []).map((d) => ({ ...d, src: state.simEngineLabel || "Simulator" })));
+  return mergeDiags(state.diags, state.simDiags, state.simEngineLabel || "Simulator");
 }
 
 function applyMarkers() {
@@ -1272,7 +1282,7 @@ const IC_WARN = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none' str
 const IC_CARET = "<svg viewBox='0 0 24 24' width='12' height='12' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 9l6 6 6-6'/></svg>";
 
 function diagRow(d) {
-  const why = d.code ? explain(d.code) : "";
+  const why = d.code ? explain(d.code) : d.severity === "error" ? explainMessage(d.msg) : "";
   return "<div class='pb-item pb-" + d.severity + "' role='button' tabindex='0' data-file='" + fmt.escape(d.file) +
     "' data-line='" + (d.line || 1) + "' data-col='" + (d.col || 1) + "'>" +
     "<span class='pb-ic'>" + (d.severity === "error" ? IC_ERR : IC_WARN) + "</span>" +
@@ -1666,6 +1676,10 @@ function finishSim(ev) {
     : !ev.vcd ? "nowave"
     : run.passes ? "passed" : "ran";
   run.buildErrors = buildErrors;
+  // It ran, but the testbench doesn't connect some of the module's inputs
+  // (ports added since it was written): say so, with the rewrite offer.
+  run.floating = ["ran", "passed", "nowave", "reported-fail"].includes(run.verdict)
+    ? floatingPorts(state.simDiags, (file) => isTestbenchFile(file)) : [];
   simStatus(run);
   if (!ev.vcd && state.wave && state.wave.vcd) setWavePartial("old");
   if (ev.cancelled) note("Simulation stopped.", true);
@@ -1684,6 +1698,7 @@ function finishSim(ev) {
   else note(buildErrors ? "The simulation didn't build: " + plural(buildErrors, "error") + " (see Problems)."
     : "Simulation finished with errors. Review the log below for details.", true);
   recordRtlStatus();
+  document.dispatchEvent(new CustomEvent("g:sim_done", { detail: { verdict: run.verdict, vcd: run.vcd, tb: run.tb } }));
 }
 
 const SS_ICON = {
@@ -1693,6 +1708,80 @@ const SS_ICON = {
   info: "<svg viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' aria-hidden='true'><circle cx='12' cy='12' r='9'/><path d='M12 11v5M12 8v.01'/></svg>",
   run: "<span class='ss-spin' aria-hidden='true'></span>",
 };
+
+// A build that failed only because the testbench names ports the module no
+// longer has (Verilator PINNOTFOUND, Icarus "is not a port of"), all in the
+// testbench file.
+const PORT_RX = /is not a port of|port .* not found|unknown port|PINNOTFOUND/i;
+export function isPortMismatch(diags, tbRel, isTb = (f) => f === tbRel) {
+  const errs = (diags || []).filter((d) => d.severity === "error");
+  return errs.length > 0 && errs.every((d) => (d.code === "PINNOTFOUND" || PORT_RX.test(d.msg || "")) && isTb(d.file));
+}
+// The module's inputs a testbench leaves unconnected (Verilator PINMISSING
+// "Cell has missing pin: 'b'", Icarus "dangling input port 3 (op) floating"),
+// warnings only in testbench files: the build passes and the simulation runs,
+// but those inputs float at z. -> port names, in order, each once.
+const FLOAT_RX = /missing pin:?\s*'?([A-Za-z_][\w$]*)'?|dangling input port \d+ \(([A-Za-z_][\w$]*)\)/i;
+export function floatingPorts(diags, isTb = () => true) {
+  const out = [];
+  for (const d of diags || []) {
+    if (d.severity === "error" || !isTb(d.file)) continue;
+    if (d.code !== "PINMISSING" && !FLOAT_RX.test(d.msg || "")) continue;
+    const m = (d.msg || "").match(FLOAT_RX);
+    const name = m ? (m[1] || m[2]) : "";
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+function portMismatch(r) {
+  if (r.verdict !== "build" || !r.tb) return false;
+  const f = projectFile(r.tb);
+  return isPortMismatch(state.simDiags, f ? f.relpath : r.tb, (file) => isTestbenchFile(file));
+}
+
+// Write the testbench again for the module's current ports; the old file is
+// kept next to it as <name>.v.bak.txt (outside the testbench glob).
+async function rewriteTestbench(tb) {
+  const f = projectFile(tb);
+  if (!f || !state.designDir) return;
+  const rel = f.relpath;
+  const name = rel.split("/").pop().replace(/\.s?v$/i, "");
+  const backup = rel + ".bak.txt";
+  const { confirmDialog } = await import("../dialog.js");
+  const ok = await confirmDialog({
+    title: "Rewrite " + rel.split("/").pop() + "?",
+    body: "LanEx writes a new testbench for the module's current ports: every input driven, every output watched, " +
+      "the clock and reset from the config. Your file is kept as " + backup + ", so nothing you wrote is lost.",
+    confirmText: "Rewrite it",
+  });
+  if (!ok) return;
+  let top = null, clock = null;
+  try {
+    const info = await api.designInfo({ design_dir: state.designDir });
+    top = (info.values && info.values.DESIGN_NAME) || info.suggested_top || null;
+    const cp = info.values && info.values.CLOCK_PORT;
+    clock = Array.isArray(cp) ? cp[0] : cp || null;
+  } catch (_e) { /* the server says what's missing */ }
+  try {
+    await api.fileRename(rel, backup);
+  } catch (ex) { note("Couldn't keep a backup of " + rel + ": " + (ex.message || ex) + ". Nothing was changed.", true); return; }
+  try {
+    // Back in the old testbench's own folder, under its own name.
+    const folder = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+    const r = await api.newProjectFile({ design_dir: state.designDir, kind: /\.sv$/i.test(rel) ? "tb_sv" : "tb_v",
+      name, top, clock, use: false, folder });
+    await loadTree();
+    await loadTestbenches();
+    await openFile(r.abs, r.rel);
+    state.simDiags = [];
+    renderProblems();
+    applyMarkers();
+    note("Rewrote " + rel + " for " + (top || "the top module") + "'s ports. Your old file is " + backup + ". Simulate to run it.");
+  } catch (ex) {
+    try { await api.fileRename(backup, rel); } catch (_e) { /* leave the backup where it is */ }
+    note("Couldn't write the new testbench: " + (ex.message || ex) + ". Your file is back as it was.", true);
+  }
+}
 
 let _ssTimer = 0;
 // The result of the last simulation, in words, with what to do next.
@@ -1720,7 +1809,11 @@ function simStatus(run) {
     passed: ["ok", "Passed", "The testbench printed PASS and ran to the end. " + facts, wave + next],
     ran: ["ok", "Ran to the end", facts + (facts ? ". " : "") + "Check the waveform and the output against what you expect.", wave + next],
     "reported-fail": ["warn", "The testbench reported " + plural(r.fails || 0, "failure"), facts, "<button class='btn btn-sm' data-ss='first-fail'>Show the first one</button>" + wave],
-    build: ["fail", "Didn't build: " + plural(r.buildErrors || 0, "error"), "They're listed in Problems and underlined in the editor.", "<button class='btn btn-sm' data-ss='first-error'>Show the first error</button>"],
+    build: portMismatch(r)
+      ? ["fail", "Didn't build: the testbench doesn't match the module's ports",
+        (tbName || "The testbench") + " connects ports the module doesn't have, or leaves some out (" + plural(r.buildErrors || 0, "error") + " in Problems). Fix the names, or LanEx can write it again for the current ports and keep yours as a backup.",
+        "<button class='btn btn-primary btn-sm' data-ss='rewrite-tb'>Rewrite the testbench for these ports</button><button class='btn btn-ghost btn-sm' data-ss='first-error'>Show the first error</button>"]
+      : ["fail", "Didn't build: " + plural(r.buildErrors || 0, "error"), "They're listed in Problems and underlined in the editor.", "<button class='btn btn-sm' data-ss='first-error'>Show the first error</button>"],
     failed: ["fail", "The simulator stopped with an error", "Exit code " + r.rc + ". The output below says why." + (secs ? " " + secs : ""), ""],
     "timeout-partial": ["warn", "Stopped at the time limit", "No $finish within 120 s, so the waveform is partial. Add $finish at the end of the testbench's initial block.", wave + "<button class='btn btn-ghost btn-sm' data-ss='open-tb'>Open the testbench</button>"],
     timeout: ["fail", "Stopped at the time limit, no waveform", "Add $finish at the end of the testbench's initial block, and $dumpfile/$dumpvars to write a waveform.", "<button class='btn btn-ghost btn-sm' data-ss='open-tb'>Open the testbench</button>"],
@@ -1729,6 +1822,14 @@ function simStatus(run) {
     refused: ["fail", "Couldn't start the simulation", fmt.escape(r.error || ""), ""],
     none: ["info", "No testbench yet", "A testbench drives your design with inputs and shows what comes out.", "<button class='btn btn-primary btn-sm' data-ss='new-tb'>Write a testbench</button>"],
   }[r.verdict] || null;
+  if (V && r.floating && r.floating.length) {
+    const ports = r.floating.slice(0, 4).join(", ") + (r.floating.length > 4 ? "…" : "");
+    V[0] = "warn";
+    V[1] = "The testbench doesn't drive " + (r.floating.length === 1 ? "port " : "ports ") + ports + " (" + (r.floating.length === 1 ? "it floats" : "they float") + " at z)";
+    V[2] = (r.verdict === "passed" ? "It printed PASS, but those inputs were never set, so the result doesn't test them. " : "It ran to the end, but those inputs were never set. ") +
+      "The module's ports changed since " + (tbName || "the testbench") + " was written. LanEx can write it again for the current ports and keep yours as a backup." + (facts ? " " + facts : "");
+    V[3] = "<button class='btn btn-primary btn-sm' data-ss='rewrite-tb'>Rewrite the testbench for these ports</button>" + wave;
+  }
   if (!V) { el.hidden = true; return; }
   el.hidden = false;
   el.className = "ide-sim-status ss-" + V[0];
@@ -1737,7 +1838,8 @@ function simStatus(run) {
   if (badge) {
     const b = { build: ["build failed", "pcount-err"], failed: ["failed", "pcount-err"], timeout: ["timed out", "pcount-err"],
       "timeout-partial": ["partial", "pcount-warn"], "reported-fail": [plural(r.fails || 0, "fail"), "pcount-warn"],
-      nowave: ["no wave", "pcount-warn"], running: ["running", ""] }[r.verdict];
+      nowave: ["no wave", "pcount-warn"], running: ["running", ""] }[r.verdict] ||
+      (r.floating && r.floating.length ? ["inputs float", "pcount-warn"] : null);
     badge.textContent = b ? b[0] : "";
     badge.className = "pcount" + (b && b[1] ? " " + b[1] : "");
   }
@@ -1769,6 +1871,8 @@ function simStatus(run) {
         const start = all.findLastIndex((x) => x.classList.contains("ll-head"));
         const hit = all.slice(Math.max(0, start)).find((x) => x.classList.contains("ll-err"));
         if (hit) { hit.scrollIntoView({ block: "center" }); hit.classList.add("ll-flash"); setTimeout(() => hit.classList.remove("ll-flash"), 1600); }
+      } else if (act === "rewrite-tb") {
+        await rewriteTestbench(run2.tb);
       } else if (act === "open-tb" || act === "add-dump") {
         const f = projectFile(run2.tb);
         if (!f) return;
@@ -1834,7 +1938,9 @@ function recordRtlStatus() {
   const real = allDiags().filter((d) => !isNoise(d));
   const st = {
     lint: state.lintChecked ? { errors: real.filter((d) => d.severity === "error").length,
-      warnings: real.filter((d) => d.severity === "warning").length, at: state.lintAt } : prev.lint,
+      warnings: real.filter((d) => d.severity === "warning").length, at: state.lintAt,
+      // What the flow's own lint (design files only, never testbenches) will hit.
+      design_errors: real.filter((d) => d.severity === "error" && !isTestbenchFile(d.file)).length } : prev.lint,
     sim: state.simRun && state.simRun.verdict && state.simRun.verdict !== "running"
       ? { tb: state.simRun.tb, verdict: state.simRun.verdict, at: Date.now() } : prev.sim,
   };
@@ -1917,14 +2023,21 @@ async function loadWaveform(vcdRel, partial) {
       note("The dump is " + Math.round(size / 1048576) + " MB, too big to show here. GTKWave opens it.", true);
       return;
     }
-    const vcd = parseVCD(await r.text());
+    // Parsed in a worker when big (vcd.js readVCD), with progress in the note.
+    const vcd = await readVCD(r, { onProgress: (phase, p) => {
+      if (state.designDir === dir) note((phase === "parse" ? "Reading waveform " : "Loading waveform ") + vcdRel + "… " + Math.round(p * 100) + "%");
+    } });
     if (state.designDir !== dir) return;
     setPanel("wave");
     growPanelFor("wave");
     if (state.wave) state.wave.load(vcd);
     // A full (non-partial) load clears any prior badge; a partial load pins it.
     setWavePartial(!!partial);
-    note("Waveform: " + vcd.signals.length + " signals over " + formatTime(vcd.end, vcd.tick) + ".");
+    // Count what the panel lists (its lanes, of the dump's variables), not the dump's raw ids.
+    const shown = state.wave ? state.wave.rows.length : vcd.signals.length;
+    const all = state.wave ? state.wave.vars.length : vcd.signals.length;
+    note("Waveform: " + (shown === all ? shown + (shown === 1 ? " signal" : " signals") : shown + " of " + all + " signals shown") +
+      " over " + formatTime(vcd.end, vcd.tick) + (plainTicks(vcd.tick) ? " time units (no `timescale)" : "") + ".");
   } catch (ex) {
     note("Could not load waveform: " + (ex.message || ex), true);
   }

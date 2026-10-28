@@ -1,12 +1,24 @@
-// runs.js — left-side history list, plus diff controls wiring.
+// runs.js — the Runs page: one dense, sortable table of every run, where runs
+// are managed, compared and swept. A row is one run; a sweep is one collapsible
+// parent row with its points under it (sweeps.js draws the sheet and summary).
+//
+//   click a row        it becomes the run every results page shows
+//   open a row (▸)     its report card and one row of actions
+//   ★                  the design's baseline: every number is coloured better
+//                      or worse than it (direction from the metric registry)
+//   tick 2–6 rows      Compare (Analytics › Compare, pre-filled) or Delete
 
 import { api, fmt } from "./api.js";
-import { state } from "./state.js";
-import { confirmDialog, alertDialog, checklistDialog, choiceDialog, promptDialog } from "./dialog.js";
+import { state, safeStorage } from "./state.js";
+import { confirmDialog, alertDialog, checklistDialog, choiceDialog, promptDialog, holdFocus } from "./dialog.js";
 import { toast } from "./toast.js";
-import { gatherRunsScoped, normDir, getRunScope, setRunScope, setRun, contextRun, contextDesign, onContext } from "./context.js";
+import { gatherRunsScoped, normDir, getRunScope, setRunScope, setRun, setBaseline, contextRun, contextDesign, onContext, designLabel } from "./context.js";
 import { go } from "./nav.js";
 import * as FS from "./flowstages.js";
+import { icon } from "./icons.js";
+import { reportCardHtml, fmtDur } from "./reportcard.js";
+import { localeNum, localeTime, localeDate } from "./intlcache.js";
+import { loadingStart, pageSkeleton } from "./loading.js";
 
 // The last step of a stage in the Classic flow (matches setup.js's --to).
 function lastStepOfStage(stageId) {
@@ -17,302 +29,1120 @@ function lastStepOfStage(stageId) {
   st.forEach((s, i) => { if (s === stageId) last = ids[i]; });
   return last;
 }
-import { icon } from "./icons.js";
 
 // Lightweight "make this run's design active" — needed before any run-scoped
 // call (delete / files) since they resolve against the server's active design
-// dir. Unlike openRun() this does NOT fetch the run or switch tabs, so a delete
-// click no longer yanks the user to the Preview tab.
+// dir. It does not switch tabs.
 async function focusDesign(designDir) {
   if (designDir && normDir(designDir) !== normDir(state.designDir)) {
     try { await api.setDesignDir(designDir); state.designDir = designDir; } catch (_e) {}
   }
 }
 
-const getScope = getRunScope;
+const esc = (s) => fmt.escape(s == null ? "" : String(s));
+const num = (v) => (typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 1e20 ? v : null);
+const km = (r, k) => num((r.key_metrics || {})[k]);
+// "|" joins them: a NUL would not survive an HTML attribute (data-key).
+const keyOf = (r) => normDir(r._design) + "|" + r.tag;
 
-// The design dir a run belongs to: <design>/runs/<tag> → strip the last 2 parts.
-function designOfRun(run) {
-  const rd = run.run_dir || "";
-  const parts = rd.split(/[/\\]/);
-  return parts.slice(0, -2).join("/");
+// ------------------------------------------------------------------ columns
+// dir: +1 higher is better, -1 lower is better, 0 no direction (no colour).
+// Directions follow LibreLane's metric registry (compare.js higher_is_better).
+function checksOf(r) {
+  const m = r.key_metrics || {};
+  const drc = ["magic__drc_error__count", "klayout__drc_error__count", "route__drc_errors"]
+    .map((k) => num(m[k])).filter((v) => v != null);
+  const lvs = num(m.design__lvs_error__count), ant = num(m.antenna__violating__nets);
+  if (!drc.length && lvs == null && ant == null) return null;
+  const d = drc.length ? Math.max(...drc) : null;
+  return { drc: d, lvs, ant, total: (d || 0) + (lvs || 0) + (ant || 0) };
 }
-function designLabel(dir) { return (dir || "").split(/[/\\]/).filter(Boolean).pop() || dir; }
+const COLS = [
+  { id: "name", label: "Run", fixed: true, sort: (r) => r.tag.toLowerCase() },
+  { id: "verdict", label: "Result", fixed: true, sort: (r) => VERDICT_ORDER[verdictOf(r).state] ?? 9 },
+  { id: "when", label: "When", sort: (r) => r.started_at || "", def: true },
+  { id: "origin", label: "Origin", sort: (r) => originText(r), def: 2000 },
+  { id: "design", label: "Design", sort: (r) => designLabel(r._design), allOnly: true, def: true },
+  { id: "pdk", label: "PDK", sort: (r) => r.pdk || "", def: false },
+  { id: "wns", label: "Setup WNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__setup__ws"), f: (v) => signed(v), def: true,
+    tip: "Worst setup slack in any corner (ns). Positive: the design meets its clock." },
+  { id: "tns", label: "Setup TNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__setup__tns"), f: (v) => signed(v), def: 1500,
+    tip: "Total negative setup slack (ns). 0 when every path meets timing." },
+  { id: "hold", label: "Hold WNS", unit: "ns", dir: 1, get: (r) => km(r, "timing__hold__ws"), f: (v) => signed(v), def: 1500,
+    tip: "Worst hold slack in any corner (ns)." },
+  { id: "die", label: "Die area", unit: "µm²", dir: -1, get: (r) => km(r, "design__die__area"), f: (v) => grp(v), def: 1500,
+    tip: "design__die__area: the whole die, in µm²." },
+  { id: "cells", label: "Std-cell area", unit: "µm²", dir: -1, get: (r) => km(r, "design__instance__area__stdcell"), f: (v) => grp(v), def: true,
+    tip: "design__instance__area__stdcell: the standard cells' area in µm², without fill, tap or decap cells." },
+  { id: "util", label: "Util", unit: "%", dir: 0, get: (r) => { const u = km(r, "design__instance__utilization"); return u == null ? null : u * 100; },
+    f: (v) => (Math.round(v * 10) / 10).toFixed(1), def: true, tip: "How full the core is with cells at the end (design__instance__utilization)." },
+  { id: "power", label: "Power", unit: "mW", dir: -1, get: (r) => { const p = km(r, "power__total"); return p == null ? null : p * 1e3; },
+    f: (v) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(3)), def: true, tip: "Total power OpenROAD estimated (power__total), in mW." },
+  { id: "checks", label: "DRC · LVS · Ant", dir: -1, get: (r) => { const c = checksOf(r); return c ? c.total : null; }, def: true,
+    tip: "Design-rule errors (worst of Magic, KLayout and the router), LVS errors and antenna violations. Not checked: blank." },
+  { id: "runtime", label: "Runtime", dir: -1, get: (r) => num(r.wall_time_s), f: (v) => fmtDur(v), def: 1300, tip: "The sum of every step's time." },
+  { id: "changed", label: "Changed vs baseline", sort: (r) => (CHANGES.get(keyOf(r)) || []).length, def: true },
+  { id: "note", label: "Note", sort: (r) => r.note || "", def: 2100 },
+];
+const VERDICT_ORDER = { running: 0, passed: 1, warning: 2, incomplete: 3, stopped: 4, failed: 5 };
+const signed = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2);
+const grp = (v) => localeNum(Math.round(v));
 
-let _scopeWired = false;
-let _filterText = "";
-let _filterStatus = "";
-let _filterPinned = false;
-// Runs ticked for batch delete, keyed "<designDir>\u0000<tag>" so the same tag
-// in two designs can't collide in the "All designs" scope.
-const _picked = new Set();
-function pickKey(designDir, tag) { return (designDir || "") + "\u0000" + tag; }
-
-function wireScope() {
-  if (_scopeWired) return;
-  _scopeWired = true;
-  document.querySelectorAll(".runs-scope[data-scope]").forEach((b) =>
-    b.addEventListener("click", () => {
-      setRunScope(b.dataset.scope);
-      renderRuns();
-    }));
-  // The run the results pages show is marked here; it follows a pick anywhere.
-  onContext(() => paintViewing());
-  const fi = document.getElementById("runs-filter");
-  if (fi) fi.addEventListener("input", () => { _filterText = fi.value.toLowerCase(); renderRuns({ cached: true }); });
-  const sf = document.getElementById("runs-status-filter");
-  if (sf) sf.addEventListener("change", () => { _filterStatus = sf.value; renderRuns({ cached: true }); });
-  const pf = document.getElementById("runs-pin-filter");
-  if (pf) pf.addEventListener("click", () => {
-    _filterPinned = !_filterPinned;
-    pf.classList.toggle("runs-scope-active", _filterPinned);
-    pf.setAttribute("aria-pressed", _filterPinned ? "true" : "false");
-    renderRuns({ cached: true });
-  });
-  const bd = document.getElementById("runs-batch-delete");
-  if (bd) bd.addEventListener("click", () => batchDelete());
-  const im = document.getElementById("runs-import");
-  if (im) im.addEventListener("click", () => importRunFlow());
+const COLS_KEY = "ll.runsCols", SORT_KEY = "ll.runsSort", BASE_KEY = "ll.runsBaseline", OPEN_KEY = "ll.runsOpenSweeps";
+function visibleCols(scope) {
+  const saved = safeStorage.getJSON(COLS_KEY, null);
+  return COLS.filter((c) => (c.allOnly ? scope === "all" : true) &&
+    (c.fixed || (saved && saved[c.id] != null ? saved[c.id] : defOn(c))));
+}
+// A column whose default is a width shows by default only when the table has
+// that much room, so the default set fits the screen (1366: the essentials).
+function defOn(c) {
+  if (typeof c.def !== "number") return !!c.def;
+  const w = document.getElementById("sec-runs")?.clientWidth || window.innerWidth;
+  return w >= c.def - 120;
 }
 
-function syncBatchButton() {
-  const bd = document.getElementById("runs-batch-delete");
-  if (!bd) return;
-  const n = _picked.size;
-  bd.hidden = n === 0;
-  bd.innerHTML = icon("trash", { size: 13 }) + " Delete selected (" + n + ")";
+// ------------------------------------------------------------------ verdict
+// The run's verdict (agent TRUST adds run.verdict from Verify's own reading);
+// until then: passed / failed (at a stage, once its reason is read) / stopped /
+// running, from the summary and the run's explanation.
+const RX = new Map();          // keyOf(run) -> runExplain result (failed runs only)
+function verdictOf(r) {
+  if (r.verdict && r.verdict.state) return r.verdict;
+  if (state.status && state.status.running && state.liveTag && r.tag === state.liveTag && normDir(r._design) === normDir(state.designDir)) {
+    return { state: "running", label: "running" };
+  }
+  if (r.success) return { state: "passed", label: "passed" };
+  const rx = RX.get(keyOf(r));
+  if (rx) {
+    if (rx.kind === "stopped") return { state: "stopped", label: "stopped" };
+    if (rx.kind === "incomplete") return { state: "incomplete", label: "incomplete" };
+    if (rx.kind === "checks-failed") return { state: "failed", label: "checks failed", stage: "signoff" };
+    if (rx.stage) return { state: "failed", label: "failed at " + FS.stageLabel(rx.stage), stage: rx.stage };
+  }
+  return { state: "failed", label: "failed" };
+}
+const VERDICT_TONE = { passed: "pass", warning: "warn", failed: "fail", stopped: "warn", incomplete: "warn", running: "live" };
+
+// ------------------------------------------------------------------ origin
+let SWEEPS = [];               // this design's sweep manifests (newest first)
+// run.origin (history.run_origin), else the summary's branched_from (TRUST).
+function originOf(r) {
+  if (r.origin && r.origin.kind) return r.origin;
+  // The run summary carries branched_from as the parent's tag (a string).
+  const b = r.branched_from;
+  if (typeof b === "string" && b) return { kind: "fix", parent: b, changes: [] };
+  if (b && b.tag) return { kind: "fix", parent: b.tag, stage: b.stage, changes: b.changes || [] };
+  return {};
+}
+function sweepOf(r) {
+  const o = originOf(r);
+  if (o.kind === "sweep") return SWEEPS.find((s) => s.id === o.sweep_id) || { id: o.sweep_id, axes: [], tags: [], _design: r._design };
+  if (normDir(r._design) !== normDir(state.designDir)) return null;
+  return SWEEPS.find((s) => (s.tags || []).includes(r.tag)) || null;
+}
+function pointValues(r, sw) {
+  const o = originOf(r);
+  if (o.kind === "sweep" && o.values && Object.keys(o.values).length) return o.values;
+  if (sw) {
+    const i = (sw.tags || []).indexOf(r.tag);
+    if (sw.points && sw.points[i]) return sw.points[i];
+    if (i >= 0 && sw.axes && sw.axes.length) {
+      // Old manifests carry axes only: a one-axis sweep maps index -> value.
+      if (sw.axes.length === 1) return { [sw.axes[0].var]: sw.axes[0].values[i] };
+    }
+  }
+  return null;
+}
+const valuesText = (v) => Object.entries(v || {}).map(([k, x]) => k + " " + x).join(", ");
+function originText(r) {
+  const o = originOf(r);
+  if (o.kind === "fix") return "fix of " + o.parent;
+  if (sweepOf(r)) return "sweep";
+  if (r.imported) return "imported";
+  return "manual";
+}
+function lineageHtml(r) {
+  const o = originOf(r);
+  if (o.kind !== "fix") return "";
+  const ch = (o.changes || []).map((c) => c.var + " " + c.from + "→" + c.to).join(", ");
+  return "<span class='rn-lineage' title='Resumed from " + esc(o.parent) + (o.stage ? " at " + esc(FS.stageLabel(o.stage)) : "") +
+    " with a changed setting'>fix of " + esc(o.parent) + (ch ? " · " + esc(ch) : "") + "</span>";
 }
 
-function matchesFilter(run) {
-  if (_filterPinned && !run.pinned) return false;
-  if (_filterStatus === "pass" && !run.success) return false;
-  if (_filterStatus === "fail" && run.success) return false;
-  if (!_filterText) return true;
-  const hay = (run.tag + " " + (run.pdk || "") + " " + (run.scl || "")).toLowerCase();
-  return hay.includes(_filterText);
-}
-
-// Run gathering (this design vs all designs, de-dup by run_dir) is shared with
-// the run bar — see context.js.
-const gatherRuns = gatherRunsScoped;
-
-// The last list shown, so typing in the filter needs no server round trip and
-// a failed refresh can keep it on screen.
+// ------------------------------------------------------------------ state
+let _wired = false;
+const F = { q: "", status: "", origin: "", pdk: "" };
+const _picked = new Set();     // keyOf(run)
+let _open = null;              // keyOf(run) whose report row is open
+let _openSweeps = new Set(safeStorage.getJSON(OPEN_KEY, []) || []);
+let _sort = safeStorage.getJSON(SORT_KEY, null) || { col: "when", dir: -1 };
 let _shown = { key: "", runs: [] };
 let _renderSeq = 0;
+const CHANGES = new Map();     // keyOf(run) -> [{var, from, to}] vs the baseline
+let _changesKey = "";
 
+function baselineTag(design) { return (safeStorage.getJSON(BASE_KEY, {}) || {})[normDir(design)] || ""; }
+function setBaselineTag(design, tag) {
+  const m = safeStorage.getJSON(BASE_KEY, {}) || {};
+  if (tag) m[normDir(design)] = tag; else delete m[normDir(design)];
+  safeStorage.setJSON(BASE_KEY, m);
+}
+
+function wire() {
+  if (_wired) return;
+  _wired = true;
+  document.querySelectorAll("#sec-runs .runs-scope[data-scope]").forEach((b) =>
+    b.addEventListener("click", () => { setRunScope(b.dataset.scope); renderRuns(); }));
+  onContext(() => paintViewing());
+  const fi = document.getElementById("runs-filter");
+  if (fi) fi.addEventListener("input", () => { F.q = fi.value.toLowerCase(); renderRuns({ cached: true }); });
+  document.getElementById("runs-import")?.addEventListener("click", () => importRunFlow());
+  document.getElementById("runs-new-sweep")?.addEventListener("click", () => import("./sweeps.js").then((m) => m.openSweepSheet()));
+  const cb = document.getElementById("rn-cols-btn"), cp = document.getElementById("rn-cols");
+  cb?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cp.hidden = !cp.hidden; cb.setAttribute("aria-expanded", cp.hidden ? "false" : "true");
+    if (!cp.hidden) paintColPicker();
+  });
+  document.addEventListener("click", (e) => { if (cp && !cp.hidden && !e.target.closest(".rn-cols-wrap")) { cp.hidden = true; cb.setAttribute("aria-expanded", "false"); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && cp && !cp.hidden) { cp.hidden = true; cb.setAttribute("aria-expanded", "false"); } });
+  // A sweep running anywhere shows its progress here.
+  // Default columns follow the room the table has.
+  let rz = 0;
+  window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (document.getElementById("sec-runs")?.classList.contains("section-active")) renderRuns({ cached: true }); }, 250); });
+  document.addEventListener("g:sweep", () => {
+    if (document.getElementById("sec-runs")?.classList.contains("section-active")) renderRuns();
+  });
+}
+
+function paintColPicker() {
+  const cp = document.getElementById("rn-cols");
+  const saved = safeStorage.getJSON(COLS_KEY, {}) || {};
+  cp.innerHTML = "<div class='rn-cols-h'>Columns</div>" + COLS.filter((c) => !c.fixed && !c.allOnly).map((c) => {
+    const on = saved[c.id] != null ? saved[c.id] : defOn(c);
+    return "<label class='rn-col-opt'><input type='checkbox' data-col='" + c.id + "'" + (on ? " checked" : "") + "/> " + esc(c.label) + "</label>";
+  }).join("") + "<button class='btn btn-ghost btn-xs' data-cols-reset>Reset</button>";
+  cp.querySelectorAll("input[data-col]").forEach((i) => i.addEventListener("change", () => {
+    const m = safeStorage.getJSON(COLS_KEY, {}) || {};
+    m[i.dataset.col] = i.checked;
+    safeStorage.setJSON(COLS_KEY, m);
+    renderRuns({ cached: true });
+  }));
+  cp.querySelector("[data-cols-reset]").addEventListener("click", () => { safeStorage.remove(COLS_KEY); paintColPicker(); renderRuns({ cached: true }); });
+}
+
+// Segmented filter chips (no native <select>), counts from the unfiltered list.
+function paintChips(runs) {
+  const chip = (host, key, opts) => {
+    const el = document.getElementById(host);
+    if (!el) return;
+    el.hidden = opts.length <= 2;
+    el.innerHTML = opts.map(([v, label, n]) =>
+      "<button class='rn-segb" + (F[key] === v ? " is-on" : "") + "' data-v='" + esc(v) + "' aria-pressed='" + (F[key] === v) + "'>" +
+      esc(label) + (n != null ? " <span class='rn-n'>" + n + "</span>" : "") + "</button>").join("");
+    el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { F[key] = b.dataset.v; renderRuns({ cached: true }); }));
+  };
+  const cnt = (fn) => runs.filter(fn).length;
+  chip("rn-status", "status", [["", "All", runs.length], ["passed", "Passed", cnt((r) => verdictOf(r).state === "passed")],
+    ["warning", "Warnings", cnt((r) => verdictOf(r).state === "warning")], ["failed", "Failed", cnt((r) => verdictOf(r).state === "failed")], ["stopped", "Stopped", cnt((r) => /stopped|incomplete/.test(verdictOf(r).state))],
+    ["pinned", "Pinned", cnt((r) => r.pinned)]]);
+  chip("rn-origin", "origin", [["", "Any origin", null], ["manual", "Manual", cnt((r) => originText(r) === "manual")],
+    ["sweep", "Sweeps", cnt((r) => originText(r) === "sweep")], ["fix", "Fixes", cnt((r) => originOf(r).kind === "fix")]]);
+  const pdks = [...new Set(runs.map((r) => r.pdk).filter(Boolean))];
+  chip("rn-pdk", "pdk", pdks.length > 1 ? [["", "Any PDK", null], ...pdks.map((p) => [p, p, cnt((r) => r.pdk === p)])] : []);
+  document.querySelectorAll("#sec-runs .runs-scope[data-scope]").forEach((b) =>
+    b.classList.toggle("is-on", b.dataset.scope === getRunScope()));
+}
+
+function matches(r) {
+  const v = verdictOf(r).state;
+  if (F.status === "pinned" && !r.pinned) return false;
+  if (F.status === "passed" && v !== "passed") return false;
+  if (F.status === "failed" && v !== "failed") return false;
+  if (F.status === "warning" && v !== "warning") return false;
+  if (F.status === "stopped" && !/stopped|incomplete/.test(v)) return false;
+  if (F.origin === "fix" && originOf(r).kind !== "fix") return false;
+  if (F.origin && F.origin !== "fix" && originText(r) !== F.origin) return false;
+  if (F.pdk && r.pdk !== F.pdk) return false;
+  if (!F.q) return true;
+  const sw = sweepOf(r);
+  const hay = [r.tag, r.pdk, r.scl, r.note, originText(r), designLabel(r._design), valuesText(pointValues(r, sw)),
+    (CHANGES.get(keyOf(r)) || []).map((c) => c.var).join(" ")].join(" ").toLowerCase();
+  return hay.includes(F.q);
+}
+
+function sortRuns(list) {
+  const col = COLS.find((c) => c.id === _sort.col) || COLS[2];
+  const val = col.sort || col.get || (() => 0);
+  return list.slice().sort((a, b) => {
+    const x = val(a), y = val(b);
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;          // blanks last, either way
+    if (y == null) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * _sort.dir;
+  });
+}
+
+// ------------------------------------------------------------------ render
 export async function renderRuns({ cached = false } = {}) {
-  const root = document.getElementById("runs-list");
-  if (!root) return;
-  wireScope();
-  const scope = getScope();
-  document.querySelectorAll(".runs-scope[data-scope]").forEach((b) =>
-    b.classList.toggle("runs-scope-active", b.dataset.scope === scope));
+  const table = document.getElementById("runs-table");
+  if (!table) return;
+  wire();
+  const scope = getRunScope();
   const key = scope + "\0" + normDir(state.designDir);
   const my = ++_renderSeq;
   let runs;
-  if (cached && _shown.key === key) {
-    runs = _shown.runs;
-  } else {
+  if (cached && _shown.key === key) runs = _shown.runs;
+  else {
+    // A list not shown yet: the page skeleton after 300 ms, never "No runs" before the answer.
+    const job = _shown.key !== key ? loadingStart(document.getElementById("sec-runs"), { skeleton: pageSkeleton("runs"), label: "Runs",
+      hasContent: () => !!document.querySelector("#runs-table tbody tr") }) : null;
     try {
-      runs = await gatherRuns(scope, { strict: true });
+      const [rs, sw] = await Promise.all([gatherRunsScoped(scope, { strict: true }),
+        state.designDir ? api.dseSweeps().catch(() => null) : Promise.resolve(null)]);
+      runs = rs;
+      if (sw) SWEEPS = (sw.data || sw).sweeps || [];
     } catch (_e) {
       if (my !== _renderSeq) return;
-      // The list could not be refreshed (LanEx busy or asleep): keep the runs
-      // already on screen and say so, rather than "No runs yet".
-      if (_shown.key === key && root.children.length) { runsNote("Couldn't refresh the list. Trying again…"); setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000); return; }
+      if (_shown.key === key && _shown.runs.length) { note("Couldn't refresh the list. Trying again…"); setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000); return; }
       runs = null;
-    }
+    } finally { if (job) job.done(); }
   }
-  // A newer render started while this one waited: it owns the list.
   if (my !== _renderSeq) return;
+  const empty = document.getElementById("rn-empty"), wrap = document.getElementById("rn-wrap");
+  const title = document.getElementById("rn-title");
+  if (title) title.textContent = scope === "all" ? "Every run of every design you've opened" : (state.designDir ? "Every run of " + designLabel(state.designDir) : "Runs");
   if (runs === null) {
-    root.innerHTML = "";
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.innerHTML = "<span class='ico'>⏱</span><h3>Couldn't load your runs</h3><p>LanEx didn't answer in time. Trying again…</p>";
-    root.appendChild(li);
+    wrap.hidden = true; empty.hidden = false;
+    empty.innerHTML = "<h3>Couldn't load your runs</h3><p>LanEx didn't answer in time. Trying again…</p>";
     setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000);
     return;
   }
-  runsNote("");
+  note("");
   _shown = { key, runs };
-  // Keep state.runs scoped to the active design (other views rely on api.run()
-  // which is active-dir-scoped); the "all" list is display-only here.
   if (scope !== "all") state.runs = runs;
-  const shown = runs.filter(matchesFilter);
-  root.innerHTML = "";
+  paintChips(runs);
+  paintLive();
   if (!runs.length) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.innerHTML = scope === "all"
-      ? "<span class='ico'>⏱</span><h3>No runs in your history</h3><p>Open a design and run the flow.</p>"
-      : "<span class='ico'>⏱</span><h3>No runs yet</h3><p>Run the flow once and your history appears here.</p>";
-    root.appendChild(li);
+    wrap.hidden = true; empty.hidden = false;
+    empty.innerHTML = state.designDir || scope === "all"
+      ? "<h3>No runs yet</h3><p>Run the flow once and every run appears here, one row each, with its timing, area, power and checks.</p>" +
+        "<button class='btn btn-primary' data-go='setup'>Go to Setup</button>"
+      : "<h3>Open a project first</h3><p>Runs lists the runs of the project you have open.</p><button class='btn btn-primary' data-go='setup'>Go to Setup</button>";
+    syncSelection();
     return;
   }
+  const shown = runs.filter(matches);
   if (!shown.length) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.innerHTML = "<span class='ico'>" + icon("search") + "</span><h3>No runs match</h3><p>Clear the filter to see all " + runs.length + " runs.</p>";
-    root.appendChild(li);
+    wrap.hidden = true; empty.hidden = false;
+    empty.innerHTML = "<h3>No runs match</h3><p>Clear the search or the filters to see all " + runs.length + " runs.</p>";
+    syncSelection();
     return;
   }
-  for (const run of shown) {
-    const li = document.createElement("li");
-    // Pass/fail left border for at-a-glance scanning (the status word is the
-    // colour-blind-safe redundant cue).
-    li.className = run.success ? "run-pass" : "run-fail";
-    li.dataset.tag = run.tag;
-    li.dataset.design = run._design || "";
-    const designRow = scope === "all"
-      ? "<div class='row2 muted'>" + icon("folder", { size: 13 }) + " " + fmt.escape(designLabel(run._design)) + "</div>"
-      : "";
-    const pkey = pickKey(run._design, run.tag);
-    li.innerHTML =
-      "<div class='row1'>" +
-      "<input type='checkbox' class='run-pick' title='Select for batch delete'" + (_picked.has(pkey) ? " checked" : "") + "/>" +
-      "<button class='run-pin" + (run.pinned ? " pinned" : "") + "' data-act='pin' aria-pressed='" +
-        (run.pinned ? "true" : "false") + "' title='" + (run.pinned ? "Unpin" : "Pin") +
-        " this run' aria-label='Pin run'>" + (run.pinned ? "<svg viewBox='0 0 24 24' width='14' height='14' fill='currentColor' stroke='currentColor' stroke-width='1' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z'/></svg>" : "<svg viewBox='0 0 24 24' width='14' height='14' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z'/></svg>") + "</button>" +
-      "<span class='tag'>" + fmt.escape(run.tag) + "</span>" +
-      "<span class='run-viewing' title='Layout, Analytics and Verify show this run'>On the results pages</span>" +
-      (run.success
-        ? "<span class='pill pill-pass'><span class='text'>passed</span></span>"
-        : "<span class='pill pill-fail'><span class='text'>failed</span></span>") +
-      (run.imported ? "<span class='pill pill-pending' title='Imported from an external source (partial run)'>imported</span>" : "") +
-      "</div>" +
-      designRow +
-      "<div class='row2'>" +
-      "PDK " + fmt.escape(run.pdk || "?") + " · SCL " + fmt.escape(run.scl || "?") +
-      " · " + (run.steps_done || 0) + "/" + (run.step_count || 0) + " steps" +
-      (run.wall_time_s != null ? " · " + run.wall_time_s.toFixed(1) + "s" : "") +
-      "</div>" +
-      "<div class='run-note-row' data-note-row hidden></div>" +
-      "<div class='row3 run-actions'>" +
-      "<button class='btn btn-ghost run-act' data-act='open' title='Show this run in Layout'>" + icon("grid", { size: 13 }) + " Open in Layout</button>" +
-      "<button class='btn btn-ghost run-act' data-act='reproduce' title='Load this run's settings into Setup'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M21 12a9 9 0 1 1-3-6.7M21 4v4h-4'/></svg> Reproduce</button>" +
-      "<button class='btn btn-ghost run-act' data-act='files'>" + icon("folder", { size: 13 }) + " Files</button>" +
-      "<button class='btn btn-ghost run-act' data-act='note'>" + icon("file", { size: 13 }) + " Note</button>" +
-      "<button class='btn btn-ghost run-act' data-act='bundle' title='Download a .zip bundle with selected deliverables'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Bundle</button>" +
-      "<button class='btn btn-ghost run-act' data-act='export' title='Download a run report (CSV / Markdown / HTML)'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3v12M7 11l5 4 5-4M5 21h14'/></svg> Export</button>" +
-      "<button class='btn btn-ghost run-act run-del' data-act='delete'>" + icon("trash", { size: 13 }) + " Delete</button>" +
-      "</div>";
-    const designDir = run._design;
-    li.querySelector('[data-act="open"]').addEventListener("click", (e) => { e.stopPropagation(); openRun(run.tag, designDir); });
-    li.querySelector('[data-act="reproduce"]').addEventListener("click", (e) => { e.stopPropagation(); focusDesign(designDir).then(() => reproduceRun(run.tag)); });
-    li.querySelector('[data-act="files"]').addEventListener("click", (e) => { e.stopPropagation(); focusDesign(designDir).then(() => showFilesModal(run.tag)); });
-    li.querySelector('[data-act="note"]').addEventListener("click", (e) => { e.stopPropagation(); toggleNote(li, run.tag, designDir); });
-    li.querySelector('[data-act="delete"]').addEventListener("click", (e) => { e.stopPropagation(); focusDesign(designDir).then(() => deleteRunFlow(run.tag)); });
-    li.querySelector('[data-act="bundle"]').addEventListener("click", (e) => { e.stopPropagation(); focusDesign(designDir).then(() => bundleDownloadFlow(run.tag)); });
-    li.querySelector('[data-act="export"]').addEventListener("click", (e) => { e.stopPropagation(); focusDesign(designDir).then(() => exportRunFlow(run.tag)); });
-    li.querySelector('[data-act="pin"]').addEventListener("click", (e) => { e.stopPropagation(); togglePin(run.tag, designDir, !run.pinned); });
-    const pick = li.querySelector(".run-pick");
-    pick.addEventListener("click", (e) => e.stopPropagation());
-    pick.addEventListener("change", () => {
-      if (pick.checked) _picked.add(pkey); else _picked.delete(pkey);
-      syncBatchButton();
-    });
-    // A click picks the run for the results pages; it no longer leaves Runs.
-    li.addEventListener("click", () => setRun(run.tag, designDir));
-    root.appendChild(li);
-  }
-  syncBatchButton();
+  wrap.hidden = false; empty.hidden = true;
+  const cols = visibleCols(scope);
+  _baseMemo = new Map();
+  _model = { items: buildItems(sortRuns(shown)), cols, a: 0, b: 0, windowed: false };
+  paintTable(table, _model);
+  wireTable(table, runs);
+  syncSelection();
   paintViewing();
+  explainFailed(runs);
+  loadChanges(runs);
 }
 
-// A one-line status above the list (empty text hides it).
-function runsNote(text) {
-  const root = document.getElementById("runs-list");
-  if (!root) return;
-  let el = document.getElementById("runs-note");
-  if (!text) { if (el) el.remove(); return; }
-  if (!el) {
-    el = document.createElement("p");
-    el.id = "runs-note";
-    el.className = "muted";
-    el.setAttribute("role", "status");
-    root.parentNode.insertBefore(el, root);
+function note(text) {
+  const el = document.getElementById("runs-note");
+  if (!el) return;
+  el.hidden = !text;
+  el.textContent = text || "";
+}
+
+function headHtml(cols) {
+  const th = (c) => {
+    const on = _sort.col === c.id;
+    return "<th scope='col' class='rn-th rn-c-" + c.id + (c.dir != null || c.get ? " is-num" : "") + "'" +
+      (on ? " aria-sort='" + (_sort.dir > 0 ? "ascending" : "descending") + "'" : "") +
+      "><button class='rn-sort" + (on ? " is-on" : "") + "' data-sort='" + c.id + "' title='" + esc(c.tip || "Sort by " + c.label) + "'>" +
+      esc(c.label) + (c.unit ? " <small>" + esc(c.unit) + "</small>" : "") +
+      "<span class='rn-arrow' aria-hidden='true'>" + (on ? (_sort.dir > 0 ? "▲" : "▼") : "") + "</span></button></th>";
+  };
+  return "<thead><tr><th class='rn-th rn-c-pick'><span class='sr-only'>Select</span></th>" +
+    "<th class='rn-th rn-c-base' title='Baseline: every number is coloured against it'>★</th>" + cols.map(th).join("") + "</tr></thead>";
+}
+
+// Rows: sweeps fold under one parent row (in the position of their newest point).
+// One item per table row (a run, with its report row when open, or a sweep).
+function buildItems(list) {
+  const groups = new Map();
+  const order = [];
+  for (const r of list) {
+    const sw = sweepOf(r);
+    if (sw) {
+      const gk = normDir(r._design) + "|sweep:" + sw.id;
+      if (!groups.has(gk)) { groups.set(gk, { sw, runs: [] }); order.push({ group: gk }); }
+      groups.get(gk).runs.push(r);
+    } else order.push({ run: r });
   }
-  el.textContent = text;
+  const items = [];
+  for (const o of order) {
+    if (o.run) { items.push({ key: keyOf(o.run), run: o.run }); continue; }
+    const g = groups.get(o.group);
+    const open = _openSweeps.has(o.group);
+    items.push({ key: o.group, group: g, gk: o.group, open });
+    if (open) for (const r of g.runs) items.push({ key: keyOf(r), run: r, child: g.sw });
+  }
+  return items;
 }
 
+function itemHtml(it, cols, i) {
+  const html = it.group ? sweepRowHtml(it.group, cols, it.gk, it.open) : rowHtml(it.run, cols, { child: it.child || null });
+  return html.replace(/<tr /g, "<tr data-vi='" + i + "' aria-rowindex='" + (i + 2) + "' ");
+}
+
+// One baseline lookup per design and render (was a scan of every run per row).
+let _baseMemo = new Map();
+function baselineRowFor(r) {
+  const t = baselineTag(r._design);
+  if (!t || t === r.tag) return null;
+  const d = normDir(r._design);
+  const mk = d + "|" + t;
+  if (_baseMemo.has(mk)) return _baseMemo.get(mk);
+  const b = _shown.runs.find((x) => x.tag === t && normDir(x._design) === d) || null;
+  _baseMemo.set(mk, b);
+  return b;
+}
+
+// ------------------------------------------------------------------ windowed rows
+// Past WINDOW_MIN rows only the rows near the view are in the DOM, with a
+// spacer row above and below for the rest: 300 runs were 9k nodes, and every
+// sort, tick or baseline change laid all of them out again (a second at a time
+// on a slow laptop). Collapsed "sizer" rows carry the widest cell of every
+// column, so the columns are exactly as wide as with every row drawn and do not
+// move while scrolling. Tab past the last drawn row draws the next ones first.
+const WINDOW_MIN = 100, OVERSCAN = 24, MARGIN = 8;
+const _heights = new Map();    // item key -> measured height in px (kept across renders)
+let _rowH = 34.5;              // a plain run row, as measured
+let _model = null;             // { items, cols, a, b, windowed }
+const _stash = new Map();      // item key -> its <tr>s, kept while scrolled away (open report, sweep summary)
+
+// The element that scrolls the table up and down (not .rn-wrap: its sideways
+// scroll makes its overflow-y compute to auto too, but it never scrolls down).
+function scrollerOf(table) {
+  const from = table.closest(".rn-wrap") || table;
+  for (let e = from.parentElement; e && e !== document.body; e = e.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(e).overflowY)) return e;
+  }
+  return document.scrollingElement;
+}
+
+function estimate(it) {
+  const h = _heights.get(it.key);
+  if (h != null) return h;
+  if (it.group) return it.open ? _rowH + 160 : _rowH;
+  return _rowH + (originOf(it.run).kind === "fix" ? 17 : 0) + (_open === it.key ? 320 : 0);
+}
+
+function prefix(m) {
+  const cum = new Float64Array(m.items.length + 1);
+  for (let i = 0; i < m.items.length; i++) cum[i + 1] = cum[i] + estimate(m.items[i]);
+  return cum;
+}
+
+// Items [i, j) under the scroller's viewport (from the heights known so far).
+function visibleRange(table, m, cum) {
+  const sc = scrollerOf(table);
+  const head = table.tHead ? table.tHead.getBoundingClientRect().height : 0;
+  const tr = table.getBoundingClientRect();
+  const vr = sc === document.scrollingElement ? { top: 0, bottom: window.innerHeight } : sc.getBoundingClientRect();
+  const top = vr.top - tr.top - head, bot = vr.bottom - tr.top - head;
+  const n = m.items.length;
+  let i = 0;
+  while (i < n && cum[i + 1] <= top) i++;
+  let j = i;
+  while (j < n && cum[j] < bot) j++;
+  return [Math.min(i, n), Math.max(j, Math.min(i + 1, n))];
+}
+
+function spacerHtml(which, cols, h) {
+  return "<tr class='rn-spacer' data-sp='" + which + "' aria-hidden='true'><td colspan='" + (cols.length + 2) + "' style='height:" + h.toFixed(1) + "px'></td></tr>";
+}
+
+function paintTable(table, m) {
+  const cols = m.cols, n = m.items.length;
+  _stash.clear();
+  table.setAttribute("aria-rowcount", String(n + 1));
+  m.windowed = n > WINDOW_MIN;
+  if (!m.windowed) {
+    m.a = 0; m.b = n;
+    table.innerHTML = headHtml(cols) + "<tbody>" + m.items.map((it, i) => itemHtml(it, cols, i)).join("") + "</tbody>";
+    afterInsert(table, m, 0, n);
+    return;
+  }
+  const cum = prefix(m);
+  let a = 0, b = Math.min(n, 40 + OVERSCAN);
+  if (table.tBodies[0] && table.offsetParent) {
+    const [i, j] = visibleRange(table, m, cum);
+    a = Math.max(0, i - OVERSCAN); b = Math.min(n, j + OVERSCAN);
+  }
+  m.a = a; m.b = b;
+  let body = "";
+  for (let k = a; k < b; k++) body += itemHtml(m.items[k], cols, k);
+  table.innerHTML = headHtml(cols) + "<tbody>" + sizerHtml(m) + spacerHtml("top", cols, cum[a]) + body + spacerHtml("bot", cols, cum[n] - cum[b]) + "</tbody>";
+  afterInsert(table, m, a, b);
+  wireWindow(table);
+  requestAnimationFrame(() => paintWindow());
+}
+
+// Heights of the drawn items (one layout read for all of them).
+function measure(table, m) {
+  const tb = table.tBodies[0];
+  if (!tb) return;
+  const acc = new Map();
+  for (const tr of tb.rows) {
+    const vi = tr.dataset.vi;
+    if (vi == null) continue;
+    acc.set(+vi, (acc.get(+vi) || 0) + tr.getBoundingClientRect().height);
+  }
+  for (const [i, h] of acc) {
+    const it = m.items[i];
+    if (!it || !h) continue;
+    _heights.set(it.key, h);
+    if (!it.group && _open !== it.key && originOf(it.run).kind !== "fix") _rowH = h;
+  }
+}
+
+let _winRaf = 0;
+function paintWindow() {
+  _winRaf = 0;
+  const m = _model, table = document.getElementById("runs-table");
+  if (!m || !m.windowed || !table || !table.tBodies[0] || !table.offsetParent) return;
+  measure(table, m);
+  const cum = prefix(m), n = m.items.length;
+  const [i, j] = visibleRange(table, m, cum);
+  const ok = (m.a === 0 || i >= m.a + MARGIN) && (m.b === n || j <= m.b - MARGIN);
+  if (!ok) moveWindow(table, m, Math.max(0, i - OVERSCAN), Math.min(n, j + OVERSCAN));
+  setSpacers(table, m, cum);
+}
+
+function setSpacers(table, m, cum) {
+  const n = m.items.length;
+  const top = table.querySelector("tr[data-sp='top'] > td"), bot = table.querySelector("tr[data-sp='bot'] > td");
+  if (top) top.style.height = cum[m.a].toFixed(1) + "px";
+  if (bot) bot.style.height = (cum[n] - cum[m.b]).toFixed(1) + "px";
+}
+
+function htmlOf(m, from, to) {
+  let s = "";
+  for (let k = from; k < to; k++) if (!_stash.has(m.items[k].key)) s += itemHtml(m.items[k], m.cols, k);
+  return s;
+}
+
+// Draw items [a, b): drop the rows that left, add the ones that came in.
+function moveWindow(table, m, a, b) {
+  const tb = table.tBodies[0];
+  const topSp = tb.querySelector("tr[data-sp='top']"), botSp = tb.querySelector("tr[data-sp='bot']");
+  if (!topSp || !botSp || (a === m.a && b === m.b)) return;
+  const keep = (k) => k >= a && k < b;
+  for (const tr of [...tb.rows]) {
+    const vi = tr.dataset.vi;
+    if (vi == null || keep(+vi)) continue;
+    const it = m.items[+vi];
+    // An open report or a sweep's summary keeps its rows (and what they show).
+    if (it && ((it.group && it.open) || (!it.group && _open === it.key))) {
+      const list = _stash.get(it.key) || [];
+      list.push(tr);
+      _stash.set(it.key, list);
+    }
+    tr.remove();
+  }
+  const overlap = a < m.b && b > m.a;
+  const ins = (anchor, where, from, to) => {
+    if (from >= to) return;
+    anchor.insertAdjacentHTML(where, htmlOf(m, from, to));
+    // Kept rows (an open report, a sweep's summary) go back where they belong.
+    for (let k = from; k < to; k++) restore(tb, m, k);
+  };
+  if (overlap) {
+    ins(topSp, "afterend", a, Math.min(m.a, b));
+    ins(botSp, "beforebegin", Math.max(m.b, a), b);
+  } else ins(botSp, "beforebegin", a, b);
+  const was = [m.a, m.b];
+  m.a = a; m.b = b;
+  paintViewing();
+  // Only the newly drawn items need their summary or report painted.
+  const fresh = [];
+  for (let k = a; k < b; k++) if (!overlap || k < was[0] || k >= was[1]) fresh.push(k);
+  if (fresh.length) afterInsert(table, m, fresh[0], fresh[fresh.length - 1] + 1, new Set(fresh));
+}
+
+function restore(tb, m, k) {
+  const it = m.items[k];
+  const list = _stash.get(it.key);
+  if (!list) return;
+  _stash.delete(it.key);
+  // Put the kept rows right after the row before them (or the top spacer).
+  let before = null;
+  for (let p = k - 1; p >= 0 && !before; p--) {
+    const rows = tb.querySelectorAll("tr[data-vi='" + p + "']");
+    if (rows.length) before = rows[rows.length - 1];
+  }
+  if (!before) before = tb.querySelector("tr[data-sp='top']");
+  let at = before;
+  for (const tr of list) { at.after(tr); at = tr; }
+  it._kept = true;
+}
+
+// After rows are drawn: sweep summaries and the open report card.
+function afterInsert(table, m, from, to, only = null) {
+  for (let k = from; k < to; k++) {
+    if (only && !only.has(k)) continue;
+    const it = m.items[k];
+    if (it._kept) { it._kept = false; continue; }
+    if (it.group && it.open) {
+      const el = table.querySelector(".rn-sw-sum[data-sum='" + CSS.escape(it.gk) + "']");
+      const g = it.group.runs;
+      if (el && g.length) import("./sweeps.js").then((mod) => mod.paintSweepSummary(el, it.group.sw, g, { verdictOf, failCode, baseline: baselineTag(g[0]._design) }));
+    }
+    if (!it.group && _open === it.key) paintCard(it.run);
+  }
+}
+
+// The widest cell of each column, from every row: up to three collapsed rows.
+function cellWidthKey(c, it) {
+  const r = it.run;
+  if (c.id === "verdict") { const v = verdictOf(r); return String(v.label || v.state).length; }
+  if (c.id === "when") return when(r.started_at).length;
+  if (c.id === "origin") return originText(r).length;
+  if (c.id === "design") return designLabel(r._design).length;
+  if (c.id === "pdk") return (r.pdk || "").length;
+  if (c.id === "note") return Math.min(26, (r.note || "").split("\n")[0].length);
+  if (c.id === "changed" || c.id === "checks") return Math.min(c.id === "changed" ? 26 : 99, cellHtml(c, r, baselineRowFor(r)).replace(/<[^>]*>/g, "").length);
+  const v = c.get ? c.get(r) : null;
+  if (v == null) return 0;
+  const neg = (c.id === "wns" || c.id === "tns" || c.id === "hold") && v < 0 ? 0.5 : 0;
+  return String(c.f ? c.f(v) : v).length + neg;
+}
+function nameWidthKey(it, cols) {
+  const r = it.run;
+  const vals = it.child ? pointValues(r, it.child) : null;
+  return r.tag.length + (vals ? valuesText(vals).length * 0.9 + 1 : 0) + (r.pinned ? 2 : 0) + (r.imported ? 9 : 0) +
+    (r.note && !cols.some((c) => c.id === "note") ? 2 : 0) + (isViewingRun(r) ? 7 : 0);
+}
+function isViewingRun(r) { return r.tag === contextRun() && normDir(r._design) === normDir(contextDesign()); }
+
+function sizerHtml(m) {
+  const cols = m.cols, N = 3;
+  _viewingKey = normDir(contextDesign()) + "|" + contextRun();
+  const top = new Map(cols.map((c) => [c.id, []]));
+  const push = (id, score, it) => {
+    const l = top.get(id);
+    if (!score) return;
+    if (l.length < N || score > l[l.length - 1][0]) {
+      l.push([score, it]); l.sort((x, y) => y[0] - x[0]); if (l.length > N) l.pop();
+    }
+  };
+  top.set("_lineage", []); top.set("_sweep", []);
+  for (const it of m.items) {
+    if (it.group) { push("_sweep", sweepRowHtml(it.group, cols, it.gk, false).replace(/<[^>]*>/g, "").length, it); continue; }
+    for (const c of cols) push(c.id, c.id === "name" ? nameWidthKey(it, cols) : cellWidthKey(c, it), it);
+    if (originOf(it.run).kind === "fix") push("_lineage", lineageHtml(it.run).replace(/<[^>]*>/g, "").length, it);
+  }
+  let out = "";
+  for (let k = 0; k < N; k++) {
+    let any = false;
+    const tds = cols.map((c) => {
+      // The third row's name cell is the longest "fix of …" line, if any.
+      const pick = c.id === "name" && k === N - 1 && top.get("_lineage").length ? top.get("_lineage")[0] : top.get(c.id)[k];
+      if (!pick) return "<td class='rn-c-" + c.id + "'></td>";
+      any = true;
+      const it = pick[1];
+      if (c.id === "name") return nameCellHtml(it.run, cols, it.child || null, isViewingRun(it.run));
+      return cellHtml(c, it.run, baselineRowFor(it.run));
+    }).join("");
+    if (any) out += "<tr class='rn-sizer' aria-hidden='true'><td class='rn-c-pick'></td><td class='rn-c-base'></td>" + tds + "</tr>";
+  }
+  const sw = top.get("_sweep")[0];
+  if (sw) out += sweepRowHtml(sw[1].group, cols, sw[1].gk, false).replace("<tr class='rn-sweep", "<tr aria-hidden='true' class='rn-sizer rn-sweep");
+  return out;
+}
+
+function repaintSizer() {
+  const m = _model, table = document.getElementById("runs-table");
+  if (!m || !m.windowed || !table || !table.tBodies[0]) return;
+  const tb = table.tBodies[0];
+  tb.querySelectorAll("tr.rn-sizer").forEach((tr) => tr.remove());
+  tb.insertAdjacentHTML("afterbegin", sizerHtml(m));
+}
+
+let _winWired = null;
+function wireWindow(table) {
+  const sc = scrollerOf(table);
+  if (_winWired !== sc) {
+    if (_winWired) _winWired.removeEventListener("scroll", onWinScroll);
+    (sc === document.scrollingElement ? window : sc).addEventListener("scroll", onWinScroll, { passive: true });
+    _winWired = sc;
+  }
+  if (table._winKeys) return;
+  table._winKeys = true;
+  // Tab / Shift+Tab off the last / first drawn row: draw the next rows first,
+  // so focus moves into them as if every row were there.
+  table.addEventListener("keydown", (e) => {
+    const m = _model;
+    if (e.key !== "Tab" || !m || !m.windowed) return;
+    const tr = e.target.closest && e.target.closest("tr[data-vi]");
+    if (!tr) return;
+    const vi = +tr.dataset.vi, n = m.items.length;
+    if (!e.shiftKey && vi >= m.b - 1 && m.b < n) moveWindow(table, m, m.a, Math.min(n, m.b + OVERSCAN));
+    else if (e.shiftKey && vi <= m.a && m.a > 0) moveWindow(table, m, Math.max(0, m.a - OVERSCAN), m.b);
+    else return;
+    setSpacers(table, m, prefix(m));
+  });
+}
+function onWinScroll() {
+  if (!_winRaf && _model && _model.windowed) _winRaf = requestAnimationFrame(paintWindow);
+}
+
+function cellHtml(c, r, base) {
+  if (c.id === "verdict") {
+    const v = verdictOf(r);
+    return "<td class='rn-c-verdict'><span class='rn-v is-" + (VERDICT_TONE[v.state] || "warn") + "'><i aria-hidden='true'></i>" + esc(v.label || v.state) + "</span></td>";
+  }
+  if (c.id === "name") return "";        // drawn by rowHtml
+  if (c.id === "when") return "<td class='rn-c-when' title='" + esc(r.started_at || "") + "'>" + esc(when(r.started_at)) + "</td>";
+  if (c.id === "origin") return "<td class='rn-c-origin'>" + esc(originText(r) === "fix" ? "fix" : originText(r)) + "</td>";
+  if (c.id === "design") return "<td class='rn-c-design'>" + esc(designLabel(r._design)) + "</td>";
+  if (c.id === "pdk") return "<td class='rn-c-pdk'>" + esc(r.pdk || "") + "</td>";
+  if (c.id === "note") return "<td class='rn-c-note' title='" + esc(r.note || "") + "'>" + esc((r.note || "").split("\n")[0]) + "</td>";
+  if (c.id === "changed") {
+    const ch = CHANGES.get(keyOf(r));
+    if (!baselineTag(r._design)) return "<td class='rn-c-changed muted'></td>";
+    if (baselineTag(r._design) === r.tag) return "<td class='rn-c-changed'><span class='rn-basetag'>baseline</span></td>";
+    if (!ch) return "<td class='rn-c-changed muted'>…</td>";
+    if (!ch.length) return "<td class='rn-c-changed muted'>same settings</td>";
+    const txt = ch.slice(0, 2).map((x) => x.var + " " + short(x.from) + "→" + short(x.to)).join(", ") + (ch.length > 2 ? " +" + (ch.length - 2) : "");
+    return "<td class='rn-c-changed' title='" + esc(ch.map((x) => x.var + ": " + x.from + " → " + x.to).join("\n")) + "'>" + esc(txt) + "</td>";
+  }
+  if (c.id === "checks") {
+    const k = checksOf(r);
+    if (!k) return "<td class='rn-c-checks is-num muted'></td>";
+    // LibreLane's metric says clean; a DRC report listing markers anyway is
+    // flagged (verdict.drc_disagree), with Verify's DRC section one click away.
+    const dd = r.verdict && r.verdict.drc_disagree;
+    if (!k.total && dd && dd.markers) {
+      return "<td class='rn-c-checks is-num'><span class='rn-clean'>clean</span> <button class='rn-drcflag' data-act='drc' style='color:var(--warn);background:none;border:0;padding:0;cursor:pointer;font:inherit' title='" +
+        esc("The DRC report files list " + dd.markers + " markers but LibreLane's metric says 0. Open Verify's Design rules.") + "'>· report: " + dd.markers + "</button></td>";
+    }
+    if (!k.total) return "<td class='rn-c-checks is-num'><span class='rn-clean'>clean</span></td>";
+    const parts = [k.drc ? "DRC " + k.drc : "", k.lvs ? "LVS " + k.lvs : "", k.ant ? "ant " + k.ant : ""].filter(Boolean);
+    return "<td class='rn-c-checks is-num'><span class='rn-bad'>" + esc(parts.join(" · ")) + "</span></td>";
+  }
+  const v = c.get(r);
+  if (v == null) return "<td class='rn-c-" + c.id + " is-num muted'></td>";
+  let cls = "", delta = "";
+  // Only finished runs are measured against the baseline (a stopped run is "faster").
+  if (c.dir && base && /passed|warning/.test(verdictOf(r).state)) {
+    const b = c.get(base);
+    if (b != null) {
+      const d = v - b;
+      const same = Math.abs(d) <= Math.max(Math.abs(b) * 5e-4, c.id === "runtime" ? 1 : 0.005);
+      if (!same) {
+        cls = (d > 0) === (c.dir > 0) ? " is-better" : " is-worse";
+        delta = " (baseline " + (c.f ? c.f(b) : b) + ")";
+      }
+    }
+  }
+  const neg = (c.id === "wns" || c.id === "tns" || c.id === "hold") && v < 0 ? " is-neg" : "";
+  // The tooltip has more digits than the cell, not all sixteen of the float.
+  const exact = c.id === "runtime" ? fmtDur(v) : String(Number(v.toPrecision(6))) + (c.unit ? " " + c.unit : "");
+  return "<td class='rn-c-" + c.id + " is-num" + cls + neg + "' title='" + esc(c.label + ": " + exact + delta) + "'>" + esc(c.f ? c.f(v) : v) + "</td>";
+}
+const short = (s) => { s = String(s ?? "—"); return s.length > 14 ? s.slice(0, 13) + "…" : s; };
+
+function rowHtml(r, cols, { child = null } = {}) {
+  const k = keyOf(r);
+  const base = baselineRowFor(r);
+  const isBase = baselineTag(r._design) === r.tag;
+  const name = nameCellHtml(r, cols, child);
+  const cells = cols.map((c) => (c.id === "name" ? name : cellHtml(c, r, base))).join("");
+  const n = cols.length + 2;
+  return "<tr class='rn-row" + (child ? " is-child" : "") + (_picked.has(k) ? " is-picked" : "") + "' data-key='" + esc(k) + "' data-tag='" + esc(r.tag) + "' data-design='" + esc(r._design || "") + "'>" +
+    "<td class='rn-c-pick'><input type='checkbox' class='rn-pick' aria-label='Select " + esc(r.tag) + "'" + (_picked.has(k) ? " checked" : "") + "/></td>" +
+    "<td class='rn-c-base'><button class='rn-star" + (isBase ? " is-on" : "") + "' data-act='base' aria-pressed='" + isBase + "' title='" +
+      (isBase ? "The baseline of " + esc(designLabel(r._design)) + ". Click to clear." : "Make this the baseline") + "'>" + icon("star", { size: 13 }) + "</button></td>" +
+    cells + "</tr>" +
+    (_open === k ? "<tr class='rn-detail' data-detail='" + esc(k) + "'><td colspan='" + n + "'><div class='rn-card' id='rn-card'>" +
+      "<p class='muted'>Reading the run…</p></div></td></tr>" : "");
+}
+
+// viewing: show the "shown" chip as the row that has it would (sizer rows only).
+function nameCellHtml(r, cols, child, viewing = false) {
+  const k = keyOf(r);
+  const vals = child ? pointValues(r, child) : null;
+  return "<td class='rn-c-name'><div class='rn-name'>" +
+    "<button class='rn-exp' data-act='expand' aria-expanded='" + (_open === k) + "' title='Report and actions' aria-label='Report and actions for " + esc(r.tag) + "'>" + icon("chevron", { size: 12 }) + "</button>" +
+    "<span class='rn-tag'>" + esc(r.tag) + "</span>" +
+    (vals ? "<span class='rn-val'>" + esc(valuesText(vals)) + "</span>" : "") +
+    (r.pinned ? "<span class='rn-pin' title='Pinned'>" + icon("star", { size: 11 }) + "</span>" : "") +
+    (r.imported ? "<span class='rn-chip'>imported</span>" : "") +
+    (r.note && !cols.some((c) => c.id === "note") ? "<span class='rn-hasnote' title='" + esc(r.note) + "'>" + icon("file", { size: 11 }) + "</span>" : "") +
+    "<span class='rn-viewing' title='Flow, Layout, Analytics and Verify show this run'" + (viewing ? " style='display:inline-block'" : "") + ">shown</span></div>" + lineageHtml(r) + "</td>";
+}
+
+function sweepRowHtml(g, cols, gk, open) {
+  const sw = g.sw, rs = g.runs;
+  const axes = (sw.axes || []).map((a) => {
+    const vs = (a.values || []).map(String);
+    const nums = vs.map(Number);
+    const range = nums.every(Number.isFinite) && vs.length > 2 ? Math.min(...nums) + "–" + Math.max(...nums) : vs.join(", ");
+    return a.var + " " + range;
+  }).join(" × ") || "settings";
+  const failed = rs.filter((r) => verdictOf(r).state === "failed");
+  const reasons = [...new Set(failed.map((r) => failCode(r)).filter(Boolean))];
+  const passed = rs.filter((r) => verdictOf(r).state === "passed");
+  const bestW = passed.map((r) => km(r, "timing__setup__ws")).filter((v) => v != null);
+  const running = rs.some((r) => verdictOf(r).state === "running");
+  // Fewer runs than planned: say why (a Stop, or "stop at the first clean").
+  const short = Number.isFinite(sw.count) && rs.length < sw.count;
+  const stopped = rs.some((r) => verdictOf(r).state === "stopped");
+  const n = cols.length + 2;
+  return "<tr class='rn-sweep" + (open ? " is-open" : "") + "' data-group='" + esc(gk) + "'><td class='rn-c-pick'></td><td class='rn-c-base'></td>" +
+    "<td colspan='" + (n - 2) + "'><div class='rn-sw'>" +
+    "<button class='rn-exp' data-act='group' aria-expanded='" + open + "' aria-label='Show the runs of this sweep'>" + icon("chevron", { size: 12 }) + "</button>" +
+    "<b>Sweep " + esc(axes) + "</b><span class='rn-sw-m'>" + rs.length + (short ? " of " + sw.count : "") + " run" + ((short ? sw.count : rs.length) === 1 ? "" : "s") +
+    (running ? " · running" : short ? (stopped ? " · you stopped it" : sw.stop_when_good && passed.length ? " · stopped at the first clean run" : "") : "") +
+    (failed.length ? " · <span class='rn-bad'>" + failed.length + " failed" + (reasons.length ? " (" + esc(reasons.join(", ")) + ")" : "") + "</span>" : "") +
+    (bestW.length ? " · best WNS " + esc(signed(Math.max(...bestW))) + " ns" : "") + "</span>" +
+    // An old manifest's time had no zone: the server read it as its own clock
+    // (dse.load_sweeps) and says so; the dotted line shows it is assumed.
+    "<span class='rn-sw-when" + (sw.created_at_note ? " is-assumed" : "") + "'" +
+      (sw.created_at_note ? " title='" + esc(sw.created_at_note) + "'" : "") + ">" + esc(when(sw.created_at)) + "</span>" +
+    "<button class='btn btn-ghost btn-xs' data-act='sweep-summary'>Summary</button></div>" +
+    (open ? "<div class='rn-sw-sum' data-sum='" + esc(gk) + "'></div>" : "") + "</td></tr>";
+}
+
+// "DPL-0036": the error code in the failed run's reason, else its stage.
+function failCode(r) {
+  const sw = sweepOf(r);
+  const res = sw && sw.results && sw.results[r.tag];
+  const rx = RX.get(keyOf(r));
+  const text = (res && res.reason) || (rx && ((rx.card && rx.card.title) || (rx.errors || [])[0])) || "";
+  const m = /\b([A-Z]{2,4}-\d{4})\b/.exec(text) || /\b([A-Z]{2,4}-\d{4})\b/.exec(((rx && rx.errors) || []).join(" "));
+  if (m) return m[1];
+  const st = (res && res.stage) || (rx && rx.stage);
+  return st ? FS.stageLabel(st) : "";
+}
+
+function when(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const now = new Date();
+  const hm = localeTime(d, [], { hour: "2-digit", minute: "2-digit" });
+  const days = Math.floor((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
+  if (days === 0) return "today " + hm;
+  if (days === 1) return "yesterday " + hm;
+  if (days < 7) return days + " days ago";
+  return localeDate(d, [], { day: "numeric", month: "short", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+}
+
+// ------------------------------------------------------------------ table events
+function rowOf(el, runs) {
+  const tr = el.closest("tr[data-key]");
+  return tr ? runs.find((r) => keyOf(r) === tr.dataset.key) : null;
+}
+
+function wireTable(table, runs) {
+  table.querySelectorAll("[data-sort]").forEach((b) => b.addEventListener("click", () => {
+    const id = b.dataset.sort;
+    _sort = _sort.col === id ? { col: id, dir: -_sort.dir } : { col: id, dir: ["name", "pdk", "origin", "design", "note"].includes(id) ? 1 : -1 };
+    safeStorage.setJSON(SORT_KEY, _sort);
+    renderRuns({ cached: true });
+  }));
+  table.onclick = (e) => {
+    const t = e.target;
+    if (t.closest(".rn-card")) return;
+    const grp = t.closest("tr.rn-sweep");
+    if (grp) {
+      if (t.closest(".rn-sw-sum")) return;
+      const gk = grp.dataset.group;
+      if (_openSweeps.has(gk)) _openSweeps.delete(gk); else _openSweeps.add(gk);
+      safeStorage.setJSON(OPEN_KEY, [..._openSweeps]);
+      renderRuns({ cached: true });
+      return;
+    }
+    const r = rowOf(t, runs);
+    if (!r) return;
+    if (t.closest(".rn-pick")) {
+      const k = keyOf(r);
+      if (t.checked) {
+        if (_picked.size >= 6) { t.checked = false; toast.show("Compare takes up to six runs.", "info"); return; }
+        _picked.add(k);
+      } else _picked.delete(k);
+      t.closest("tr").classList.toggle("is-picked", t.checked);
+      syncSelection();
+      return;
+    }
+    const act = t.closest("[data-act]")?.dataset.act;
+    if (act === "base") {
+      const isBase = baselineTag(r._design) === r.tag;
+      setBaselineTag(r._design, isBase ? "" : r.tag);
+      // The results pages compare with it too, when it isn't the run they show.
+      if (!isBase && normDir(r._design) === normDir(contextDesign()) && r.tag !== contextRun()) setBaseline(r.tag);
+      _changesKey = "";
+      renderRuns({ cached: true });
+      return;
+    }
+    if (act === "expand") { toggleOpen(r); return; }
+    // The DRC "report disagrees" flag: this run, in Verify's Design rules.
+    if (act === "drc") { e.stopPropagation(); Promise.resolve(setRun(r.tag, r._design)).then(() => go("verify", { section: "vf-drc" })); return; }
+    setRun(r.tag, r._design);
+  };
+  table.ondblclick = (e) => { const r = rowOf(e.target, runs); if (r && !e.target.closest(".rn-card, .rn-pick, [data-act]")) toggleOpen(r); };
+  // The open report card and the open sweeps' summaries: paintTable / afterInsert.
+}
+
+function toggleOpen(r) {
+  const k = keyOf(r);
+  _open = _open === k ? null : k;
+  if (_open) setRun(r.tag, r._design);
+  renderRuns({ cached: true });
+}
+
+let _viewingKey = "";
 function paintViewing() {
   const run = contextRun(), design = normDir(contextDesign());
-  document.querySelectorAll("#runs-list > li[data-tag]").forEach((li) =>
-    li.classList.toggle("is-viewing", li.dataset.tag === run && normDir(li.dataset.design) === design));
+  document.querySelectorAll("#runs-table tr.rn-row").forEach((tr) =>
+    tr.classList.toggle("is-viewing", tr.dataset.tag === run && normDir(tr.dataset.design) === design));
+  // The "shown" chip widens its row's name: the sizer rows follow it.
+  const vk = design + "|" + run;
+  if (vk !== _viewingKey) { _viewingKey = vk; repaintSizer(); }
 }
 
-// Batch delete every ticked run. Grouped by design dir so each run resolves
-// against the right active design before deletion. One typed confirm for the
-// whole set (per-run typing would be unusable at scale).
-async function batchDelete() {
-  const items = [];
-  const byDesign = new Map();
-  for (const r of (state.runs || [])) {
-    const key = pickKey(r._design, r.tag);
-    if (_picked.has(key)) {
-      items.push(r);
-      if (!byDesign.has(r._design)) byDesign.set(r._design, []);
-      byDesign.get(r._design).push(r.tag);
-    }
-  }
-  // The "All designs" scope holds runs not in state.runs; fall back to keys.
-  if (!items.length && _picked.size) {
-    for (const key of _picked) {
-      const sp = key.indexOf(" ");
-      const designDir = key.slice(0, sp); const tag = key.slice(sp + 1);
-      if (!byDesign.has(designDir)) byDesign.set(designDir, []);
-      byDesign.get(designDir).push(tag);
-    }
-  }
+// ------------------------------------------------------------------ selection
+function pickedRuns() { return _shown.runs.filter((r) => _picked.has(keyOf(r))); }
+function syncSelection() {
+  const bar = document.getElementById("rn-selbar");
+  if (!bar) return;
+  // Runs that are gone (deleted, filtered by scope) leave the selection.
+  const live = new Set(_shown.runs.map(keyOf));
+  for (const k of [..._picked]) if (!live.has(k)) _picked.delete(k);
   const n = _picked.size;
+  bar.hidden = n === 0;
+  if (!n) return;
+  bar.innerHTML = "<b>" + n + " selected</b>" +
+    "<button class='btn btn-primary btn-sm' data-sel='compare'" + (n < 2 ? " disabled title='Pick at least two'" : "") + ">" + icon("diff", { size: 13 }) + " Compare</button>" +
+    "<button class='btn btn-ghost btn-sm' data-sel='delete'>" + icon("trash", { size: 13 }) + " Delete</button>" +
+    "<button class='btn btn-ghost btn-sm' data-sel='clear'>Clear</button>" +
+    (n < 2 ? "<span class='muted'>Tick one more to compare.</span>" : "");
+  bar.querySelector("[data-sel='compare']").onclick = () => compareRuns(pickedRuns());
+  bar.querySelector("[data-sel='delete']").onclick = () => batchDelete();
+  bar.querySelector("[data-sel='clear']").onclick = () => { _picked.clear(); renderRuns({ cached: true }); };
+}
+
+export async function compareRuns(runs) {
+  if (runs.length < 2) return;
+  const m = await import("./compare.js");
+  m.preselectCompare(runs.map((r) => r.run_dir).filter(Boolean));
+  // Showing Analytics renders Compare, which ticks the pick and compares.
+  go("analytics", { section: "analytics-compare" });
+}
+
+// ------------------------------------------------------------------ lazy facts
+// Why each failed run failed (the same reading Flow uses), for "failed at
+// Placement" and the sweep's "(DPL-0036)". Active design only (the endpoint
+// resolves against it); a dozen at most per render.
+let _rxBusy = false;
+async function explainFailed(runs) {
+  if (_rxBusy) return;
+  const todo = runs.filter((r) => !r.success && !(r.verdict && r.verdict.stage) && !RX.has(keyOf(r)) &&
+    normDir(r._design) === normDir(state.designDir)).slice(0, 12);
+  if (!todo.length) return;
+  _rxBusy = true;
+  try {
+    for (const r of todo) {
+      try { RX.set(keyOf(r), await api.runExplain(r.tag)); } catch (_e) { RX.set(keyOf(r), {}); }
+    }
+  } finally { _rxBusy = false; }
+  renderRuns({ cached: true });
+}
+
+// What each run changed against its design's baseline: one /api/compare over
+// the design's runs (resolved configs), keys that are run paths left out.
+const NOISE = /^(meta|DESIGN_DIR|.*_PATH|.*_FILE|.*_FILES|RUN_TAG|.*_DIR)$/;
+async function loadChanges(runs) {
+  const byDesign = new Map();
+  for (const r of runs) {
+    const b = baselineTag(r._design);
+    if (!b) continue;
+    if (!byDesign.has(r._design)) byDesign.set(r._design, []);
+    byDesign.get(r._design).push(r);
+  }
+  const key = [...byDesign].map(([d, rs]) => d + ":" + baselineTag(d) + ":" + rs.map((r) => r.tag + r.started_at).join(",")).join("|");
+  if (!key || key === _changesKey) return;
+  _changesKey = key;
+  for (const [d, rs] of byDesign) {
+    const base = rs.find((r) => r.tag === baselineTag(d));
+    if (!base) continue;
+    const list = rs.slice(0, 40);
+    try {
+      const data = await api.compare(list.map((r) => r.tag), list.map((r) => r.run_dir));
+      const diff = (data && (data.config_diff || (data.data || {}).config_diff)) || {};
+      for (const r of list) {
+        const out = [];
+        for (const [k, per] of Object.entries(diff)) {
+          if (NOISE.test(k)) continue;
+          const a = per[r.run_dir], b = per[base.run_dir];
+          if (JSON.stringify(a) !== JSON.stringify(b) && !/\/runs\//.test(JSON.stringify(a) + JSON.stringify(b))) out.push({ var: k, from: show(b), to: show(a) });
+        }
+        CHANGES.set(keyOf(r), out);
+      }
+    } catch (_e) { /* the column stays "…"; nothing else depends on it */ }
+  }
+  if (key === _changesKey) renderRuns({ cached: true });
+}
+const show = (v) => (v == null ? "unset" : typeof v === "object" ? JSON.stringify(v) : String(v));
+
+// ------------------------------------------------------------------ live sweep
+let _poll = null;
+async function paintLive() {
+  const el = document.getElementById("rn-live");
+  if (!el) return;
+  let st = null;
+  try { st = await api.dseStatus(); st = st && (st.data || st); } catch (_e) { st = null; }
+  if (!st || !st.active) {
+    el.hidden = true;
+    if (_poll) { clearInterval(_poll); _poll = null; renderRuns(); }
+    return;
+  }
+  const done = (st.done || []).length + (st.failed || []).length;
+  el.hidden = false;
+  el.innerHTML = "<span class='rn-live-dot' aria-hidden='true'></span><b>Sweep running</b> · run " + Math.min(done + 1, st.total || done + 1) + " of " + (st.total || "?") +
+    (st.running ? " · <code>" + esc(st.running) + "</code>" : "") +
+    ((st.failed || []).length ? " · <span class='rn-bad'>" + st.failed.length + " failed</span>" : "") +
+    "<span class='rn-spacer'></span><button class='btn btn-ghost btn-sm' data-go='pipeline'>Watch in Flow</button>" +
+    "<button class='btn btn-ghost btn-sm' id='rn-sweep-stop'>" + icon("stop", { size: 13 }) + " Stop sweep</button>";
+  el.querySelector("#rn-sweep-stop").onclick = async () => {
+    if (!(await confirmDialog({ title: "Stop the sweep?", confirmText: "Stop sweep", danger: true,
+      body: "The run that is going stops now and the rest are not run. Finished runs are kept." }))) return;
+    try { await api.dseCancel(); toast.show("Sweep stopped.", "success"); } catch (ex) { toast.show("Couldn't stop: " + (ex.message || ex), "error"); }
+    paintLive();
+  };
+  if (!_poll) _poll = setInterval(() => { if (document.getElementById("sec-runs")?.classList.contains("section-active")) paintLive(); }, 4000);
+}
+
+// ------------------------------------------------------------------ report card
+async function paintCard(r) {
+  const host = document.getElementById("rn-card");
+  if (!host || !r) return;
+  const base = baselineRowFor(r);
+  const active = normDir(r._design) === normDir(state.designDir);
+  let rx = RX.get(keyOf(r));
+  // Verify's reading of the run, for the verdict words (the same as Flow and Verify).
+  const [rx2, vfr] = await Promise.all([
+    rx || !active ? Promise.resolve(rx || null) : api.runExplain(r.tag, base ? base.tag : undefined).catch(() => null),
+    active && (r.success || (r.verdict && r.verdict.state !== "running")) ? api.verify(r.tag).catch(() => null) : Promise.resolve(null),
+  ]);
+  rx = rx2;
+  const vf = vfr && (vfr.verdict ? vfr : vfr.data && vfr.data.verdict ? vfr.data : null);
+  if (document.getElementById("rn-card") !== host) return;
+  let card;
+  if (rx && (rx.kind === "clean" || rx.kind === "checks-failed")) {
+    // Flow's report card, fed with this run's final metrics (and the baseline's).
+    card = reportCardHtml({ tag: r.tag, rx, vf, steps: [{ metrics: r.key_metrics || {}, secs: r.wall_time_s || 0 }],
+      stages: [], base: base ? base.tag : "", baseRs: base ? { steps: [{ changed: base.key_metrics || {}, runtime_s: base.wall_time_s || 0 }] } : null });
+  } else {
+    const v = verdictOf(r);
+    const c = (rx && rx.card) || {};
+    // Flow's wording: "You stopped this run" only when it was cancelled; a run
+    // that just ended early (no error, no Stop) may have lost LanEx mid-run.
+    const cancelled = !!rx && rx.kind === "stopped";
+    const early = !cancelled && (v.state === "stopped" || v.state === "incomplete");
+    const at = rx && rx.step ? (rx.step.id || rx.step.dir) + (rx.step.n ? " (step " + rx.step.n + ")" : "") : "";
+    const title = cancelled ? "You stopped this run" : early ? "This run ended before the last step"
+      : c.title ? c.title : v.label;
+    const lede = c.plain ? c.plain
+      : cancelled ? (at ? "It stopped at " + at + ". " : "") + "Everything before it is kept; run again whenever you're ready."
+      : early ? (at ? "Its folder ends at " + at + " with no error" : "It has no error") + ": LanEx may have been closed while it ran. Run it again to finish."
+      : at ? "It stopped at " + at + "." : "";
+    card = "<div class='an-verdict fl-hero is-" + (VERDICT_TONE[v.state] === "pass" ? "pass" : v.state === "failed" ? "fail" : "warn") + "'><div class='an-verdict-main'>" +
+      "<div class='an-eyebrow'>Run " + esc(r.tag) + "</div><h2 class='an-title'>" + esc(title) + "</h2>" +
+      (lede ? "<p class='an-lede'>" + esc(lede) + "</p>" : "") +
+      "</div><div class='an-verdict-act'>" + (v.state === "failed" ? "<button class='btn btn-primary btn-sm' data-go='pipeline'>" + icon("flow", { size: 13 }) + " Why, and how to fix it</button>" : "") + "</div></div>";
+  }
+  host.innerHTML = lineageHtml(r) + card + actionsHtml(r) + "<div class='rn-note-row'><label class='muted' for='rn-note-ta'>Note</label>" +
+    "<textarea id='rn-note-ta' class='rn-note-ta' rows='2' placeholder='What you tried, what you saw…'></textarea></div>";
+  // Verify didn't answer (another design, or it failed): don't promise a reading.
+  if (!vf) host.querySelectorAll(".an-lede").forEach((p) => { if (/Reading the sign-off checks/.test(p.textContent)) p.textContent = "No step failed. Open Verify for the sign-off checks."; });
+  const ta = host.querySelector("#rn-note-ta");
+  ta.value = r.note || "";
+  ta.addEventListener("blur", async () => {
+    if (ta.value === (r.note || "")) return;
+    try { await focusDesign(r._design); await api.setRunNote(r.tag, ta.value); r.note = ta.value; toast.show("Note saved.", "success", 2500); }
+    catch (ex) { toast.show("Couldn't save the note: " + (ex.message || ex), "error"); }
+  });
+  host.querySelectorAll("[data-ra]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); runAction(b.dataset.ra, r); }));
+}
+
+function actionsHtml(r) {
+  const b = (id, label, ic, cls = "btn-ghost") => "<button class='btn " + cls + " btn-sm' data-ra='" + id + "'>" + (ic ? icon(ic, { size: 13 }) + " " : "") + esc(label) + "</button>";
+  return "<div class='rn-actions'>" +
+    "<span class='rn-act-g'>" + b("flow", "Flow", "flow") + b("layout", "Layout", "grid") + b("analytics", "Analytics", "chart") + b("verify", "Verify", "check") + "</span>" +
+    "<span class='rn-act-g'>" + b("again", "Run again with changes", "play") + b("cmd", "Copy command", "command") + "</span>" +
+    "<span class='rn-act-g'>" + b("pin", r.pinned ? "Unpin" : "Pin", "star") + b("bundle", "Bundle", "download") + b("export", "Report", "file") + b("files", "Files", "folder") + "</span>" +
+    "<span class='rn-act-g'>" + b("delete", "Delete", "trash", "btn-ghost rn-del") + "</span></div>";
+}
+
+async function runAction(id, r) {
+  const d = r._design;
+  if (["flow", "layout", "analytics", "verify"].includes(id)) { await setRun(r.tag, d); go(id === "flow" ? "pipeline" : id); return; }
+  await focusDesign(d);
+  if (id === "again") return reproduceRun(r.tag);
+  if (id === "cmd") return copyCommand(r.tag);
+  if (id === "pin") return togglePin(r.tag, d, !r.pinned);
+  if (id === "bundle") return bundleDownloadFlow(r.tag);
+  if (id === "export") return exportRunFlow(r.tag);
+  if (id === "files") return showFilesModal(r.tag);
+  if (id === "delete") return deleteRunFlow(r.tag);
+}
+
+async function copyCommand(tag) {
+  let meta;
+  try { meta = await api.runGuiMeta(tag); } catch (_e) { meta = null; }
+  const cc = meta && meta.cli_command;
+  const cli = String((cc && typeof cc === "object" ? (cc[cc.recommended] || cc.container || cc.local) : cc) || "").trim();
+  if (!cli) { await alertDialog({ title: "No saved command", body: "LanEx didn't record the command for " + tag + " (it was started elsewhere, or by a sweep before LanEx kept it)." }); return; }
+  try { await navigator.clipboard.writeText(cli); toast.show("Command copied.", "success"); }
+  catch (_e) { await alertDialog({ title: "The command of " + tag, body: cli }); }
+}
+
+// Batch delete every ticked run, grouped by design so each resolves against
+// the right active design. One confirm for the whole set.
+async function batchDelete() {
+  const items = pickedRuns();
+  const n = items.length;
   if (!n) return;
   const ok = await confirmDialog({
     title: "Delete " + n + " run" + (n === 1 ? "" : "s") + "?", danger: true,
     confirmText: "Delete " + n + " run" + (n === 1 ? "" : "s"),
-    body: "This permanently deletes " + n + " run" + (n === 1 ? "" : "s") + " and all their files. This cannot be undone.",
+    body: items.map((r) => r.tag).join(", ") + "\n\nThis permanently deletes " + (n === 1 ? "this run" : "these runs") + " and all their files. This cannot be undone.",
   });
   if (!ok) return;
   let failed = 0, done = 0;
+  const byDesign = new Map();
+  for (const r of items) { if (!byDesign.has(r._design)) byDesign.set(r._design, []); byDesign.get(r._design).push(r.tag); }
   for (const [designDir, tags] of byDesign) {
     await focusDesign(designDir);
     for (const tag of tags) {
-      try {
-        if (await deleteGuarded(tag)) {
-          if (state.selectedRunTag === tag) state.selectedRunTag = null;
-          done++;
-        }
-      } catch (_e) { failed++; }
+      try { if (await deleteGuarded(tag)) { if (state.selectedRunTag === tag) state.selectedRunTag = null; done++; } }
+      catch (_e) { failed++; }
     }
   }
   _picked.clear();
   await renderRuns();
   if (failed) await alertDialog({ title: "Some deletes failed", body: failed + " run(s) could not be deleted." });
   else toast.show("Deleted " + done + " run" + (done === 1 ? "" : "s") + ".", "success");
-}
-
-// Inline run-note editor: expands a textarea under the row; saves on blur.
-async function toggleNote(li, tag, designDir) {
-  const row = li.querySelector("[data-note-row]");
-  if (!row) return;
-  if (!row.hidden) { row.hidden = true; return; }
-  row.hidden = false;
-  row.innerHTML = "<span class='muted'>loading note…</span>";
-  // Ensure this run's design is active so the note resolves to the right run.
-  if (designDir && designDir !== state.designDir) {
-    try { await api.setDesignDir(designDir); } catch (_e) {}
-  }
-  let note = "";
-  try { note = (await api.runNote(tag)).note || ""; } catch (_e) {}
-  row.innerHTML = "<textarea class='run-note-ta' rows='2' placeholder='Add a note for this run…'></textarea>";
-  const ta = row.querySelector("textarea");
-  ta.value = note;
-  ta.addEventListener("click", (e) => e.stopPropagation());
-  ta.addEventListener("blur", async () => {
-    try { await api.setRunNote(tag, ta.value); } catch (ex) { console.error("save note", ex); }
-  });
-  ta.focus();
 }
 
 // Download a support bundle — the user ticks exactly what goes in. Keys match
@@ -438,7 +1268,7 @@ async function reproduceRun(tag) {
   });
   if (pick === "copy" && cli) {
     try { await navigator.clipboard.writeText(cli); toast.show("CLI command copied.", "success"); }
-    catch (_e) { toast.show("Copy failed. Select and copy the command in the Manual tab.", "warn"); }
+    catch (_e) { toast.show("Copy failed. The command is shown above: select it and copy it.", "warn"); }
   }
 }
 
@@ -537,15 +1367,17 @@ function filesOverlay() {
   ov.className = "smodal-backdrop";
   ov.hidden = true;
   ov.innerHTML =
-    "<div class='smodal'>" +
+    "<div class='smodal' role='dialog' aria-modal='true' aria-labelledby='files-title'>" +
     "  <div class='smodal-head'><span class='smodal-title' id='files-title'>Files</span>" +
-    "  <span class='smodal-spacer'></span><button class='btn btn-ghost' id='files-close'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
+    "  <span class='smodal-spacer'></span><button class='btn btn-ghost' id='files-close' aria-label='Close the file list'><svg viewBox='0 0 24 24' width='13' height='13' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M6 6l12 12M18 6L6 18'/></svg></button></div>" +
     "  <div class='smodal-log' id='files-body' style='white-space:normal'></div>" +
     "</div>";
   document.body.appendChild(ov);
-  ov.addEventListener("click", (e) => { if (e.target === ov) ov.hidden = true; });
-  ov.querySelector("#files-close").addEventListener("click", () => { ov.hidden = true; });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !ov.hidden) ov.hidden = true; });
+  // Closing puts focus back where it was (holdFocus also keeps Tab inside).
+  const hide = () => { ov.hidden = true; if (ov._release) { const r = ov._release; ov._release = null; r(); } };
+  ov.addEventListener("click", (e) => { if (e.target === ov) hide(); });
+  ov.querySelector("#files-close").addEventListener("click", hide);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !ov.hidden) hide(); });
   _filesOverlay = ov;
   return ov;
 }
@@ -560,6 +1392,8 @@ function fmtBytes(n) {
 async function showFilesModal(tag) {
   const ov = filesOverlay();
   ov.hidden = false;
+  if (!ov._release) ov._release = holdFocus(ov.querySelector(".smodal"));
+  ov.querySelector("#files-close").focus({ preventScroll: true });
   ov.querySelector("#files-title").textContent = "Files: " + tag;
   const body = ov.querySelector("#files-body");
   body.textContent = "loading…";
@@ -586,10 +1420,3 @@ async function showFilesModal(tag) {
     rows.join("");
 }
 
-async function openRun(tag, designDir) {
-  await setRun(tag, designDir);
-  go("layout");
-}
-
-// (The old Runs-tab metric-diff UI was removed; run comparison now lives in the
-// Analytics → "Compare runs" panel. The /api/diff endpoint is retained server-side.)

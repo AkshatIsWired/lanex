@@ -7,9 +7,67 @@ import { state } from "./state.js";
 import { go } from "./nav.js";
 
 let _last = null;
+let _lastAt = 0;
+let _lastKey = "";
+let _inflight = null;   // { key, p }: the check now on its way
 
 export function lastPreflight() {
   return _last;
+}
+
+// What a check is a check of: the project, the PDK and library picked, and
+// the run mode. A result for anything else says nothing about this run.
+export function preflightKey(s = state) {
+  return [s.designDir || "", s.selectedPdk || "", s.selectedScl || "", s.runMode || ""].join("\0");
+}
+
+// How long a check stays good enough to start a run on without asking again.
+// Anything that changes what it checked (a config edit, an install, another
+// PDK or project) drops it before then (forgetPreflight).
+export const PREFLIGHT_FRESH_MS = 60000;
+
+// The rule Run uses: a result is reused only for the same project, PDK,
+// library and mode, while it is fresh. Pure (tested).
+export function reusablePreflight(last, { key, now, maxAge = PREFLIGHT_FRESH_MS } = {}) {
+  if (!last || !last.result || !last.at || last.key !== key) return null;
+  if (!(now - last.at >= 0) || now - last.at > maxAge) return null;
+  return last.result;
+}
+
+// What a check means for a Run click: a PDK mismatch (offer the fix), other
+// blockers (ask), or nothing in the way. Pure (tested).
+export function runBlocker(pf) {
+  if (!pf) return null;
+  const mm = pf.pdk && pf.pdk.mismatch;
+  if (mm) return { kind: "mismatch", mismatch: mm };
+  if (!pf.ready) return { kind: "blockers", blockers: (pf.blockers || []).slice() };
+  return null;
+}
+
+// A fresh result for the current picks, or null.
+export function freshPreflight(now = Date.now()) {
+  return reusablePreflight({ result: _last, key: _lastKey, at: _lastAt }, { key: preflightKey(), now });
+}
+
+// Something the check read has changed: the next Run checks again.
+let _gen = 0;
+export function forgetPreflight() {
+  _gen++;
+  _lastAt = 0;
+  _lastKey = "";
+  _inflight = null;   // one already on its way may have read the old state
+}
+
+if (typeof document !== "undefined") {
+  for (const ev of ["g:config_changed", "g:active_design_changed", "g:projects_changed", "g:tools_changed"]) {
+    document.addEventListener(ev, forgetPreflight);
+  }
+}
+
+// The check on its way for the current picks, else a new one (painted on
+// Setup's checklist). Callers that only need the answer share one request.
+export function preflightNow() {
+  return renderPreflight();
 }
 
 // One checkpoint on the trace. state: "ok" | "warn" | "bad" | "wait". "warn"
@@ -40,7 +98,18 @@ function verdict(text, kind) {
 }
 
 // Fetch + paint the checklist. Returns the preflight result object.
-export async function renderPreflight() {
+// A check already on its way for the same picks is shared, not repeated.
+export function renderPreflight() {
+  const key = preflightKey();
+  if (_inflight && _inflight.key === key) return _inflight.p;
+  const p = paintPreflight(key);
+  const mine = { key, p };
+  _inflight = mine;
+  p.finally(() => { if (_inflight === mine) _inflight = null; }).catch(() => {});
+  return p;
+}
+
+async function paintPreflight(key) {
   const root = document.getElementById("preflight");
   if (!root) return null;
   // Keep the last result on screen while re-checking (no layout jump); the
@@ -51,6 +120,7 @@ export async function renderPreflight() {
   }
   root.classList.add("is-checking");
   verdict("Checking…", "");
+  const gen = _gen;
   let pf;
   try {
     pf = await api.preflight(state.selectedPdk, state.selectedScl, state.runMode);
@@ -62,6 +132,8 @@ export async function renderPreflight() {
   }
   root.classList.remove("is-checking");
   _last = pf;
+  // Kept as fresh only if nothing it read changed while it was on its way.
+  if (gen === _gen) { _lastAt = Date.now(); _lastKey = key; }
 
   const d = pf.design || {};
   const p = pf.pdk || {};
@@ -143,7 +215,15 @@ export async function renderPreflight() {
     );
   }
 
-  if (pf.ready && empty) verdict("1 heads-up", "bad");
+  // Free memory looks too small for this design: a heads-up, never a blocker.
+  const mem = pf.resources || {};
+  if (mem.warn) {
+    html += row("warn", "Memory", (mem.available_gb ?? "?") + " GB free; this design needs about " + (mem.need_gb ?? "?") + " GB",
+      "<button class='btn btn-sm pf-act' data-act='mem'>What to do</button>");
+  }
+
+  const heads = (empty ? 1 : 0) + (mem.warn ? 1 : 0);
+  if (pf.ready && heads) verdict(heads + " heads-up" + (heads === 1 ? "" : "s"), "bad");
   else if (pf.ready) verdict("All set", "ok");
   else verdict(pf.blockers.length + (pf.blockers.length === 1 ? " thing" : " things") + " to fix", "bad");
 
@@ -165,6 +245,10 @@ export async function renderPreflight() {
         go("ide", { rel: b.dataset.rel });
       } else if (act === "new-file") {
         go("ide", { newFile: "module_v" });
+      } else if (act === "mem") {
+        import("./dialog.js").then((m) => m.alertDialog({ title: "Low memory", html: true,
+          body: "<p>" + fmt.escape(mem.message) + "</p><p>" + fmt.escape(mem.next_step) + "</p>" +
+            "<p><a href='" + fmt.escape(mem.link) + "' target='_blank' rel='noopener'>Microsoft's guide to WSL settings (.wslconfig)</a></p>" }));
       } else if (act === "pdk-save" || act === "pdk-follow") {
         import("./setup.js").then((m) => m.resolvePdkMismatch(p.mismatch, act === "pdk-save" ? "save" : "follow"));
       }

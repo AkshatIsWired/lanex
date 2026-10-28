@@ -396,15 +396,22 @@ function ioPins() {
   return out;
 }
 
+// The label font, read once: getComputedStyle on every overlay paint forced a
+// style pass of the page (one 400 ms frame on a slow laptop), and --mono never
+// changes while the page lives.
+let _ioFont = "";
 function drawIoPins(ctx, v) {
   const pins = ioPins();
   if (!pins.length) return;
   const light = S.bg === "light";
   ctx.save();
-  ctx.font = "500 11px " + (getComputedStyle(document.body).getPropertyValue("--mono") || "monospace");
+  if (!_ioFont) _ioFont = "500 11px " + (getComputedStyle(document.body).getPropertyValue("--mono") || "monospace");
+  ctx.font = _ioFont;
   ctx.textBaseline = "middle";
   const placed = { n: -1e9, s: -1e9, e: -1e9, w: -1e9 };
-  const sorted = pins.slice().sort((a, b) => (a.side === "n" || a.side === "s") ? a.x - b.x : b.y - a.y);
+  // Sorted once per pin set (pan and zoom only move them on screen).
+  if (!pins._sorted) pins._sorted = pins.slice().sort((a, b) => (a.side === "n" || a.side === "s") ? a.x - b.x : b.y - a.y);
+  const sorted = pins._sorted;
   for (const p of sorted) {
     const [x, y] = v.w2s(p.x, p.y);
     if (x < -40 || y < -40 || x > v.W + 40 || y > v.H + 40) continue;
@@ -889,7 +896,15 @@ function renderChecks() {
   if (!host) return;
   const srcs = (S.markers && S.markers.sources) || [];
   const total = srcs.reduce((a, s) => a + (s.total || 0), 0);
-  if (badge) { badge.hidden = !total; badge.textContent = total > 999 ? "999+" : String(total); }
+  // The badge counts what Verify counts: LibreLane's metric where it has one
+  // (a report file that contradicts it is listed below, and said).
+  const errs = srcs.reduce((a, s) => a + (s.metric ? (s.metric.value || 0) : (s.total || 0)), 0);
+  const odd = srcs.some((s) => s.disagree);
+  if (badge) { badge.hidden = !errs && !odd; badge.textContent = errs > 999 ? "999+" : errs ? String(errs) : "!"; badge.title = odd ? "A report file disagrees with LibreLane's metric" : ""; }
+  const disagree = (s) => s.disagree
+    ? "<p class='lx-kind-hint lx-pad lx-disagree'>The report lists " + s.total + (s.total === 1 ? " marker" : " markers") + ", but LibreLane's metric <code>" + esc(s.metric.key) +
+      "</code> says " + s.metric.value + ". They disagree; Verify's verdict uses the metric. The report may be edited or left from an earlier run.</p>"
+    : "";
   if (!srcs.length) {
     host.innerHTML = "<p class='muted lx-pad'>This run has no DRC or XOR reports, so there are no markers to show. The checks run after routing; the Verify tab says which ran.</p>";
     return;
@@ -904,9 +919,9 @@ function renderChecks() {
   host.innerHTML =
     "<label class='lx-check lx-pad'><input type='checkbox' id='lx-mk-show'" + (S.showMarkers ? " checked" : "") + "/><span>Show markers on the layout</span></label>" +
     srcs.map((s, si) => {
-      if (!s.total) return "<div class='lx-mk-src is-clean'><span class='vf-mark is-pass'></span><b>" + esc(s.label) + "</b><span class='lx-n'>0</span></div>";
+      if (!s.total) return "<div class='lx-mk-src is-clean'><span class='vf-mark is-" + (s.disagree ? "warn" : "pass") + "'></span><b>" + esc(s.label) + "</b><span class='lx-n'>0</span></div>" + disagree(s);
       return "<div class='lx-mk-src'><label class='lx-check'><input type='checkbox' data-mk-src='" + si + "'" + (s.hidden ? "" : " checked") + "/>" +
-        "<span class='vf-mark is-fail'></span><b>" + esc(s.label) + "</b></label><span class='lx-n'>" + s.total + "</span></div>" +
+        "<span class='vf-mark is-" + (s.disagree ? "warn" : "fail") + "'></span><b>" + esc(s.label) + "</b></label><span class='lx-n'>" + s.total + "</span></div>" + disagree(s) +
         s.categories.map((c) => {
           const items = (s.items || []).filter((it) => it.cat === c.name);
           return "<details class='lx-kind'><summary><b class='lx-mk-cat'>" + esc(c.name) + "</b><span class='lx-n'>" + c.count + "</span></summary>" +

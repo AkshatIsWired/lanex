@@ -26,7 +26,6 @@ export const state = {
   varsValues: {},
   metrics: {},
   installJobs: {},
-  onboardingSeen: false,
   runProgress: { done: 0, total: 0, current: "" },
 };
 

@@ -90,8 +90,11 @@ export function wireJumpNav(nav, { clicks = true } = {}) {
       const t = document.getElementById(c.dataset.jump);
       if (t && t.offsetParent !== null && t.getBoundingClientRect().top <= base) current = c.dataset.jump;
     }
-    // At the very bottom, the last visible section wins.
-    if (root && root.scrollTop + root.clientHeight >= root.scrollHeight - 2) {
+    // At the very bottom, the last visible section wins — but only once the
+    // user has actually scrolled there. A page that doesn't scroll yet (its
+    // sections still loading, or all of it fitting on a wide screen) is "at the
+    // bottom" at scrollTop 0, which used to light up the LAST chip on load.
+    if (root && root.scrollTop > 0 && root.scrollTop + root.clientHeight >= root.scrollHeight - 2) {
       for (const c of list) {
         const t = document.getElementById(c.dataset.jump);
         if (t && t.offsetParent !== null && t.getBoundingClientRect().top < rootBox.bottom) current = c.dataset.jump;
@@ -102,8 +105,16 @@ export function wireJumpNav(nav, { clicks = true } = {}) {
   const onScroll = () => { if (!raf) raf = requestAnimationFrame(compute); };
   (root || window).addEventListener("scroll", onScroll, { passive: true });
   window.addEventListener("resize", onScroll, { passive: true });
-  document.addEventListener("g:tab_activated", () => setTimeout(compute, 0));
-  compute();
+  // A page switch recomputes only the nav of the page that showed, in the
+  // next frame (every nav measuring itself inside the click forced a layout
+  // per nav).
+  const sec = nav.closest(".section");
+  document.addEventListener("g:tab_activated", (e) => {
+    const tab = e.detail && e.detail.tab;
+    if (sec && tab && sec.id !== "sec-" + tab) return;
+    if (!raf) raf = requestAnimationFrame(compute);
+  });
+  onScroll();   // first measure in a frame, not while wiring
 }
 
 // Kept for callers that only want the spy (Analytics wires its own clicks).

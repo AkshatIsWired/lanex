@@ -76,7 +76,8 @@ export function runSummary({ tag, design, rx, vf, rs, name = (id) => id }) {
   if (rx.kind === "stopped") return { ok: false, tone: "warn", title: who + ": you stopped it", body: "" };
   const c = rx.card || {};
   const at = rx.step ? (rx.step.id ? name(rx.step.id) : rx.step.dir) : "";
-  return { ok: false, tone: "fail", title: who + " stopped" + (at ? " at " + at : ""),
+  // A step raised: that is a failure, not a stop ("you stopped it" above).
+  return { ok: false, tone: "fail", title: who + " failed" + (at ? " at " + at : ""),
     short: c.title || "", body: c.title ? c.title + (c.plain ? ". " + c.plain.split(". ")[0].replace(/\.$/, "") + "." : "") : ((rx.errors || [])[0] || "") };
 }
 
@@ -93,7 +94,7 @@ export function reportCardHtml(c) {
     kpi("Setup slack", n(m, "timing__setup__ws"), b && n(b, "timing__setup__ws"), { unit: "ns", signed: true, better: 1, tip: "Worst setup slack in any corner, after routing. Positive: the design meets its clock." }),
     kpi("Hold slack", n(m, "timing__hold__ws"), b && n(b, "timing__hold__ws"), { unit: "ns", signed: true, better: 1, tip: "Worst hold slack in any corner." }),
     dieKpi(m, b),
-    kpi("Power", n(m, "power__total"), b && n(b, "power__total"), { power: true, better: -1, tip: "Total power OpenROAD estimated (internal, switching and leakage)." }),
+    kpi("Power", n(m, "power__total"), b && n(b, "power__total"), { power: true, better: -1, tip: "Total power OpenSTA estimated in the OpenROAD.STAPostPNR step (internal, switching and leakage), with default switching activity." }),
     kpi("Wire", n(m, "route__wirelength"), b && n(b, "route__wirelength"), { wire: true, better: -1, tip: "Total routed wire length." }),
     kpi("Run time", secs || null, bsecs || null, { time: true, better: -1, tip: "The sum of every step's time" +
       (c.steps.some((s) => s.from) ? ", without the steps it reused from the run it was resumed from." : ".") }),
@@ -110,7 +111,11 @@ export function reportCardHtml(c) {
     "<div class='fl-split-a'><div class='an-eyebrow'>Run " + esc(c.tag) + (c.base ? " <span class='fl-vs'>compared with " + esc(c.base) + "</span>" : "") + "</div>" +
     "<h2 class='an-title'>" + esc(failed ? "The layout is done, but " + (v.short || "checks failed") : v.title) + "</h2>" +
     (c.branch || "") +
-    "<p class='an-lede'>" + esc(v.sub || "") + "</p>" + (failed ? failedHtml(c) : "") +
+    "<p class='an-lede'>" + esc(v.sub || "") + "</p>" +
+    // DRC report vs metric (V.drcDisagree): the verdict is the metric's; the way to the reports.
+    (v.drc ? "<p class='fl-drcflag'><button class='btn btn-ghost btn-xs' data-go='verify' data-go-section='vf-drc'>" +
+      icon("alert", { size: 12 }) + " DRC " + esc(v.drc.short) + ": see Verify's Design rules</button></p>" : "") +
+    (failed ? failedHtml(c) : "") +
     "<details class='fl-covers'><summary>What “clean” covers</summary><p>Clean means every check LibreLane runs on the layout passed: " +
       "design rules in Magic and KLayout, layout against netlist (LVS), the two GDS writers against each other (XOR), antenna rules, " +
       "and timing in every corner it checks. It does not cover simulating the finished netlist with its real delays (gate-level " +

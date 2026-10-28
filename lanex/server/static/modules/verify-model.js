@@ -106,7 +106,7 @@ export const HELP = {
     fix: ["Set RUN_EQY to true in your config to run it."],
   },
   pdn: {
-    what: "OpenROAD checks that every cell's power and ground pins reach the power grid (VPWR/VGND).",
+    what: "OpenROAD checks that every cell's power and ground pins reach the power grid (VPWR/VGND on sky130 and IHP, VDD/VSS on gf180).",
     why: "A cell with no power doesn't work. LibreLane's own note: you may ignore this if LVS passes, because LVS checks power connections too.",
     fix: ["Check the power-grid settings (PDN_VPITCH, PDN_HPITCH, PDN_CFG) suit your die size; a very small die can leave cells between straps.",
       "Macros need PDN_CONNECT_MACROS_TO_GRID (on by default) and the right power pin names."],
@@ -235,6 +235,25 @@ export function worstStatus(checks) {
 // (Verify, Flow, the toast and the notification): rule 10 of the spec.
 // "Clean" means LibreLane's checks passed, never "tape-out ready": gate-level
 // simulation, a shuttle's precheck and the foundry's decks are not covered.
+// Step counts from Verify's flow_state, in FS.stepCounts' meaning: the total
+// is the flow's steps minus those the config turns off, so a run that ended
+// early reads "34 of 76", the same as Flow, not "34 of 35" (its folders).
+export function stepTotals(f) {
+  if (!f || !(f.steps_planned || f.steps_total)) return null;
+  return { done: f.steps_done || 0, total: f.steps_planned || f.steps_total };
+}
+
+// A run whose DRC metric says 0 while the marker report lists markers
+// (run_verdict.drc_disagree). The verdict stays LibreLane's (the metric);
+// pages add this flag next to "clean". -> {markers, text, short} or null.
+export function drcDisagree(rv) {
+  const d = rv && rv.drc_disagree;
+  if (!d || !d.markers) return null;
+  const m = d.markers + (d.markers === 1 ? " marker" : " markers");
+  return { markers: d.markers, short: "report lists " + m,
+    text: "The DRC report files list " + m + " but LibreLane's metric says 0" };
+}
+
 export function verdictCopy(rep) {
   const v = rep.verdict, f = rep.flow_state || {};
   const by = new Map((rep.checks || []).map((c) => [c.id, c]));
@@ -252,8 +271,34 @@ export function verdictCopy(rep) {
     if (f.state === "deferred_errors") sub = "LibreLane finished every step, then failed the run on " + names(v.blocker_ids).join(", ") + ". " + sub;
     return { tone: "fail", title, sub, short: k + (k === 1 ? " check failed" : " checks failed") };
   }
+  // rep.run_verdict is the same verdict the run lists show (server side):
+  // it tells a step that raised from a run the user stopped or LanEx left.
+  const rv = rep.run_verdict || null;
+  if (rv && rv.state === "running") {
+    return { tone: "warn", title: "Still running", short: "running",
+      sub: ran + " of " + v.total + " checks have a result so far. The verdict comes when the flow ends." };
+  }
+  if (v.state !== "blocked" && v.state !== "stopped" && rv && rv.timing_miss) {
+    // Negative slack is never "clean", even where LibreLane only warns.
+    const m = rv.timing_miss;
+    const what = m.kind === "hold" ? "Some paths change too soon after the clock edge" : "Some paths arrive too late for the clock";
+    const fix = m.kind === "hold" ? "The hold-fixing step (buffer insertion) usually closes this." : "A slower clock (a larger CLOCK_PERIOD) or a less crowded layout usually closes this.";
+    const gate = ((by.get(m.kind) || {}).gate_note) || "";
+    return { tone: "warn", title: rv.label, short: "timing misses",
+      sub: what + " in " + m.where + ": worst " + m.kind + " slack " + m.ws.toFixed(2) + " ns. " + fix +
+        // The PDK sets the default (*tt* on sky130 and gf180, *typ* on IHP), so
+        // name this run's rule rather than one PDK's.
+        " LibreLane finished the run because it only fails on the corners listed in TIMING_VIOLATION_CORNERS" +
+        (gate ? " (this run: " + gate.replace(/^TIMING_VIOLATION_CORNERS = /, "") + ")" : " (the PDK's typical corner by default)") + "." };
+  }
+  if (v.state === "incomplete" && rv && rv.state === "stopped") {
+    return { tone: "warn", title: rv.label, short: "stopped",
+      sub: "The flow ended before its last step, so " + (v.total - ran) + " of " + v.total + " checks have no result. Nothing failed; run it again to finish." };
+  }
   if (v.state === "stopped") {
-    return { tone: "fail", title: "The flow stopped at step " + (stop ? stop.n : "?"), short: "not checked",
+    const failed = rv && rv.state === "failed";
+    return { tone: "fail", title: (failed ? "Failed at step " : rv && rv.state === "stopped" ? "Stopped at step " : "The flow stopped at step ") + (stop ? stop.n : "?"),
+      short: failed ? "failed" : "not checked",
       sub: (stop ? (stop.id || stop.dir) + " didn't finish. " : "") + ran + " of " + v.total + " checks ran before it stopped. The run log has the reason." };
   }
   if (v.state === "incomplete") {
@@ -264,15 +309,18 @@ export function verdictCopy(rep) {
         " Nothing failed, but these have to pass before the layout can go to a foundry." };
   }
   const w = v.warning_ids.length;
-  if (!w) return { tone: "pass", title: "Clean", short: "clean", sub: "Every check LibreLane makes on this layout passed." };
+  // A DRC report that disagrees with the metric is said, verdict unchanged.
+  const dd = drcDisagree(rv);
+  const ddSub = dd ? " " + dd.text + ": check the Design rules section." : "";
+  if (!w) return { tone: "pass", title: "Clean", short: "clean", drc: dd, sub: "Every check LibreLane makes on this layout passed." + ddSub };
   // LibreLane passed the run, but some checks only warn here (setup outside
   // TIMING_VIOLATION_CORNERS, for one): never call that plain "clean".
   const warned = names(v.warning_ids);
   const gates = v.warning_ids.map((id) => (by.get(id) || {}).gate_note).filter(Boolean);
   const n = w + (w === 1 ? " warning" : " warnings");
   return { tone: "warn", title: "Clean, with " + n, short: "clean, " + n, warned,
-    sub: "Every check that fails a run passed. " + warned.join(", ") + (w === 1 ? " warns" : " warn") +
-      " instead of failing it" + (gates.length ? " (" + gates.join("; ") + ")" : "") + ": worth a look before tape-out." };
+    sub: "Every check that fails a run passed. LibreLane only warned about " + warned.join(", ") +
+      " instead of failing the run" +(gates.length ? " (" + gates.join("; ") + ")" : "") + ": worth a look before tape-out." + ddSub, drc: dd };
 }
 
 export function isNum(v) { return typeof v === "number" && Number.isFinite(v); }

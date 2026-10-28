@@ -1,7 +1,7 @@
 {
   "name": "multiplier",
   "title": "Registered Multiplier",
-  "description": "An N×N multiplier with registered outputs. A small datapath where synthesis trades area against timing, so it's a good one to sweep in DSE.",
+  "description": "An N×N multiplier with registered outputs. A small datapath where synthesis trades area against timing, so it's a good one to sweep (Runs › New sweep).",
   "top": "mult",
   "clock_port": "clk",
   "clock_period": 15.0,
@@ -10,7 +10,16 @@
   ],
   "testbench": "verify/mult_tb.v",
   "order": 5,
+  "config": {
+    "FP_CORE_UTIL": 40,
+    "PL_TARGET_DENSITY_PCT": 55
+  },
   "pdk": {
+    "sky130*": {
+      "config": {
+        "MAX_FANOUT_CONSTRAINT": 6
+      }
+    },
     "gf180mcu*": {
       "clock_period": 40.0,
       "config": {

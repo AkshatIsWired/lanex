@@ -447,3 +447,66 @@ def test_the_worst_path_splits_into_where_its_time_goes():
     # Everything adds up to LibreLane's own arrival and slack.
     assert b["launch"] + b["clk_q"] + b["cells"] + b["wires"] == pytest.approx(b["arrival"])
     assert b["required"] - b["arrival"] == pytest.approx(b["slack"])
+
+
+# KLayout.XOR's report as LibreLane 3.0.4 wrote it for a 350 um die whose
+# config still said DIE_AREA 0 0 150 150 (a beginner run, FP_SIZING relative).
+XOR_XML = """<?xml version="1.0" encoding="utf-8"?>
+<report-database>
+ <categories>
+  <category><name>235/4</name><description>XOR data for layer 235/4</description><categories></categories></category>
+ </categories>
+ <items>
+  <item><tags/><category>'235/4'</category><cell>bigmul</cell><visited>false</visited><multiplicity>1</multiplicity>
+   <values><value>polygon: (150,0;150,150;0,150;0,360.875;350.155,360.875;350.155,0)</value></values></item>
+ </items>
+</report-database>
+"""
+
+
+def _xor_run(tmp_path, monkeypatch, cfg, xml=XOR_XML):
+    d = tmp_path / "run"
+    (d / "50-klayout-xor").mkdir(parents=True)
+    (d / "50-klayout-xor" / "xor.xml").write_text(xml)
+    monkeypatch.setattr(problems, "_cfg", lambda run_dir: cfg)
+    monkeypatch.setattr(problems, "_die", lambda run_dir: [0.0, 0.0, 350.155, 360.875])
+    return problems.check_problems(d, {"checks": [{"id": "xor", "name": "Mask XOR", "status": "fail", "value": 1,
+                                                   "limit": "0"}]}, set())[0]
+
+
+def test_xor_on_the_outline_names_a_stale_die_area(tmp_path, monkeypatch):
+    p = _xor_run(tmp_path, monkeypatch, {"PDK": "sky130A", "FP_SIZING": "relative", "DIE_AREA": [0, 0, 150, 150]})
+    assert p["title"] == "Mask XOR: only the cell outline differs"
+    assert "Magic" in p["plain"] and "KLayout" in p["plain"] and "DIE_AREA" in p["plain"]
+    assert p["diag"]["layers"] == ["235/4"] and p["diag"]["stale_die_area"]
+    fix = p["fixes"][0]
+    assert fix["var"] == "DIE_AREA" and fix["to"] == "0 0 350.155 360.875"
+    show = next(f for f in p["fixes"] if f["kind"] == "open" and f["go"]["tab"] == "layout")
+    assert show["go"]["box"] == "0.00,0.00,350.15,360.88"
+
+
+def test_xor_on_a_mask_layer_offers_no_setting(tmp_path, monkeypatch):
+    p = _xor_run(tmp_path, monkeypatch, {"PDK": "sky130A", "FP_SIZING": "absolute", "DIE_AREA": [0, 0, 350.155, 360.875]},
+                 XOR_XML.replace("235/4", "68/20"))
+    assert p["title"].startswith("Mask XOR: Magic") and not p["diag"]["stale_die_area"]
+    assert all(f["kind"] == "open" for f in p["fixes"])
+    assert "real ambiguity" in p["plain"]
+
+
+@pytest.mark.parametrize("cid", ["antenna", "lvs", "setup", "hold", "overlap", "pdn", "slew", "cap", "fanout",
+                                 "disc_pin", "lint_errors", "unmapped", "latch", "eqy", "assign", "wire_length"])
+def test_every_check_that_can_fail_lands_on_an_action(tmp_path, monkeypatch, cid):
+    monkeypatch.setattr(problems, "_cfg", lambda run_dir: {})
+    p = problems.check_problems(tmp_path, {"checks": [{"id": cid, "name": cid, "status": "fail", "value": 3}]}, set())[0]
+    assert p["fixes"], cid
+    assert p["plain"], cid
+
+
+def test_slow_corner_slew_suggests_a_lower_fanout_limit_first(tmp_path, monkeypatch):
+    # Seen on the counter template (sky130A): 11 slew violations in the ss
+    # corners stayed at DESIGN_REPAIR_MAX_SLEW_PCT 30 and went to 0 at
+    # MAX_FANOUT_CONSTRAINT 6.
+    monkeypatch.setattr(problems, "_cfg", lambda run_dir: {"MAX_FANOUT_CONSTRAINT": 10, "DESIGN_REPAIR_MAX_SLEW_PCT": 20})
+    p = problems.check_problems(tmp_path, {"checks": [{"id": "slew", "name": "Max slew", "status": "warn", "value": 11}]}, set())[0]
+    sets = [(f["var"], f["to"]) for f in p["fixes"] if f["kind"] == "setting"]
+    assert sets == [("MAX_FANOUT_CONSTRAINT", "6"), ("DESIGN_REPAIR_MAX_SLEW_PCT", "30")]

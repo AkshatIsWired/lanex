@@ -22,7 +22,11 @@ import { wireScrollSpy } from "./jumpnav.js";
 import { icon } from "./icons.js";
 import { provBtnHtml, wireProvBtns } from "./provenance.js";
 import * as M from "./analytics-model.js";
+import * as V from "./verify-model.js";
+import { fmtDur } from "./reportcard.js";
 import * as C from "./analytics-charts.js";
+import { localeNum, localeDateTime } from "./intlcache.js";
+import { loadingStart, skel } from "./loading.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -35,6 +39,8 @@ let _v = {};                    // selected run's metrics
 let _b = null;                  // baseline metrics (or null)
 let _ctx = null;                // everything the sections render from
 let _token = 0;                 // guards against out-of-order loads
+let _job = null;                // the first load's skeleton (loading.js), until the first paint
+function loadDone() { if (_job) { _job.done(); _job = null; } }
 const _trendCache = new Map();  // design dir -> trends payload
 let _allFilter = "all";         // All metrics: all | problems | changed
 let _partial = null;            // {n, name, dir} when values come from a step's state_out.json
@@ -133,12 +139,16 @@ export async function renderAnalyticsFull() {
   if (!body) return;
   wireOnce();
   _trendCache.clear();   // a run may have finished since the tab was last shown
+  // First visit: a skeleton of the sections after 300 ms (never an empty state before the runs came back).
+  loadDone();
+  if (!_ctx) _job = loadingStart(body, { skeleton: skel.cards(3) + skel.block(200), label: "Analytics" });
   await loadMeta();
   const runs = await ctx.loadRuns();
   // The list could not be loaded at all (LanEx busy or asleep): leave the page
   // as it is; context.js retries and the page repaints when runs arrive.
-  if (!runs.length && ctx.runsLoadFailed()) return;
+  if (!runs.length && ctx.runsLoadFailed()) { loadDone(); return; }
   if (!runs.length || !ctx.contextRun()) {
+    loadDone();
     body.classList.add("is-empty");
     document.getElementById("an-empty").hidden = false;
     return;
@@ -235,6 +245,7 @@ async function selectRun(tag) {
   }
   _ctx = { row: row || {}, view: view || {}, stages: stages || {}, steps, cells, trends, designDir, signoff };
   body.classList.remove("is-loading");
+  loadDone();             // before drawing: the charts measure their boxes
   if (!view && !_partial) {
     document.getElementById("an-overview").innerHTML = "<div class='empty'><span class='ico'>" + icon("alert", { size: 40 }) +
       "</span><h3>Could not load " + esc(tag) + "</h3><p>The run folder may have been moved or deleted. Refresh, or pick another run.</p></div>";
@@ -266,21 +277,28 @@ async function loadTrends(dir) {
   return t;
 }
 
+// The first screen (overview, timing) is drawn at once; the sections below it
+// follow one per task, so no single task builds all 9k nodes (half a second
+// on a slow laptop). A newer paint drops the rest of an older one.
+let _paintSeq = 0;
 function paint() {
   if (!_ctx) return;
+  const seq = ++_paintSeq;
+  const body = document.getElementById("an-body");
   C.resetCharts();
   renderOverview();
   renderTiming();
-  renderArea();
-  renderPower();
-  renderRouting();
-  renderFlow();
-  renderHistory();
-  renderAll();
-  const body = document.getElementById("an-body");
-  wireProvBtns(body);
   C.drawCharts(body);
-  C.watchResize(body);
+  const rest = [renderArea, renderPower, renderRouting, renderFlow, renderHistory, renderAll];
+  const next = () => {
+    if (seq !== _paintSeq || !_ctx) return;
+    const fn = rest.shift();
+    if (fn) { fn(); setTimeout(next, 0); return; }
+    wireProvBtns(body);
+    C.drawCharts(body);
+    C.watchResize(body);
+  };
+  setTimeout(next, 0);
 }
 
 // ---------- 1. Overview ---------------------------------------------------------------------
@@ -325,6 +343,23 @@ function renderOverview() {
     title = "Clean run: all " + ran.length + " checks passed";
     lede = "Every check LibreLane ran on this layout came back at zero.";
   }
+  // The headline is Verify's verdict whenever Verify answered: one verdict
+  // for the run on every page (Runs, the run bar, Verify, Analytics). The grid
+  // below is the subset of Verify's checks that write a metric, and says so.
+  const so = _ctx.signoff;
+  const vTotal = so && so.verdict ? so.verdict.total : 0;
+  if (so && so.verdict) {
+    const vc = V.verdictCopy(so);
+    tone = vc.tone;
+    title = esc(vc.title);
+    const stopLede = (!completed || stopped) && _partial
+      ? " The numbers below are the metrics LibreLane saved after step " + _partial.n + " (" + esc(_partial.name) + "), the last step that finished."
+      : "";
+    lede = esc(vc.sub) + stopLede;
+  }
+  const subsetNote = vTotal
+    ? "<p class='an-foot'>These are " + checks.length + " of Verify's " + vTotal + " checks: the ones LibreLane writes a metric for. Verify has every check, with its limit and report.</p>"
+    : "";
 
   const groups = [];
   const shownChecks = (stopped || !completed) ? checks.filter((c) => c.status !== "absent") : checks;
@@ -353,10 +388,13 @@ function renderOverview() {
   if (row.pdk || stages.pdk) meta.push(esc((row.pdk || stages.pdk) + (row.scl || stages.scl ? " / " + (row.scl || stages.scl) : "")));
   if (row.started_at) {
     const d = new Date(row.started_at);
-    if (!Number.isNaN(d.getTime())) meta.push(esc(d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })));
+    if (!Number.isNaN(d.getTime())) meta.push(esc(localeDateTime(d, undefined, { dateStyle: "medium", timeStyle: "short" })));
   }
   if (Number.isFinite(row.wall_time_s)) meta.push(esc(fmtDur(row.wall_time_s)) + " of step time");
-  if (row.step_count) meta.push(esc(row.steps_done + " / " + row.step_count + " steps"));
+  // Verify's step totals (V.stepTotals): the same "34 of 76" Flow shows.
+  const nst = V.stepTotals(_ctx.signoff && _ctx.signoff.flow_state) ||
+    (row.step_count ? { done: row.steps_done, total: row.step_count } : null);
+  if (nst) meta.push(esc(nst.done + " of " + nst.total + " steps done" + (row.steps_reused ? " (" + row.steps_reused + " reused from " + (row.branched_from || "its parent") + ")" : "")));
 
   el.innerHTML =
     "<div class='an-verdict is-" + tone + "'>" +
@@ -365,19 +403,12 @@ function renderOverview() {
       "<div class='an-runmeta'>" + meta.join("<span class='sep'>·</span>") + "</div></div>" +
       "<div class='an-verdict-act'>" + (stopped || !completed ? goBtn("runs", "Open the run log") : goBtn("verify", "Details in Verify")) +
       "<span class='an-disclaim'>LanEx shows what LibreLane's tools reported. It is not a sign-off.</span></div>" +
-    "</div>" + strip +
+    "</div>" + strip + subsetNote +
     "<div class='an-kpis'>" + kpiTiming() + kpiArea() + kpiPower() + kpiRouting() + "</div>" +
     (_b ? "<p class='an-basenote'>" + icon("diff", { size: 13 }) + " Changes are against <b>" + esc(_baseTag) + "</b>. Green is better and red is worse, by LibreLane's own direction for each metric.</p>"
         : "<p class='an-basenote'>" + icon("diff", { size: 13 }) + " Pick a run under <b>Compare with</b> to see what changed.</p>");
 }
 
-function fmtDur(s) {
-  if (!Number.isFinite(s)) return "";
-  if (s < 60) return s.toFixed(s < 10 ? 1 : 0) + " s";
-  const m = Math.floor(s / 60), r = Math.round(s % 60);
-  if (m < 60) return m + " min " + r + " s";
-  return Math.floor(m / 60) + " h " + (m % 60) + " min";
-}
 
 // History series for one metric, aligned to the trend runs. Highlights the
 // selected run; failed runs get a hollow marker.
@@ -454,7 +485,7 @@ function kpiArea() {
   });
 }
 
-function trimNum(x) { return Number(x.toFixed(3)).toLocaleString("en-US", { maximumFractionDigits: 3 }); }
+function trimNum(x) { return localeNum(Number(x.toFixed(3)), "en-US", { maximumFractionDigits: 3 }); }
 
 function kpiPower() {
   const k = "power__total";
@@ -467,7 +498,7 @@ function kpiPower() {
   })) : "";
   return kpi({
     title: "Power", heroKey: k,
-    tip: "Total power from OpenSTA after routing: internal + switching + leakage. It assumes the tool's default switching activity, so treat it as an estimate.",
+    tip: "Total power OpenSTA estimated in the OpenROAD.STAPostPNR step: internal + switching + leakage. It assumes the tool's default switching activity, so treat it as an estimate.",
     hero: vh(k), rows: stack ? "<div class='an-kpi-stack'>" + stack + "</div>" : "",
     spark: trendSpark(k), sparkLabel: "total power, recent runs",
   });
@@ -664,14 +695,14 @@ function renderCellRows() {
   const list = q ? cells.filter((c) => String(c.cell).toLowerCase().includes(q)) : cells;
   const cnt = document.getElementById("an-cells-count");
   const pfx = commonPrefix(cells.map((c) => String(c.cell)));
-  if (cnt) cnt.textContent = cells.length + " cell types · " + total.toLocaleString("en-US") + " instances" + (pfx ? " · names without the " + pfx + " prefix" : "") + " · from the Cells by Master report";
+  if (cnt) cnt.textContent = cells.length + " cell types · " + localeNum(total) + " instances" + (pfx ? " · names without the " + pfx + " prefix" : "") + " · from the Cells by Master report";
   const LIMIT = 12;
   const max = Math.max(...cells.map((c) => Number(c.count)));
   const pre = commonPrefix(cells.map((c) => String(c.cell)));
   host.innerHTML = C.barList(list.map((c, i) => ({
     label: pre ? String(c.cell).slice(pre.length) : c.cell, mono: true, value: Number(c.count), tone: PHYSICAL_ONLY.test(String(c.cell).replace(/^.*__/, "")) ? "muted" : "s1",
-    text: esc(Number(c.count).toLocaleString("en-US")) + " <span class='muted'>" + C.pctText((Number(c.count) / total) * 100) + "</span>",
-    tip: c.cell + "\n" + Number(c.count).toLocaleString("en-US") + " instances · " + C.pctText((Number(c.count) / total) * 100) + " of all",
+    text: esc(localeNum(Number(c.count))) + " <span class='muted'>" + C.pctText((Number(c.count) / total) * 100) + "</span>",
+    tip: c.cell + "\n" + localeNum(Number(c.count)) + " instances · " + C.pctText((Number(c.count) / total) * 100) + " of all",
     _i: i,
   })), { max }) + (!q && list.length > LIMIT ? "<button class='btn btn-ghost btn-sm an-more' data-an-more='Show all " + list.length + "'>Show all " + list.length + "</button>" : "") +
     (q && !list.length ? "<p class='muted'>No cell matches “" + esc(q) + "”.</p>" : "");
@@ -738,9 +769,14 @@ function renderRouting() {
     fact("Single-cut / multi-cut", "route__vias__singlecut", { value: has("route__vias__singlecut") ? esc(M.num(g("route__vias__singlecut"))) + " / " + esc(M.num(g("route__vias__multicut"))) : undefined, delta: false }) +
     fact("I/O half-perimeter WL", "design__io__hpwl") +
     "</dl></div>";
-  const ant = "<div class='an-card'><div class='an-card-h'>Antenna and placement</div><dl class='an-facts'>" +
-    fact("Antenna violations", "route__antenna_violation__count", { tip: "Long wires that can damage transistor gates while the chip is being made." }) +
-    fact("Violating nets / pins", "antenna__violating__nets", { value: has("antenna__violating__nets") ? esc(M.num(g("antenna__violating__nets"))) + " / " + esc(M.num(g("antenna__violating__pins"))) : undefined, delta: false }) +
+  // A run cut off before the antenna check after detailed routing: what it
+  // has is the global-routing estimate (before antenna repair), said so.
+  const antChk = ((_ctx.signoff && _ctx.signoff.checks) || []).find((c) => c.id === "antenna");
+  const antEst = !!(antChk && antChk.status === "not_run" && antChk.interim != null);
+  const estTip = antEst ? " This run ended before the check after detailed routing: this is the estimate at global routing, before antenna repair, not a result." : "";
+  const ant = "<div class='an-card'><div class='an-card-h'>Antenna and placement" + (antEst ? " <span class='muted'>antenna: estimate only</span>" : "") + "</div><dl class='an-facts'>" +
+    fact("Antenna violations" + (antEst ? " (estimate)" : ""), "route__antenna_violation__count", { delta: !antEst, tip: "Long wires that can damage transistor gates while the chip is being made." + estTip }) +
+    fact("Violating nets / pins" + (antEst ? " (estimate)" : ""), "antenna__violating__nets", { tip: estTip.trim(), value: has("antenna__violating__nets") ? esc(M.num(g("antenna__violating__nets"))) + " / " + esc(M.num(g("antenna__violating__pins"))) : undefined, delta: false }) +
     fact("Antenna diodes inserted", "antenna_diodes_count", { tip: "Diodes the flow added to protect gates from antenna effects." }) +
     fact("Max displacement", "design__instance__displacement__max", { tip: "How far detailed placement had to move a cell to make it legal." }) +
     fact("Mean displacement", "design__instance__displacement__mean") +

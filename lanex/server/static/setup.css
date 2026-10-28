@@ -268,7 +268,7 @@ body.theme-light .hub-label { color: var(--accent); }
 .project-empty-state p code { font-size: 13px; }
 /* The three ways in, as big targets: same box language as the steps above. */
 .start-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-3); margin-top: var(--s-5); }
-.no-projects .start-tiles { max-width: 980px; }
+.no-projects .start-tiles { max-width: min(100%, 1400px); }
 @media (max-width: 1240px) { .project-hub:not(.no-projects) .start-tiles { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .start-tiles { grid-template-columns: 1fr; } }
 .start-tile {
@@ -329,6 +329,16 @@ body.theme-light .hub-label { color: var(--accent); }
 .proj-note { margin: 0; display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--warn); }
 .proj-note svg { flex: 0 0 auto; margin-top: 3px; }
 .proj-note.is-fail { color: var(--fail); }
+/* A project whose folder is gone: only the notice and its two ways out. */
+.project-open-state.is-missing .proj-design,
+.project-open-state.is-missing .pd-status,
+.project-open-state.is-missing .proj-lastrun,
+.project-open-state.is-missing .proj-notes,
+.project-open-state.is-missing > .picker-actions { display: none; }
+.proj-missing { margin-top: var(--s-4); padding: var(--s-3) var(--s-4); border: 1px solid var(--fail); border-radius: 8px; max-width: 72ch; }
+.proj-missing-h { margin: 0; display: flex; gap: 8px; align-items: center; color: var(--fail); font-size: 15px; }
+.proj-missing-p { margin: 6px 0 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.proj-missing .picker-actions { margin-top: var(--s-3); }
 
 .hub-list-head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-3); }
 .hub-list-acts { margin-left: auto; display: flex; gap: 6px; }
@@ -745,6 +755,10 @@ body:not(.theme-light) .pf-node.is-ok .pf-state { color: var(--met3); }
 
 .wizard { display: flex; flex-direction: column; max-height: calc(100vh / var(--ll-zoom, 1) - 64px); }
 .wizard .wizard-body { overflow-y: auto; min-height: 0; }
+/* A 768-pixel-high screen: two lines per example, so the last one isn't cut off. */
+@media (max-height: 820px) {
+  .wizard .wiz-templates .wiz-tpl-desc { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+}
 
 /* New file (RTL IDE): styles live in ide.css, which the pop-out loads too. */
 

@@ -26,7 +26,7 @@ STAGES: List[Dict[str, str]] = [
      "steps": "floorplan dumprcvalues checkmacroantennaproperties setpowerconnections manualmacroplacement "
               "macroplacement cutrows tapendcapinsertion"},
     {"id": "pdn", "label": "Power grid",
-     "blurb": "The power distribution network: the VPWR / VGND straps and rails every cell connects to.",
+     "blurb": "The power distribution network: the power and ground straps and rails every cell connects to (VPWR / VGND on sky130 and IHP, VDD / VSS on gf180).",
      "steps": "addpdnobstructions generatepdn removepdnobstructions"},
     {"id": "placement", "label": "Placement",
      "blurb": "The pins on the die edge, then every standard cell on a legal row site. Wires come later.",

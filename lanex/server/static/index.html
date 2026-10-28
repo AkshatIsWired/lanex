@@ -15,8 +15,52 @@
   <link rel="stylesheet" href="/static/verify.css" />
   <link rel="stylesheet" href="/static/flow.css" />
   <link rel="stylesheet" href="/static/fix.css" />
+  <link rel="stylesheet" href="/static/console.css" />
   <link rel="stylesheet" href="/static/layout.css" />
   <link rel="stylesheet" href="/static/cells.css" />
+  <link rel="stylesheet" href="/static/tools.css" />
+  <link rel="stylesheet" href="/static/runs.css" />
+  <link rel="stylesheet" href="/static/vendor/driverjs/driver.css" />
+  <link rel="stylesheet" href="/static/guide.css" />
+  <link rel="stylesheet" href="/static/skeleton.css" />
+  <!-- The modules the first paint needs (app.js's static imports, all of
+       them): fetched side by side now instead of one import level at a time.
+       Page modules load on demand (app.js PAGES). frontend_test.mjs checks
+       this list against the real import graph. -->
+  <link rel="modulepreload" href="/static/app.js" />
+  <link rel="modulepreload" href="/static/modules/api.js" />
+  <link rel="modulepreload" href="/static/modules/state.js" />
+  <link rel="modulepreload" href="/static/modules/setup.js" />
+  <link rel="modulepreload" href="/static/modules/config.js" />
+  <link rel="modulepreload" href="/static/modules/fs.js" />
+  <link rel="modulepreload" href="/static/modules/preflight.js" />
+  <link rel="modulepreload" href="/static/modules/nav.js" />
+  <link rel="modulepreload" href="/static/modules/tabs.js" />
+  <link rel="modulepreload" href="/static/modules/context.js" />
+  <link rel="modulepreload" href="/static/modules/shell.js" />
+  <link rel="modulepreload" href="/static/modules/palette.js" />
+  <link rel="modulepreload" href="/static/modules/palettemodel.js" />
+  <link rel="modulepreload" href="/static/modules/help.js" />
+  <link rel="modulepreload" href="/static/modules/wizard.js" />
+  <link rel="modulepreload" href="/static/modules/runend.js" />
+  <link rel="modulepreload" href="/static/modules/reportcard.js" />
+  <link rel="modulepreload" href="/static/modules/verify-model.js" />
+  <link rel="modulepreload" href="/static/modules/problems.js" />
+  <link rel="modulepreload" href="/static/modules/dialog.js" />
+  <link rel="modulepreload" href="/static/modules/loading.js" />
+  <link rel="modulepreload" href="/static/modules/zoom.js" />
+  <link rel="modulepreload" href="/static/modules/hotkeys.js" />
+  <link rel="modulepreload" href="/static/modules/density.js" />
+  <link rel="modulepreload" href="/static/modules/jumpnav.js" />
+  <link rel="modulepreload" href="/static/modules/flowstages.js" />
+  <link rel="modulepreload" href="/static/modules/icons.js" />
+  <link rel="modulepreload" href="/static/modules/toast.js" />
+  <link rel="modulepreload" href="/static/modules/tooltip.js" />
+  <link rel="modulepreload" href="/static/modules/pdkinfo.js" />
+  <link rel="modulepreload" href="/static/modules/fullscreen.js" />
+  <link rel="modulepreload" href="/static/modules/runmode.js" />
+  <link rel="modulepreload" href="/static/modules/logs.js" />
+  <link rel="modulepreload" href="/static/modules/theme.js" />
   <link rel="icon" type="image/png" href="/static/vendor/favicon.png" />
   <!-- PWA: lets Chromium/Edge "Install" LanEx as a standalone-window app with a
        real icon (zero extra deps; static manifest, no service worker). -->
@@ -165,16 +209,13 @@
           <span class="ico"></span><span class="label">Cells</span>
         </button>
       </div>
-      <div class="rail-group" style="--n:3">
+      <div class="rail-group" style="--n:2">
         <span class="rail-label">Run</span>
         <button class="side-tab" data-tab="pipeline" data-tip="A run stage by stage: where it is, how long it took, why it stopped">
           <span class="ico"></span><span class="label">Flow</span>
         </button>
-        <button class="side-tab" data-tab="runs" data-tip="Every past run; pick one to inspect">
+        <button class="side-tab" data-tab="runs" data-tip="Every run and sweep: compare, pick a baseline, sweep a setting">
           <span class="ico"></span><span class="label">Runs</span>
-        </button>
-        <button class="side-tab" data-tab="dse" data-tip="Design-space exploration: sweep settings and compare">
-          <span class="ico"></span><span class="label">DSE</span>
         </button>
       </div>
       <div class="rail-group" style="--n:3">
@@ -189,13 +230,10 @@
           <span class="ico"></span><span class="label">Verify</span>
         </button>
       </div>
-      <div class="rail-group rail-foot" style="--n:2">
+      <div class="rail-group rail-foot" style="--n:1">
         <span class="rail-label">System</span>
         <button class="side-tab" data-tab="tools" data-tip="Install or check EDA tools and PDKs">
           <span class="ico"></span><span class="label">Tools</span>
-        </button>
-        <button class="side-tab" data-tab="manual" data-tip="Run LibreLane commands yourself and copy the exact CLI">
-          <span class="ico"></span><span class="label">Manual</span>
         </button>
       </div>
     </nav>
@@ -458,7 +496,7 @@
     <!-- FLOW (rail "Flow"; the id stays "pipeline", spec decision 1): one run,
          stage by stage, and why it stopped (modules/flow.js). -->
     <section class="section" id="sec-pipeline">
-      <div class="an-runbar fl-runbar">
+      <div class="an-runbar fl-runbar ld-keep">
         <div class="rb-host" id="flow-runbar"></div>
         <span class="bar-spacer"></span>
         <button class="btn btn-ghost btn-sm" id="fl-live" hidden><span class="fl-live-dot"></span> Back to the live run</button>
@@ -485,25 +523,33 @@
     </section>
 
     <!-- RUNS -->
-    <section class="section" id="sec-runs">
-      <div class="bar">
-        <span class="muted">Show runs from:</span>
-        <button class="btn btn-ghost runs-scope runs-scope-active" data-scope="design">This design</button>
-        <button class="btn btn-ghost runs-scope" data-scope="all" title="Runs of every design you've opened recently">All designs</button>
+    <section class="section rn" id="sec-runs">
+      <header class="an-head rn-head"><div><div class="an-eyebrow">Runs</div>
+        <h2 class="an-title" id="rn-title">Every run, side by side</h2>
+        <p class="an-lede">One row per run. Click a row to show it on Flow, Layout, Analytics and Verify; open it for its report and actions. Star one as the baseline and every number is coloured better or worse than it. Tick two to six to compare them.</p></div>
+        <div class="an-head-act rn-head-act">
+          <button class="btn btn-ghost" id="runs-import" title="Adopt a run folder or a LanEx bundle (.zip) from elsewhere">Import…</button>
+          <button class="btn btn-primary" id="runs-new-sweep" title="Run the same design with a setting at several values">New sweep</button>
+        </div>
+      </header>
+      <div class="rn-tools" role="toolbar" aria-label="Filter runs">
+        <div class="rn-seg" role="group" aria-label="Show runs from">
+          <button class="rn-segb runs-scope" data-scope="design">This design</button>
+          <button class="rn-segb runs-scope" data-scope="all" title="Runs of every design you've opened recently">All designs</button>
+        </div>
+        <input type="search" id="runs-filter" class="rn-q" placeholder="Search name, PDK, note, setting…" aria-label="Search runs"/>
+        <div class="rn-seg" role="group" aria-label="Status" id="rn-status"></div>
+        <div class="rn-seg" role="group" aria-label="Origin" id="rn-origin"></div>
+        <div class="rn-seg" role="group" aria-label="PDK" id="rn-pdk"></div>
+        <span class="rn-spacer"></span>
+        <div class="rn-cols-wrap"><button class="btn btn-ghost btn-sm" id="rn-cols-btn" aria-expanded="false">Columns</button>
+          <div class="rn-cols" id="rn-cols" hidden></div></div>
       </div>
-      <div class="bar">
-        <input type="search" id="runs-filter" class="runs-filter" placeholder="Filter runs by tag / PDK…" aria-label="Filter runs"/>
-        <select id="runs-status-filter" aria-label="Filter by status">
-          <option value="">All</option>
-          <option value="pass">Passed</option>
-          <option value="fail">Failed</option>
-        </select>
-        <button class="btn btn-ghost runs-scope" id="runs-pin-filter" aria-pressed="false" title="Show only pinned runs"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.4 1.4-6.3L3 9.5l6.4-.6z"/></svg> Pinned</button>
-        <span class="bar-spacer"></span>
-        <button class="btn btn-ghost" id="runs-import" title="Adopt a run directory or a LanEx bundle (.zip) from elsewhere"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg> Import…</button>
-        <button class="btn btn-ghost" id="runs-batch-delete" hidden><svg class="ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6M14 11v6"/></svg> Delete selected (0)</button>
-      </div>
-      <ul id="runs-list" class="runs-list"></ul>
+      <div class="rn-live" id="rn-live" hidden></div>
+      <div class="rn-selbar" id="rn-selbar" hidden></div>
+      <p class="muted rn-note" id="runs-note" role="status" hidden></p>
+      <div class="rn-wrap" id="rn-wrap"><table class="rn-table" id="runs-table"></table></div>
+      <div class="an-empty empty" id="rn-empty" hidden></div>
     </section>
 
     <!-- RTL IDE (embedded) -->
@@ -592,48 +638,95 @@
 
     <!-- TOOLS -->
     <section class="section" id="sec-tools">
-      <nav class="section-jump" id="tools-jump" aria-label="Jump to section">
-        <span class="muted">Jump to:</span>
-        <button class="chip chip-clickable" data-jump="tools-toolchain">Toolchain</button>
-        <button class="chip chip-clickable" data-jump="tools-extras">Extras</button>
-        <button class="chip chip-clickable" data-jump="local-tools-card">Local tools</button>
-        <button class="chip chip-clickable" data-jump="tools-pdk">PDK</button>
-        <button class="chip chip-clickable" data-jump="tools-viewers">Viewers</button>
+      <nav class="section-jump tl-strip" id="tools-jump" aria-label="Tools page actions">
+        <span class="tl-strip-gap"></span>
+        <button class="btn btn-sm btn-ghost" id="tl-copy-diag" title="Copy versions, image digest, PDK and system facts for a bug report">Copy diagnostics</button>
+        <button class="btn btn-sm btn-ghost" id="tl-recheck" title="Probe every component again (a few seconds)">Check all</button>
       </nav>
-      <h2 id="tools-toolchain">Install the toolchain <span class="hint">(recommended default)</span></h2>
-      <p class="hint">The most reliable way to obtain all required EDA tools (OpenROAD, Yosys, Magic, KLayout, Netgen, Verilator) is the version-matched LibreLane container image. When Docker or Podman is installed, pulling the image enables <code>Container</code> execution without requiring native binary packages. If a container engine is not present, the installer card below sets up Docker or Podman automatically.</p>
-      <div id="runtime-card"></div>
-
-      <h2 id="tools-extras">Recommended helper utilities <span class="hint">(optional)</span></h2>
-      <p class="hint">Auxiliary tools used for interactive features: <strong>Icarus Verilog</strong> provides testbench simulation in the IDE, <strong>Graphviz</strong> renders synthesis schematics, and <strong>GDS3D</strong> provides 3D layout visualization. If package installation requires elevated privileges, LanEx prompts for authentication in the terminal.</p>
-      <div id="recommended-tools"></div>
-
-      <details class="card tools-local-card" id="local-tools-card">
-        <summary><strong>Advanced: local toolchain</strong><span class="hint">Only needed for <em>Local tools</em> run mode (Nix / conda / system installs).</span></summary>
-        <div class="card-body">
-          <p class="hint">These binaries are invoked when running with native host tools. Green status indicates the executable was found in PATH. <strong>librelane</strong> and <strong>ciel</strong> can be installed via pip; <strong>OpenROAD</strong>, <strong>Magic</strong>, and <strong>Netgen</strong> require installation through Nix, Conda (litex-hub), or container mode.</p>
-          <p class="hint"><strong>Version compatibility:</strong> If an installed native tool is incompatible with your LibreLane release (such as an older Yosys build lacking pyosys bindings), switch to Container mode to execute the exact version-pinned binaries provided in the official image.</p>
-          <div id="tools-grid"></div>
-        </div>
-      </details>
-
-      <h2 id="tools-pdk">PDK Settings</h2>
-      <div class="card tools-pdk-card">
-        <div class="card-body">
-          <label class="lbl">PDK Installation Directory (PDK_ROOT)</label>
-          <div class="pdk-root-row">
-            <input type="text" id="pdk-root-input" class="grow" placeholder="e.g. /home/user/.ciel" />
-            <button id="btn-save-pdk-root" class="btn btn-primary">Save</button>
-          </div>
-          <p class="hint">Changing this will point the GUI and tools to a new directory. Useful if you have a secondary drive with more space.</p>
-        </div>
+      <div id="tools-summary" class="tl-summary" aria-live="polite">
+        <div class="tl-verdict is-loading"><div class="tl-verdict-main"><div class="an-eyebrow">Tools and PDKs</div>
+          <h2 class="tl-verdict-title"><span class="spinner-sm"></span> Checking components…</h2>
+          <p class="tl-verdict-lede">Probing the container engine, the LibreLane image, PDKs and helpers. This takes a few seconds.</p></div></div>
       </div>
-      <h2>PDK store</h2>
-      <div id="pdk-store-row"></div>
-
-      <h2 id="tools-viewers">Desktop layout viewers</h2>
-      <p class="hint">Interactive layout viewing uses your own desktop tools (the GUI launches them on a run's GDS from the Layout tab). KLayout &amp; Magic ship in the LibreLane container image. The 3D viewer <strong>GDS3D</strong> installs from the <em>Recommended extra tools</em> section above.</p>
-      <div id="desktop-viewers"></div>
+      <div class="tl-list" id="tl-list">
+        <section class="tl-group tl-engine" id="tools-toolchain">
+          <div class="tl-sec-h">
+            <h3 class="tl-sec-t">Flow engine</h3>
+            <span class="tl-sec-d">Every EDA tool the flow runs comes from one container image, version-matched to LibreLane.</span>
+            <span class="tl-sec-aside tl-engine-use" id="tl-engine-use"></span>
+          </div>
+          <div class="tl-hero">
+            <div class="tl-tiles" id="tl-engine-rows">
+              <div class="tl-tile tl-skel"><i></i><i></i><i></i><i></i></div>
+              <div class="tl-tile tl-skel"><i></i><i></i><i></i><i></i></div>
+            </div>
+            <div id="runtime-card"></div>
+          </div>
+        </section>
+        <section class="tl-group" id="tools-pdk">
+          <div class="tl-sec-h">
+            <h3 class="tl-sec-t">PDKs</h3>
+            <span class="tl-sec-d">Process design kits. ciel downloads each one at the version LibreLane pins.</span>
+            <span class="tl-sec-aside">
+              <span id="tl-pdk-ciel-host"></span>
+              <span class="tl-pdkroot tools-pdk-card"><span class="muted">Folder</span> <code id="tl-pdkroot-path">…</code>
+                <button class="btn btn-sm btn-ghost" id="tl-pdkroot-edit" title="Change where PDKs live (PDK_ROOT)">Change</button></span>
+            </span>
+          </div>
+          <div class="tl-pdkroot-form" id="tl-pdkroot-form" hidden>
+            <label class="lbl" for="pdk-root-input">PDK folder (PDK_ROOT)</label>
+            <div class="pdk-root-row">
+              <input type="text" id="pdk-root-input" class="grow" placeholder="e.g. /home/user/.ciel" />
+              <button id="btn-save-pdk-root" class="btn btn-sm btn-primary">Save</button>
+            </div>
+            <p class="hint">Where PDKs live. Point it at a bigger drive if you run out of space; LanEx and the flow both read it from here.</p>
+          </div>
+          <div class="tl-fams" id="pdk-store-row">
+            <div class="tl-fam tl-skel"><i></i><i></i><i></i></div>
+            <div class="tl-fam tl-skel"><i></i><i></i><i></i></div>
+            <div class="tl-fam tl-skel"><i></i><i></i><i></i></div>
+          </div>
+        </section>
+        <div class="tl-pair">
+          <section class="tl-group tl-pair-a" id="tools-viewers">
+            <div class="tl-sec-h">
+              <h3 class="tl-sec-t">Viewers</h3>
+              <span class="tl-sec-d">Desktop windows the Layout tab opens on a run.</span>
+            </div>
+            <div class="tl-cards tl-cards-4">
+              <div class="tl-cards-c" id="desktop-viewers">
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+              </div>
+              <div class="tl-cards-c" id="viewer-gds3d"></div>
+            </div>
+          </section>
+          <section class="tl-group tl-pair-b" id="tools-extras">
+            <div class="tl-sec-h">
+              <h3 class="tl-sec-t">Helpers</h3>
+              <span class="tl-sec-d">Optional. Simulation, schematics and waveforms.</span>
+            </div>
+            <div class="tl-cards tl-cards-3">
+              <div class="tl-cards-c" id="recommended-tools">
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+                <div class="tl-card tl-skel"><i></i><i></i><i></i></div>
+              </div>
+            </div>
+          </section>
+        </div>
+        <details class="tl-group tl-local tools-local-card" id="local-tools-card">
+          <summary class="tl-local-sum">
+            <span class="tl-sec-t">Local toolchain</span>
+            <span class="tl-sec-d">Only for the Local tools run engine: native binaries on this system's PATH.</span>
+            <span class="tl-sec-aside muted" id="tl-local-count"></span>
+          </summary>
+          <p class="hint tl-local-note">With the Container engine none of these are needed. If a native tool doesn't match your LibreLane release (for example a Yosys build without pyosys), switch to Container to use the pinned binaries in the image. librelane and ciel install with pip; OpenROAD, Magic and Netgen have no system package, so use the image, Nix or conda (litex-hub).</p>
+          <div class="tl-cols" aria-hidden="true"><span>Status</span><span>Tool</span><span>Installed</span><span>Size</span><span></span></div>
+          <div class="tl-rows" id="tools-grid"></div>
+        </details>
+      </div>
     </section>
 
     <!-- ANALYTICS -->
@@ -751,12 +844,6 @@
       </div>
     </section>
 
-    <!-- DSE -->
-    <section class="section" id="sec-dse">
-      <h2>Design-space exploration</h2>
-      <p class="hint">Sweep configuration variables; each combination runs once and the results are compared on a Pareto plot.</p>
-      <div id="dse-body"></div>
-    </section>
 
     <!-- LAYOUT: see the chip (modules/layout.js, layoutcanvas.js, runfiles.js). One
          page for what Preview and Layout used to split: KLayout draws the run live
@@ -932,40 +1019,6 @@
       </div>
     </section>
 
-    <!-- MANUAL / ADVANCED -->
-    <section class="section" id="sec-manual">
-      <h2>Manual control <span class="cc-badge">advanced</span></h2>
-      <p class="hint">Drive LibreLane and the EDA tools yourself while the cockpit keeps watching
-        <code>runs/</code>. Copy the exact command to run in your own terminal, or run an
-        allow-listed command right here.</p>
-
-      <div class="card manual-card">
-        <div class="card-body">
-          <h3>Equivalent CLI for your current Setup</h3>
-          <p class="hint">Equivalent command-line invocation representing the current Setup parameters (PDK, SCL, flow variant, and step bounds). Executing this command in a terminal updates the GUI runs history automatically.</p>
-          <button class="btn btn-ghost" id="btn-cli-reveal">Show the command</button>
-          <div id="cli-reveal" class="cli-reveal"></div>
-        </div>
-      </div>
-
-      <div class="card manual-card">
-        <div class="card-body">
-          <h3>Run a command here</h3>
-          <p class="hint">Allowed: <code>librelane</code>, <code>openroad</code>, <code>yosys</code>,
-            <code>magic</code>, <code>klayout</code>, <code>netgen</code>, <code>iverilog</code>,
-            <code>vvp</code>, <code>verilator</code>, <code>dot</code>, <code>ciel</code>,
-            <code>docker</code>/<code>podman</code>.
-            Shell pipes, redirects, and <code>sudo</code> commands are disabled in this console; execute elevated commands in an external terminal.</p>
-          <div class="manual-input-row">
-            <input type="text" id="manual-cmd" placeholder="e.g. librelane --dockerized config.json -T floorplan" autocomplete="off" spellcheck="false"/>
-            <button class="btn btn-primary" id="btn-manual-run">Run</button>
-            <button class="btn btn-ghost" id="btn-manual-cancel" disabled>Stop</button>
-          </div>
-          <pre id="manual-output" class="manual-output" aria-live="polite"></pre>
-        </div>
-      </div>
-    </section>
-
   </main>
 
   <!-- Wafer edge: run state, what the run will use, logs, and the honest notice. -->
@@ -984,6 +1037,10 @@
     <button class="st-item" id="st-engine" data-tip="Run engine (change it from the Run menu)"><span class="st-k">Engine</span><span class="st-v" id="st-engine-v">Container</span></button>
     <button class="st-item" id="st-mode" data-tip="Run mode (change it from the Run menu)"><span class="st-k">Mode</span><span class="st-v" id="st-mode-v">Full auto</span></button>
     <span class="st-spacer"></span>
+    <button class="st-item st-console" id="console-btn" aria-pressed="false" aria-controls="console" data-tip="Console: the flow log, the exact command, what LanEx ran, and a command line (Ctrl+`)">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7l4 4-4 4M11 16h7"/></svg>
+      <span>Console</span>
+    </button>
     <button class="st-item st-logs" id="logs-btn" aria-pressed="false" aria-controls="log-panel" data-tip="Install and tool output">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 11h16M4 16h10"/></svg>
       <span>Logs</span><span class="st-count" id="logs-count" hidden></span>
@@ -1002,7 +1059,7 @@
         <button class="iconbtn fs-x" id="fs-close" aria-label="Close"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
       <div class="dlg-body fs-body">
-        <p class="hint">Click a folder to open it. Type a path to jump directly. Pick <em>Use this folder</em> when you're at the right place.</p>
+        <p class="hint">Click a folder to open it. Type a path to jump directly. When you're in the right folder, press the blue button.</p>
         <div class="picker-row fs-pathrow">
           <input type="text" id="fs-path" placeholder="path…" autocomplete="off"/>
           <button class="btn btn-ghost fs-up" id="fs-up" aria-label="Up one folder"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V5M6 11l6-6 6 6"/></svg></button>
@@ -1014,7 +1071,7 @@
     </div>
   </div>
 
-  <script src="/static/vendor/echarts.min.js"></script>
+  <!-- ECharts (1 MB) loads when a chart is first drawn (loading.js loadECharts). -->
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

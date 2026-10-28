@@ -62,11 +62,21 @@ const FOCUS = {
     const m = await import("./config.js");
     await m.revealSetting(p.setting);
   },
+  runs: async (p) => {
+    if (!p.sweep) return;
+    const m = await import("./sweeps.js");
+    m.openSweepSheet();
+  },
   verify: async (p) => {
     if (!p.check && !p.filter) return;
     const m = await import("./verify.js");
     if (p.check) await m.revealCheck(p.check);
     else await m.revealProblems();
+  },
+  tools: async (p) => {
+    if (!p.item) return;
+    const m = await import("./tools.js");
+    await m.focusTools(p);
   },
 };
 
@@ -93,6 +103,14 @@ function describe(e) {
 // `link: false` for the rail, number keys and the palette: the user picked the
 // page itself, so there is no "Back to" chip (Back still works).
 export function go(tab, params = {}, { link = true } = {}) {
+  // The Manual page became the Console drawer (console.js): it opens over
+  // whatever page is showing, on its "Run a command" tab (or params.pane).
+  if (tab === "manual" || tab === "console") {
+    import("./console.js").then((m) => m.openConsole(params.pane || (tab === "manual" ? "run" : null)));
+    return;
+  }
+  // DSE is sweeps inside Runs now: the old page name opens Runs' sweep sheet.
+  if (tab === "dse") { tab = "runs"; params = { ...params, sweep: "new" }; }
   if (!document.getElementById("sec-" + tab)) return;
   const from = currentTab();
   saveScroll();
@@ -116,7 +134,25 @@ export function go(tab, params = {}, { link = true } = {}) {
 function onPop(e) {
   const entry = e.state && e.state.lx;
   saveScroll();
-  _cur = entry || { id: ++_seq, tab: "setup", params: {}, via: null };
+  // No entry of ours: the user typed or pasted a #tab address. Open that page
+  // (an old page name like #dse or #manual goes where go() sends it).
+  if (!entry) {
+    const t = hashTab();
+    if (t && !document.getElementById("sec-" + t)) {
+      // An old name: it replaces this entry (Back must not land on it again).
+      if (_cur) {
+        if (t === "dse") _cur = { ..._cur, tab: "runs" };
+        history.replaceState({ lx: _cur }, "", "#" + _cur.tab);
+      }
+      go(t);
+      return;
+    }
+    _cur = { id: ++_seq, tab: t || "setup", params: {}, via: null };
+    history.replaceState({ lx: _cur }, "", "#" + _cur.tab);
+    show(_cur, { fresh: true });
+    return;
+  }
+  _cur = entry;
   show(_cur, { fresh: false });
 }
 
@@ -135,7 +171,7 @@ function show(entry, { fresh }) {
   // row): that is held in view like a section while the page fills in.
   if (fresh && (p.section || p.setting)) {
     done.then((id) => revealSection(entry.tab, p.section || id));
-  } else if (changed && !(fresh && (p.cell || p.check || p.rel || p.setting || p.step || p.stage || p.box || p.filter))) {
+  } else if (changed && !(fresh && (p.cell || p.check || p.rel || p.setting || p.step || p.stage || p.box || p.filter || p.item))) {
     restoreScroll(!fresh && _entryScroll[entry.id] != null ? _entryScroll[entry.id] : (_scroll[entry.tab] || 0));
   }
 }
@@ -151,13 +187,18 @@ function saveScroll() {
 // Pages render after they show (data arrives later): keep asking for the
 // position until the page is tall enough, for up to two seconds, and give up
 // the moment the user scrolls.
+// The first write waits for the next frame too: writing scrollTop right after
+// the page switch forces the browser to lay the new page out at once, inside
+// the click (20-350 ms on a slow PC); in a frame it is laid out once anyway.
 let _restoreTok = 0;
 function restoreScroll(top) {
   const w = work();
   if (!w) return;
   const tok = ++_restoreTok;
-  w.scrollTop = top;
-  if (!top) return;
+  if (!top) {
+    requestAnimationFrame(() => { if (tok === _restoreTok && w.scrollTop) w.scrollTop = 0; });
+    return;
+  }
   const t0 = performance.now();
   const stop = () => { _restoreTok++; };
   w.addEventListener("wheel", stop, { once: true, passive: true });
@@ -264,12 +305,31 @@ export function setupNav() {
   });
 }
 
-// The first page: Setup, as one history entry the rest build on.
+// The page the address names (#ide, #verify…), or null: a tab with a page, or
+// an old page name go() still knows (dse, manual, console).
+export function hashTab(hash = location.hash) {
+  const t = String(hash || "").replace(/^#/, "").split(/[?&/]/)[0].trim();
+  if (!t || !/^[a-z0-9_-]+$/i.test(t)) return null;
+  if (document.getElementById("sec-" + t) || ["dse", "manual", "console"].includes(t)) return t;
+  return null;
+}
+
+// The first page as one history entry the rest build on: Setup for a bare
+// address (spec decision 6), or the page a #tab address names (a reload on
+// #ide stays on the IDE).
+export function bootTab() {
+  const t = hashTab();
+  return t && document.getElementById("sec-" + t) ? t : "setup";
+}
+
 export function startAt(tab) {
   _cur = { id: ++_seq, tab, params: {}, via: null };
   history.replaceState({ lx: _cur }, "", "#" + tab);
   activate(tab);
   remember(_cur);
+  // The first page renders like any page it is shown: a reload on #tools
+  // otherwise sat on its loading skeleton for good.
+  document.dispatchEvent(new CustomEvent("g:tab_activated", { detail: { tab } }));
 }
 
 // [key, tab] in rail order: 1–9 then 0.

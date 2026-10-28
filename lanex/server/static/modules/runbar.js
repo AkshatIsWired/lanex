@@ -16,6 +16,7 @@ import { fmt } from "./api.js";
 import { state } from "./state.js";
 import { icon } from "./icons.js";
 import * as ctx from "./context.js";
+import { fmtDur } from "./reportcard.js";
 
 const esc = (s) => fmt.escape(String(s ?? ""));
 let _seq = 0;
@@ -264,11 +265,28 @@ function isNewest(r) {
 
 // The Runs tab's words: a run passed or failed; the newest run of the active
 // design is "running" while the flow is live.
+// The words come from the run's verdict (the server's, the same one Verify
+// shows): passed / failed / stopped / incomplete / running.
+const VERDICT_WORD = {
+  passed: { cls: "pass", word: "passed" },
+  warning: { cls: "warn", word: "finished, with problems" },
+  failed: { cls: "fail", word: "failed" },
+  stopped: { cls: "warn", word: "stopped" },
+  incomplete: { cls: "warn", word: "not enough to call it" },
+  running: { cls: "run", word: "running" },
+};
+export function verdictWord(r) {
+  const st = r && r.verdict && r.verdict.state;
+  if (st && VERDICT_WORD[st]) return VERDICT_WORD[st];
+  // A state this build doesn't know yet: amber, never a guessed pass/fail.
+  if (st) return { cls: "warn", word: (r.verdict.label || st).toLowerCase() };
+  return r && r.success ? VERDICT_WORD.passed : VERDICT_WORD.failed;
+}
 function verdict(r) {
   if (state.status && state.status.running && !r.success && isNewest(r) && ctx.normDir(r._design) === ctx.normDir(state.designDir)) {
-    return { cls: "run", word: "running" };
+    return VERDICT_WORD.running;
   }
-  return r.success ? { cls: "pass", word: "passed" } : { cls: "fail", word: "failed" };
+  return verdictWord(r);
 }
 
 function when(r) {
@@ -282,10 +300,4 @@ function when(r) {
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) }) + ", " + time;
 }
 
-function dur(s) {
-  s = Math.round(s);
-  if (s < 60) return s + " s";
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + " min " + (s % 60) + " s";
-  return Math.floor(m / 60) + " h " + (m % 60) + " min";
-}
+const dur = fmtDur;

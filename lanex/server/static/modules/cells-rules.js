@@ -50,7 +50,8 @@ export async function renderRules(ctx) {
 }
 
 function matchList(pats, names) {
-  return names.filter((n) => M.globMatch(n, pats).length);
+  const hit = M.globMatcher(pats);
+  return names.filter(hit);
 }
 
 function cellLinks(list, max = 60) {

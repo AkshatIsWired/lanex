@@ -18,6 +18,7 @@ and is what flows over the stdlib HTTP boundary to the SPA.
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field, asdict
 from decimal import Decimal
 from enum import Enum
@@ -133,6 +134,16 @@ class RunSummary:
     key_metrics: Dict[str, Any] = field(default_factory=dict)
     imported: bool = False
     pinned: bool = False
+    origin: Dict[str, Any] = field(default_factory=dict)
+    note: str = ""
+    # Steps taken from the run this one was resumed from (counted in
+    # step_count and steps_done).
+    steps_reused: int = 0
+    # {state: passed|warning|failed|stopped|running|incomplete, label, stage?, ...}:
+    # Verify's verdict (controller/verify.run_verdict).
+    verdict: Optional[Dict[str, Any]] = None
+    # Tag of the run this one was resumed from, if any.
+    branched_from: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -227,13 +238,18 @@ def _convert(v: Any, d: int, *, _seen: set, depth: int) -> Any:
                 return float(v)
             except Exception:
                 return str(v)
-        try:
-            import numpy as np
-            if isinstance(v, np.integer): return int(v)
-            if isinstance(v, np.floating): return float(v)
-            if isinstance(v, np.ndarray): return v.tolist()
-        except ImportError:
-            pass
+        # A numpy value can only exist once numpy is imported, so look it up
+        # in sys.modules instead of importing: a failed ``import numpy`` is
+        # not cached, and searching sys.path for it on every value made
+        # listing 300 runs take 30 s when LanEx runs from /mnt/c.
+        np = sys.modules.get("numpy")
+        if np is not None:
+            try:
+                if isinstance(v, np.integer): return int(v)
+                if isinstance(v, np.floating): return float(v)
+                if isinstance(v, np.ndarray): return v.tolist()
+            except Exception:
+                pass
         if isinstance(v, Path):
             return str(v)
         if isinstance(v, Enum):
