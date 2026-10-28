@@ -80,6 +80,20 @@ async function _fetch(path, init) {
   }
   return data;
 }
+// One request for identical calls in flight at the same time (keyed by the
+// project shown too: the server answers for its active project). Nothing is
+// kept once it has answered.
+const _shared = new Map();
+export function shared(name, body, run) {
+  const key = name + "\0" + shownDesign() + "\0" + body;
+  const hit = _shared.get(key);
+  if (hit) return hit;
+  const p = Promise.resolve().then(() => run(body));
+  _shared.set(key, p);
+  const drop = () => { if (_shared.get(key) === p) _shared.delete(key); };
+  p.then(drop, drop);
+  return p;
+}
 const JOURNALED = new Set(["/api/run/start", "/api/run/resume", "/api/config/set", "/api/config/undo",
   "/api/fix/apply", "/api/dse/start", "/api/manual/run", "/api/open-in-tool", "/api/container-tools/open"]);
 
@@ -242,8 +256,10 @@ export const api = {
   templates: () => _fetch("/api/templates"),
   projectDefaults: () => _fetch("/api/project/defaults"),
   projectFiles: (path) => _fetch("/api/project/files" + (path ? "?path=" + encodeURIComponent(path) : "")),
-  designInfo: (payload) =>
-    _fetch("/api/project/design-info", { method: "POST", body: JSON.stringify(payload || {}) }),
+  // Callers asking the same thing at the same moment (the Design row and the
+  // Settings card, the IDE opening twice) share one request.
+  designInfo: (payload) => shared("design-info", JSON.stringify(payload || {}), (body) =>
+    _fetch("/api/project/design-info", { method: "POST", body })),
   newProjectFile: (payload) =>
     _fetch("/api/project/new-file", { method: "POST", body: JSON.stringify(payload) }),
   configSet: (set, remove, extra) =>
