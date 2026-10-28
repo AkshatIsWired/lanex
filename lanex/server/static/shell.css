@@ -173,6 +173,8 @@ body.theme-light .logo--light { display: block !important; }
 .run-main:disabled + .run-opts { background: var(--surface-2); color: var(--text-muted); border-color: var(--border); }
 .run-main:disabled + .run-opts:hover { background: var(--surface-3); color: var(--text); }
 .run-main.is-stop, .run-main.is-stop + .run-opts { background: var(--fail); border-color: var(--fail); color: var(--on-accent); }
+/* Run turns into Stop under the pointer that pressed it: hovered, it stays red. */
+.run-main.is-stop:hover:not(:disabled), .run-main.is-stop + .run-opts:hover { background: var(--fail); filter: brightness(1.08); }
 .run-split:has(.is-stop) { box-shadow: 0 6px 16px var(--fail-soft); }
 
 /* Icon buttons: the original raised square, accent on hover. */

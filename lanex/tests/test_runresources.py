@@ -272,6 +272,30 @@ def test_last_run_peak_reads_process_stats(tmp_path: Path):
     assert rr.last_run_peak_gb(tmp_path / "nothing") is None
 
 
+def test_last_run_peak_reads_a_finished_run_once(tmp_path: Path, monkeypatch):
+    run = tmp_path / "runs" / "r1"
+    for name, rss in [("06-yosys-synthesis", "197MiB"), ("41-openroad-detailedrouting", "2.5GiB")]:
+        d = run / name
+        d.mkdir(parents=True)
+        (d / (name.split("-", 1)[1] + ".process_stats.json")).write_text(
+            json.dumps({"peak_resources": {"memory_rss": rss}}))
+    rr._PEAK_CACHE.clear()
+    assert rr.last_run_peak_gb(tmp_path)["gb"] == 2.5
+    reads = []
+    real = Path.read_text
+    monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: reads.append(self.name) or real(self, *a, **k))
+    assert rr.last_run_peak_gb(tmp_path)["gb"] == 2.5
+    assert reads == []          # nothing changed: no step folder read again
+    # a new step (a run still going, or resumed) is read
+    d = run / "52-openroad-fillinsertion"
+    d.mkdir()
+    (d / "openroad-fillinsertion.process_stats.json").write_text(
+        json.dumps({"peak_resources": {"memory_rss": "3.0GiB"}}))
+    peak = rr.last_run_peak_gb(tmp_path)
+    assert peak == {"gb": 3.0, "tag": "r1", "step": "52-openroad-fillinsertion"}
+    assert reads
+
+
 # ------------------------------------------------------- log batching
 
 def test_log_lines_are_batched_in_order():

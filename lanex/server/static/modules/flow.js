@@ -149,6 +149,23 @@ export function flowEvent(ev) {
     // The run being watched here is the one the results pages show from now on
     // (watching it is picking it); elsewhere context.js's follow rule decides.
     const watched = visible() && F.live ? F.tag : "";
+    if (watched && (ev.cancelled || ev.error) && !Object.keys(state.stepStatuses || {}).length) {
+      // Stopped (Stop while starting) or failed before LibreLane reported a
+      // step: there may be no run folder to read. Say that, instead of
+      // "Reading the run…" and then an older run's outcome.
+      F.keep = watched;
+      noFolderYet(watched).then((gone) => {
+        F.keep = "";
+        if (gone && !state.status.running && !state.runStart) {
+          F.live = false;
+          state.runStart = { error: { reason: ev.cancelled
+            ? "You stopped it before LibreLane started, so nothing was written and there is no run folder. Your earlier runs are as they were."
+            : String(ev.error) } };
+          paint();
+        } else renderFlow();
+      }).catch(() => { F.keep = ""; renderFlow(); });
+      return;
+    }
     if (watched) {
       // Keep showing it while the run list catches up, then make it the run.
       F.keep = watched;
@@ -178,6 +195,16 @@ export function flowEvent(ev) {
     }, 900);
   }
   schedule();
+}
+
+// True when the run list, asked twice, has no folder for this run.
+async function noFolderYet(tag) {
+  for (let i = 0; i < 2; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 700));
+    await ctx.loadRuns({ fresh: true });
+    if (ctx.contextRow(tag, state.designDir)) return false;
+  }
+  return true;
 }
 
 function schedule() {
