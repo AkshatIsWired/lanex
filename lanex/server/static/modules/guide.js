@@ -97,6 +97,7 @@ async function point(o) {
       align: o.align || "start",
       showButtons: ["close"],
       onPopoverRender: (pop) => {
+        unzoomPopover(pop.wrapper);
         pop.wrapper.setAttribute("aria-label", o.title);
         if (o.eyebrow) {
           const eb = document.createElement("div");
@@ -129,6 +130,33 @@ async function point(o) {
   }
 }
 
+// The UI size is a CSS zoom on <html> (zoom.js; 125 % by default at 2560 px).
+// Driver.js measures in screen pixels (getBoundingClientRect, innerWidth) and
+// writes them as left/top, which the zoom then scales again: at 125 % the tour
+// cards sat off the left edge and the Flow card above the top, over the
+// FIRST CHIP pill. Every position Driver.js writes is divided by the zoom.
+export function unzoomPx(v, k) {
+  const n = /^(-?[\d.]+)px$/.exec(String(v || ""));
+  return n && k && k !== 1 ? (parseFloat(n[1]) / k) + "px" : null;
+}
+function unzoomPopover(el) {
+  if (!el || el._unzoom) return;
+  const mine = {};
+  const fix = () => {
+    const k = parseFloat(document.documentElement.style.zoom) || 1;
+    if (k === 1) return;
+    for (const p of ["left", "top", "right", "bottom"]) {
+      const v = el.style[p];
+      if (!v || v === mine[p]) continue;
+      const out = unzoomPx(v, k);
+      if (out) { mine[p] = out; el.style[p] = out; }
+    }
+  };
+  el._unzoom = new MutationObserver(fix);
+  el._unzoom.observe(el, { attributes: true, attributeFilter: ["style"] });
+  fix();
+}
+
 // The hairline outline with L-shaped corner ticks, kept on the element while
 // its pointer is up (it follows scrolling and resizing).
 function reticleOn(el, d) {
@@ -142,8 +170,20 @@ function reticleOn(el, d) {
     document.body.appendChild(r);
   }
   const pad = 6;
+  let goneSince = 0;
   const step = () => {
-    if (_drv !== d || !visible(el)) { r.hidden = true; return; }
+    if (_drv !== d) { r.hidden = true; return; }
+    if (!visible(el)) {
+      // The person went to another page (the palette, a shortcut, a link):
+      // a card pointing at nothing would sit over that page. Put it away;
+      // the FIRST CHIP pill brings it back.
+      r.hidden = true;
+      goneSince = goneSince || performance.now();
+      if (performance.now() - goneSince > 400) { hidePointer(); return; }
+      requestAnimationFrame(step);
+      return;
+    }
+    goneSince = 0;
     // The UI size is a CSS zoom on <html> (zoom.js): rects come back zoomed,
     // and fixed positions are zoomed again.
     const k = parseFloat(document.documentElement.style.zoom) || 1;
@@ -343,6 +383,14 @@ async function beatFlow() {
   if (!state.status || !state.status.running) {
     // Reopened after the run ended (or before it started): nothing to watch.
     go("pipeline", {}, { link: false });
+    // The end of the run may have been missed (LanEx restarted, the window
+    // was closed): the newest run's verdict says how it went. "running" is
+    // the server's word for a live run, so a run still going is watched.
+    let last = null;
+    try { last = state.designDir ? ((await api.runs(state.designDir)) || [])[0] : null; } catch (_e) { last = null; }
+    const v = last && last.verdict && last.verdict.state;
+    if (v === "passed" || v === "warning") { moveTo(BEATS.length); return; }
+    if (v === "failed" || v === "stopped" || v === "incomplete") { runFailed({ cancelled: v === "stopped" }); return; }
   }
   const strip = await waitFor(() => document.getElementById("fl-strip") || document.getElementById("flow-runbar"), 6000);
   point({
