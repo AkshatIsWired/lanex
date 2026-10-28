@@ -63,24 +63,71 @@ def load_sweeps(design_dir: str | Path) -> List[Dict[str, Any]]:
     return sweeps
 
 
-def new_sweep_id() -> str:
-    """A sortable, collision-resistant sweep id (``YYYYMMDD-HHMMSS``)."""
-    return time.strftime("%Y%m%d-%H%M%S", time.localtime())
+def new_sweep_id(design_dir: str | Path | None = None) -> str:
+    """A sortable, collision-resistant sweep id (``YYYYMMDD-HHMMSS``), in the
+    person's own time zone (the distro's clock runs on UTC). With
+    ``design_dir``, an id already recorded there gets ``-2``, ``-3``..."""
+    from . import platform_env
+    base = platform_env.local_now().strftime("%Y%m%d-%H%M%S")
+    if design_dir is None:
+        return base
+    taken = {s.get("id") for s in load_sweeps(design_dir)}
+    sid, k = base, 1
+    while sid in taken:
+        k += 1
+        sid = f"{base}-{k}"
+    return sid
+
+
+# Serialises every load-modify-write of a sweeps file: the sweep worker
+# records each point while a request thread may be recording the manifest.
+_sweeps_lock = threading.RLock()
+
+
+def _write_sweeps(p: Path, sweeps: List[Dict[str, Any]]) -> None:
+    # A unique temp name per write, so two writers never share one file.
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps({"sweeps": sweeps}, indent=2), encoding="utf-8")
+        tmp.replace(p)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def record_sweep(design_dir: str | Path, sweep: Dict[str, Any]) -> None:
-    """Append (or replace by id) a sweep manifest. Best-effort; never raises."""
+    """Append (or replace by id) a sweep manifest. Best-effort; never raises.
+    Point results already recorded under the same id are kept when ``sweep``
+    brings none of its own."""
     try:
-        p = _sweeps_path(design_dir)
-        existing = load_sweeps(design_dir)
-        sid = sweep.get("id")
-        existing = [s for s in existing if s.get("id") != sid]
-        existing.insert(0, sweep)
-        # Keep the file bounded.
-        existing = existing[:200]
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(json.dumps({"sweeps": existing}, indent=2), encoding="utf-8")
-        tmp.replace(p)
+        with _sweeps_lock:
+            p = _sweeps_path(design_dir)
+            existing = load_sweeps(design_dir)
+            sid = sweep.get("id")
+            prior = next((s for s in existing if s.get("id") == sid), None)
+            sweep = dict(sweep)
+            if prior and prior.get("results") and "results" not in sweep:
+                sweep["results"] = prior["results"]
+            existing = [s for s in existing if s.get("id") != sid]
+            existing.insert(0, sweep)
+            # Keep the file bounded.
+            existing = existing[:200]
+            _write_sweeps(p, existing)
+    except Exception:
+        pass
+
+
+def forget_sweep(design_dir: str | Path, sweep_id: str) -> None:
+    """Drop the manifest of a sweep that never started. Best-effort."""
+    try:
+        with _sweeps_lock:
+            existing = load_sweeps(design_dir)
+            kept = [s for s in existing if s.get("id") != sweep_id]
+            if len(kept) != len(existing):
+                _write_sweeps(_sweeps_path(design_dir), kept)
     except Exception:
         pass
 
@@ -89,13 +136,14 @@ def record_point(design_dir: str | Path, sweep_id: str, tag: str, result: Dict[s
     """Note how one point of a sweep ended in its manifest (``results``), so
     the outcome survives a reload and a restart. Best-effort; never raises."""
     try:
-        for s in load_sweeps(design_dir):
-            if s.get("id") == sweep_id:
-                res = dict(s.get("results") or {})
-                res[tag] = dict(result)
-                s["results"] = res
-                record_sweep(design_dir, s)
-                return
+        with _sweeps_lock:
+            for s in load_sweeps(design_dir):
+                if s.get("id") == sweep_id:
+                    res = dict(s.get("results") or {})
+                    res[tag] = dict(result)
+                    s["results"] = res
+                    record_sweep(design_dir, s)
+                    return
     except Exception:
         pass
 
@@ -276,7 +324,7 @@ def sweep_run_tags(design_dir: str | Path, overrides_list: Sequence[Dict[str, An
     for ov in overrides_list:
         parts = []
         for var, val in ov.items():
-            parts.append(_SHORT.get(var, var.lower()))
+            parts.append(_SHORT.get(var) or _slug(str(var).lower()))
             parts.append(_slug(val))
         base = ("sweep-" + "-".join(parts))[:80]
         tag, k = base, 1
@@ -396,6 +444,11 @@ class DseJob:
 
     def cancel(self) -> None:
         self._cancel.set()
+
+    @property
+    def cancelled(self) -> bool:
+        """Stop was asked for the current queue."""
+        return self._cancel.is_set()
 
     def _run(self, start_one, overrides_list, tags) -> None:
         for i, tag in enumerate(tags):

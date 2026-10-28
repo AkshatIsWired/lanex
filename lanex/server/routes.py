@@ -3211,6 +3211,11 @@ def _dse_run_one_blocking(design_dir: str, config_file: Path, flow_name: str,
                 pdk_root = pf.get("pdk_root") or pdk_root
             except Exception:
                 pass
+        # Stop may have landed while this point was being prepared: launching
+        # it now would run a point the person already stopped.
+        from ..controller import dse as _dse
+        if _dse.job.cancelled:
+            return {"ok": False, "kind": "stopped", "reason": "stopped"}
         res = r.start(
             flow_factory=_flow_factory(flow_name),
             config_files=[str(config_file)],
@@ -3287,21 +3292,19 @@ def h_dse_start(handler: Any) -> None:
     # Each point is named by the values it tries (sweep-util-65), never
     # overwriting an earlier run of the same name.
     tags = dse.sweep_run_tags(design_dir, overrides_list)
-    sweep_id = dse.new_sweep_id()
+    sweep_id = dse.new_sweep_id(design_dir)
     start_one = _dse_run_one_blocking(design_dir, config_file, flow_name, run_mode, base_overrides, body,
                                       sweep_id=sweep_id)
-    result = dse.job.start(start_one=start_one, overrides_list=overrides_list, tags=tags,
-                           sweep_id=sweep_id, stop_when_good=bool(body.get("stop_when_good")),
-                           on_point=lambda tag, res: dse.record_point(design_dir, sweep_id, tag, res))
-    if not result.get("ok"):
-        _respond(handler, result.get("error") or "could not start the sweep", 400)
+    if dse.job.active:
+        _respond(handler, "a sweep is already running", 400)
         return
     # Persist a manifest so the sweep is recoverable after a restart and Runs
-    # can group its runs without parsing run-tag regexes.
+    # can group its runs without parsing run-tag regexes. Written BEFORE the
+    # worker starts, so a point that ends at once still finds its sweep.
     dse.record_sweep(design_dir, {
         "id": sweep_id,
         "base": base_tag,
-        "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "created_at": platform_env.local_now().isoformat(timespec="seconds"),
         "axes": spec["axes"],
         "mode": spec["mode"],
         "run_mode": run_mode,
@@ -3313,6 +3316,13 @@ def h_dse_start(handler: Any) -> None:
         "goal": str(body.get("goal") or "")[:40],
         "stop_when_good": bool(body.get("stop_when_good")),
     })
+    result = dse.job.start(start_one=start_one, overrides_list=overrides_list, tags=tags,
+                           sweep_id=sweep_id, stop_when_good=bool(body.get("stop_when_good")),
+                           on_point=lambda tag, res: dse.record_point(design_dir, sweep_id, tag, res))
+    if not result.get("ok"):
+        dse.forget_sweep(design_dir, sweep_id)
+        _respond(handler, result.get("error") or "could not start the sweep", 400)
+        return
     result = dict(result)
     result["sweep_id"] = sweep_id
     result["base_tag"] = base_tag

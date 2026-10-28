@@ -142,3 +142,88 @@ def test_summary_carries_the_table_fields(tmp_path):
     assert km["power__total"] == 0.00147
     assert s["note"] == "try lower util"
     assert s["origin"] == {"kind": "manual"}
+
+
+# ---------------------------------------------------------------- polish fixes
+def test_odd_variable_names_cannot_make_paths(tmp_path):
+    tags = dse.sweep_run_tags(tmp_path, [{"../EVIL/VAR": "1"}, {"A B\\C": "2"}])
+    assert all("/" not in t and "\\" not in t and " " not in t for t in tags)
+    assert tags[1] == "sweep-a_b_c-2"
+
+
+def test_manifest_written_before_the_worker_keeps_an_instant_result(tmp_path):
+    # The route records the manifest first, then starts the job; a point that
+    # fails at once must still land in that manifest.
+    dse.record_sweep(tmp_path, {"id": "s1", "created_at": "2026-10-28T10:00:00+05:30", "tags": ["a"]})
+    job = dse.DseJob()
+    job.start(start_one=lambda tag, ov: {"ok": False, "kind": "error", "reason": "did not start: x"},
+              overrides_list=[{"FP_CORE_UTIL": "40"}], tags=["a"], sweep_id="s1",
+              on_point=lambda tag, res: dse.record_point(tmp_path, "s1", tag, res))
+    _drain(job)
+    sw = dse.load_sweeps(tmp_path)[0]
+    assert sw["results"]["a"]["reason"] == "did not start: x"
+    # Re-recording the manifest without results keeps the recorded ones.
+    dse.record_sweep(tmp_path, {"id": "s1", "created_at": "2026-10-28T10:00:00+05:30", "tags": ["a"]})
+    assert dse.load_sweeps(tmp_path)[0]["results"]["a"]["kind"] == "error"
+
+
+def test_concurrent_point_records_are_not_lost(tmp_path):
+    import threading
+    tags = [f"p{i}" for i in range(16)]
+    dse.record_sweep(tmp_path, {"id": "s2", "created_at": "2026-10-28T10:00:00", "tags": tags})
+    ths = [threading.Thread(target=dse.record_point, args=(tmp_path, "s2", t, {"ok": True}))
+           for t in tags]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join()
+    assert sorted(dse.load_sweeps(tmp_path)[0]["results"]) == sorted(tags)
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_a_failed_start_forgets_its_manifest(tmp_path):
+    dse.record_sweep(tmp_path, {"id": "keep", "created_at": "2026-10-28T09:00:00"})
+    dse.record_sweep(tmp_path, {"id": "gone", "created_at": "2026-10-28T10:00:00"})
+    dse.forget_sweep(tmp_path, "gone")
+    assert [s["id"] for s in dse.load_sweeps(tmp_path)] == ["keep"]
+
+
+def test_sweep_ids_use_the_browsers_zone_and_never_repeat(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from lanex.controller import platform_env
+    fixed = datetime(2026, 10, 28, 21, 5, 9, tzinfo=timezone(timedelta(minutes=330)))
+    monkeypatch.setattr(platform_env, "local_now", lambda: fixed)
+    assert dse.new_sweep_id() == "20261028-210509"
+    dse.record_sweep(tmp_path, {"id": "20261028-210509", "created_at": fixed.isoformat()})
+    assert dse.new_sweep_id(tmp_path) == "20261028-210509-2"
+
+
+def test_stop_flag_is_readable():
+    job = dse.DseJob()
+    assert job.cancelled is False
+    job.cancel()
+    assert job.cancelled is True
+
+
+def test_start_time_is_reread_for_a_recreated_run_folder(tmp_path):
+    import os
+    import shutil
+    run = tmp_path / "runs" / "r1"
+    run.mkdir(parents=True)
+    (run / "resolved.json").write_text("{}")
+    os.utime(run / "resolved.json", (1_000_000_000, 1_000_000_000))
+    os.utime(run, (1_000_000_100, 1_000_000_100))
+    history._START_CACHE.clear()
+    first = history.started_ts(run)
+    assert first == 1_000_000_000
+    # Delete and re-create under the same tag, later on.
+    shutil.rmtree(run)
+    run.mkdir()
+    (run / "resolved.json").write_text("{}")
+    os.utime(run / "resolved.json", (1_700_000_000, 1_700_000_000))
+    os.utime(run, (1_700_000_100, 1_700_000_100))
+    assert history.started_ts(run) == 1_700_000_000
+    # Annotating (a new file, folder mtime moves on) keeps the start.
+    (run / "note.txt").write_text("hi")
+    os.utime(run, (1_800_000_000, 1_800_000_000))
+    assert history.started_ts(run) == 1_700_000_000
