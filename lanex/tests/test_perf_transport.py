@@ -142,6 +142,83 @@ def test_event_stream_is_close_delimited(server):
     s.close()
 
 
+def _sse_frames(buf: bytes):
+    out = []
+    for block in buf.decode("utf-8", "replace").split("\n\n"):
+        lines = [l for l in block.split("\n") if l]
+        d = {}
+        for l in lines:
+            k, _, v = l.partition(": ")
+            d[k] = v
+        if "data" in d:
+            out.append(d)
+    return out
+
+
+def _read_until(s: socket.socket, pred, timeout: float = 5.0) -> bytes:
+    buf = b""
+    deadline = time.time() + timeout
+    s.settimeout(0.2)
+    while time.time() < deadline:
+        try:
+            chunk = s.recv(65536)
+        except socket.timeout:
+            chunk = None
+        if chunk == b"":
+            break
+        if chunk:
+            buf += chunk
+        if pred(buf):
+            break
+    return buf
+
+
+def test_event_stream_sleeps_until_an_event_and_batches(server, monkeypatch):
+    from lanex.controller import events
+    from lanex.server import sse
+    waits = []
+    real = sse.ISSEHandler._events_since
+    monkeypatch.setattr(sse.ISSEHandler, "_events_since",
+                        staticmethod(lambda bus, cur, t: waits.append(t) or real(bus, cur, t)))
+    sends = []
+    real_send = sse.ISSEHandler._send
+    monkeypatch.setattr(sse.ISSEHandler, "_send", lambda self, text: sends.append(text) or real_send(self, text))
+    s = socket.create_connection(("127.0.0.1", server), timeout=10)
+    s.sendall(b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    _read_until(s, lambda b: b"event: hello" in b)
+    time.sleep(1.2)
+    # Idle: one wait for the heartbeat, not a wake-up every 0.4 s.
+    assert len(waits) <= 2 and all(w > 5 for w in waits), waits
+    t0 = time.time()
+    events.publish("perf_probe", {"n": -1})
+    buf = _read_until(s, lambda b: b'"perf_probe"' in b)
+    assert b'"n": -1' in buf and time.time() - t0 < 1.0
+    # A burst: every event, in order, each with its id, in few writes.
+    sends.clear()
+    for i in range(300):
+        events.publish("perf_burst", {"n": i})
+    buf = _read_until(s, lambda b: b'"n": 299' in b)
+    got = [json.loads(f["data"]) for f in _sse_frames(buf) if '"perf_burst"' in f["data"]]
+    assert [g["n"] for g in got] == list(range(300))
+    assert all(f.get("id") for f in _sse_frames(buf) if '"perf_burst"' in f["data"])
+    assert len(sends) < 60, len(sends)
+    s.close()
+
+
+def test_batch_event_goes_out_as_its_events(server):
+    from lanex.controller import events
+    s = socket.create_connection(("127.0.0.1", server), timeout=10)
+    s.sendall(b"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    _read_until(s, lambda b: b"event: hello" in b)
+    time.sleep(0.3)     # a fresh stream starts at the ring's end, just after hello
+    events.publish("batch",{"events": [{"type": "log", "message": "a"}, {"type": "log", "message": "b"}]})
+    buf = _read_until(s, lambda b: b'"message": "b"' in b)
+    frames = [f for f in _sse_frames(buf) if '"log"' in f["data"]]
+    assert [json.loads(f["data"])["message"] for f in frames] == ["a", "b"]
+    assert "id" not in frames[0] and frames[1].get("id")
+    s.close()
+
+
 def test_gzip_decodes_to_the_same_bytes(server, design):
     c = HTTPConnection("127.0.0.1", server, timeout=10)
     for path in ("/static/app.js", "/api/steps", "/api/run-file?tag=r1&path=flow.log"):
