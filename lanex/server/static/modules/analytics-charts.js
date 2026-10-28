@@ -9,6 +9,7 @@
 // shown on keyboard focus).
 
 import { fmt } from "./api.js";
+import { localeNum } from "./intlcache.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -267,7 +268,7 @@ export function floorplan(die, core, { label = "" } = {}) {
 }
 
 function num2(v) {
-  return Number(v.toFixed(2)).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  return localeNum(Number(v.toFixed(2)), "en-US", { maximumFractionDigits: 2 });
 }
 
 export function bbox(v) {
@@ -305,12 +306,28 @@ export function chartHost(fn, cls = "") {
 }
 export function drawCharts(root) {
   if (!root) return;
+  // Every width is read first, then every chart written: reading a width
+  // after a write forces a layout per chart.
+  // A chart in a section the browser is skipping (content-visibility: auto,
+  // off screen) is drawn when that section comes near the view: measuring it
+  // now would lay the whole section out.
+  const todo = [];
   root.querySelectorAll(".an-chart[data-chart]").forEach((h) => {
     const fn = _draw.get(h.dataset.chart);
     if (!fn) return;
-    const w = h.clientWidth;
-    if (w > 0 && h._w !== w) { h._w = w; h.innerHTML = fn(w); }
+    if (typeof h.checkVisibility === "function" && !h.checkVisibility({ contentVisibilityAuto: true })) {
+      const sec = h.closest(".an-sec");
+      if (sec && getComputedStyle(sec).contentVisibility === "auto") { drawWhenShown(sec); return; }
+    }
+    todo.push([h, fn]);
   });
+  for (const t of todo) t.push(t[0].clientWidth);
+  for (const [h, fn, w] of todo) if (w > 0 && h._w !== w) { h._w = w; h.innerHTML = fn(w); }
+}
+function drawWhenShown(sec) {
+  if (sec._anDrawOnShow) return;
+  sec._anDrawOnShow = true;
+  sec.addEventListener("contentvisibilityautostatechange", (e) => { if (!e.skipped) drawCharts(sec); });
 }
 export function resetCharts() { _draw.clear(); }
 let _ro = null;

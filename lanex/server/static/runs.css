@@ -41,7 +41,7 @@
 }
 .rn-live[hidden], .rn-selbar[hidden] { display: none; }
 .rn-live { border-color: color-mix(in srgb, var(--met1) 50%, var(--border)); }
-.rn-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--met1); animation: rn-pulse 1.4s ease-in-out infinite; }
+.rn-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--met1); animation: rn-pulse 1.4s ease-in-out infinite; will-change: opacity; }
 @keyframes rn-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .rn-live-dot { animation: none; } }
 .rn-selbar { position: sticky; top: 0; z-index: 5; border-color: var(--accent); }
@@ -69,6 +69,10 @@
 .rn-table .rn-c-base { left: 28px; }
 .rn-table .rn-c-name { left: 56px; box-shadow: inset -1px 0 0 var(--border); }
 .rn-hasnote { color: var(--text-muted); display: inline-flex; }
+/* Long lists draw only the rows near the view (runs.js): a spacer row stands
+   for the rest, and collapsed sizer rows keep every column at its full width. */
+.rn-table tr.rn-sizer { visibility: collapse; }
+.rn-table tr.rn-spacer td { padding: 0; border: 0; background: none; }
 .rn-th.rn-c-base { color: var(--text-muted); font-size: 12px; }
 .rn-row { cursor: pointer; }
 .rn-row:hover td { background: color-mix(in srgb, var(--surface-2) 70%, var(--surface)); }
@@ -107,7 +111,7 @@
 .rn-v.is-warn { color: var(--warn); }
 .rn-v.is-warn i { background: var(--warn); }
 .rn-v.is-live { color: var(--met1); }
-.rn-v.is-live i { background: var(--met1); animation: rn-pulse 1.4s ease-in-out infinite; }
+.rn-v.is-live i { background: var(--met1); animation: rn-pulse 1.4s ease-in-out infinite; will-change: opacity; }
 .rn-table td.is-better { color: var(--pass); }
 .rn-table td.is-worse { color: var(--fail); }
 .rn-table td.is-neg { font-weight: 600; }

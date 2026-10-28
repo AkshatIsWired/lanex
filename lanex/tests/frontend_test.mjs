@@ -1882,6 +1882,93 @@ check("console: Manual rail item is gone, go('manual') opens the drawer", () => 
   assert.match(nav, /tab === "manual" \|\| tab === "console"/);
 });
 
+// ---------- performance pass: cached formatters and the compiled matcher ----------
+const IC = await import(toUrl(resolve(MOD, "intlcache.js")));
+check("intlcache: cached number formats match toLocaleString exactly", () => {
+  const nums = [0, -0, 1, -1, 12.5, 1234.5678, -98765.4321, 1e6, 0.000123, 7214.42, 1226];
+  const opts = [undefined, { maximumFractionDigits: 0 }, { maximumFractionDigits: 2 }, { maximumFractionDigits: 3 },
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 }, { minimumFractionDigits: 0, maximumFractionDigits: 4 }];
+  for (const n of nums) for (const o of opts) {
+    assert.equal(IC.localeNum(n, "en-US", o), n.toLocaleString("en-US", o));
+    assert.equal(IC.localeNum(n, "en-US", o), n.toLocaleString("en-US", o));   // second call: from the cache
+  }
+  assert.equal(IC.localeNum(1234567), (1234567).toLocaleString("en-US"));
+});
+check("intlcache: cached date formats match Date#toLocale*String", () => {
+  const ds = [new Date(2026, 9, 28, 4, 19, 7), new Date(2025, 0, 1, 23, 59, 59), new Date(2026, 5, 3, 12, 0, 0)];
+  for (const d of ds) {
+    assert.equal(IC.localeTime(d, [], { hour: "2-digit", minute: "2-digit" }), d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    assert.equal(IC.localeDate(d, [], { day: "numeric", month: "short", year: undefined }), d.toLocaleDateString([], { day: "numeric", month: "short", year: undefined }));
+    assert.equal(IC.localeDate(d, [], { day: "numeric", month: "short", year: "numeric" }), d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }));
+    assert.equal(IC.localeDateTime(d, undefined, { dateStyle: "medium", timeStyle: "short" }), d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }));
+    // no options: each method's own defaults (date and time / date / time)
+    assert.equal(IC.localeDateTime(d), d.toLocaleString());
+    assert.equal(IC.localeDate(d), d.toLocaleDateString());
+    assert.equal(IC.localeTime(d), d.toLocaleTimeString());
+    assert.equal(IC.localeTime(d, "en-US", { hour: "numeric" }), d.toLocaleTimeString("en-US", { hour: "numeric" }));
+    assert.equal(IC.localeDate(d, "en-GB", { weekday: "long" }), d.toLocaleDateString("en-GB", { weekday: "long" }));
+  }
+});
+check("cells: the compiled matcher catches exactly what per-pattern globs catch", () => {
+  const names = ["sky130_fd_sc_hd__dlygate4sd3_1", "sky130_fd_sc_hd__buf_16", "sky130_fd_sc_hd__buf_1", "sky130_fd_sc_hd__a2bb2o_1",
+    "a.b", "axb", "lib$cell", "x(1)", "sky130_fd_sc_hd__probe_p_8", "sky130_fd_sc_hd__lpflow_inputiso0n_1", "[weird]"];
+  const lists = [[], ["*dlygate*"], ["*buf_16", "*probe_p_*", "*lpflow*"], ["a?b"], ["a.b"], ["lib$cell"], ["x(1)"], ["[weird]"], ["*"], ["sky130_fd_sc_hd__buf_?"]];
+  for (const pats of lists) {
+    const want = names.filter((n) => CM.globMatch(n, pats).length > 0);
+    const got = names.filter(CM.globMatcher(pats));
+    assert.deepEqual(got, want, "patterns " + JSON.stringify(pats));
+    assert.equal(CM.globMatcher(pats), CM.globMatcher(pats.slice()), "same patterns: one compiled matcher");
+  }
+});
+
+const VC = await import(toUrl(resolve(MOD, "ide", "vcd.js")));
+check("vcd.js: a dump packed for the worker unpacks to exactly what parseVCD gives", () => {
+  const extra = "$timescale 10 ps $end\n$scope module t $end\n$var wire 1 ! a $end\n$var wire 8 \" b [7:0] $end\n$var real 64 # r $end\n$var wire 1 $ never $end\n$upscope $end\n$enddefinitions $end\n" +
+    "#0\n0!\nb0 \"\nr1.5 #\n#5\n1!\nb\n#10\nb1010 \"\n0!\n#12345678901\nr-2e-3 #\n";
+  for (const text of [GOLDEN_VCD, extra]) {
+    const a = VC.parseVCD(text);
+    const m = VC.packVCD(VC.parseVCD(text)).msg;
+    const b = VC.unpackVCD(structuredClone(m));
+    for (const k of ["timescale", "tick", "end", "signals", "vars", "scopes"]) assert.deepEqual(b[k], a[k], k);
+    assert.deepEqual(Object.keys(b.byId), Object.keys(a.byId));
+    for (const id of Object.keys(a.byId)) {
+      assert.deepEqual(b.byId[id].changes, a.byId[id].changes, "changes of " + id);
+      assert.equal(b.byId[id].name, a.byId[id].name); assert.equal(b.byId[id].width, a.byId[id].width);
+    }
+    assert.equal(VC.valueAt(b.byId[Object.keys(a.byId)[0]], a.end), VC.valueAt(a.byId[Object.keys(a.byId)[0]], a.end));
+  }
+  let seen = 0;
+  VC.parseVCD("$enddefinitions $end\n" + "#1\n".repeat(200000), { onProgress: () => { seen++; } });
+  assert.ok(seen >= 2, "progress reported while parsing");
+});
+
+const ED = await import(toUrl(resolve(MOD, "ide", "editor.js")));
+const CMV = await import(toUrl(resolve(MOD, "..", "vendor", "codemirror.js")));
+check("ide editor: line-cached fold pairs equal the whole-text reading", () => {
+  const pool = [
+    "module m (input clk);", "endmodule", "  always @(posedge clk) begin", "  end", "begin end", "  if (a) begin : blk",
+    "  end else begin", "case (s)", "endcase", "function automatic f;", "endfunction", "extern function g;", "task t;", "endtask",
+    "fork", "join", "join_any", "wait fork;", "disable fork;", "generate", "endgenerate", "// begin end module", "/* begin */ end",
+    "/* begin", "still comment end", "*/ begin", "x = \"begin /* end\";", "y = \"unterminated begin", "`define begin end", "`begin",
+    "/*/ begin", "a /* b */ c /* d", "**/ end", "pure function h;", "import task k;", "constructor begin", "", "   ", "end /* x */ end",
+    "property p;", "endproperty", "class c;", "endclass", "covergroup g;", "endgroup", "begin // end", "/**/ begin",
+  ];
+  let seed = 7;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  for (let k = 0; k < 400; k++) {
+    const lines = Array.from({ length: 1 + rnd(40) }, () => pool[rnd(pool.length)]);
+    const doc = CMV.EditorState.create({ doc: lines.join("\n") }).doc;
+    assert.deepEqual([...ED.blockPairs(doc)], [...ED.blockPairsFull(doc)], "doc:\n" + lines.join("\n"));
+  }
+  // typing into one document, character by character (the caches carry over)
+  let st = CMV.EditorState.create({ doc: "module m;\n  always @(posedge clk) begin\n    x <= 1;\n  end\nendmodule\n" });
+  const typed = "  /* note begin\n  initial begin\n    y = \"end\";\n  end */\n  begin\n  end\n";
+  for (const ch of typed) {
+    st = st.update({ changes: { from: st.doc.length - 10, insert: ch } }).state;
+    assert.deepEqual([...ED.blockPairs(st.doc)], [...ED.blockPairsFull(st.doc)], "after typing " + JSON.stringify(ch));
+  }
+});
+
 // ---------------------------------------------------------------- perf pass: shell, boot, Run
 const LD = await import(toUrl(resolve(MOD, "loading.js")));
 const PF = await import(toUrl(resolve(MOD, "preflight.js")));

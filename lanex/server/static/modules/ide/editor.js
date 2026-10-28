@@ -66,11 +66,105 @@ for (const [open, closes] of Object.entries(CLOSERS)) for (const c of closes) (C
 const WORD_RX = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\\n])*"|`?[A-Za-z_][\w$]*/g;
 
 const _folds = new WeakMap();
+
+// The words of one line that matter for folding, as WORD_RX reads the whole
+// text, cached by the line's text: each keystroke on a 2000-line file used to
+// rescan everything (8 ms a key on a slow laptop); now only changed lines are
+// read again. A line is read in one of three modes: "n" normal, "b" starting
+// inside a block comment, "x" after a "/*" that nothing closes (WORD_RX then
+// skips the "/*" and reads on, so no block comment exists from there).
+const LINE_RX_N = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|\/\*|"(?:\\.|[^"\\\n])*"|`?[A-Za-z_][\w$]*/g;
+const LINE_RX_X = /\/\/[^\n]*|"(?:\\.|[^"\\\n])*"|`?[A-Za-z_][\w$]*/g;
+const _lineCache = { n: new Map(), b: new Map(), x: new Map() };
+
+// -> { toks: [[word, offset, prevInLine|undefined]], last, tail, rest }
+//    tail: offset of a "/*" not closed on this line (mode n); rest: the line
+//    after it read in mode x (made when first needed).
+function scanLine(text, from, rx) {
+  const toks = [];
+  let last, m, tail = -1;
+  rx.lastIndex = from;
+  while ((m = rx.exec(text)) !== null) {
+    const w = m[0];
+    if (w === "/*") { tail = m.index; break; }
+    if (w[0] === "/" || w[0] === '"' || w[0] === "`") continue;
+    if (CLOSERS[w] || CLOSE_OF[w]) toks.push([w, m.index, last]);
+    last = w;
+  }
+  return { toks, last, tail, rest: null };
+}
+function lineInfo(mode, text) {
+  const cache = _lineCache[mode];
+  let e = cache.get(text);
+  if (e) return e;
+  if (mode === "b") {
+    const end = text.indexOf("*/");
+    e = end < 0 ? { toks: [], last: undefined, tail: -1, rest: null, open: true } : scanLine(text, end + 2, LINE_RX_N);
+  } else e = scanLine(text, 0, mode === "x" ? LINE_RX_X : LINE_RX_N);
+  if (cache.size > 50000) cache.clear();
+  cache.set(text, e);
+  return e;
+}
+
 // Line number -> position of the line holding its block's closing keyword.
-function blockPairs(doc) {
+// The same answer as one WORD_RX pass over the whole text (tests compare them).
+export function blockPairs(doc) {
   let map = _folds.get(doc);
   if (map) return map;
   map = new Map();
+  const lines = [];
+  for (const it = doc.iterLines(); !it.next().done;) lines.push(it.value);
+  // A "/*" is a comment only if some "*/" comes after it: the last line holding one.
+  let lastClose = -1;
+  for (let i = lines.length - 1; i >= 0; i--) if (lines[i].indexOf("*/") >= 0) { lastClose = i; break; }
+  const stack = [];
+  let prev = "", mode = "n", pos = 0;
+  const take = (toks, ln, base) => {
+    for (const [w, off, p0] of toks) {
+      const pv = p0 === undefined ? prev : p0;
+      const at = base + off;
+      // "wait fork" / "disable fork" and prototypes ("extern function") close nothing.
+      if (CLOSERS[w] && !(w === "fork" && (pv === "wait" || pv === "disable")) &&
+          !((w === "function" || w === "task") && (pv === "extern" || pv === "import" || pv === "export" || pv === "pure"))) {
+        stack.push({ w, ln });
+      } else if (CLOSE_OF[w]) {
+        for (let i = stack.length - 1; i >= 0; i--) {
+          if (CLOSE_OF[w].includes(stack[i].w)) {
+            const ol = stack[i].ln;
+            stack.length = i;
+            // The outermost block wins when one line opens several.
+            if (ln > ol + 1 && !(map.has(ol) && map.get(ol) > at)) map.set(ol, at);
+            break;
+          }
+        }
+      }
+    }
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i], ln = i + 1;
+    const e = lineInfo(mode, text);
+    take(e.toks, ln, pos);
+    if (e.last !== undefined) prev = e.last;
+    if (e.open) { /* the whole line is inside the comment */ }
+    else if (e.tail >= 0) {
+      if (lastClose > i) mode = "b";            // closed further down: a comment until then
+      else {
+        // Never closed: WORD_RX skips the "/*" and reads the rest as code.
+        if (!e.rest) e.rest = scanLine(text, e.tail + 2, LINE_RX_X);
+        take(e.rest.toks.map(([w, off, p0]) => [w, off, p0 === undefined ? (e.last !== undefined ? e.last : undefined) : p0]), ln, pos);
+        if (e.rest.last !== undefined) prev = e.rest.last;
+        mode = "x";
+      }
+    } else if (mode === "b") mode = "n";
+    pos += text.length + 1;
+  }
+  _folds.set(doc, map);
+  return map;
+}
+
+// The original whole-text reading, kept for the tests to compare against.
+export function blockPairsFull(doc) {
+  const map = new Map();
   const text = doc.toString();
   const stack = [];
   let prev = "", m;
@@ -78,7 +172,6 @@ function blockPairs(doc) {
   while ((m = WORD_RX.exec(text)) !== null) {
     const w = m[0];
     if (w[0] === "/" || w[0] === '"' || w[0] === "`") { continue; }
-    // "wait fork" / "disable fork" and prototypes ("extern function") close nothing.
     if (CLOSERS[w] && !(w === "fork" && (prev === "wait" || prev === "disable")) &&
         !((w === "function" || w === "task") && (prev === "extern" || prev === "import" || prev === "export" || prev === "pure"))) {
       stack.push({ w, pos: m.index });
@@ -88,7 +181,6 @@ function blockPairs(doc) {
           const open = stack[i];
           stack.length = i;
           const ol = doc.lineAt(open.pos).number, cl = doc.lineAt(m.index).number;
-          // The outermost block wins when one line opens several.
           if (cl > ol + 1 && !(map.has(ol) && map.get(ol) > m.index)) map.set(ol, m.index);
           break;
         }
@@ -96,7 +188,6 @@ function blockPairs(doc) {
     }
     prev = w;
   }
-  _folds.set(doc, map);
   return map;
 }
 

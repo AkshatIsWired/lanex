@@ -25,6 +25,8 @@ import * as M from "./analytics-model.js";
 import * as V from "./verify-model.js";
 import { fmtDur } from "./reportcard.js";
 import * as C from "./analytics-charts.js";
+import { localeNum, localeDateTime } from "./intlcache.js";
+import { loadingStart, skel } from "./loading.js";
 
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 
@@ -37,6 +39,8 @@ let _v = {};                    // selected run's metrics
 let _b = null;                  // baseline metrics (or null)
 let _ctx = null;                // everything the sections render from
 let _token = 0;                 // guards against out-of-order loads
+let _job = null;                // the first load's skeleton (loading.js), until the first paint
+function loadDone() { if (_job) { _job.done(); _job = null; } }
 const _trendCache = new Map();  // design dir -> trends payload
 let _allFilter = "all";         // All metrics: all | problems | changed
 let _partial = null;            // {n, name, dir} when values come from a step's state_out.json
@@ -135,12 +139,16 @@ export async function renderAnalyticsFull() {
   if (!body) return;
   wireOnce();
   _trendCache.clear();   // a run may have finished since the tab was last shown
+  // First visit: a skeleton of the sections after 300 ms (never an empty state before the runs came back).
+  loadDone();
+  if (!_ctx) _job = loadingStart(body, { skeleton: skel.cards(3) + skel.block(200), label: "Analytics" });
   await loadMeta();
   const runs = await ctx.loadRuns();
   // The list could not be loaded at all (LanEx busy or asleep): leave the page
   // as it is; context.js retries and the page repaints when runs arrive.
-  if (!runs.length && ctx.runsLoadFailed()) return;
+  if (!runs.length && ctx.runsLoadFailed()) { loadDone(); return; }
   if (!runs.length || !ctx.contextRun()) {
+    loadDone();
     body.classList.add("is-empty");
     document.getElementById("an-empty").hidden = false;
     return;
@@ -237,6 +245,7 @@ async function selectRun(tag) {
   }
   _ctx = { row: row || {}, view: view || {}, stages: stages || {}, steps, cells, trends, designDir, signoff };
   body.classList.remove("is-loading");
+  loadDone();             // before drawing: the charts measure their boxes
   if (!view && !_partial) {
     document.getElementById("an-overview").innerHTML = "<div class='empty'><span class='ico'>" + icon("alert", { size: 40 }) +
       "</span><h3>Could not load " + esc(tag) + "</h3><p>The run folder may have been moved or deleted. Refresh, or pick another run.</p></div>";
@@ -268,21 +277,28 @@ async function loadTrends(dir) {
   return t;
 }
 
+// The first screen (overview, timing) is drawn at once; the sections below it
+// follow one per task, so no single task builds all 9k nodes (half a second
+// on a slow laptop). A newer paint drops the rest of an older one.
+let _paintSeq = 0;
 function paint() {
   if (!_ctx) return;
+  const seq = ++_paintSeq;
+  const body = document.getElementById("an-body");
   C.resetCharts();
   renderOverview();
   renderTiming();
-  renderArea();
-  renderPower();
-  renderRouting();
-  renderFlow();
-  renderHistory();
-  renderAll();
-  const body = document.getElementById("an-body");
-  wireProvBtns(body);
   C.drawCharts(body);
-  C.watchResize(body);
+  const rest = [renderArea, renderPower, renderRouting, renderFlow, renderHistory, renderAll];
+  const next = () => {
+    if (seq !== _paintSeq || !_ctx) return;
+    const fn = rest.shift();
+    if (fn) { fn(); setTimeout(next, 0); return; }
+    wireProvBtns(body);
+    C.drawCharts(body);
+    C.watchResize(body);
+  };
+  setTimeout(next, 0);
 }
 
 // ---------- 1. Overview ---------------------------------------------------------------------
@@ -372,7 +388,7 @@ function renderOverview() {
   if (row.pdk || stages.pdk) meta.push(esc((row.pdk || stages.pdk) + (row.scl || stages.scl ? " / " + (row.scl || stages.scl) : "")));
   if (row.started_at) {
     const d = new Date(row.started_at);
-    if (!Number.isNaN(d.getTime())) meta.push(esc(d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })));
+    if (!Number.isNaN(d.getTime())) meta.push(esc(localeDateTime(d, undefined, { dateStyle: "medium", timeStyle: "short" })));
   }
   if (Number.isFinite(row.wall_time_s)) meta.push(esc(fmtDur(row.wall_time_s)) + " of step time");
   // Verify's step totals (V.stepTotals): the same "34 of 76" Flow shows.
@@ -469,7 +485,7 @@ function kpiArea() {
   });
 }
 
-function trimNum(x) { return Number(x.toFixed(3)).toLocaleString("en-US", { maximumFractionDigits: 3 }); }
+function trimNum(x) { return localeNum(Number(x.toFixed(3)), "en-US", { maximumFractionDigits: 3 }); }
 
 function kpiPower() {
   const k = "power__total";
@@ -679,14 +695,14 @@ function renderCellRows() {
   const list = q ? cells.filter((c) => String(c.cell).toLowerCase().includes(q)) : cells;
   const cnt = document.getElementById("an-cells-count");
   const pfx = commonPrefix(cells.map((c) => String(c.cell)));
-  if (cnt) cnt.textContent = cells.length + " cell types · " + total.toLocaleString("en-US") + " instances" + (pfx ? " · names without the " + pfx + " prefix" : "") + " · from the Cells by Master report";
+  if (cnt) cnt.textContent = cells.length + " cell types · " + localeNum(total) + " instances" + (pfx ? " · names without the " + pfx + " prefix" : "") + " · from the Cells by Master report";
   const LIMIT = 12;
   const max = Math.max(...cells.map((c) => Number(c.count)));
   const pre = commonPrefix(cells.map((c) => String(c.cell)));
   host.innerHTML = C.barList(list.map((c, i) => ({
     label: pre ? String(c.cell).slice(pre.length) : c.cell, mono: true, value: Number(c.count), tone: PHYSICAL_ONLY.test(String(c.cell).replace(/^.*__/, "")) ? "muted" : "s1",
-    text: esc(Number(c.count).toLocaleString("en-US")) + " <span class='muted'>" + C.pctText((Number(c.count) / total) * 100) + "</span>",
-    tip: c.cell + "\n" + Number(c.count).toLocaleString("en-US") + " instances · " + C.pctText((Number(c.count) / total) * 100) + " of all",
+    text: esc(localeNum(Number(c.count))) + " <span class='muted'>" + C.pctText((Number(c.count) / total) * 100) + "</span>",
+    tip: c.cell + "\n" + localeNum(Number(c.count)) + " instances · " + C.pctText((Number(c.count) / total) * 100) + " of all",
     _i: i,
   })), { max }) + (!q && list.length > LIMIT ? "<button class='btn btn-ghost btn-sm an-more' data-an-more='Show all " + list.length + "'>Show all " + list.length + "</button>" : "") +
     (q && !list.length ? "<p class='muted'>No cell matches “" + esc(q) + "”.</p>" : "");

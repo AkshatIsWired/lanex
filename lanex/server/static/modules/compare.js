@@ -6,6 +6,7 @@ import { state } from "./state.js";
 import { toCsv, downloadCsv } from "./csvutil.js";
 import { gatherRunsScoped, designLabel } from "./context.js";
 import { icon } from "./icons.js";
+import { localeNum } from "./intlcache.js";
 
 // The run's verdict as the Runs page reads it: a run that finished with a
 // timing warning is not a failure.
@@ -237,7 +238,7 @@ export function summaryCellHtml(row) {
 function shortMetric(v) {
   const r = fmt.metric(v);
   if (typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 100 && Number(r) === v) {
-    return v.toLocaleString("en-US", { maximumFractionDigits: 3 });
+    return localeNum(v, "en-US", { maximumFractionDigits: 3 });
   }
   return r;
 }
@@ -254,8 +255,18 @@ const _CHART_METRICS = [
   ["route__wirelength__estimated", "Wirelength"],
 ];
 
+// The chart instances of the last render (disposed when it is replaced) and
+// one ResizeObserver for all of them (was a new window listener per render).
+let _charts = [];
+let _chartRO = null;
+function disposeCharts() {
+  for (const c of _charts) { try { c.dispose(); } catch (_e) { /* already gone */ } }
+  _charts = [];
+}
+
 async function renderCompareCharts(host, data, cols) {
   if (!host) return;
+  disposeCharts();
   if (typeof window.echarts === "undefined") await import("./loading.js").then((m) => m.loadECharts()).catch(() => null);
   if (typeof window.echarts === "undefined") { host.innerHTML = "<p class='muted'>Charts need ECharts.</p>"; return; }
   const { runBarsOption, runBarsHeight } = await import("./barchart.js");
@@ -287,8 +298,16 @@ async function renderCompareCharts(host, data, cols) {
     el.setAttribute("role", "img");
     el.setAttribute("aria-label", name + " comparison across selected runs, matching the values in the comparison tables above.");
     chart.setOption(opt);
+    _charts.push(chart);
   }
-  window.addEventListener("resize", () => host.querySelectorAll(".cmp-chart").forEach((el) => {
-    const inst = window.echarts.getInstanceByDom(el); if (inst) inst.resize();
-  }));
+  if (typeof ResizeObserver === "undefined") return;
+  if (!_chartRO) {
+    let t = 0;
+    _chartRO = new ResizeObserver(() => {
+      clearTimeout(t);
+      t = setTimeout(() => { for (const c of _charts) { if (!c.isDisposed()) c.resize(); } }, 60);
+    });
+  }
+  _chartRO.disconnect();
+  _chartRO.observe(host);
 }

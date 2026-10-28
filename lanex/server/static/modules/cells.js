@@ -21,6 +21,8 @@ import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 import * as M from "./cells-model.js";
 import * as runCtx from "./context.js";
+import { localeNum } from "./intlcache.js";
+import { loadingStart, skel } from "./loading.js";
 
 const esc = M.esc;
 const LS = "lanex.cells.view";
@@ -154,7 +156,10 @@ async function load(pdk, scl, wantCell, { keepScroll = false } = {}) {
   const my = ++S.token;
   S.pdk = pdk; S.scl = scl; S.dd = state.designDir || "";
   const host = document.getElementById("cl-lib");
-  if (!keepScroll) host.innerHTML = "<div class='cl-loading'><span class='spinner'></span> Reading " + esc(scl) + " (Liberty, LEF and the PDK's flow config)…</div>";
+  // The first library read gets the page skeleton after 300 ms; switching library keeps its own line.
+  if (S._job) S._job.done();
+  S._job = !S.lib && !keepScroll ? loadingStart(host, { skeleton: skel.cards(3) + skel.rows(6, 4), label: "Cells" }) : null;
+  if (!keepScroll) host.innerHTML = S._job ? "" : "<div class='cl-loading'><span class='spinner'></span> Reading " + esc(scl) + " (Liberty, LEF and the PDK's flow config)…</div>";
   let res;
   try { res = await api.cellLibrary(pdk, scl, state.designDir); } catch (ex) { res = { ok: false, error: ex.message || String(ex) }; }
   if (my !== S.token) return;
@@ -172,6 +177,7 @@ async function load(pdk, scl, wantCell, { keepScroll = false } = {}) {
       if (my !== S.token) return;
     }
   }
+  if (S._job) { S._job.done(); S._job = null; }      // before drawing (the curves measure their box)
   if (!res || res.ok === false) {
     S.lib = null;
     host.innerHTML = emptyHtml("Couldn't read " + scl, (res && res.error) || "unknown error", null);
@@ -261,7 +267,7 @@ function paintSummary() {
     tile("Synthesis can use", esc(String(usable)), "of " + logic.length + " logic cells", "data-cl-filter='usable'") +
     tile("Never used", esc(String(ex.length)), esc(pdkEx + " by the PDK" + (userEx ? " · " + userEx + " by you" : "")), "data-cl-jump='cl-rules'") +
     (types
-      ? tile("Used by run", esc(String(types)) + " <small>types</small>", esc(inst.toLocaleString("en-US") + " instances · " + (u.tag || "")), "data-cl-filter='used'")
+      ? tile("Used by run", esc(String(types)) + " <small>types</small>", esc(localeNum(inst) + " instances · " + (u.tag || "")), "data-cl-filter='used'")
       : tile("Used by run", "–", state.designDir ? "Run the flow to see which cells it picked" : "Open a project to see usage", "data-go='setup'")) +
     "<button class='cl-tile' data-cl-jump='cl-macros' id='cl-tile-macros'><span class='cl-tile-k'>Macros</span><span class='cl-tile-v'>–</span><span class='cl-tile-s'>SRAMs and pre-built blocks</span></button>" +
     "</div>";
@@ -506,7 +512,7 @@ function headHtml(c, fam) {
   const chips = [];
   if (c.used) {
     const total = L.cells.reduce((s, x) => s + (x.used || 0), 0);
-    chips.push("<span class='cl-chip is-used'>" + icon("check", { size: 12 }) + " Used " + c.used.toLocaleString("en-US") + "× in " + esc((S.lib.usage || {}).tag || "the run") +
+    chips.push("<span class='cl-chip is-used'>" + icon("check", { size: 12 }) + " Used " + localeNum(c.used) + "× in " + esc((S.lib.usage || {}).tag || "the run") +
       (total ? " <span>(" + (100 * c.used / total).toFixed(1) + "% of cells)</span>" : "") + "</span>");
   }
   if (c.excluded.synth || c.excluded.pnr) chips.push("<span class='cl-chip is-ex'>" + icon("ban", { size: 12 }) + " PDK keeps it out of " + (c.excluded.pnr ? "synthesis and placement" : "synthesis") + "</span>");
@@ -701,7 +707,7 @@ function driveHtml(c, fam, det) {
   const rows = cells.map((x) => "<tr class='" + (x.cell === c.cell ? "is-sel" : "") + (isExcluded(x) ? " is-ex" : "") + "' data-pick='" + esc(x.cell) + "'>" +
     "<td class='mono' title='" + esc(isExcluded(x) ? "The flow won't use it: " + exWhy(x).join(", ") : x.cell) + "'>" + esc(x.drive || "·") + "</td><td>" + M.fmtArea(x.area) + "</td>" +
     "<td>" + (x.delay ? M.fmtPs(x.delay) : "–") + "</td><td>" + (x.in_cap ? M.fmtCap(x.in_cap) : "–") + "</td>" +
-    "<td>" + (x.leakage != null ? M.fmtPower(x.leakage) : "–") + "</td><td>" + (x.used ? x.used.toLocaleString("en-US") : "–") + "</td></tr>").join("");
+    "<td>" + (x.leakage != null ? M.fmtPower(x.leakage) : "–") + "</td><td>" + (x.used ? localeNum(x.used) : "–") + "</td></tr>").join("");
   const table = "<div class='cl-tblwrap'><table class='cl-tbl'><thead><tr><th>Drive</th><th>Area</th><th title='At a fan-out-of-4 load'>Delay</th><th>In cap</th><th>Leakage</th><th>Used</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
   const cv = det && det.ok && det.curves;
   let chart = "";
@@ -866,7 +872,7 @@ function flowHtml(c) {
   if (e.user) rows.push("<li>" + mark(false) + " Excluded by your <code>EXTRA_EXCLUDED_CELLS</code> (" + esc(e.user.join(", ")) + ").</li>");
   if (e.swap) rows.push("<li>" + mark(false) + " Swapped out for one of your custom cells (Flow rules).</li>");
   if (c.dont_use) rows.push("<li>" + mark(false) + " The Liberty file marks it <code>dont_use</code>.</li>");
-  if (c.used) rows.push("<li><span class='vf-mark is-pass'></span> " + c.used.toLocaleString("en-US") + " instances in run <b>" + esc((L.usage || {}).tag || "") + "</b>. <button class='btn btn-ghost btn-xs' data-go='analytics' data-go-section='an-area'>Area breakdown</button></li>");
+  if (c.used) rows.push("<li><span class='vf-mark is-pass'></span> " + localeNum(c.used) + " instances in run <b>" + esc((L.usage || {}).tag || "") + "</b>. <button class='btn btn-ghost btn-xs' data-go='analytics' data-go-section='an-area'>Area breakdown</button></li>");
   else if ((L.usage || {}).tag && c.category !== "physical") rows.push("<li><span class='vf-mark is-not_run'></span> Not used in run <b>" + esc(L.usage.tag) + "</b>.</li>");
   let act = "";
   if (c.category !== "physical" && state.designDir) {

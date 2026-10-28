@@ -508,3 +508,8 @@ body.theme-light .an-spark .sp-pt { fill: var(--an-1); stroke: var(--surface); s
 /* used-cell rows open the cell in the Cells library */
 #an-cells-rows .an-bar-row { cursor: pointer; }
 #an-cells-rows .an-bar-row:hover .an-bar-label { color: var(--accent); }
+
+/* All metrics (4k nodes on a big design) is laid out and painted only near
+   the viewport. Only the last section: a skipped section above another would
+   take a guessed height, and a jump to the one below would land off target. */
+#sec-analytics #an-all { content-visibility: auto; contain-intrinsic-size: auto 1000px; }

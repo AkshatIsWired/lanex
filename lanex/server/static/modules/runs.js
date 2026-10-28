@@ -17,6 +17,8 @@ import { go } from "./nav.js";
 import * as FS from "./flowstages.js";
 import { icon } from "./icons.js";
 import { reportCardHtml, fmtDur } from "./reportcard.js";
+import { localeNum, localeTime, localeDate } from "./intlcache.js";
+import { loadingStart, pageSkeleton } from "./loading.js";
 
 // The last step of a stage in the Classic flow (matches setup.js's --to).
 function lastStepOfStage(stageId) {
@@ -84,7 +86,7 @@ const COLS = [
 ];
 const VERDICT_ORDER = { running: 0, passed: 1, warning: 2, incomplete: 3, stopped: 4, failed: 5 };
 const signed = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2);
-const grp = (v) => Math.round(v).toLocaleString("en-US");
+const grp = (v) => localeNum(Math.round(v));
 
 const COLS_KEY = "ll.runsCols", SORT_KEY = "ll.runsSort", BASE_KEY = "ll.runsBaseline", OPEN_KEY = "ll.runsOpenSweeps";
 function visibleCols(scope) {
@@ -293,6 +295,9 @@ export async function renderRuns({ cached = false } = {}) {
   let runs;
   if (cached && _shown.key === key) runs = _shown.runs;
   else {
+    // A list not shown yet: the page skeleton after 300 ms, never "No runs" before the answer.
+    const job = _shown.key !== key ? loadingStart(document.getElementById("sec-runs"), { skeleton: pageSkeleton("runs"), label: "Runs",
+      hasContent: () => !!document.querySelector("#runs-table tbody tr") }) : null;
     try {
       const [rs, sw] = await Promise.all([gatherRunsScoped(scope, { strict: true }),
         state.designDir ? api.dseSweeps().catch(() => null) : Promise.resolve(null)]);
@@ -302,7 +307,7 @@ export async function renderRuns({ cached = false } = {}) {
       if (my !== _renderSeq) return;
       if (_shown.key === key && _shown.runs.length) { note("Couldn't refresh the list. Trying again…"); setTimeout(() => { if (my === _renderSeq) renderRuns(); }, 4000); return; }
       runs = null;
-    }
+    } finally { if (job) job.done(); }
   }
   if (my !== _renderSeq) return;
   const empty = document.getElementById("rn-empty"), wrap = document.getElementById("rn-wrap");
@@ -337,7 +342,9 @@ export async function renderRuns({ cached = false } = {}) {
   }
   wrap.hidden = false; empty.hidden = true;
   const cols = visibleCols(scope);
-  table.innerHTML = headHtml(cols) + "<tbody>" + bodyHtml(sortRuns(shown), cols) + "</tbody>";
+  _baseMemo = new Map();
+  _model = { items: buildItems(sortRuns(shown)), cols, a: 0, b: 0, windowed: false };
+  paintTable(table, _model);
   wireTable(table, runs);
   syncSelection();
   paintViewing();
@@ -366,7 +373,8 @@ function headHtml(cols) {
 }
 
 // Rows: sweeps fold under one parent row (in the position of their newest point).
-function bodyHtml(list, cols) {
+// One item per table row (a run, with its report row when open, or a sweep).
+function buildItems(list) {
   const groups = new Map();
   const order = [];
   for (const r of list) {
@@ -377,18 +385,323 @@ function bodyHtml(list, cols) {
       groups.get(gk).runs.push(r);
     } else order.push({ run: r });
   }
-  return order.map((o) => {
-    if (o.run) return rowHtml(o.run, cols, {});
+  const items = [];
+  for (const o of order) {
+    if (o.run) { items.push({ key: keyOf(o.run), run: o.run }); continue; }
     const g = groups.get(o.group);
     const open = _openSweeps.has(o.group);
-    return sweepRowHtml(g, cols, o.group, open) + (open ? g.runs.map((r) => rowHtml(r, cols, { child: g.sw })).join("") : "");
-  }).join("");
+    items.push({ key: o.group, group: g, gk: o.group, open });
+    if (open) for (const r of g.runs) items.push({ key: keyOf(r), run: r, child: g.sw });
+  }
+  return items;
 }
 
+function itemHtml(it, cols, i) {
+  const html = it.group ? sweepRowHtml(it.group, cols, it.gk, it.open) : rowHtml(it.run, cols, { child: it.child || null });
+  return html.replace(/<tr /g, "<tr data-vi='" + i + "' aria-rowindex='" + (i + 2) + "' ");
+}
+
+// One baseline lookup per design and render (was a scan of every run per row).
+let _baseMemo = new Map();
 function baselineRowFor(r) {
   const t = baselineTag(r._design);
   if (!t || t === r.tag) return null;
-  return _shown.runs.find((x) => x.tag === t && normDir(x._design) === normDir(r._design)) || null;
+  const d = normDir(r._design);
+  const mk = d + "|" + t;
+  if (_baseMemo.has(mk)) return _baseMemo.get(mk);
+  const b = _shown.runs.find((x) => x.tag === t && normDir(x._design) === d) || null;
+  _baseMemo.set(mk, b);
+  return b;
+}
+
+// ------------------------------------------------------------------ windowed rows
+// Past WINDOW_MIN rows only the rows near the view are in the DOM, with a
+// spacer row above and below for the rest: 300 runs were 9k nodes, and every
+// sort, tick or baseline change laid all of them out again (a second at a time
+// on a slow laptop). Collapsed "sizer" rows carry the widest cell of every
+// column, so the columns are exactly as wide as with every row drawn and do not
+// move while scrolling. Tab past the last drawn row draws the next ones first.
+const WINDOW_MIN = 100, OVERSCAN = 24, MARGIN = 8;
+const _heights = new Map();    // item key -> measured height in px (kept across renders)
+let _rowH = 34.5;              // a plain run row, as measured
+let _model = null;             // { items, cols, a, b, windowed }
+const _stash = new Map();      // item key -> its <tr>s, kept while scrolled away (open report, sweep summary)
+
+// The element that scrolls the table up and down (not .rn-wrap: its sideways
+// scroll makes its overflow-y compute to auto too, but it never scrolls down).
+function scrollerOf(table) {
+  const from = table.closest(".rn-wrap") || table;
+  for (let e = from.parentElement; e && e !== document.body; e = e.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(e).overflowY)) return e;
+  }
+  return document.scrollingElement;
+}
+
+function estimate(it) {
+  const h = _heights.get(it.key);
+  if (h != null) return h;
+  if (it.group) return it.open ? _rowH + 160 : _rowH;
+  return _rowH + (originOf(it.run).kind === "fix" ? 17 : 0) + (_open === it.key ? 320 : 0);
+}
+
+function prefix(m) {
+  const cum = new Float64Array(m.items.length + 1);
+  for (let i = 0; i < m.items.length; i++) cum[i + 1] = cum[i] + estimate(m.items[i]);
+  return cum;
+}
+
+// Items [i, j) under the scroller's viewport (from the heights known so far).
+function visibleRange(table, m, cum) {
+  const sc = scrollerOf(table);
+  const head = table.tHead ? table.tHead.getBoundingClientRect().height : 0;
+  const tr = table.getBoundingClientRect();
+  const vr = sc === document.scrollingElement ? { top: 0, bottom: window.innerHeight } : sc.getBoundingClientRect();
+  const top = vr.top - tr.top - head, bot = vr.bottom - tr.top - head;
+  const n = m.items.length;
+  let i = 0;
+  while (i < n && cum[i + 1] <= top) i++;
+  let j = i;
+  while (j < n && cum[j] < bot) j++;
+  return [Math.min(i, n), Math.max(j, Math.min(i + 1, n))];
+}
+
+function spacerHtml(which, cols, h) {
+  return "<tr class='rn-spacer' data-sp='" + which + "' aria-hidden='true'><td colspan='" + (cols.length + 2) + "' style='height:" + h.toFixed(1) + "px'></td></tr>";
+}
+
+function paintTable(table, m) {
+  const cols = m.cols, n = m.items.length;
+  _stash.clear();
+  table.setAttribute("aria-rowcount", String(n + 1));
+  m.windowed = n > WINDOW_MIN;
+  if (!m.windowed) {
+    m.a = 0; m.b = n;
+    table.innerHTML = headHtml(cols) + "<tbody>" + m.items.map((it, i) => itemHtml(it, cols, i)).join("") + "</tbody>";
+    afterInsert(table, m, 0, n);
+    return;
+  }
+  const cum = prefix(m);
+  let a = 0, b = Math.min(n, 40 + OVERSCAN);
+  if (table.tBodies[0] && table.offsetParent) {
+    const [i, j] = visibleRange(table, m, cum);
+    a = Math.max(0, i - OVERSCAN); b = Math.min(n, j + OVERSCAN);
+  }
+  m.a = a; m.b = b;
+  let body = "";
+  for (let k = a; k < b; k++) body += itemHtml(m.items[k], cols, k);
+  table.innerHTML = headHtml(cols) + "<tbody>" + sizerHtml(m) + spacerHtml("top", cols, cum[a]) + body + spacerHtml("bot", cols, cum[n] - cum[b]) + "</tbody>";
+  afterInsert(table, m, a, b);
+  wireWindow(table);
+  requestAnimationFrame(() => paintWindow());
+}
+
+// Heights of the drawn items (one layout read for all of them).
+function measure(table, m) {
+  const tb = table.tBodies[0];
+  if (!tb) return;
+  const acc = new Map();
+  for (const tr of tb.rows) {
+    const vi = tr.dataset.vi;
+    if (vi == null) continue;
+    acc.set(+vi, (acc.get(+vi) || 0) + tr.getBoundingClientRect().height);
+  }
+  for (const [i, h] of acc) {
+    const it = m.items[i];
+    if (!it || !h) continue;
+    _heights.set(it.key, h);
+    if (!it.group && _open !== it.key && originOf(it.run).kind !== "fix") _rowH = h;
+  }
+}
+
+let _winRaf = 0;
+function paintWindow() {
+  _winRaf = 0;
+  const m = _model, table = document.getElementById("runs-table");
+  if (!m || !m.windowed || !table || !table.tBodies[0] || !table.offsetParent) return;
+  measure(table, m);
+  const cum = prefix(m), n = m.items.length;
+  const [i, j] = visibleRange(table, m, cum);
+  const ok = (m.a === 0 || i >= m.a + MARGIN) && (m.b === n || j <= m.b - MARGIN);
+  if (!ok) moveWindow(table, m, Math.max(0, i - OVERSCAN), Math.min(n, j + OVERSCAN));
+  setSpacers(table, m, cum);
+}
+
+function setSpacers(table, m, cum) {
+  const n = m.items.length;
+  const top = table.querySelector("tr[data-sp='top'] > td"), bot = table.querySelector("tr[data-sp='bot'] > td");
+  if (top) top.style.height = cum[m.a].toFixed(1) + "px";
+  if (bot) bot.style.height = (cum[n] - cum[m.b]).toFixed(1) + "px";
+}
+
+function htmlOf(m, from, to) {
+  let s = "";
+  for (let k = from; k < to; k++) if (!_stash.has(m.items[k].key)) s += itemHtml(m.items[k], m.cols, k);
+  return s;
+}
+
+// Draw items [a, b): drop the rows that left, add the ones that came in.
+function moveWindow(table, m, a, b) {
+  const tb = table.tBodies[0];
+  const topSp = tb.querySelector("tr[data-sp='top']"), botSp = tb.querySelector("tr[data-sp='bot']");
+  if (!topSp || !botSp || (a === m.a && b === m.b)) return;
+  const keep = (k) => k >= a && k < b;
+  for (const tr of [...tb.rows]) {
+    const vi = tr.dataset.vi;
+    if (vi == null || keep(+vi)) continue;
+    const it = m.items[+vi];
+    // An open report or a sweep's summary keeps its rows (and what they show).
+    if (it && ((it.group && it.open) || (!it.group && _open === it.key))) {
+      const list = _stash.get(it.key) || [];
+      list.push(tr);
+      _stash.set(it.key, list);
+    }
+    tr.remove();
+  }
+  const overlap = a < m.b && b > m.a;
+  const ins = (anchor, where, from, to) => {
+    if (from >= to) return;
+    anchor.insertAdjacentHTML(where, htmlOf(m, from, to));
+    // Kept rows (an open report, a sweep's summary) go back where they belong.
+    for (let k = from; k < to; k++) restore(tb, m, k);
+  };
+  if (overlap) {
+    ins(topSp, "afterend", a, Math.min(m.a, b));
+    ins(botSp, "beforebegin", Math.max(m.b, a), b);
+  } else ins(botSp, "beforebegin", a, b);
+  const was = [m.a, m.b];
+  m.a = a; m.b = b;
+  paintViewing();
+  // Only the newly drawn items need their summary or report painted.
+  const fresh = [];
+  for (let k = a; k < b; k++) if (!overlap || k < was[0] || k >= was[1]) fresh.push(k);
+  if (fresh.length) afterInsert(table, m, fresh[0], fresh[fresh.length - 1] + 1, new Set(fresh));
+}
+
+function restore(tb, m, k) {
+  const it = m.items[k];
+  const list = _stash.get(it.key);
+  if (!list) return;
+  _stash.delete(it.key);
+  // Put the kept rows right after the row before them (or the top spacer).
+  let before = null;
+  for (let p = k - 1; p >= 0 && !before; p--) {
+    const rows = tb.querySelectorAll("tr[data-vi='" + p + "']");
+    if (rows.length) before = rows[rows.length - 1];
+  }
+  if (!before) before = tb.querySelector("tr[data-sp='top']");
+  let at = before;
+  for (const tr of list) { at.after(tr); at = tr; }
+  it._kept = true;
+}
+
+// After rows are drawn: sweep summaries and the open report card.
+function afterInsert(table, m, from, to, only = null) {
+  for (let k = from; k < to; k++) {
+    if (only && !only.has(k)) continue;
+    const it = m.items[k];
+    if (it._kept) { it._kept = false; continue; }
+    if (it.group && it.open) {
+      const el = table.querySelector(".rn-sw-sum[data-sum='" + CSS.escape(it.gk) + "']");
+      const g = it.group.runs;
+      if (el && g.length) import("./sweeps.js").then((mod) => mod.paintSweepSummary(el, it.group.sw, g, { verdictOf, failCode, baseline: baselineTag(g[0]._design) }));
+    }
+    if (!it.group && _open === it.key) paintCard(it.run);
+  }
+}
+
+// The widest cell of each column, from every row: up to three collapsed rows.
+function cellWidthKey(c, it) {
+  const r = it.run;
+  if (c.id === "verdict") { const v = verdictOf(r); return String(v.label || v.state).length; }
+  if (c.id === "when") return when(r.started_at).length;
+  if (c.id === "origin") return originText(r).length;
+  if (c.id === "design") return designLabel(r._design).length;
+  if (c.id === "pdk") return (r.pdk || "").length;
+  if (c.id === "note") return Math.min(26, (r.note || "").split("\n")[0].length);
+  if (c.id === "changed" || c.id === "checks") return Math.min(c.id === "changed" ? 26 : 99, cellHtml(c, r, baselineRowFor(r)).replace(/<[^>]*>/g, "").length);
+  const v = c.get ? c.get(r) : null;
+  if (v == null) return 0;
+  const neg = (c.id === "wns" || c.id === "tns" || c.id === "hold") && v < 0 ? 0.5 : 0;
+  return String(c.f ? c.f(v) : v).length + neg;
+}
+function nameWidthKey(it, cols) {
+  const r = it.run;
+  const vals = it.child ? pointValues(r, it.child) : null;
+  return r.tag.length + (vals ? valuesText(vals).length * 0.9 + 1 : 0) + (r.pinned ? 2 : 0) + (r.imported ? 9 : 0) +
+    (r.note && !cols.some((c) => c.id === "note") ? 2 : 0) + (isViewingRun(r) ? 7 : 0);
+}
+function isViewingRun(r) { return r.tag === contextRun() && normDir(r._design) === normDir(contextDesign()); }
+
+function sizerHtml(m) {
+  const cols = m.cols, N = 3;
+  _viewingKey = normDir(contextDesign()) + "|" + contextRun();
+  const top = new Map(cols.map((c) => [c.id, []]));
+  const push = (id, score, it) => {
+    const l = top.get(id);
+    if (!score) return;
+    if (l.length < N || score > l[l.length - 1][0]) {
+      l.push([score, it]); l.sort((x, y) => y[0] - x[0]); if (l.length > N) l.pop();
+    }
+  };
+  top.set("_lineage", []); top.set("_sweep", []);
+  for (const it of m.items) {
+    if (it.group) { push("_sweep", sweepRowHtml(it.group, cols, it.gk, false).replace(/<[^>]*>/g, "").length, it); continue; }
+    for (const c of cols) push(c.id, c.id === "name" ? nameWidthKey(it, cols) : cellWidthKey(c, it), it);
+    if (originOf(it.run).kind === "fix") push("_lineage", lineageHtml(it.run).replace(/<[^>]*>/g, "").length, it);
+  }
+  let out = "";
+  for (let k = 0; k < N; k++) {
+    let any = false;
+    const tds = cols.map((c) => {
+      // The third row's name cell is the longest "fix of …" line, if any.
+      const pick = c.id === "name" && k === N - 1 && top.get("_lineage").length ? top.get("_lineage")[0] : top.get(c.id)[k];
+      if (!pick) return "<td class='rn-c-" + c.id + "'></td>";
+      any = true;
+      const it = pick[1];
+      if (c.id === "name") return nameCellHtml(it.run, cols, it.child || null, isViewingRun(it.run));
+      return cellHtml(c, it.run, baselineRowFor(it.run));
+    }).join("");
+    if (any) out += "<tr class='rn-sizer' aria-hidden='true'><td class='rn-c-pick'></td><td class='rn-c-base'></td>" + tds + "</tr>";
+  }
+  const sw = top.get("_sweep")[0];
+  if (sw) out += sweepRowHtml(sw[1].group, cols, sw[1].gk, false).replace("<tr class='rn-sweep", "<tr aria-hidden='true' class='rn-sizer rn-sweep");
+  return out;
+}
+
+function repaintSizer() {
+  const m = _model, table = document.getElementById("runs-table");
+  if (!m || !m.windowed || !table || !table.tBodies[0]) return;
+  const tb = table.tBodies[0];
+  tb.querySelectorAll("tr.rn-sizer").forEach((tr) => tr.remove());
+  tb.insertAdjacentHTML("afterbegin", sizerHtml(m));
+}
+
+let _winWired = null;
+function wireWindow(table) {
+  const sc = scrollerOf(table);
+  if (_winWired !== sc) {
+    if (_winWired) _winWired.removeEventListener("scroll", onWinScroll);
+    (sc === document.scrollingElement ? window : sc).addEventListener("scroll", onWinScroll, { passive: true });
+    _winWired = sc;
+  }
+  if (table._winKeys) return;
+  table._winKeys = true;
+  // Tab / Shift+Tab off the last / first drawn row: draw the next rows first,
+  // so focus moves into them as if every row were there.
+  table.addEventListener("keydown", (e) => {
+    const m = _model;
+    if (e.key !== "Tab" || !m || !m.windowed) return;
+    const tr = e.target.closest && e.target.closest("tr[data-vi]");
+    if (!tr) return;
+    const vi = +tr.dataset.vi, n = m.items.length;
+    if (!e.shiftKey && vi >= m.b - 1 && m.b < n) moveWindow(table, m, m.a, Math.min(n, m.b + OVERSCAN));
+    else if (e.shiftKey && vi <= m.a && m.a > 0) moveWindow(table, m, Math.max(0, m.a - OVERSCAN), m.b);
+    else return;
+    setSpacers(table, m, prefix(m));
+  });
+}
+function onWinScroll() {
+  if (!_winRaf && _model && _model.windowed) _winRaf = requestAnimationFrame(paintWindow);
 }
 
 function cellHtml(c, r, base) {
@@ -451,15 +764,7 @@ function rowHtml(r, cols, { child = null } = {}) {
   const k = keyOf(r);
   const base = baselineRowFor(r);
   const isBase = baselineTag(r._design) === r.tag;
-  const vals = child ? pointValues(r, child) : null;
-  const name = "<td class='rn-c-name'><div class='rn-name'>" +
-    "<button class='rn-exp' data-act='expand' aria-expanded='" + (_open === k) + "' title='Report and actions' aria-label='Report and actions for " + esc(r.tag) + "'>" + icon("chevron", { size: 12 }) + "</button>" +
-    "<span class='rn-tag'>" + esc(r.tag) + "</span>" +
-    (vals ? "<span class='rn-val'>" + esc(valuesText(vals)) + "</span>" : "") +
-    (r.pinned ? "<span class='rn-pin' title='Pinned'>" + icon("star", { size: 11 }) + "</span>" : "") +
-    (r.imported ? "<span class='rn-chip'>imported</span>" : "") +
-    (r.note && !cols.some((c) => c.id === "note") ? "<span class='rn-hasnote' title='" + esc(r.note) + "'>" + icon("file", { size: 11 }) + "</span>" : "") +
-    "<span class='rn-viewing' title='Flow, Layout, Analytics and Verify show this run'>shown</span></div>" + lineageHtml(r) + "</td>";
+  const name = nameCellHtml(r, cols, child);
   const cells = cols.map((c) => (c.id === "name" ? name : cellHtml(c, r, base))).join("");
   const n = cols.length + 2;
   return "<tr class='rn-row" + (child ? " is-child" : "") + (_picked.has(k) ? " is-picked" : "") + "' data-key='" + esc(k) + "' data-tag='" + esc(r.tag) + "' data-design='" + esc(r._design || "") + "'>" +
@@ -469,6 +774,20 @@ function rowHtml(r, cols, { child = null } = {}) {
     cells + "</tr>" +
     (_open === k ? "<tr class='rn-detail' data-detail='" + esc(k) + "'><td colspan='" + n + "'><div class='rn-card' id='rn-card'>" +
       "<p class='muted'>Reading the run…</p></div></td></tr>" : "");
+}
+
+// viewing: show the "shown" chip as the row that has it would (sizer rows only).
+function nameCellHtml(r, cols, child, viewing = false) {
+  const k = keyOf(r);
+  const vals = child ? pointValues(r, child) : null;
+  return "<td class='rn-c-name'><div class='rn-name'>" +
+    "<button class='rn-exp' data-act='expand' aria-expanded='" + (_open === k) + "' title='Report and actions' aria-label='Report and actions for " + esc(r.tag) + "'>" + icon("chevron", { size: 12 }) + "</button>" +
+    "<span class='rn-tag'>" + esc(r.tag) + "</span>" +
+    (vals ? "<span class='rn-val'>" + esc(valuesText(vals)) + "</span>" : "") +
+    (r.pinned ? "<span class='rn-pin' title='Pinned'>" + icon("star", { size: 11 }) + "</span>" : "") +
+    (r.imported ? "<span class='rn-chip'>imported</span>" : "") +
+    (r.note && !cols.some((c) => c.id === "note") ? "<span class='rn-hasnote' title='" + esc(r.note) + "'>" + icon("file", { size: 11 }) + "</span>" : "") +
+    "<span class='rn-viewing' title='Flow, Layout, Analytics and Verify show this run'" + (viewing ? " style='display:inline-block'" : "") + ">shown</span></div>" + lineageHtml(r) + "</td>";
 }
 
 function sweepRowHtml(g, cols, gk, open) {
@@ -520,12 +839,12 @@ function when(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return iso;
   const now = new Date();
-  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const days = Math.floor((new Date(now.toDateString()) - new Date(d.toDateString())) / 864e5);
+  const hm = localeTime(d, [], { hour: "2-digit", minute: "2-digit" });
+  const days = Math.floor((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
   if (days === 0) return "today " + hm;
   if (days === 1) return "yesterday " + hm;
   if (days < 7) return days + " days ago";
-  return d.toLocaleDateString([], { day: "numeric", month: "short", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+  return localeDate(d, [], { day: "numeric", month: "short", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
 }
 
 // ------------------------------------------------------------------ table events
@@ -581,14 +900,7 @@ function wireTable(table, runs) {
     setRun(r.tag, r._design);
   };
   table.ondblclick = (e) => { const r = rowOf(e.target, runs); if (r && !e.target.closest(".rn-card, .rn-pick, [data-act]")) toggleOpen(r); };
-  if (_open) paintCard(runs.find((r) => keyOf(r) === _open));
-  table.querySelectorAll(".rn-sw-sum").forEach((el) => {
-    const gk = el.dataset.sum;
-    const g = [...table.querySelectorAll("tr.rn-row.is-child")].map((tr) => runs.find((r) => keyOf(r) === tr.dataset.key)).filter(Boolean)
-      .filter((r) => { const sw = sweepOf(r); return sw && gk.endsWith("sweep:" + sw.id); });
-    const sw = g.length ? sweepOf(g[0]) : null;
-    if (sw) import("./sweeps.js").then((m) => m.paintSweepSummary(el, sw, g, { verdictOf, failCode, baseline: baselineTag(g[0]._design) }));
-  });
+  // The open report card and the open sweeps' summaries: paintTable / afterInsert.
 }
 
 function toggleOpen(r) {
@@ -598,10 +910,14 @@ function toggleOpen(r) {
   renderRuns({ cached: true });
 }
 
+let _viewingKey = "";
 function paintViewing() {
   const run = contextRun(), design = normDir(contextDesign());
   document.querySelectorAll("#runs-table tr.rn-row").forEach((tr) =>
     tr.classList.toggle("is-viewing", tr.dataset.tag === run && normDir(tr.dataset.design) === design));
+  // The "shown" chip widens its row's name: the sizer rows follow it.
+  const vk = design + "|" + run;
+  if (vk !== _viewingKey) { _viewingKey = vk; repaintSizer(); }
 }
 
 // ------------------------------------------------------------------ selection

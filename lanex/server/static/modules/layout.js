@@ -396,15 +396,22 @@ function ioPins() {
   return out;
 }
 
+// The label font, read once: getComputedStyle on every overlay paint forced a
+// style pass of the page (one 400 ms frame on a slow laptop), and --mono never
+// changes while the page lives.
+let _ioFont = "";
 function drawIoPins(ctx, v) {
   const pins = ioPins();
   if (!pins.length) return;
   const light = S.bg === "light";
   ctx.save();
-  ctx.font = "500 11px " + (getComputedStyle(document.body).getPropertyValue("--mono") || "monospace");
+  if (!_ioFont) _ioFont = "500 11px " + (getComputedStyle(document.body).getPropertyValue("--mono") || "monospace");
+  ctx.font = _ioFont;
   ctx.textBaseline = "middle";
   const placed = { n: -1e9, s: -1e9, e: -1e9, w: -1e9 };
-  const sorted = pins.slice().sort((a, b) => (a.side === "n" || a.side === "s") ? a.x - b.x : b.y - a.y);
+  // Sorted once per pin set (pan and zoom only move them on screen).
+  if (!pins._sorted) pins._sorted = pins.slice().sort((a, b) => (a.side === "n" || a.side === "s") ? a.x - b.x : b.y - a.y);
+  const sorted = pins._sorted;
   for (const p of sorted) {
     const [x, y] = v.w2s(p.x, p.y);
     if (x < -40 || y < -40 || x > v.W + 40 || y > v.H + 40) continue;

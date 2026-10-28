@@ -4,6 +4,8 @@
 // a gate diagram; flip-flop / latch behaviour in words; unit formatting; the
 // LibreLane wildcard semantics (fnmatch) used by the exclusion lists.
 
+import { localeNum } from "./intlcache.js";
+
 // ---------- Liberty function parser ------------------------------------------
 // Grammar (Liberty user guide): NOT is prefix ! or postfix ', AND is & or * or
 // juxtaposition, XOR is ^, OR is | or +. Precedence NOT > AND > XOR > OR.
@@ -346,8 +348,35 @@ export function globToRegex(p) {
   }
   return new RegExp(r + "$");
 }
+// Each pattern is compiled once (a PDK list is a few hundred patterns, checked
+// against every cell of the library: compiling per test froze the Cells tab).
+const _rx = new Map();
+function compiled(p) {
+  const k = String(p);
+  let rx = _rx.get(k);
+  if (!rx) { rx = globToRegex(k); _rx.set(k, rx); }
+  return rx;
+}
 export function globMatch(name, pats) {
-  return (pats || []).filter((p) => globToRegex(p).test(name));
+  return (pats || []).filter((p) => compiled(p).test(name));
+}
+// A test "does any of these patterns catch the name": one alternation of the
+// anchored patterns, so a name is scanned once instead of once per pattern.
+const _any = new Map();
+export function globMatcher(pats) {
+  const list = (pats || []).map(String);
+  const k = list.join("\u0000");
+  let fn = _any.get(k);
+  if (!fn) {
+    if (!list.length) fn = () => false;
+    else {
+      const rx = new RegExp("^(?:" + list.map((p) => globToRegex(p).source.slice(1, -1)).join("|") + ")$");
+      fn = (name) => rx.test(name);
+    }
+    if (_any.size > 200) _any.clear();
+    _any.set(k, fn);
+  }
+  return fn;
 }
 
 // ---------- formatting ---------------------------------------------------------
@@ -355,7 +384,7 @@ export function fmtNum(v, digits = 2) {
   if (v === null || v === undefined || !Number.isFinite(Number(v))) return "–";
   const n = Number(v);
   const a = Math.abs(n);
-  if (a >= 1000) return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  if (a >= 1000) return localeNum(n, "en-US", { maximumFractionDigits: 0 });
   if (a >= 100) return n.toFixed(0);
   if (a >= 10) return n.toFixed(1);
   return n.toFixed(digits);
