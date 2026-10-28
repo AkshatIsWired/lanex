@@ -202,8 +202,8 @@ after a server restart without a reload, the server forgets the active project.
 
 Tests after the pass: frontend 133 checks; pytest only the 8 known environment
 failures.
-Test build: pre-release `windows-test-2026-10-28`, EXE replaced 2026-10-29 (built from 35ffae7, SHA-256
-`285f9e83…4600bab95`); app changes only, installer unchanged, not VM-checked.
+Test build: pre-release `windows-test-2026-10-28`, EXE replaced 2026-10-29 (first built from 35ffae7, SHA-256
+`285f9e83…4600bab95`; replaced the same day by the Layout-redesign build from cee850e, `07091acb…2ba1b767`); app changes only, installer unchanged, not VM-checked.
 
 ## Layout tab redesign (2026-10-29)
 
