@@ -227,7 +227,7 @@ function renderStep2(body, tpl) {
     const where = shown(joinPath(projectsDir(), name));
     $("wiz-where").textContent = $("wiz-where").title = where;
     $("wiz-where-help").textContent = _parent ? "A new folder is created inside the folder you chose."
-      : where.startsWith("\\\\wsl") ? "Inside the LanEx environment, as your Windows user name has a space."
+      : where.startsWith("\\\\wsl") ? "Inside the LanEx environment: your Windows user folder can't be used here (its path has a space, or LanEx couldn't find it)."
       : _defaults && _defaults.wsl ? "Your LanEx projects folder, next to your other Windows files." : "Your LanEx projects folder.";
   };
   const paintClk = () => {
