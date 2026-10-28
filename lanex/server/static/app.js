@@ -266,6 +266,9 @@ function handle(ev) {
     if (Array.isArray(ev.step_graph)) {
       state.pipeline = ev.step_graph;
       state.status.running = true;
+      // Every open window shows Stop, not only the one Run was pressed in: the
+      // top-bar button stops a running flow, so "Run" on it would mislead.
+      if (!state.runStart) paintRunning(true);   // (a start pressed here paints itself)
       // Reset per-step statuses to the fresh graph (all pending). Without this
       // the timeline kept the PREVIOUS run's statuses (all "done")
       // until each new step event arrived — so a fresh run (especially a DSE
@@ -296,6 +299,7 @@ function handle(ev) {
   } else if (ev.type === "phase") {
     // Container pre-step milestone — show the "preparing" hero with a timer.
     state.status.running = true;
+    if (!state.runStart) paintRunning(true);
     if (!state.prepStart) state.prepStart = Date.now();
     state.prepPhase = ev.label || "Preparing…";
     if (ev.tag) state.liveTag = ev.tag;
