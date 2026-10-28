@@ -1389,7 +1389,7 @@ check("run report card: one summary for the toast, the title and the notificatio
   assert.equal(clean.body, "setup +0.31 ns · 57 × 68.2 µm · 1 min 1 s", "the numbers, not just 'done'");
   const halted = RC.runSummary({ tag: "t", rx: { kind: "halted", step: { id: "OpenROAD.GlobalPlacement" },
     card: { title: "Placement ran out of room", plain: "The cells need 207 % of the core area, so they can't all be placed. The die is fixed." } }, rs });
-  assert.match(halted.title, /stopped at OpenROAD\.GlobalPlacement/);
+  assert.match(halted.title, /failed at OpenROAD\.GlobalPlacement/);
   assert.match(halted.body, /^Placement ran out of room\. The cells need 207 %/);
   assert.equal(RC.runSummary({ tag: "t", rx: { kind: "stopped" }, rs }).tone, "warn");
   // Every number on the card keeps its exact value one hover away.
