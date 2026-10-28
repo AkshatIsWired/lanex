@@ -217,3 +217,39 @@ def test_open_render_probe_instances_and_mesh(tmp_path):
 
     # a session that was never opened (or was dropped) answers None, not an error
     assert lv.render("nope", box=None, w=10, h=10) is None
+
+
+@pytest.mark.skipif(not klayout_ok, reason="klayout Python package not installed")
+def test_mesh_too_big_keeps_the_top_of_the_stack(tmp_path, monkeypatch):
+    """A whole big chip over the 3D budget keeps the wiring on top and names
+    the lower layers it left out; nothing fitting at all is still too_big."""
+    import klayout.db as kdb
+
+    run = _run(tmp_path)
+    ly = kdb.Layout()
+    ly.dbu = 0.001
+    top = ly.create_cell("top")
+    for i in range(3):                                   # met1: 3 boxes = 6 tris + 12 edges = 30 prims
+        top.shapes(ly.layer(68, 20)).insert(kdb.Box(i * 1000, 0, i * 1000 + 460, 2720))
+    top.shapes(ly.layer(69, 20)).insert(kdb.Box(0, 0, 2460, 400))   # met2 above: 10 prims
+    ly.write(str(run / "final" / "gds" / "top.gds"))
+    info = lv.open_session(run, "final")
+    assert info["ok"], info
+
+    def head(blob):
+        n = struct.unpack("<I", blob[:4])[0]
+        return json.loads(blob[4:4 + n])
+
+    full = head(lv.mesh(info["sid"], None, None))
+    if not full["stack"].startswith("gds3d:"):
+        pytest.skip("no sky130 GDS3D process file here")
+    assert {L["name"] for L in full["layers"]} == {"met1", "met2"} and full["dropped"] == []
+
+    monkeypatch.setattr(lv, "_MAX_3D_PRIMS", 20)
+    part = head(lv.mesh(info["sid"], None, None))
+    assert [L["name"] for L in part["layers"]] == ["met2"]
+    assert part["dropped"] == ["met1"]
+
+    monkeypatch.setattr(lv, "_MAX_3D_PRIMS", 5)
+    with pytest.raises(ValueError, match="too_big"):
+        lv.mesh(info["sid"], None, None)

@@ -1122,20 +1122,36 @@ def mesh(sid: str, box: Optional[List[float]], visible: Optional[List[int]]) -> 
         extent = clip.bbox().to_dtype(dbu) if clip is not None else bb
         ox, oy = extent.left, extent.bottom
         layers_out: List[Dict[str, Any]] = []
+        dropped: List[str] = []
         tri = array("f")
         edg = array("f")
         prims = 0
+        # Top of the stack first: when a whole big chip has more geometry than
+        # a browser can hold, the wiring is kept and the dense transistor-level
+        # layers below it are left out (and named in the reply), instead of
+        # drawing nothing. Nothing at all fitting is still "too_big".
+        todo = []
         for L in s._layers:
             if vis is not None and L["id"] not in vis:
                 continue
             spec = stack.get(L["src"]) if stack else generic.get(L["id"])
-            if not spec:
+            if spec:
+                todo.append((L, spec))
+        todo.sort(key=lambda t: (-t[1]["z0"], -t[1]["z1"]))
+        for L, spec in todo:
+            if dropped:
+                dropped.append(spec["name"])
                 continue
             r = kdb.Region(s.top.begin_shapes_rec(L["li"]))
             if clip is not None:
                 r = r & clip
             r.merge()
             if r.is_empty():
+                continue
+            # A cheap size check (in KLayout's C++) before the slow Python
+            # triangulation: every edge becomes a wall of two triangles.
+            if prims + 2 * r.edges().count() > _MAX_3D_PRIMS:
+                dropped.append(spec["name"])
                 continue
             t0 = len(tri)
             e0 = len(edg)
@@ -1147,14 +1163,20 @@ def mesh(sid: str, box: Optional[List[float]], visible: Optional[List[int]]) -> 
                 edg.extend((e.p1.x * dbu - ox, e.p1.y * dbu - oy, e.p2.x * dbu - ox, e.p2.y * dbu - oy))
             nt = (len(tri) - t0) // 6
             ne = (len(edg) - e0) // 4
+            if prims + nt + 2 * ne > _MAX_3D_PRIMS:
+                del tri[t0:]
+                del edg[e0:]
+                dropped.append(spec["name"])
+                continue
             prims += nt + 2 * ne
-            if prims > _MAX_3D_PRIMS:
-                raise ValueError("too_big")
             layers_out.append({"id": L["id"], "label": L["label"], "name": spec["name"], "z0": spec["z0"],
                                "z1": spec["z1"], "color": spec["color"], "metal": spec.get("metal", True),
                                "tris": nt, "edges": ne, "triOff": t0, "edgeOff": e0})
+        if dropped and not layers_out:
+            raise ValueError("too_big")
         head = {"origin": [ox, oy], "extent": [extent.left, extent.bottom, extent.right, extent.top],
                 "clipped": clip is not None, "layers": layers_out, "triFloats": len(tri), "edgeFloats": len(edg),
+                "dropped": dropped,
                 "stack": (kind + ":" + Path(techfile).name) if techfile else "generic",
                 "top": s.top.name}
     hb = json.dumps(head).encode("utf-8")
