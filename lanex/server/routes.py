@@ -1680,7 +1680,8 @@ def h_manual_run(handler: Any) -> None:
         _respond(handler, why.replace("Nothing was started.", "The command was not run."), 409)
         return
     v = manualcmd.validate(command)
-    if v.get("ok") and v.get("base") == "librelane":
+    _info_only = {"--version", "--help", "-h", "--list-steps", "--list-flows"}
+    if v.get("ok") and v.get("base") == "librelane" and not (_info_only & set(v.get("argv") or [])):
         # A second flow next to a live run or sweep: double the memory, and a
         # copied command may name the same run folder.
         busy = _other_flow_busy()

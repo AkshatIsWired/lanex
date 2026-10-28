@@ -220,6 +220,11 @@ def test_console_librelane_waits_for_a_live_run(monkeypatch, tmp_path, got):
     monkeypatch.setattr(app, "get_runner", lambda: _Runner(running=True))
     routes.h_manual_run(_H({"command": "librelane --dockerized config.json"}))
     assert got["code"] == 409 and "run is in progress" in got["payload"]
+    # Asking librelane its version is not a second flow.
+    monkeypatch.setattr(manualcmd.ManualJob, "_run", lambda self, *a: setattr(self, "_running", False))
+    monkeypatch.setattr(manualcmd, "_JOB", manualcmd.ManualJob())
+    routes.h_manual_run(_H({"command": "librelane --version"}))
+    assert got["code"] == 200
 
 
 # ------------------------------------------------------------------ runs into the wrong folder
