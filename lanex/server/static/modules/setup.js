@@ -872,15 +872,23 @@ function startAccepted(tag) {
   const s = _start;
   _start = null;
   state.runStart = null;
-  state.pipeline = [];
-  state.stepStatuses = {};
-  state.stepTiming = {};
-  state.prepPhase = null;
-  state.prepStart = null;
-  state.lastFlow = null;
-  state.paused = false;
-  state.status.running = true;
-  if (tag) state.liveTag = tag;
+  // The run's own first events can arrive before this reply (app.js then
+  // already holds its step graph): only a run not heard from yet is reset.
+  const heard = !!tag && state.liveTag === tag && state.status.running;
+  if (!heard) {
+    state.pipeline = [];
+    state.stepStatuses = {};
+    state.stepTiming = {};
+    state.prepPhase = null;
+    state.prepStart = null;
+    state.lastFlow = null;
+    state.paused = false;
+    state.status.running = true;
+    if (tag) state.liveTag = tag;
+    // Flow's elapsed clock starts now (app.js keeps it when this run's first event comes).
+    state.runStartedAt = Date.now();
+    state.runStartedFor = tag || "";
+  }
   paintRunning(true);
   document.dispatchEvent(new CustomEvent("g:run_start", { detail: { phase: "started", tag } }));
   if (s && s.cancel) api.cancelRun().catch(() => {});
@@ -957,8 +965,11 @@ async function onRunClick({ show = false, fixed = false } = {}) {
   // Run flow and the very first run always show it.
   const first = !safeStorage.get("ll.ranOnce") && !(state.runs || []).length;
   const showFlow = show || first || safeStorage.get("ll.showFlowOnRun") !== "0";
-  beginStart(currentTab(), showFlow);
+  // The page first (it reads the scroll position while nothing has changed
+  // yet, so no forced layout), then the button and Flow's "Starting".
+  const from = currentTab();
   if (showFlow) go("pipeline", {}, { link: false });
+  beginStart(from, showFlow);
   const checkP = fresh ? null : preflightNow();
   if (checkP) checkP.catch(() => {});
   try {

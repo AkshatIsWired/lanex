@@ -109,6 +109,8 @@ export async function renderFlow() {
   F.loaded = true;
   if (F.job) { F.job.done(); F.job = null; }
   if (tok !== F.tok) return;
+  // Still starting: the page shows that, not the last run (nothing to read).
+  if (state.runStart && !liveTag()) { paint(); return; }
   const tag = (!F.pinned && live) ? live : (F.keep || ctx.contextRun());
   const wasLive = F.live;
   F.live = !!live && tag === live;
@@ -362,7 +364,7 @@ function paint() {
   const strip = $("fl-strip"), body = $("fl-body");
   $("fl-live").hidden = !(liveTag() && !F.live);
   F.rb?.paint();
-  if (state.runStart && !F.live && !liveTag()) {
+  if (state.runStart && !liveTag()) {
     // Run was pressed: starting, or refused (with why and the way back).
     const head = $("fl-head");
     head._key = "";

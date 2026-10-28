@@ -175,7 +175,7 @@ async function boot() {
       } catch (_e) { /* stale/removed recent dir — ignore */ }
       return { adopt: null, serverKnew: false };
     })();
-    const [[steps, vars, formats, flows, pdks], boot] = await Promise.all([metaP, designP]);
+    const [[steps, vars, formats, flows, pdks], proj] = await Promise.all([metaP, designP]);
     state.steps = steps;
     state.variables = vars;
     state.designFormats = formats;
@@ -199,13 +199,13 @@ async function boot() {
     // summary are read after the window shows (finishAdopt).
     const setupMod = await import("./modules/setup.js");
     let opened = false;
-    if (boot.adopt) {
+    if (proj.adopt) {
       const input = document.getElementById("design-dir-input");
-      if (input) input.value = boot.adopt;
+      if (input) input.value = proj.adopt;
       // Boot adoption is implicit: scope Runs/Preview but keep the Setup file
       // selector hidden (history/recents stay shown) until the user explicitly
       // loads a design. See adoptDesignDir({explicit}).
-      try { opened = await setupMod.openDesignQuick(boot.adopt, { explicit: boot.serverKnew }); } catch (_e) { opened = false; }
+      try { opened = await setupMod.openDesignQuick(proj.adopt, { explicit: proj.serverKnew }); } catch (_e) { opened = false; }
     }
     // The PDK picker, already following the project's config.
     await populatePdkPicker(pdks);
@@ -217,7 +217,7 @@ async function boot() {
       if (!state.selectedRunTag && state.runs && state.runs.length) state.selectedRunTag = state.runs[0].tag;
     }).catch(() => {});
     if (opened) {
-      setupMod.finishAdopt(boot.adopt, { explicit: boot.serverKnew })
+      setupMod.finishAdopt(proj.adopt, { explicit: proj.serverKnew })
         .then(() => paintOnboardChecklist())
         .catch((e) => console.error("adopt", e));
     }
@@ -282,9 +282,10 @@ function handle(ev) {
       // on the page you're on.
       noteRunStarted();
       // The clock started when Run was pressed (setup.js), not now.
-      const t0 = ev.tag && state.liveTag === ev.tag ? state.runStartedAt : 0;
+      const t0 = ev.tag && state.runStartedFor === ev.tag ? state.runStartedAt : 0;
       runStarted(ev.tag);
       if (t0) state.runStartedAt = t0;
+      state.runStartedFor = "";
       ifLoaded("flow", (m) => m.flowEvent(ev));
     }
     if (ev.message) {
