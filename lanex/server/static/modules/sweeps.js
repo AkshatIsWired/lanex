@@ -64,10 +64,13 @@ function typicalRunSecs() {
 }
 
 // ------------------------------------------------------------------ sheet
-export async function openSweepSheet() {
+// `goal` (a GOALS id such as "clock") opens the sheet on that preset;
+// `values` fills its first setting's values (e.g. "12.5, 10, 8").
+export async function openSweepSheet(goal, { values } = {}) {
   if (!state.designDir) { toast.show("Open a project first: a sweep runs the open design.", "info"); return; }
   if (!S.el) build();
-  pickGoal(S.goal);
+  pickGoal(GOALS.some((g) => g.id === goal) ? goal : S.goal);
+  if (values && S.axes[0]) { S.axes[0].values = values; paintAxes(); }
   S.el.hidden = false;
   requestAnimationFrame(() => S.el.classList.add("is-open"));
   if (!S.vars) {

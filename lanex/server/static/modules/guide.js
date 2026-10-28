@@ -427,13 +427,14 @@ async function show3d() {
 async function finishCard() {
   hidePointer();
   const tag = state.selectedRunTag || (state.runs && state.runs[0] && state.runs[0].tag) || "";
-  let facts = [];
+  let facts = [], period = null;
   try {
     const [view, clk] = await Promise.all([
       tag ? api.run(tag) : null,
       tag ? api.provenance({ kind: "var", key: "CLOCK_PERIOD", tag }).catch(() => null) : null,
     ]);
-    facts = chipFacts(view && view.summary, clockOf(clk));
+    period = clockOf(clk);
+    facts = chipFacts(view && view.summary, period);
   } catch (_e) { facts = []; }
   G = { active: false, beat: BEATS.length, project: G.project };
   save();
@@ -464,7 +465,12 @@ async function finishCard() {
   ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
   ov.querySelector(".gd-close").addEventListener("click", close);
   ov.querySelector("[data-g='verilog']").addEventListener("click", () => { close(); go("ide", { rel: "src/blinky.v" }); });
-  ov.querySelector("[data-g='sweep']").addEventListener("click", () => { close(); go("dse"); });
+  ov.querySelector("[data-g='sweep']").addEventListener("click", () => { close(); go("runs");
+    // Faster, the same, slower: the run's clock period x 0.8, 1, 1.25. Tightest first,
+    // so the preset's "stop at the first clean run" finds the fastest that works.
+    const values = period ? [0.8, 1, 1.25].map((f) => String(+(period * f).toFixed(2))).join(", ") : undefined;
+    import("./sweeps.js").then((m) => m.openSweepSheet("clock", { values }));
+  });
   ov.querySelector("[data-g='own']").addEventListener("click", () => { close(); import("./wizard.js").then((m) => m.openWizard()); });
   ov.querySelector("[data-g='own']").focus();
 }
@@ -602,7 +608,8 @@ export function showStart() {
 // Closed mid-guide: ask once, on the next launch, whether to carry on.
 function offerResume() {
   const b = BEATS[G.beat];
-  const t = toast.show("Your first chip is at step " + (G.beat + 1) + " of " + BEATS.length + ": " + (b ? b.label.toLowerCase() : "done") + ".", "info", 0, [
+  const t = toast.show(b ? "Your first chip is at step " + (G.beat + 1) + " of " + BEATS.length + ": " + b.label.toLowerCase() + "."
+    : "Your first chip is built. Carry on to see its summary.", "info", 0, [
     { label: "Carry on", run: () => showBeat() },
     { label: "End guide", run: () => endGuide({ quiet: true }) },
   ]);
