@@ -334,7 +334,8 @@ async function pointRun() {
       "synthesis, floorplan, placement, clock tree, routing and the sign-off checks.</p>",
     buttons: [{ label: "Run flow", primary: true, run: () => { hidePointer(); document.getElementById("btn-run")?.click(); } }],
     hideOnTargetClick: true,
-    side: "top",
+    // Below the button: above it, the tip covered the preflight checks it talks about.
+    side: "bottom",
   });
 }
 
@@ -401,7 +402,7 @@ async function showLayout() {
     eyebrow: eb() + " · DONE",
     title: "This is your chip, from above",
     body: "<p>Every rectangle is a shape on one layer of the process: the cells in rows, and the metal wires routed between them. " +
-      "Scroll to zoom, drag to pan, and pick a stage on the left to see how it was built up.</p>",
+      "Scroll to zoom, drag to pan, and pick a stage along the top to see how it was built up.</p>",
     buttons: [{ label: "Show it in 3D", primary: true, run: show3d }, { label: "Finish", run: finishCard }],
     side: "left",
   });
