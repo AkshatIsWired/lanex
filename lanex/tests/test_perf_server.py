@@ -471,6 +471,44 @@ def test_pdk_size_cached_by_mtime_and_on_disk(tmp_path, monkeypatch):
     assert tools._dir_size_mb(tree) == 5 and len(walks) > n
 
 
+# --------------------------------------------------------------- httpx .pth hook
+
+def _heredoc_line(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    start = text.index("<< 'EOFPTH'")
+    body = text[text.index("\n", start) + 1:]
+    return body[:body.index("EOFPTH\n")]
+
+
+def test_pth_line_is_the_same_everywhere():
+    from lanex.controller import installer
+    root = Path(__file__).resolve().parents[2]
+    for f in (root / "windows" / "provision" / "provision.sh", root / "scripts" / "install.sh"):
+        if f.is_file():
+            assert _heredoc_line(f).replace("\r\n", "\n") == installer._HTTPX_TIMEOUT_PTH, f
+
+
+def test_pth_hook_sets_the_timeout_lazily(tmp_path):
+    import subprocess
+    import sys
+    pytest.importorskip("httpx")
+    from lanex.controller import installer
+    (tmp_path / "lanex_timeout.pth").write_text(installer._HTTPX_TIMEOUT_PTH)
+    # -S: no site-packages .pth runs, only ours (sys.path entries are added
+    # as plain paths, which runs no .pth file).
+    code = (
+        "import sys, site\n"
+        f"sys.path.extend({[p for p in sys.path if p]!r})\n"
+        f"site.addsitedir({str(tmp_path)!r})\n"
+        "lazy = 'httpx' not in sys.modules\n"
+        "import httpx\n"
+        "t = httpx.Client.__init__.__kwdefaults__['timeout']\n"
+        "print(lazy, t == httpx.Timeout(300.0, connect=60.0), httpx.Client().timeout == t)\n"
+    )
+    out = subprocess.run([sys.executable, "-S", "-c", code], capture_output=True, text=True, timeout=60)
+    assert out.stdout.split() == ["True", "True", "True"], out.stderr
+
+
 # --------------------------------------------------------------- cell library
 
 def test_liberty_compact_form_matches_the_parse_tree(tmp_path, monkeypatch):

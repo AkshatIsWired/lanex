@@ -653,9 +653,13 @@ install_lanex() {
    The log above ends with its own error message.
    Click Retry — this step is safe to repeat."; }
 
+    # Raise httpx's default timeout (ciel's PDK download on a slow line) in
+    # every Python of the LanEx venv, applied when httpx is first imported:
+    # importing it eagerly here cost every Python process ~65 ms. The same
+    # line is lanex/controller/installer.py's _HTTPX_TIMEOUT_PTH.
     find "/home/${APP_USER}/.local" -type d -name "site-packages" ! -path "*/pipx/shared/*" 2>/dev/null | while IFS= read -r sp; do
         cat << 'EOFPTH' > "$sp/lanex_timeout.pth"
-import sys; exec("try:\n import httpx\n if hasattr(httpx, 'Client') and hasattr(httpx.Client.__init__, '__kwdefaults__') and httpx.Client.__init__.__kwdefaults__ is not None:\n  httpx.Client.__init__.__kwdefaults__['timeout'] = httpx.Timeout(300.0, connect=60.0)\nexcept Exception:\n pass")
+import sys; exec("class _LanexHttpxTimeout:\n @staticmethod\n def find_spec(name, path=None, target=None):\n  if name != 'httpx':\n   return None\n  import importlib.machinery as m\n  spec = m.PathFinder.find_spec(name, path)\n  if spec is None or not hasattr(spec.loader, 'exec_module'):\n   return spec\n  run = spec.loader.exec_module\n  def exec_module(module):\n   run(module)\n   try:\n    d = module.Client.__init__.__kwdefaults__\n    if d is not None:\n     d['timeout'] = module.Timeout(300.0, connect=60.0)\n   except Exception:\n    pass\n  spec.loader.exec_module = exec_module\n  return spec\nif 'httpx' not in sys.modules:\n sys.meta_path.insert(0, _LanexHttpxTimeout)")
 EOFPTH
         chown "$APP_USER:$APP_USER" "$sp/lanex_timeout.pth" 2>/dev/null || true
     done
