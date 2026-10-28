@@ -38,6 +38,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .fastscan import SOURCE_SKIP_DIRS, iter_entries, prune_names
+
 # Source extensions we read for module detection (Verilog + SystemVerilog).
 _RTL_EXTS = (".v", ".sv", ".verilog")
 # VHDL is supported by LibreLane via the (optional) GHDL plugin; we still detect
@@ -209,11 +211,13 @@ def scan_sources(
     tb_files: set = set()
     combined = ""
     errors: List[str] = []
-    skip_dirs = {".git", "runs", "tmp", "__pycache__", "build", "node_modules", "sim_build", "obj_dir"}
+    skip_dirs = SOURCE_SKIP_DIRS
 
     files: List[Path] = []
     try:
-        for f in sorted(d.rglob("*")):
+        # Skipped folders (runs/ above all: ~800 files a run) are never
+        # entered, instead of walked and filtered afterwards.
+        for f in sorted(iter_entries(d, prune_names(skip_dirs))):
             if not f.is_file():
                 continue
             if any(part in skip_dirs for part in f.relative_to(d).parts[:-1]):

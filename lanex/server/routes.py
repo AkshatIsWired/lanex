@@ -366,6 +366,24 @@ def _live_run_dir() -> Optional[str]:
         return None
 
 
+def _live_probe() -> Optional[str]:
+    """:func:`_live_run_dir` for history's caches: lets them trust a finished
+    run's quick signature while always re-reading the live one. A runner that
+    was never created runs nothing; one whose run folder is not known yet
+    makes every run count as possibly live."""
+    from ..server import app as _app
+    r = _app._RUNNER
+    if r is None or not r.running:
+        return None
+    rd = r.run_dir
+    if not rd:
+        raise RuntimeError("live run folder not known yet")
+    return rd
+
+
+history.set_live_probe(_live_probe)
+
+
 def h_run_step_log(handler: Any) -> None:
     """One step's log + reports, for click-to-inspect on the flow graph.
 
@@ -417,7 +435,7 @@ def h_run(handler: Any) -> None:
         _respond(handler, f"run '{tag}' not found", 404)
         return
     try:
-        _respond(handler, history.get_run(run_path))
+        _respond(handler, history.cached_run_result("run", run_path, lambda: history.get_run(run_path)))
     except Exception as ex:
         _log.exception("get_run failed")
         _respond(handler, str(ex), 500)
@@ -551,7 +569,9 @@ def h_run_reports(handler: Any) -> None:
         _respond(handler, "missing design_dir or run_tag", 400)
         return
     try:
-        _respond(handler, fsbrowser.list_run_reports(design_dir, run_tag))
+        _respond(handler, history.cached_run_result(
+            "reports", os.path.join(design_dir, "runs", run_tag),
+            lambda: fsbrowser.list_run_reports(design_dir, run_tag)))
     except Exception as ex:
         _log.exception("list_run_reports failed")
         _respond(handler, str(ex), 500)
@@ -2095,7 +2115,8 @@ def h_run_files(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, {"tag": tag, "files": history.list_run_files(run_dir)})
+        _respond(handler, {"tag": tag, "files": history.cached_run_result(
+            "files", run_dir, lambda: history.list_run_files(run_dir))})
     except Exception as ex:
         _log.exception("list_run_files failed")
         _respond(handler, str(ex), 500)
@@ -2109,7 +2130,8 @@ def h_run_images(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, {"tag": tag, "images": history.list_run_images(run_dir)})
+        _respond(handler, {"tag": tag, "images": history.cached_run_result(
+            "images", run_dir, lambda: history.list_run_images(run_dir))})
     except Exception as ex:
         _log.exception("list_run_images failed")
         _respond(handler, str(ex), 500)
@@ -3099,7 +3121,8 @@ def h_verify(handler: Any) -> None:
         _respond(handler, "no run to verify", 404)
         return
     try:
-        rep = verify_mod.verify_report(run_dir)
+        # Shallow copy: the cached report is shared; only run_verdict changes.
+        rep = dict(history.cached_run_result("verify", run_dir, lambda: verify_mod.verify_report(run_dir)))
         rv = rep.get("run_verdict")
         if rv is not None:
             rep["run_verdict"] = history.mark_live([{"run_dir": rep.get("run_dir"), "verdict": rv}],
@@ -3223,7 +3246,7 @@ def h_run_stages(handler: Any) -> None:
         _respond(handler, "run not found", 404)
         return
     try:
-        _respond(handler, history.run_stages(run_dir))
+        _respond(handler, history.cached_run_result("stages", run_dir, lambda: history.run_stages(run_dir)))
     except Exception as ex:
         _log.exception("run_stages failed")
         _respond(handler, str(ex), 500)

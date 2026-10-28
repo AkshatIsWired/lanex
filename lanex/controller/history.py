@@ -27,10 +27,11 @@ import shutil
 import stat
 import subprocess
 import threading
+from collections import OrderedDict
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .models import RunSummary, RunView, MetricSet, to_json
 from . import platform_env
@@ -90,16 +91,22 @@ def _run_identity(run_dir: Path, st: os.stat_result) -> tuple:
     return (st.st_ino, rmt)
 
 
-def started_ts(run_dir: Path) -> float:
+def started_ts(run_dir: Path, st: Optional[os.stat_result] = None) -> float:
     key = str(run_dir)
-    try:
-        st = run_dir.stat()
-    except OSError:
-        return 0.0
+    if st is None:
+        try:
+            st = run_dir.stat()
+        except OSError:
+            return 0.0
     mt = st.st_mtime
-    ident = _run_identity(run_dir, st)
     hit = _START_CACHE.get(key)
+    # The folder has not changed at all since it was read (same inode, same
+    # mtime to the nanosecond): no need to look at resolved.json again.
+    if hit and hit[0] == mt and hit[1][0] == st.st_ino:
+        return hit[2]
+    ident = _run_identity(run_dir, st)
     if hit and hit[0] <= mt and hit[1] == ident:
+        _START_CACHE[key] = (mt, ident, hit[2])
         return hit[2]
     ts = _started_ts(run_dir, mt)
     if len(_START_CACHE) > 8000:
@@ -110,6 +117,11 @@ def started_ts(run_dir: Path) -> float:
 
 def _walk_runs(design_dir: Path) -> List[Path]:
     """Return run dirs sorted newest-first by start time (:func:`started_ts`)."""
+    return [p for p, _ in _walk_runs_st(design_dir)]
+
+
+def _walk_runs_st(design_dir: Path) -> List[Tuple[Path, os.stat_result]]:
+    """:func:`_walk_runs` with each run folder's stat (reused by the caller)."""
     runs_root = design_dir / "runs"
     if not runs_root.is_dir():
         return []
@@ -125,9 +137,9 @@ def _walk_runs(design_dir: Path) -> List[Path]:
             continue
         if not stat.S_ISDIR(st.st_mode):
             continue
-        out.append((started_ts(p), p.name, p))
+        out.append((started_ts(p, st), p.name, p, st))
     out.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    return [p for _, _, p in out]
+    return [(p, st) for _, _, p, st in out]
 
 
 def _read_json(path: Path) -> Any:
@@ -312,7 +324,9 @@ def _load_disk_cache() -> None:
         return
     for key, ent in (doc.get("runs") or {}).items():
         try:
-            _SUMMARY_CACHE.setdefault(key, (tuple(ent["sig"]), ent["doc"]))
+            fast = ent.get("fast")
+            _SUMMARY_CACHE.setdefault(key, (tuple(ent["sig"]), ent["doc"],
+                                            tuple(fast) if isinstance(fast, list) else None))
         except Exception:
             continue
 
@@ -324,7 +338,12 @@ def _save_disk_cache() -> None:
         if not _cache_dirty or f is None:
             return
         _cache_dirty = False
-        runs = {k: {"sig": list(sig), "doc": doc} for k, (sig, doc) in _SUMMARY_CACHE.items()}
+        runs = {}
+        for k, (sig, doc, fast) in _SUMMARY_CACHE.items():
+            ent = {"sig": list(sig), "doc": doc}
+            if fast is not None:
+                ent["fast"] = list(fast)
+            runs[k] = ent
     try:
         from . import platform_env
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -333,22 +352,140 @@ def _save_disk_cache() -> None:
         pass  # a cache that cannot be written is only slower next time
 
 
-def _summary_json(run: Path) -> Dict[str, Any]:
-    global _cache_dirty
+def _fast_signature(run_dir: Path, st: Optional[os.stat_result] = None) -> tuple:
+    """The signature of a run nothing is writing any more, in four stats.
+
+    Once the flow has ended, only LanEx's annotations change a run: pinning,
+    importing and a first note add a file (the folder's mtime moves), a note
+    edit and an unpin within one mtime tick do not, hence those two markers.
+    ``final/metrics.json`` covers a metrics file rewritten in place. The
+    live run never uses this (:func:`_run_signature` follows its steps)."""
+    rd = str(run_dir)
+    if st is None:
+        st = os.stat(rd)
+    return (st.st_mtime_ns, st.st_ino,
+            _mtime_ns(os.path.join(rd, _PIN_MARKER)),
+            _mtime_ns(os.path.join(rd, _NOTE_FILE)),
+            _mtime_ns(os.path.join(rd, "final", "metrics.json")))
+
+
+# Who is writing a run right now. The server registers the run controller's
+# live run folder (:func:`set_live_probe`); with no probe every run is read as
+# possibly live, so nothing is trusted on the fast signature alone.
+_LIVE_PROBE: Optional[Callable[[], Optional[str]]] = None
+
+
+def set_live_probe(probe: Optional[Callable[[], Optional[str]]]) -> None:
+    global _LIVE_PROBE
+    _LIVE_PROBE = probe
+
+
+_NO_PROBE = object()
+
+
+def _live_key() -> Any:
+    """(st_dev, st_ino) of the live run folder; None when no run is live;
+    ``_NO_PROBE`` when liveness is unknown (no probe registered)."""
+    probe = _LIVE_PROBE
+    if probe is None:
+        return _NO_PROBE
+    try:
+        live = probe()
+    except Exception:
+        return _NO_PROBE
+    if not live:
+        return None
+    try:
+        st = os.stat(live)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _is_live(st: os.stat_result, live_key: Any) -> bool:
+    return live_key is _NO_PROBE or live_key == (st.st_dev, st.st_ino)
+
+
+# A run another program is writing (``librelane`` typed into the Console, a
+# terminal) is not the run controller's live run, so a run is only trusted on
+# its fast signature once its folder and its newest step folder have been
+# quiet this long. A step that finishes makes LibreLane create the next step
+# folder (or final/) at once, which moves the run folder's mtime, so even a
+# step that runs for hours is followed.
+_QUIET_NS = 120 * 10**9
+
+
+def _quiet(full_sig: tuple) -> bool:
+    import time as _time
+    try:
+        newest = max(int(full_sig[0]), int(full_sig[2]))
+    except Exception:
+        return False
+    return _time.time_ns() - newest > _QUIET_NS
+
+
+def _cached_summary(run: Path, st: os.stat_result, live: bool) -> Optional[Dict[str, Any]]:
+    """The cached summary when it still holds, else None."""
     key = str(run)
-    sig = _run_signature(run)
     with _SUMMARY_LOCK:
         _load_disk_cache()
         hit = _SUMMARY_CACHE.get(key)
-    if hit and hit[0] == sig:
+    if not hit:
+        return None
+    if not live and hit[2] is not None and hit[2] == _fast_signature(run, st):
         return dict(hit[1])
-    doc = to_json(_summarise(run))
+    if hit[0] != _run_signature(run):
+        return None
+    if not live and hit[2] is None and _quiet(hit[0]):
+        # First look since the run stopped being written (or a cache file from
+        # an older LanEx): it matches its full signature, so the fast one
+        # holds from here on.
+        _store_summary(key, hit[0], hit[1], _fast_signature(run, st))
+    return dict(hit[1])
+
+
+def _store_summary(key: str, sig: tuple, doc: Dict[str, Any], fast: Optional[tuple]) -> None:
+    global _cache_dirty
     with _SUMMARY_LOCK:
-        if len(_SUMMARY_CACHE) >= _SUMMARY_MAX:
+        if len(_SUMMARY_CACHE) >= _SUMMARY_MAX and key not in _SUMMARY_CACHE:
             _SUMMARY_CACHE.clear()
-        _SUMMARY_CACHE[key] = (sig, doc)
+        _SUMMARY_CACHE[key] = (sig, doc, fast)
         _cache_dirty = True
+
+
+def _summary_json(run: Path, st: Optional[os.stat_result] = None,
+                  live: Optional[bool] = None) -> Dict[str, Any]:
+    if st is None:
+        st = os.stat(run)
+    if live is None:
+        live = _is_live(st, _live_key())
+    hit = _cached_summary(run, st, live)
+    if hit is not None:
+        return hit
+    # Both signatures are taken before reading the run, so a change made while
+    # it is being summarised shows up as a mismatch next time.
+    sig = _run_signature(run)
+    fast = None if live or not _quiet(sig) else _fast_signature(run, st)
+    doc = to_json(_summarise(run))
+    _store_summary(str(run), sig, doc, fast)
     return dict(doc)
+
+
+# Cold summaries (first listing after an upgrade, a project copied in, many
+# runs on /mnt/c where every file is a round trip to Windows) are read on a
+# few threads. Bounded so a low-end PC is not swamped.
+_POOL: Optional[Any] = None
+_POOL_LOCK = threading.Lock()
+
+
+def _pool() -> Any:
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _POOL = ThreadPoolExecutor(max_workers=max(2, min(8, os.cpu_count() or 2)),
+                                       thread_name_prefix="lanex-runs")
+        return _POOL
 
 
 def mark_live(runs: List[Dict[str, Any]], live_run_dir: Optional[str]) -> List[Dict[str, Any]]:
@@ -375,16 +512,110 @@ def list_runs(design_dir: str | Path) -> List[Dict[str, Any]]:
     with _SUMMARY_LOCK:
         lock = _LIST_LOCKS.setdefault(str(design_dir), threading.Lock())
     with lock:
-        runs = _walk_runs(design_dir)
-        out: List[Dict[str, Any]] = []
-        for run in runs:
+        runs = _walk_runs_st(design_dir)
+        live_key = _live_key()
+
+        def one(item: Tuple[Path, os.stat_result]) -> Optional[Dict[str, Any]]:
+            run, st = item
             try:
-                out.append(_summary_json(run))
+                return _summary_json(run, st, _is_live(st, live_key))
             except Exception:
                 # Don't let a malformed run hide the others.
-                continue
+                return None
+
+        slow_fs = platform_env.is_windows_mount_path(str(design_dir))
+        results: List[Optional[Dict[str, Any]]] = [None] * len(runs)
+        todo = list(range(len(runs)))
+        if not slow_fs:
+            # Local disk: the cache checks are a few stats; only the runs that
+            # need summarising go to the pool.
+            todo = []
+            for i, (run, st) in enumerate(runs):
+                try:
+                    results[i] = _cached_summary(run, st, _is_live(st, live_key))
+                except Exception:
+                    results[i] = None
+                if results[i] is None:
+                    todo.append(i)
+        if len(todo) > 1:
+            for i, doc in zip(todo, _pool().map(lambda i: one(runs[i]), todo)):
+                results[i] = doc
+        elif todo:
+            results[todo[0]] = one(runs[todo[0]])
+        out = [r for r in results if r is not None]
     _save_disk_cache()
     return out
+
+
+# Per-run answers (run-files, run-images, run-stages, the run detail, its
+# reports) for runs nothing is writing, keyed by the fast signature plus a
+# generation LanEx bumps when it writes into a run itself (a rendered diagram).
+# The live run is always read fresh. A short lifetime bounds staleness from
+# edits made outside LanEx deep inside a finished run.
+_RUN_RESULTS: "OrderedDict[tuple, tuple]" = OrderedDict()
+_RUN_RESULTS_LOCK = threading.Lock()
+_RUN_RESULTS_MAX = 48
+_RUN_RESULTS_TTL_S = 300.0
+_RUN_GEN: Dict[tuple, int] = {}
+
+
+def touch_run(run_dir: str | Path) -> None:
+    """LanEx wrote something into *run_dir*: forget its cached answers."""
+    try:
+        st = os.stat(run_dir)
+    except OSError:
+        return
+    with _RUN_RESULTS_LOCK:
+        k = (st.st_dev, st.st_ino)
+        _RUN_GEN[k] = _RUN_GEN.get(k, 0) + 1
+
+
+def _settled_signature(run: Path, st: os.stat_result) -> Optional[tuple]:
+    """The run's fast signature when nothing is writing it, else None.
+    Reuses the Runs listing's verdict on that (its cached fast signature)
+    when the run has not changed since."""
+    if _is_live(st, _live_key()):
+        return None
+    fast = _fast_signature(run, st)
+    with _SUMMARY_LOCK:
+        _load_disk_cache()
+        hit = _SUMMARY_CACHE.get(str(run))
+    if hit and hit[2] is not None and hit[2] == fast:
+        return fast
+    return fast if _quiet(_run_signature(run)) else None
+
+
+def cached_run_result(kind: str, run_dir: str | Path, compute: Callable[[], Any]) -> Any:
+    """``compute()``, reused for a run that is not live and has not changed.
+    The value is shared between callers: never mutate it."""
+    import time as _time
+    rd = str(run_dir)
+    try:
+        st = os.stat(rd)
+    except OSError:
+        return compute()
+    try:
+        sig = _settled_signature(Path(rd), st)
+    except OSError:
+        sig = None
+    if sig is None:
+        return compute()
+    ident = (st.st_dev, st.st_ino)
+    key = (kind, rd)
+    now = _time.monotonic()
+    with _RUN_RESULTS_LOCK:
+        sig = sig + (_RUN_GEN.get(ident, 0),)
+        hit = _RUN_RESULTS.get(key)
+        if hit and hit[0] == sig and now - hit[1] < _RUN_RESULTS_TTL_S:
+            _RUN_RESULTS.move_to_end(key)
+            return hit[2]
+    value = compute()
+    with _RUN_RESULTS_LOCK:
+        _RUN_RESULTS[key] = (sig, now, value)
+        _RUN_RESULTS.move_to_end(key)
+        while len(_RUN_RESULTS) > _RUN_RESULTS_MAX:
+            _RUN_RESULTS.popitem(last=False)
+    return value
 
 
 def _summarise(run_dir: Path) -> RunSummary:
@@ -682,17 +913,22 @@ _IMAGE_EXTS = {".png", ".svg", ".jpg", ".jpeg", ".gif", ".webp"}
 def list_run_files(run_dir: str | Path, *, max_entries: int = 5000) -> List[Dict[str, Any]]:
     """Flat listing of every file/dir under a run (rel path + size + is_dir),
     for the per-run file browser. Capped so a huge run can't blow up the JSON."""
+    from .fastscan import iter_rel_entries
     run = Path(run_dir)
     out: List[Dict[str, Any]] = []
     try:
-        for p in sorted(run.rglob("*"), key=lambda x: str(x.relative_to(run))):
-            rel = p.relative_to(run)
-            is_dir = p.is_dir()
+        # One directory read per folder; the entry already knows file vs folder
+        # (two stats a file before, slow on /mnt/c), a stat only for the size.
+        for rel, entry in sorted(iter_rel_entries(run), key=lambda x: x[0]):
             try:
-                size = p.stat().st_size if not is_dir else 0
+                is_dir = entry.is_dir()
+            except OSError:
+                is_dir = False
+            try:
+                size = entry.stat().st_size if not is_dir else 0
             except Exception:
                 size = 0
-            out.append({"path": str(rel), "dir": is_dir, "size": size})
+            out.append({"path": rel, "dir": is_dir, "size": size})
             if len(out) >= max_entries:
                 break
     except Exception:
@@ -705,11 +941,22 @@ def list_run_images(run_dir: str | Path) -> List[Dict[str, Any]]:
     came from, so the Preview tab can show a per-stage gallery. LibreLane's
     Classic flow renders only the final layout by default, so typically this is
     the final GDS render plus its step copy."""
+    from .fastscan import iter_rel_entries
     run = Path(run_dir)
     out: List[Dict[str, Any]] = []
     try:
-        for p in sorted(run.rglob("*")):
-            if p.is_file() and p.suffix.lower() in _IMAGE_EXTS:
+        # Image names first (no I/O), then the file test, which the directory
+        # read already answered for regular files.
+        cands = {}
+        for _rel, entry in iter_rel_entries(run):
+            if os.path.splitext(entry.name)[1].lower() in _IMAGE_EXTS:
+                cands[Path(entry.path)] = entry
+        for p in sorted(cands):
+            try:
+                is_file = cands[p].is_file()
+            except OSError:
+                is_file = False
+            if is_file and p.suffix.lower() in _IMAGE_EXTS:
                 rel = p.relative_to(run)
                 parts = rel.parts
                 top = parts[0] if parts else ""
@@ -1115,6 +1362,7 @@ def render_dot(run_dir: str | Path, rel_path: str, *, force: bool = False) -> Di
         svg_file.write_bytes(proc.stdout)
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
+    touch_run(run)  # the run's file listing just gained a file
     return {"ok": True, "svg": str(svg_file.relative_to(run))}
 
 
@@ -1172,7 +1420,29 @@ def render_dot_png(run_dir: str | Path, rel_path: str, *, force: bool = False) -
         png_file.write_bytes(proc.stdout)
     except Exception as ex:
         return {"ok": False, "error": str(ex)}
+    touch_run(run)  # the run's file listing just gained a file
     return {"ok": True, "png": str(png_file.relative_to(run))}
+
+
+def _read_text_tail(path: Path, n_chars: int) -> Tuple[str, bool]:
+    """The last *n_chars* characters of ``path.read_text(encoding="utf-8",
+    errors="replace")`` and whether that cut anything, without reading a
+    large log whole. A UTF-8 character is at most 4 bytes and newline
+    translation only shrinks text, so the last ``4 * n_chars`` bytes (plus a
+    margin for the decoder to find a character boundary) always hold them."""
+    margin = 16
+    size = path.stat().st_size
+    if size <= 4 * n_chars + margin:
+        data = path.read_text(encoding="utf-8", errors="replace")
+        if len(data) > n_chars:
+            return data[-n_chars:], True
+        return data, False
+    with path.open("rb") as f:
+        f.seek(size - (4 * n_chars + margin))
+        raw = f.read()
+    # read_text's universal newlines: \r\n and a lone \r both become \n.
+    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    return text[-n_chars:], True
 
 
 def get_step_output(run_dir: str | Path, step_id: str, *, tail_bytes: int = 60000) -> Dict[str, Any]:
@@ -1216,10 +1486,7 @@ def get_step_output(run_dir: str | Path, step_id: str, *, tail_bytes: int = 6000
     truncated = False
     if log is not None and log.is_file():
         try:
-            data = log.read_text(encoding="utf-8", errors="replace")
-            if len(data) > tail_bytes:
-                data = data[-tail_bytes:]
-                truncated = True
+            data, truncated = _read_text_tail(log, tail_bytes)
             try:
                 from .container_run import strip_ansi
 

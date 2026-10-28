@@ -191,8 +191,15 @@ def find_testbenches(design_dir: str | Path) -> List[str]:
     for pat in _TB_PATTERNS:
         for p in sorted(base.glob("verify/" + pat)):
             add(p)
+    # One walk for every pattern, never entering a folder whose contents add()
+    # would drop anyway (``runs/`` holds ~800 files a run; slow on /mnt/c):
+    # anything below a folder named "...runs", or below a top-level "runs*".
+    from fnmatch import fnmatch
+    from .fastscan import iter_entries
+    entries = list(iter_entries(base, lambda parts: parts[-1].endswith("runs")
+                                or parts[0].startswith("runs")))
     for pat in _TB_PATTERNS:
-        for p in sorted(base.rglob(pat)):
+        for p in sorted(e for e in entries if fnmatch(e.name, pat)):
             add(p)
     return found
 
