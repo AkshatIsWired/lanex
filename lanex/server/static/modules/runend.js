@@ -11,7 +11,7 @@ import { api } from "./api.js";
 import { state, safeStorage } from "./state.js";
 import { toast } from "./toast.js";
 import * as FS from "./flowstages.js";
-import { runSummary } from "./reportcard.js";
+import { runSummary, fmtDur } from "./reportcard.js";
 
 const BASE_TITLE = document.title || "LanEx";
 let _result = null;          // the last run's result line, kept in the title until seen
@@ -50,17 +50,23 @@ export function runProgress() {
 function current() {
   const ids = (state.pipeline || []).map((p) => p.id);
   const st = state.stepStatuses || {};
-  const n = FS.stepCounts(ids.map((id) => st[id]));
+  // Flow's rule (flow.js model): LibreLane runs one step at a time, so a step
+  // behind the newest one that started is done even if its event was missed.
+  const sts = ids.map((id) => st[id]);
+  let last = -1;
+  sts.forEach((s, i) => { if (s && s !== "pending") last = i; });
+  for (let i = 0; i < last; i++) if (!sts[i] || sts[i] === "pending" || sts[i] === "running") sts[i] = "done";
+  const n = FS.stepCounts(sts);
   const cur = [...ids].reverse().find((id) => st[id] === "running");
   const stage = cur ? FS.stagesOf(ids.map((id) => ({ id })))[ids.indexOf(cur)] : null;
-  return { ids, done: n.done, total: n.total, cur, stage };
+  return { ids, done: n.done, total: n.total, current: n.current, cur, stage };
 }
 
 function paintTitle() {
   const name = designName();
   if (state.status && state.status.running) {
     const c = current();
-    document.title = (c.total ? Math.min(c.done + 1, c.total) + "/" + c.total + (c.stage ? " · " + FS.stageLabel(c.stage) : "") : "Starting") +
+    document.title = (c.total ? "Step " + c.current + " of " + c.total + (c.stage ? " · " + FS.stageLabel(c.stage) : "") : "Starting") +
       (name ? " · " + name : "") + " — LanEx";
   } else if (_result) {
     document.title = _result + (name ? " · " + name : "") + " — LanEx";
@@ -78,7 +84,7 @@ async function paintStatus() {
   try { if (c.cur) name = (await import("./flow.js")).stepLabel(c.cur); } catch (_e) {}
   const eta = state.runProgress && state.runProgress.eta_seconds;
   el.textContent = (c.stage ? FS.stageLabel(c.stage) + " · " : "") + (name ? name + " · " : "") +
-    Math.min(c.done + 1, c.total) + "/" + c.total + (typeof eta === "number" && eta > 0 ? " · ~" + Math.max(1, Math.round(eta / 60)) + " min left" : "");
+    "Step " + c.current + " of " + c.total + (typeof eta === "number" && eta > 0 ? " · ~" + Math.max(1, Math.round(eta / 60)) + " min left" : "");
   el.dataset.go = "pipeline";
 }
 
@@ -117,15 +123,25 @@ export async function runFinished(ev) {
   try { name = (await import("./flow.js")).stepLabel; } catch (_e) {}
   const sum = runSummary({ tag, design: designName(), rx, vf, rs, name });
   if (!rx && ev.error) { sum.title = tag + " failed"; sum.body = String(ev.error); sum.tone = "fail"; }
-  const mark = sum.ok ? "✓" : sum.tone === "warn" ? "■" : "✗";
-  _result = mark + " " + (sum.ok ? (sum.tone === "warn" ? "clean, with warnings" : "clean") : rx && rx.kind === "halted" ? "stopped" : rx && rx.kind === "stopped" ? "stopped by you" : (sum.tone === "fail" ? "failed" : "done"));
+  // The shared run verdict (controller/verify.run_verdict, the one Flow,
+  // Verify and Runs show) decides the words and the colour when it is known.
+  const rv = ev.cancelled ? { state: "stopped", label: "Stopped" } : (vf && vf.run_verdict) || null;
+  const numSum = rx && (rx.kind === "clean" || rx.kind === "checks-failed")
+    ? runSummary({ tag, design: designName(), rx: { kind: "clean" }, vf: null, rs, name }) : null;
+  const secs = ((rs && rs.steps) || []).filter((s) => !s.from).reduce((a, s) => a + (s.runtime_s || 0), 0);
+  const out = withVerdict(sum, rv, { tag, rx, name, nums: numSum ? numSum.body : "", secs });
+  _result = out.mark + " " + out.label;
   paintTitle();
-  paintRail(!sum.ok && sum.tone === "fail");
+  paintRail(out.tone === "fail");
   if (status) {
-    // One short line: the time for a finished run, the reason for a stopped one.
-    const tail = sum.ok ? (sum.body || "").split(" · ").slice(-1)[0] : (sum.short || "");
-    status.textContent = _result + (rx && rx.kind === "halted" && rx.step ? " at " + name(rx.step.id) : "") + (tail ? " · " + tail : "");
+    status.textContent = _result + (out.tail ? " · " + out.tail : "");
     status.dataset.go = "pipeline";
+  }
+  const pill = document.getElementById("run-pill");
+  if (pill) {
+    pill.classList.remove("pill-running", "pill-pass", "pill-warn", "pill-fail", "pill-pending");
+    pill.classList.add(out.tone === "pass" ? "pill-pass" : out.tone === "warn" ? "pill-warn" : out.tone === "fail" ? "pill-fail" : "pill-pending");
+    pill.textContent = rv && rv.state === "stopped" ? "stopped" : "done";
   }
   // The title goes back to normal once the user has had the window in front
   // for a few seconds after the run ended.
@@ -144,12 +160,59 @@ export async function runFinished(ev) {
     : kind === "checks-failed" ? [{ label: "Show the problems", run: () => go("verify", { section: "vf-checks" }) }]
     : kind === "halted" ? [{ label: "Why", run: () => go("pipeline") }]
     : [];
-  const msg = sum.title + (sum.body ? ": " + sum.body : "");
-  toast.show(msg, sum.ok ? (sum.tone === "warn" ? "warn" : "success") : kind === "stopped" ? "info" : "error",
-    sum.ok ? (sum.tone === "warn" ? 16000 : 10000) : kind === "stopped" ? 6000 : 0, acts);
+  if (rv && rv.state === "warning") acts.splice(0, acts.length, { label: "Show timing", run: () => go("verify") }, { label: "See chip", run: () => go("layout") });
+  const msg = out.title + (out.body ? ": " + out.body : "");
+  const ttype = { pass: "success", warn: "warn", fail: "error", info: "info" }[out.tone] || "info";
+  toast.show(msg, ttype, out.tone === "pass" ? 10000 : out.tone === "warn" ? 16000 : out.tone === "info" ? 6000 : 0, acts);
 
-  if (prefs.chime()) chime(sum.ok);
-  if (prefs.notify() && !(document.visibilityState === "visible" && document.hasFocus())) notify(sum, kind);
+  if (prefs.chime()) chime(out.tone === "pass");
+  if (prefs.notify() && !(document.visibilityState === "visible" && document.hasFocus())) notify(out, out.tone === "pass" ? "clean" : kind);
+}
+
+// The run-end words from the shared verdict: {tone: pass|warn|fail|info,
+// mark, label (status bar + window title), tail, title, body (toast and
+// notification)}. Without a verdict (Verify didn't answer in time) the
+// report's own summary stands.
+export function withVerdict(sum, rv, { tag = "", rx = null, name = (id) => id, nums = "", secs = 0 } = {}) {
+  const who = sum.title && tag && sum.title.includes(tag) ? sum.title.slice(0, sum.title.indexOf(tag) + tag.length) : tag;
+  // nums: the numbers line, "setup −0.17 ns · 120 × 120 µm · 1 min 20 s"
+  // (runSummary's clean body); the status bar keeps only the time.
+  const time = secs ? fmtDur(secs) : "";
+  const halt = rx && rx.kind === "halted" ? (sum.short || "") : "";
+  const s = rv && rv.state;
+  if (s === "passed") {
+    const tone = rv.warnings ? "warn" : "pass";
+    return { tone, mark: "✓", label: rv.label || "Clean", tail: time,
+      title: who + ": " + (rv.label || "clean"), body: tone === "warn" && sum.tone === "warn" ? sum.body : nums };
+  }
+  if (s === "warning") {
+    return { tone: "warn", mark: "▲", label: rv.label || "Finished with timing misses", tail: time,
+      title: who + ": " + (rv.label || "finished with timing misses"), body: nums };
+  }
+  if (s === "failed") {
+    const label = rv.label || "Failed";
+    const at = rx && rx.kind === "halted" && rx.step ? name(rx.step.id) : "";
+    return { tone: "fail", mark: "✗", label: label + (at && !label.includes(at) ? " (" + at + ")" : ""),
+      tail: halt && !label.toLowerCase().includes(halt.toLowerCase()) ? halt : "",
+      title: who + ": " + label.charAt(0).toLowerCase() + label.slice(1) + (at && !label.includes(at) ? " (" + at + ")" : ""), body: sum.body || "" };
+  }
+  if (s === "stopped") {
+    const mine = rx && rx.kind === "stopped";
+    return { tone: "info", mark: "■", label: mine ? "Stopped by you" : rv.label || "Stopped", tail: "",
+      title: who + (mine ? ": you stopped it" : ": " + (rv.label || "stopped").toLowerCase()), body: "" };
+  }
+  if (s === "incomplete") {
+    return { tone: "warn", mark: "▲", label: rv.label || "Not enough to call it", tail: time,
+      title: who + ": " + (rv.label || "not enough to call it").toLowerCase(), body: nums };
+  }
+  // No verdict: the report's summary.
+  const tone = sum.ok ? (sum.tone === "warn" ? "warn" : "pass") : rx && rx.kind === "stopped" ? "info" : sum.tone === "warn" ? "warn" : "fail";
+  const label = sum.ok ? (tone === "warn" ? "Clean, with warnings" : "Clean")
+    : rx && rx.kind === "stopped" ? "Stopped by you"
+    : rx && rx.kind === "halted" ? "Stopped" + (rx.step ? " at " + name(rx.step.id) : "")
+    : tone === "fail" ? "Failed" : "Done";
+  const tail = sum.ok ? time : (sum.short && !label.toLowerCase().includes(String(sum.short).toLowerCase()) ? sum.short : "");
+  return { tone, mark: { pass: "✓", warn: "▲", fail: "✗", info: "■" }[tone], label, tail, title: sum.title, body: sum.body || "" };
 }
 
 // ------------------------------------------------------------------ notification
