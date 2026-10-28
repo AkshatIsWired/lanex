@@ -107,6 +107,62 @@ def _grep_step_logs(run_dir: Path, code: str) -> Optional[str]:
     return None
 
 
+# A checker step that raised only says "N Lint errors found." and writes no
+# log; what failed is in the tool step it checks. Each checker -> the check
+# id problems.py explains, a title, and the tool step whose log has the lines.
+_CHECKERS = {
+    "Checker.LintErrors": ("lint_errors", "The RTL has lint errors", "Verilator.Lint"),
+    "Checker.LintTimingConstructs": ("lint_timing_constructs", "The RTL has delays synthesis can't build", "Verilator.Lint"),
+    "Checker.LintWarnings": ("lint_warnings", "The RTL has lint warnings, and this run fails on them", "Verilator.Lint"),
+    "Checker.YosysUnmappedCells": ("unmapped", "Synthesis left cells it couldn't map", "Yosys.Synthesis"),
+    "Checker.YosysSynthChecks": ("synth_check", "Synthesis found structural problems", "Yosys.Synthesis"),
+    "Checker.NetlistAssignStatements": ("assign", "The netlist has assign statements", "Yosys.Synthesis"),
+}
+_VL_RX = re.compile(r"^%(Error|Warning)(?:-([A-Z0-9_]+))?: (.*)")
+_YS_RX = re.compile(r"^\s*(?:Warning|ERROR|Error): (.*)")
+
+
+def _is_step(s: Dict[str, Any], step_id: str) -> bool:
+    """A step folder is *step_id*: by the id flow.log gave it, else by its
+    folder name ("03-checker-linterrors" is Checker.LintErrors)."""
+    if s.get("id"):
+        return s["id"] == step_id
+    return str(s.get("dir") or "").split("-", 1)[-1] == step_id.lower().replace(".", "-")
+
+
+def _checker_of(step: Dict[str, Any]) -> Optional[tuple]:
+    return next((v for k, v in _CHECKERS.items() if _is_step(step, k)), None)
+
+
+def _checker_evidence(run: "verify._Run", tool_id: str, design_dir: Optional[Path]) -> Optional[Dict[str, Any]]:
+    """The tool's own error lines behind a checker that raised: up to three,
+    errors first, with paths relative to the design; and where the first one
+    is in the tool step's log (``{lines, at}``)."""
+    step = next((s for s in run.steps if _is_step(s, tool_id)), None)
+    if step is None:
+        return None
+    log = _step_log(run.dir, step["dir"])
+    if log is None:
+        return None
+    rx = _VL_RX if tool_id.startswith("Verilator") else _YS_RX
+    hits = []
+    for i, ln in enumerate(_read(log).splitlines(), 1):
+        m = rx.match(ln)
+        if not m or "Exiting due to" in ln:
+            continue
+        text = ln.strip()
+        if design_dir is not None:
+            text = text.replace(str(design_dir).rstrip("/") + "/", "")
+        err = tool_id.startswith("Verilator") and m.group(1) == "Error" or ln.lstrip().upper().startswith("ERROR")
+        hits.append((0 if err else 1, i, text[:400]))
+    if not hits:
+        return None
+    hits.sort(key=lambda h: (h[0], h[1]))
+    first = hits[0]
+    return {"lines": [h[2] for h in hits[:3]],
+            "at": {"path": step["dir"] + "/" + log.name, "line": first[1], "text": first[2], "step": tool_id}}
+
+
 def _outcome(run_dir: Path) -> Optional[str]:
     try:
         doc = json.loads((run_dir / "gui-run.json").read_text(encoding="utf-8"))
@@ -159,6 +215,23 @@ def explain_run(run_dir: str | Path, base_dir: Optional[str | Path] = None) -> D
             out["at"] = {"path": step["dir"] + "/" + log.name, **first}
         text = "\n".join(out["errors"]) or (first or {}).get("text", "")
         card = problems.explain_error(text, cfg)
+        ck = _checker_of(step)
+        if ck and not card.get("title"):
+            key, title, tool = ck
+            card["title"] = title
+            card["plain"] = problems._CHECK_PLAIN.get(key) or card.get("plain")
+            if key in problems._CHECK_OPEN:
+                label, go, why = problems._CHECK_OPEN[key]
+                card["fixes"] = list(card.get("fixes") or []) + [problems._open(label, go, why)]
+            dd = None
+            try:
+                dd = run_dir.parent.parent if run_dir.parent.name == "runs" else None
+            except Exception:
+                dd = None
+            ev = _checker_evidence(run, tool, dd)
+            if ev:
+                card["evidence"] = ev["lines"]
+                out["at"] = ev["at"]
         card["fixes"] = problems.finish(card.get("fixes", []), (cfg.get("meta") or {}).get("flow") or "Classic")
         out["card"] = card
     # A run resumed from another one: where it started, and what changed.

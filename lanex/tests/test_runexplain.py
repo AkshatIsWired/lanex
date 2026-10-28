@@ -113,3 +113,38 @@ def test_failed_checks_after_the_last_step(tmp_path):
     rx = runexplain.explain_run(run)
     assert rx["kind"] == "checks-failed"
     assert [c["dir"] for c in rx["raised_checkers"]] == ["02-checker-setupviolations"]
+
+
+def test_a_lint_checker_that_raised_shows_verilators_own_lines(tmp_path):
+    # LibreLane's Checker.LintErrors writes no log and only says "1 Lint errors
+    # found."; the lines that say what and where are in Verilator.Lint's log.
+    design = tmp_path / "brk"
+    run = design / "runs" / "latch"
+    run.mkdir(parents=True)
+    for d in ["01-verilator-lint", "02-checker-linttimingconstructs", "03-checker-linterrors"]:
+        (run / d).mkdir()
+        (run / d / "state_in.json").write_text("{}")
+    for d in ["01-verilator-lint", "02-checker-linttimingconstructs"]:
+        (run / d / "state_out.json").write_text("{}")
+    src = str(design) + "/src/brk.v"
+    (run / "01-verilator-lint" / "verilator-lint.log").write_text(
+        "%Warning-CASEINCOMPLETE: " + src + ":11:9: Case values incompletely covered (example pattern 0x2)\n"
+        "   11 |         case (sel)\n"
+        "%Error-LATCH: " + src + ":10:5: Latch inferred for signal 'brk.y' (not all control paths of combinational always assign a value)\n"
+        "%Error: Exiting due to 1 error(s)\n")
+    (run / "resolved.json").write_text("{}")
+    (run / "error.log").write_text("1 Lint errors found.\n")
+    (run / "warning.log").write_text("")
+    rx = runexplain.explain_run(run)
+    assert rx["kind"] == "halted"
+    card = rx["card"]
+    assert card["title"] == "The RTL has lint errors"
+    assert "Verilator" in card["plain"]
+    # Errors first, paths relative to the project, the "Exiting" line dropped.
+    assert card["evidence"][0].startswith("%Error-LATCH: src/brk.v:10:5: Latch inferred")
+    assert card["evidence"][1].startswith("%Warning-CASEINCOMPLETE: src/brk.v:11:9")
+    assert len(card["evidence"]) == 2
+    assert [f["label"] for f in card["fixes"] if f["kind"] == "open"] == ["Open the RTL IDE"]
+    # "Show it in the log" opens the Verilator step's log at the error.
+    assert rx["at"]["step"] == "Verilator.Lint" and rx["at"]["line"] == 3
+    assert rx["at"]["path"] == "01-verilator-lint/verilator-lint.log"
