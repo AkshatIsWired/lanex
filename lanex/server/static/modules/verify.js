@@ -426,7 +426,10 @@ function pillar(p) {
     const worstIr = ir.filter((r) => V.isNum(r.pct)).reduce((m, r) => (!m || r.pct > m.pct ? r : m), null);
     const pins = an && an.breakdown && an.breakdown[1];
     hero = an && an.value != null ? "<span class='vf-hero-v'>" + esc(n(an.value)) + "</span><span class='an-u'>antenna nets</span>" + provFor(an) : "<span class='vf-hero-v'>—</span>";
-    rows = [["Antenna pins", pins ? n(pins.value) : "—", null, pins ? mprov(pins.metric) : ""],
+    // A run cut off before the antenna check after detailed routing has only
+    // the global-routing estimate: say so rather than show it as the result.
+    const est = an && an.status === "not_run" && an.interim != null;
+    rows = [["Antenna pins", pins ? n(pins.value) + (est ? " (estimate)" : "") : "—", null, pins ? mprov(pins.metric) : ""],
       ["Power-grid issues", pd ? valueText(pd) : "—", pd],
       ["Worst IR drop", worstIr ? worstIr.pct + " % of supply" : "—", null,
         worstIr ? mprov("design_powergrid__drop__worst__net:" + worstIr.net, "Show the worst drop on " + worstIr.net + " in this run's metrics.json") : ""]];

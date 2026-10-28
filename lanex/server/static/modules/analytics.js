@@ -753,9 +753,14 @@ function renderRouting() {
     fact("Single-cut / multi-cut", "route__vias__singlecut", { value: has("route__vias__singlecut") ? esc(M.num(g("route__vias__singlecut"))) + " / " + esc(M.num(g("route__vias__multicut"))) : undefined, delta: false }) +
     fact("I/O half-perimeter WL", "design__io__hpwl") +
     "</dl></div>";
-  const ant = "<div class='an-card'><div class='an-card-h'>Antenna and placement</div><dl class='an-facts'>" +
-    fact("Antenna violations", "route__antenna_violation__count", { tip: "Long wires that can damage transistor gates while the chip is being made." }) +
-    fact("Violating nets / pins", "antenna__violating__nets", { value: has("antenna__violating__nets") ? esc(M.num(g("antenna__violating__nets"))) + " / " + esc(M.num(g("antenna__violating__pins"))) : undefined, delta: false }) +
+  // A run cut off before the antenna check after detailed routing: what it
+  // has is the global-routing estimate (before antenna repair), said so.
+  const antChk = ((_ctx.signoff && _ctx.signoff.checks) || []).find((c) => c.id === "antenna");
+  const antEst = !!(antChk && antChk.status === "not_run" && antChk.interim != null);
+  const estTip = antEst ? " This run ended before the check after detailed routing: this is the estimate at global routing, before antenna repair, not a result." : "";
+  const ant = "<div class='an-card'><div class='an-card-h'>Antenna and placement" + (antEst ? " <span class='muted'>antenna: estimate only</span>" : "") + "</div><dl class='an-facts'>" +
+    fact("Antenna violations" + (antEst ? " (estimate)" : ""), "route__antenna_violation__count", { delta: !antEst, tip: "Long wires that can damage transistor gates while the chip is being made." + estTip }) +
+    fact("Violating nets / pins" + (antEst ? " (estimate)" : ""), "antenna__violating__nets", { tip: estTip.trim(), value: has("antenna__violating__nets") ? esc(M.num(g("antenna__violating__nets"))) + " / " + esc(M.num(g("antenna__violating__pins"))) : undefined, delta: false }) +
     fact("Antenna diodes inserted", "antenna_diodes_count", { tip: "Diodes the flow added to protect gates from antenna effects." }) +
     fact("Max displacement", "design__instance__displacement__max", { tip: "How far detailed placement had to move a cell to make it legal." }) +
     fact("Mean displacement", "design__instance__displacement__mean") +
