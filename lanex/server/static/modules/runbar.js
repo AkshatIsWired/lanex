@@ -269,6 +269,7 @@ function isNewest(r) {
 // shows): passed / failed / stopped / incomplete / running.
 const VERDICT_WORD = {
   passed: { cls: "pass", word: "passed" },
+  warning: { cls: "warn", word: "finished, with problems" },
   failed: { cls: "fail", word: "failed" },
   stopped: { cls: "warn", word: "stopped" },
   incomplete: { cls: "warn", word: "not enough to call it" },
@@ -277,6 +278,8 @@ const VERDICT_WORD = {
 export function verdictWord(r) {
   const st = r && r.verdict && r.verdict.state;
   if (st && VERDICT_WORD[st]) return VERDICT_WORD[st];
+  // A state this build doesn't know yet: amber, never a guessed pass/fail.
+  if (st) return { cls: "warn", word: (r.verdict.label || st).toLowerCase() };
   return r && r.success ? VERDICT_WORD.passed : VERDICT_WORD.failed;
 }
 function verdict(r) {

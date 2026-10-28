@@ -1257,10 +1257,11 @@ def run_verdict_from(run: "_Run", checks: List[Dict[str, Any]], flow: Dict[str, 
         return out
     miss = _timing_miss(run)
     if miss:
-        # LibreLane passed the run (the corner only warns), but the design
-        # misses its clock there: a problem, said in plain words first.
-        out.update(state="failed", stage="signoff", timing_miss={**miss, "where": _corner_words(miss["corner"])},
-                   label=f"Timing misses in {_corner_words(miss['corner']).split(' (')[0]}"
+        # LibreLane passed the run (it only enforces the corners in
+        # TIMING_VIOLATION_CORNERS), so LanEx does not call it failed; but the
+        # design misses its clock there, so never "clean" either: warning.
+        out.update(state="warning", stage="signoff", timing_miss={**miss, "where": _corner_words(miss["corner"])},
+                   label=f"Finished: timing misses in {_corner_words(miss['corner']).split(' (')[0]}"
                          f" ({miss['kind']} {miss['ws']:.2f} ns)")
         return out
     if v["state"] == "incomplete":

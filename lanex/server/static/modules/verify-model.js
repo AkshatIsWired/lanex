@@ -265,9 +265,10 @@ export function verdictCopy(rep) {
     const what = m.kind === "hold" ? "Some paths change too soon after the clock edge" : "Some paths arrive too late for the clock";
     const fix = m.kind === "hold" ? "The hold-fixing step (buffer insertion) usually closes this." : "A slower clock (a larger CLOCK_PERIOD) or a less crowded layout usually closes this.";
     const gate = ((by.get(m.kind) || {}).gate_note) || "";
-    return { tone: "fail", title: rv.label, short: "timing misses",
+    return { tone: "warn", title: rv.label, short: "timing misses",
       sub: what + " in " + m.where + ": worst " + m.kind + " slack " + m.ws.toFixed(2) + " ns. " + fix +
-        (gate ? " LibreLane only warned here, because this corner is outside the ones it fails on (" + gate + ")." : "") };
+        " LibreLane finished the run because it only fails on the corners listed in TIMING_VIOLATION_CORNERS (by default the typical corner, *tt*)" +
+        (gate ? "; this run: " + gate : "") + "." };
   }
   if (v.state === "incomplete" && rv && rv.state === "stopped") {
     return { tone: "warn", title: rv.label, short: "stopped",

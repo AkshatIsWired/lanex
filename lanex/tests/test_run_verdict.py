@@ -150,6 +150,8 @@ def test_negative_slack_in_a_warning_corner_is_never_clean(tmp_path):
     run = _run(tmp_path, "R", m)
     (run / "resolved.json").write_text(json.dumps({"TIMING_VIOLATION_CORNERS": ["*tt*"]}), encoding="utf-8")
     v = verify.run_verdict(run)
-    assert v["state"] == "failed"
-    assert v["label"] == "Timing misses in the slow corner (setup -0.43 ns)"
+    # Not "failed" (LibreLane passed it), never "passed"/"Clean": warning.
+    assert v["state"] == "warning"
+    assert v["label"] == "Finished: timing misses in the slow corner (setup -0.43 ns)"
     assert v["timing_miss"]["corner"] == "max_ss_100C_1v60"
+    assert history.list_runs(tmp_path)[0]["success"] is False
