@@ -261,6 +261,8 @@ function handle(ev) {
     state.prepStart = Date.now();
     state.prepPhase = "Sweep run " + (((ev.index || 0) + 1)) + " of " + (ev.total || "?") + (ev.tag ? " (" + ev.tag + ")" : "") + ": preparing…";
     flowEvent(ev);
+    // A sweep point is a run: the top bar shows Stop and the status bar "running".
+    import("./modules/setup.js").then((m) => m.paintRunning(true)).catch(() => {});
     document.dispatchEvent(new CustomEvent("g:sweep", { detail: ev }));
   } else if (ev.type === "dse_config_done" || ev.type === "dse_done") {
     // Runs shows each point's real outcome as it lands.

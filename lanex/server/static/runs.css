@@ -117,10 +117,11 @@
 .rn-sw-m { color: var(--text-muted); font-size: 12.5px; }
 .rn-sw-when { color: var(--text-muted); font-size: 12px; }
 .rn-row.is-child td.rn-c-name { padding-left: 28px; }
-.rn-sw-sum { margin: var(--s-3) 0 var(--s-2); cursor: default; white-space: normal; }
+.rn-sw-sum { margin: var(--s-3) 0 var(--s-2); cursor: default; white-space: normal; position: sticky; left: 12px; max-width: calc(100vw / var(--ll-zoom, 1) - 200px); }
 
 /* expanded run */
 .rn-detail > td { background: var(--surface); padding: var(--s-3) var(--s-4) var(--s-4) !important; white-space: normal; cursor: default; }
+.rn-card { position: sticky; left: 16px; max-width: calc(100vw / var(--ll-zoom, 1) - 200px); }
 .rn-card .an-verdict { margin: 0; }
 .rn-actions { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); margin: var(--s-3) 0 0; }
 .rn-act-g { display: inline-flex; flex-wrap: wrap; gap: 6px; }

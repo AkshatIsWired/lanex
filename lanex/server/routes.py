@@ -1575,9 +1575,15 @@ def h_manual_result(handler: Any) -> None:
 
 
 def h_run_cancel(handler: Any) -> None:
+    from ..controller import dse
     from ..server.app import get_runner
+    # Stop during a sweep stops the sweep: otherwise the queue would start
+    # the next point the moment this run ends.
+    sweep = dse.job.active
+    if sweep:
+        dse.job.cancel()
     get_runner().cancel()
-    _respond(handler, {"status": "cancelled"})
+    _respond(handler, {"status": "cancelled", "sweep_stopped": sweep})
 
 
 def h_run_resume(handler: Any) -> None:

@@ -40,7 +40,8 @@ async function focusDesign(designDir) {
 const esc = (s) => fmt.escape(s == null ? "" : String(s));
 const num = (v) => (typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 1e20 ? v : null);
 const km = (r, k) => num((r.key_metrics || {})[k]);
-const keyOf = (r) => normDir(r._design) + "\u0000" + r.tag;
+// "|" joins them: a NUL would not survive an HTML attribute (data-key).
+const keyOf = (r) => normDir(r._design) + "|" + r.tag;
 
 // ------------------------------------------------------------------ columns
 // dir: +1 higher is better, -1 lower is better, 0 no direction (no colour).
@@ -359,7 +360,7 @@ function bodyHtml(list, cols) {
   for (const r of list) {
     const sw = sweepOf(r);
     if (sw) {
-      const gk = normDir(r._design) + "\u0000sweep:" + sw.id;
+      const gk = normDir(r._design) + "|sweep:" + sw.id;
       if (!groups.has(gk)) { groups.set(gk, { sw, runs: [] }); order.push({ group: gk }); }
       groups.get(gk).runs.push(r);
     } else order.push({ run: r });
