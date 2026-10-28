@@ -1415,7 +1415,7 @@ check("one verdict: Verify and Flow say 'Clean', never 'tape-out ready'", () => 
   const vw = VM.verdictCopy(warned);
   assert.equal(vw.tone, "warn");
   assert.equal(vw.title, "Clean, with 1 warning");
-  assert.match(vw.sub, /Setup violations warns instead of failing it \(TIMING_VIOLATION_CORNERS = \*tt\*\)/);
+  assert.match(vw.sub, /LibreLane only warned about Setup violations instead of failing the run \(TIMING_VIOLATION_CORNERS = \*tt\*\)/);
   const sw = RC.runSummary({ tag: "t", rx: { kind: "clean" }, vf: warned, rs: { steps: [] } });
   assert.equal(sw.title, "t is clean, with 1 warning");
   assert.equal(sw.tone, "warn");
