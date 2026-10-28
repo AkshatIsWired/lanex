@@ -16,7 +16,7 @@ import { icon } from "./icons.js";
 import { api } from "./api.js";
 import { state, safeStorage } from "./state.js";
 import { contextRun, contextRuns, contextBaseline, contextDesign, setRun, loadRuns } from "./context.js";
-import { parseQuery, rank, oneLine, pushRecent, PREFIXES } from "./palettemodel.js";
+import { parseQuery, rank, oneLine, pushRecent, PREFIXES, whenLocal } from "./palettemodel.js";
 
 const RECENT_KEY = "ll.paletteRecent";
 let _el = null;
@@ -140,7 +140,7 @@ function runs() {
     return {
       id: "r:" + (r._design || design) + ":" + r.tag, group: "run", title: r.tag, mono: true,
       where: "Flow", icon: icon("clock"), value: st,
-      sub: [r.started_at ? String(r.started_at).slice(0, 16).replace("T", " ") : "", r._design && r._design !== design ? r._design.split("/").pop() : ""].filter(Boolean).join(" · "),
+      sub: [whenLocal(r.started_at), r._design && r._design !== design ? r._design.split("/").pop() : ""].filter(Boolean).join(" · "),
       keys: [st],
       run: async () => { await setRun(r.tag, r._design || design); tab("pipeline"); },
     };

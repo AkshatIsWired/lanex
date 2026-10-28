@@ -1633,6 +1633,23 @@ check("palette: ranking, group filter, recents first", () => {
   assert.equal(PM.oneLine("First sentence here is long enough. Second one.", 200), "First sentence here is long enough.");
 });
 
+check("palette: several words match in any order; run times are local", () => {
+  const items = [
+    { id: "g", group: "action", title: "First-chip guide", keys: ["Help"] },
+    { id: "t", group: "action", title: "Take the tour" },
+    { id: "c", group: "setting", title: "CLOCK_PERIOD", keys: ["The clock period in ns."] },
+  ];
+  assert.deepEqual(PM.rank(items, "first chip").map((i) => i.id), ["g"]);
+  assert.deepEqual(PM.rank(items, "chip first").map((i) => i.id), ["g"]);
+  assert.deepEqual(PM.rank(items, "clock ns").map((i) => i.id), ["c"], "a word may match the description");
+  assert.deepEqual(PM.rank(items, "tour zzz"), [], "every word must match");
+  const now = new Date(2026, 9, 28, 18, 0);
+  const at = new Date(2026, 9, 28, 17, 22);
+  assert.match(PM.whenLocal(at.toISOString(), now), /^today /);
+  assert.ok(!PM.whenLocal(at.toISOString(), now).includes("T"), "not the raw ISO text");
+  assert.equal(PM.whenLocal("", now), "");
+});
+
 // ------------------------------------------------- console drawer (spec 5.9)
 const CNM = await import(toUrl(resolve(MOD, "consolemodel.js")));
 const HK = await import(toUrl(resolve(MOD, "hotkeys.js")));

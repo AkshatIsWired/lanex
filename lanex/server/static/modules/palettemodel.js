@@ -46,6 +46,44 @@ export function fuzzyScore(q, text) {
 
 const GROUP_ORDER = { action: 0, setting: 1, run: 2, file: 3, help: 4 };
 
+// Score of query *q* against an item's title and, below it, its keys.
+function itemScore(q, it) {
+  let s = fuzzyScore(q, it.title);
+  // A match in the location or description counts, below the same match in the title.
+  for (const k of it.keys || []) {
+    const ks = fuzzyScore(q, k);
+    // (substring matches only: a long description holds almost any subsequence)
+    if (ks >= 400) s = Math.max(s, ks - 350);
+  }
+  return s;
+}
+
+function wordsScore(words, it) {
+  let min = Infinity;
+  for (const w of words) {
+    let ws = fuzzyScore(w, it.title);
+    if (ws < 400) ws = -1;               // a loose subsequence of one word isn't a match
+    for (const k of it.keys || []) { const ks = fuzzyScore(w, k); if (ks >= 400) ws = Math.max(ws, ks - 350); }
+    if (ws < 0) return -1;
+    min = Math.min(min, ws);
+  }
+  return Number.isFinite(min) ? Math.max(1, min - 100) : -1;
+}
+
+// A run's start time in the person's own time, the way Runs shows it:
+// "today 05:22 pm", "yesterday 09:10 am", "3 days ago", "17 Sept".
+export function whenLocal(iso, now = new Date()) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const days = Math.floor((new Date(now.toDateString()) - new Date(d.toDateString())) / 864e5);
+  if (days === 0) return "today " + hm;
+  if (days === 1) return "yesterday " + hm;
+  if (days < 7) return days + " days ago";
+  return d.toLocaleDateString([], { day: "numeric", month: "short", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+}
+
 // Rank *items* ({ id, group, title, keys?: [strings searched besides the title] })
 // for the raw query. Recents (ids in *recentIds*, newest first) come first while
 // nothing is typed, and win ties when something is. *limit* caps the list.
@@ -63,13 +101,10 @@ export function rank(items, raw, { recentIds = [], limit = 60 } = {}) {
       if (!group && it.group !== "action" && !rec.has(it.id)) continue;
       s = 0;
     } else {
-      s = fuzzyScore(q, it.title);
-      // A match in the location or description counts, below the same match in the title.
-      for (const k of it.keys || []) {
-        const ks = fuzzyScore(q, k);
-        // (substring matches only: a long description holds almost any subsequence)
-        if (ks >= 400) s = Math.max(s, ks - 350);
-      }
+      s = itemScore(q, it);
+      // Several words match in any order ("first chip" finds "First-chip guide"):
+      // each word must be a real substring somewhere, scored by its weakest word.
+      if (s < 0 && /\s/.test(q)) s = wordsScore(q.split(/\s+/).filter(Boolean), it);
       if (s < 0) continue;
     }
     const r = rec.has(it.id) ? rec.get(it.id) : null;
