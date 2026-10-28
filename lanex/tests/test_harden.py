@@ -444,6 +444,17 @@ def test_corrupt_and_old_run_folders_still_list(tmp_path):
     assert by["half-json"]["verdict"]["state"] != "passed"   # unreadable metrics are never a pass
 
 
+def test_unpin_within_one_mtime_tick_is_seen(tmp_path):
+    d = tmp_path / "d"
+    run = _good_run(d, "r1")
+    history.set_pin(run, True)
+    st = os.stat(run)
+    assert {r["tag"]: r for r in history.list_runs(d)}["r1"]["pinned"] is True
+    history.set_pin(run, False)
+    os.utime(run, ns=(st.st_atime_ns, st.st_mtime_ns))   # same folder stat as when pinned
+    assert {r["tag"]: r for r in history.list_runs(d)}["r1"]["pinned"] is False
+
+
 def test_three_hundred_runs_list_fast(tmp_path):
     d = tmp_path / "d"
     for i in range(300):
