@@ -135,7 +135,8 @@ def test_fail_metrics_use_real_drc_key():
     from lanex.controller import history
 
     assert "route__drc_errors" in history._FAIL_METRICS
-    assert "klayout__drc_error__count" not in history._FAIL_METRICS
+    # KLayout.DRC's own key; Checker.KLayoutDRC fails the run on it (librelane/steps/klayout.py).
+    assert "klayout__drc_error__count" in history._FAIL_METRICS
 
 
 # --- M7: re-verify continues the prior run's state ---------------------------

@@ -59,6 +59,25 @@ export function pdkFamilies(catalog) {
   }));
 }
 
+// Families -> two columns of about equal height (a card header counts as about
+// one and a half variant rows). Biggest family first into the shorter column;
+// each column keeps catalog order, and the column holding the first family
+// goes on the left.
+export function pdkColumns(fams) {
+  const cols = [{ h: 0, idx: [] }, { h: 0, idx: [] }];
+  const order = fams.map((f, i) => i).sort((a, b) => fams[b].keys.length - fams[a].keys.length || a - b);
+  for (const i of order) {
+    const c = cols[0].h <= cols[1].h ? cols[0] : cols[1];
+    c.idx.push(i);
+    c.h += fams[i].keys.length + 1.5;
+  }
+  return cols
+    .map((c) => c.idx.sort((a, b) => a - b))
+    .filter((idx) => idx.length)
+    .sort((a, b) => a[0] - b[0])
+    .map((idx) => idx.map((i) => fams[i]));
+}
+
 let _pdkRoot = "";
 async function loadPdkRoot() {
   const input = document.getElementById("pdk-root-input");
@@ -1361,7 +1380,7 @@ export function renderPdkStore(info) {
     );
   };
 
-  const fams = pdkFamilies(catalog).map(({ family, keys }) => {
+  const famHtml = ({ family, keys }) => {
     const first = catalog[keys[0]] || {};
     const inst = keys.filter((k) => installed.has(k));
     const mb = inst.reduce((a, k) => a + ((pdkInfo.installed_sizes_mb || {})[k] || 0), 0);
@@ -1374,8 +1393,9 @@ export function renderPdkStore(info) {
         "<div class='tl-vars'>" + keys.map(variantHtml).join("") + "</div>" +
       "</div>"
     );
-  });
-  drop.innerHTML = fams.join("");
+  };
+  drop.innerHTML = pdkColumns(pdkFamilies(catalog))
+    .map((col) => "<div class='tl-fam-col'>" + col.map(famHtml).join("") + "</div>").join("");
 
   // Wire PDK install buttons
   drop.querySelectorAll(".pdk-install-btn").forEach(btn => {

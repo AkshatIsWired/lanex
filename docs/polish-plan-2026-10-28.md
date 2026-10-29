@@ -202,5 +202,17 @@ after a server restart without a reload, the server forgets the active project.
 
 Tests after the pass: frontend 133 checks; pytest only the 8 known environment
 failures.
-Test build: pre-release `windows-test-2026-10-29` (built from 35ffae7, SHA-256
-`285f9e83…4600bab95`); app changes only, installer unchanged, not VM-checked.
+Test build: pre-release `windows-test-2026-10-28`, EXE replaced 2026-10-29 (first built from 35ffae7, SHA-256
+`285f9e83…4600bab95`; replaced the same day by the Layout-redesign build from cee850e, `07091acb…2ba1b767`); app changes only, installer unchanged, not VM-checked.
+
+## Layout tab redesign (2026-10-29)
+
+The owner called the Layout tab a main selling point. One design agent rebuilt it:
+studio-lit 3D (sky/ground ambient, key and fill lights, metal rim, depth fog, fading
+top outlines, graded backdrop, µm ground grid, contact shadow), three colour schemes
+(LanEx by layer role, Metallic, PDK), spread that opens gaps at real levels with vias
+stretched across, size-aware defaults (stack drawn at about 23% of chip width, spread
+70%, height never below x1), a 2D-to-3D intro, an opt-in turntable, and whole-chip 3D
+for big designs (mac_array, 12k cells) that keeps the upper wiring and says what was
+left out. Page: one controls card, plain layer names, segmented presets, cleaner stage
+strip. Tools: PDK families in two balanced, level columns. Frontend 139 checks.

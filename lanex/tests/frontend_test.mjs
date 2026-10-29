@@ -944,6 +944,10 @@ await checkAsync("tools: full fixture renders 10 tools, 7 PDK cards, 14 GF180 li
     // Families: sky130, gf180mcu (default D first), ihp-sg13g2.
     assert.deepEqual(toolsModule.pdkFamilies(fullFixture.pdk_catalog).map((f) => f.family + ":" + f.keys.join(",")),
       ["sky130:sky130A,sky130B", "gf180mcu:gf180mcuD,gf180mcuA,gf180mcuB,gf180mcuC", "ihp-sg13g2:ihp-sg13g2"]);
+    // Two balanced columns: sky130 + ihp on the left, gf180mcu (4 variants) on the right.
+    assert.deepEqual(toolsModule.pdkColumns(toolsModule.pdkFamilies(fullFixture.pdk_catalog)).map((c) => c.map((f) => f.family)),
+      [["sky130", "ihp-sg13g2"], ["gf180mcu"]]);
+    assert.equal((pdkHtml.match(/class='tl-fam-col'/g) || []).length, 2, "the PDK store renders two columns");
 
     // 3. Render desktop viewers with container fallback
     await toolsModule.renderDesktopViewers(fullFixture);
@@ -1329,6 +1333,97 @@ check("layout: rulers and the scale bar speak in the natural unit", () => {
   assert.equal(LC.niceLength(7.3), 5);
   assert.equal(LC.niceLength(0.031), 0.02);
   assert.equal(LC.niceLength(180), 100);
+});
+
+// ---------- Layout 3D (layout3d.js): pure helpers ---------------------------------
+const L3 = await import(toUrl(resolve(MOD, "layout3d.js")));
+
+check("layout3d: layers are told apart by their job on sky130, gf180 and IHP", () => {
+  const r = (n) => { const x = L3.layerRole(n); return x.kind + (x.n ? x.n : ""); };
+  assert.equal(r("met1"), "metal1");
+  assert.equal(r("Metal5"), "metal5");
+  assert.equal(r("TopMetal1"), "metal6");
+  assert.equal(r("TopMetal2"), "metal7");
+  assert.equal(r("via"), "via1");
+  assert.equal(r("via4"), "via4");
+  assert.equal(r("TopVia1"), "via5");
+  assert.equal(r("licon1"), "contact");
+  assert.equal(r("mcon"), "contact");
+  assert.equal(r("Cont"), "contact");
+  assert.equal(r("li1"), "li");
+  assert.equal(r("GatPoly"), "poly");
+  assert.equal(r("Poly2"), "poly");
+  assert.equal(r("COMP"), "diff");
+  assert.equal(r("Activ"), "diff");
+  assert.equal(r("tap"), "tap");
+  assert.equal(r("nwell"), "well");
+  assert.equal(r("LVPWELL"), "well");
+  assert.equal(r("mystery"), "other");
+});
+
+check("layout3d: colour schemes follow the layer's job; PDK keeps the file's colour", () => {
+  const met2 = { name: "met2", color: "#ff00ff" };
+  assert.equal(L3.schemeColor("lanex", met2), "#e879c9");
+  assert.equal(L3.schemeColor("lanex", { name: "Metal2" }), "#e879c9", "same hue on every PDK");
+  assert.equal(L3.schemeColor("pdk", met2), "#ff00ff");
+  assert.equal(L3.schemeColor("nonsense", met2), "#ff00ff");
+  // a via is a light tint of the metal under it
+  assert.equal(L3.schemeColor("lanex", { name: "via" }), L3.mixHex("#4da3ff", "#ffffff", 0.42));
+  for (const s of L3.SCHEME_ORDER) assert.ok(L3.SCHEMES[s] && L3.SCHEMES[s].label, s);
+});
+
+check("layout3d: spread opens a gap per level; vias stretch across, metals move rigidly", () => {
+  const layers = [
+    { name: "nwell", z0: 0, z1: 0.206 }, { name: "diff", z0: 0.206, z1: 0.326 }, { name: "tap", z0: 0.206, z1: 0.326 },
+    { name: "poly", z0: 0.326, z1: 0.506 }, { name: "licon1", z0: 0.326, z1: 0.936 }, { name: "li1", z0: 0.936, z1: 1.036 },
+    { name: "mcon", z0: 1.036, z1: 1.376 }, { name: "met1", z0: 1.376, z1: 1.736 }, { name: "via", z0: 1.736, z1: 2.006 },
+    { name: "met2", z0: 2.006, z1: 2.366 },
+  ];
+  const { levels, gaps } = L3.stackLevels(layers);
+  const at = (n) => levels[layers.findIndex((L) => L.name === n)];
+  assert.equal(gaps, 5, "nwell, diff, poly, li1, met1, met2 start levels");
+  assert.deepEqual(at("diff"), at("tap"), "layers at the same height share a level");
+  assert.deepEqual(at("met1"), [4, 4], "a metal is rigid");
+  assert.deepEqual(at("via"), [4, 5], "a via reaches the metal above");
+  assert.deepEqual(at("licon1"), [2, 3], "a contact reaches li1");
+  assert.deepEqual(at("nwell"), [0, 0], "a well stays put under the diffusion");
+  assert.equal(L3.isCut("Via3"), true);
+  assert.equal(L3.isCut("Metal3"), false);
+});
+
+check("layout3d: slider defaults scale with the chip, never below true height", () => {
+  // sky130 stack (substrate to met5 top) is 6.63 µm
+  const blinky = L3.defaults3d(68.31, 6.63), mac = L3.defaults3d(483.3, 6.63);
+  const ihp = L3.defaults3d(150, 14.23), gf = L3.defaults3d(253.8, 6.93);
+  assert.equal(blinky.spread, L3.SPREAD_DEFAULT);
+  assert.equal(blinky.z, 1.5);
+  assert.equal(ihp.z, 1.5);
+  assert.equal(gf.z, 5);
+  assert.equal(mac.z, 9.75);
+  assert.ok(mac.zMax >= mac.z * 2, "room on the slider above the default");
+  assert.equal(L3.defaults3d(5, 6.63).z, 1, "a tiny block is drawn at true scale, not squashed");
+  assert.equal(L3.defaults3d(0, 0).z, 2, "no data: a safe middle value");
+  for (const d of [blinky, mac, ihp, gf]) assert.equal(d.z * 4, Math.round(d.z * 4), "quarter steps, like the slider");
+});
+
+check("layout3d: readouts and the ground grid step", () => {
+  assert.equal(L3.fmtHeight(1), "×1");
+  assert.equal(L3.fmtHeight(1.5), "×1.5");
+  assert.equal(L3.fmtHeight(9.75), "×9.75");
+  assert.equal(L3.fmtSpread(0.7), "70%");
+  assert.equal(L3.fmtSpread(0), "0%");
+  assert.equal(L3.gridStep(68), 5);
+  assert.equal(L3.gridStep(483), 50);
+  assert.equal(L3.gridStep(150), 10);
+});
+
+check("layout3d: the 3D card keeps its controls and labels", () => {
+  const html = readFileSync(resolve(MOD, "..", "index.html"), "utf8");
+  for (const id of ["lx-3d-z", "lx-3d-zv", "lx-3d-s", "lx-3d-sv", "lx-3d-scheme", "lx-3d-spin", "lx-3d-reset"]) assert.ok(html.includes('id="' + id + '"'), id);
+  assert.ok(/id="lx-3d-s"[^>]*aria-label=/.test(html), "spread slider is labelled");
+  const src = readFileSync(resolve(MOD, "layout3d.js"), "utf8");
+  assert.ok(/prefers-reduced-motion/.test(src), "motion respects reduced motion");
+  assert.ok(/document\.hidden/.test(src), "loops stop when the tab is hidden");
 });
 
 check("layout: standard cells are named in plain words", () => {

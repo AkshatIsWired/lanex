@@ -353,6 +353,10 @@ jobs:
           $image = 'ghcr.io/librelane/librelane:3.0.4'
           $digest = '${{ needs.candidate-inputs.outputs.image-digest }}'
           $gds = '${{ needs.candidate-inputs.outputs.gds3d-commit }}'
+          # The rootfs and apt pins live in one place, the local build script, so
+          # CI and a local build can't drift apart again.
+          $pins = python -c "import json, runpy; g = runpy.run_path('scripts/build_windows_release.py', run_name='pins'); print(json.dumps({k: g[k] for k in ('ROOTFS_URL', 'ROOTFS_URLS', 'ROOTFS_SHA256', 'ROOTFS_SIZE_BYTES', 'APT_SNAPSHOT')}))" | ConvertFrom-Json
+          if (-not $pins.APT_SNAPSHOT) { throw 'could not read the pins from scripts/build_windows_release.py' }
           $args = @{
             Action = 'NewManifest'
             OutputPath = 'windows/setup/build-manifest.json'
@@ -365,11 +369,15 @@ jobs:
             ProvisionScriptPath = 'windows/provision/provision.sh'
             SelftestPath = 'windows/provision/selftest.sh'
             ConstraintsPath = 'windows/setup/constraints.txt'
+            LockPath = 'windows/setup/requirements.lock'
+            PdkAssetsPath = 'windows/setup/pdk-assets.json'
+            AptSnapshot = $pins.APT_SNAPSHOT
+            RootfsUrls = $pins.ROOTFS_URLS
             CatalogPath = 'docs/windows-installer-handoff/CAPABILITY-INVENTORY.json'
             PdkPinsPath = 'windows/setup/pdk-pins.json'
-            RootfsUrl = 'https://releases.ubuntu.com/24.04.4/ubuntu-24.04.4-wsl-amd64.wsl'
-            RootfsSha256 = '9b2f7730dc68227dd04a9f3e5eab86ad85caf556b8606ad94f1f29ff5c4fd3f5'
-            RootfsSizeBytes = 391118848
+            RootfsUrl = $pins.ROOTFS_URL
+            RootfsSha256 = $pins.ROOTFS_SHA256
+            RootfsSizeBytes = [int64]$pins.ROOTFS_SIZE_BYTES
             ImageReference = $image
             ImageDigest = $digest
             Gds3dCommit = $gds
@@ -650,7 +658,11 @@ jobs:
       - name: Provision a container
         run: |
           set -euo pipefail
-          docker run -d --name lanex-e2e \
+          # --privileged and a volume for /var/lib/docker let the appliance's own
+          # Docker daemon run inside this container (started below, the way
+          # systemd starts it on the distro's first real boot).
+          docker run -d --name lanex-e2e --privileged \
+            --mount type=volume,dst=/var/lib/docker \
             -v "$PWD:/checkout:ro" \
             -e "LANEX_REF=$LANEX_SOURCE_SHA" \
             -e "LANEX_SOURCE_SHA=$LANEX_SOURCE_SHA" \
@@ -663,6 +675,18 @@ jobs:
           start=$(date +%s)
           docker exec lanex-e2e bash /checkout/windows/provision/provision.sh
           echo "first run: $(( $(date +%s) - start ))s" >> "$GITHUB_STEP_SUMMARY"
+
+      # provision.sh leaves the daemon to systemd, which starts it when the
+      # installer restarts the distro. This container has no systemd, so start
+      # it by hand; the self-test then checks it really answers.
+      - name: Start the appliance's Docker daemon (the distro restart)
+        run: |
+          set -euo pipefail
+          docker exec -d lanex-e2e sh -c 'dockerd > /var/log/dockerd.log 2>&1'
+          if ! docker exec lanex-e2e timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done'; then
+            docker exec lanex-e2e tail -n 40 /var/log/dockerd.log || true
+            echo "::error::the appliance's Docker daemon did not start"; exit 1
+          fi
 
       - name: Self-test the provisioned appliance
         run: docker exec lanex-e2e bash /checkout/windows/provision/selftest.sh
