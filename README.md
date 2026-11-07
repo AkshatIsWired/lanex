@@ -149,11 +149,15 @@ curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/in
 ```
 
 One command, any major distro (Debian/Ubuntu, Fedora, Arch, openSUSE), macOS 13+,
-or inside WSL2. It detects your system, installs what a fresh machine is missing,
-puts the `lanex` command on your PATH, and pre-pulls the version-matched
-LibreLane image if you have Docker or Podman. Every step has a fallback, so it
-lands on any supported machine. Safe to re-run — **a re-run upgrades LanEx in
-place**. Then launch it with:
+or inside WSL2. In a terminal it opens an interactive installer with the same
+choices as the Windows Setup: **Recommended** (Docker, the matched LibreLane
+image, Verilator, Icarus Verilog, GTKWave, Graphviz, GDS3D and sky130A),
+**Custom** (pick the engine, each tool, each PDK and extra libraries),
+**Minimal** (the app only) or **Complete** (every tool and PDK). It shows what
+it will download, asks for your sudo password once, and installs with a live
+progress view and a log file. Safe to re-run: **a re-run upgrades LanEx in
+place**, keeps your projects, and skips what is already installed. Then launch
+it with:
 
 ```bash
 lanex
@@ -161,7 +165,14 @@ lanex
 
 Don't prefix it with `sudo`: it asks for sudo itself only where needed, and
 refuses to run under `sudo` outright (that's how installs end up in root's
-home).</td></tr>
+home). Unattended (CI, scripts, no terminal), pick the profile up front:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash -s -- --profile recommended
+```
+
+Without a terminal and without `--profile`, it installs the app as before, with
+plain line-by-line output.</td></tr>
 
 <tr><td><b>Anything else</b></td>
 <td>
