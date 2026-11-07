@@ -1,328 +1,95 @@
-<!-- LanEx — README -->
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="lanex/server/static/vendor/lanex-logo-dark.png">
-  <img src="lanex/server/static/vendor/lanex-logo-light.png" alt="LanEx" width="400">
-</picture>
+<a href="https://github.com/AkshatIsWired/lanex/releases/latest"><img src="docs/screenshots/banner.png" alt="LanEx: Verilog to a chip layout. No terminal." width="100%"></a>
 
-### Take Verilog all the way to silicon — without living in a terminal.
-
-A cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane/librelane) RTL&nbsp;→&nbsp;GDSII chip flow.
-
-<br>
-
-[![License](https://img.shields.io/badge/license-Apache%202.0-2f6fe0.svg?style=flat-square)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10%2B-2f6fe0?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![Dependencies](https://img.shields.io/badge/runtime%20deps-stdlib%20only-4da3ff?style=flat-square)](#architecture)
-[![Tests](https://img.shields.io/badge/tests-1338%20passing-3fb950?style=flat-square)](#testing)
-[![Built on LibreLane](https://img.shields.io/badge/built%20on-LibreLane-2f6fe0?style=flat-square)](https://github.com/librelane/librelane)
-
-<a href="#install"><b>Install</b></a> &nbsp;·&nbsp;
-<a href="#quickstart"><b>Quickstart</b></a> &nbsp;·&nbsp;
-<a href="#the-cockpit"><b>The&nbsp;cockpit</b></a> &nbsp;·&nbsp;
-<a href="#gui--cli"><b>GUI&nbsp;↔&nbsp;CLI</b></a> &nbsp;·&nbsp;
-<a href="#architecture"><b>Architecture</b></a>
-
-<br>
-
-<img src="docs/screenshots/pipeline.png" alt="LanEx Flow view" width="88%">
+[![Latest release](https://img.shields.io/github/v/release/AkshatIsWired/lanex?style=flat-square&color=2f6fe0)](https://github.com/AkshatIsWired/lanex/releases/latest) [![License](https://img.shields.io/badge/license-Apache%202.0-2f6fe0?style=flat-square)](LICENSE) [![Built on LibreLane](https://img.shields.io/badge/built%20on-LibreLane-2f6fe0?style=flat-square)](https://github.com/librelane/librelane)
 
 </div>
 
----
-
-> ### ⚠&nbsp; LanEx is a viewer, not a sign-off tool
->
-> LanEx drives LibreLane and the EDA tools it orchestrates (OpenROAD, Yosys,
-> Magic, KLayout, Netgen) and **displays their output**. It performs **no silicon
-> analysis of its own** — every metric, report, and verdict it shows comes
-> straight from those tools, passed through unmodified.
->
-> **Do not fabricate from a LanEx verdict alone.** Before committing a design to
-> manufacturing, always verify results against your foundry's official sign-off
-> decks and your shuttle/MPW program's checks. LanEx is provided **AS&nbsp;IS,
-> without warranty of any kind** (Apache-2.0 — see [LICENSE](LICENSE) and
-> [NOTICE](NOTICE)).
->
-> **LanEx is under active development and testing.** It passes tool output through
-> unmodified, but a display or data-parsing error cannot be fully excluded. **If you
-> intend to manufacture, run the LibreLane flow directly — independent of LanEx —
-> and base your decision on its native output** as well. Treat LanEx as a
-> convenience layer over the tools, not a replacement for their authoritative
-> results; you assume all risk of relying on it. This safeguards the irreversible
-> step of committing silicon and does not diminish LanEx's day-to-day accuracy.
-
----
-
-## Contents
-
-- [Why LanEx](#why-lanex)
-- [The cockpit](#the-cockpit)
-- [Install](#install)
-- [Quickstart](#quickstart)
-- [GUI ↔ CLI](#gui--cli)
-- [Architecture](#architecture)
-- [Testing](#testing)
-- [Relationship to LibreLane](#relationship-to-librelane)
-- [License](#license)
-
----
-
-## Why LanEx
-
-LibreLane is powerful, but terminal-first: you hand-write a `config.json`, learn
-an ~80-step flow, install a compatible toolchain, and read raw logs to find out
-why a run failed. **LanEx** ("lane extender") puts a real, reactive GUI on top —
-and it is honest by design: **it renders exactly what the tools emit and computes
-no numbers itself.**
-
-|  | |
-|---|---|
-| **▸ Runs the flow for real** | Not a mock-up. Drives `librelane`, streams true per-step status over SSE, parses the real `metrics.json`. |
-| **▸ RTL IDE** | A real code editor for Verilog/SystemVerilog (completion, folding, find/replace, multi-cursor); Verilator lint as squiggles with each warning explained; one-click simulation (Icarus / Verilator) with a result in words; a waveform viewer with signal tree, cursor and marker, zoom, and jump-to-source. |
-| **▸ Verification Center** | DRC / LVS / antenna / timing roll-up by signoff stage, with an honest **3-state** verdict — it never flashes green "tape-out ready" for an incomplete run. |
-| **▸ Provenance everywhere** | Every displayed number and setting traces to the tool's own file — one click opens the raw `metrics.json` / `resolved.json` / report with the exact line highlighted. A **Final settings** preview shows what a run will send (your overrides vs your config's lines vs defaults), and Analytics' **Final settings used** lists every variable a run resolved with its source. |
-| **▸ Analytics &amp; DSE** | Metric trends, run comparison, and design-space sweeps. |
-| **▸ Real layout viewers** | Opens the actual GDS in KLayout / Magic / GDS3D / OpenROAD GUI; renders previews inline. |
-| **▸ Tool &amp; PDK management** | Detects what's installed and installs what's missing — one click. |
-
-LanEx is a **standalone, independent project** built on LibreLane. It is not
-affiliated with or endorsed by the LibreLane project or its maintainers.
-
----
-
-## The cockpit
-
-<div align="center">
-
-| Setup | Verification | Analytics |
-|:---:|:---:|:---:|
-| <img src="docs/screenshots/setup.png" width="260"> | <img src="docs/screenshots/verify.png" width="260"> | <img src="docs/screenshots/analytics.png" width="260"> |
-| **RTL IDE** | **Layout** | **Runs &amp; sweeps** |
-| <img src="docs/screenshots/ide.png" width="260"> | <img src="docs/screenshots/layout.png" width="260"> | <img src="docs/screenshots/runs.png" width="260"> |
-
-<sub>More in <a href="docs/screenshots/"><code>docs/screenshots/</code></a></sub>
-
-</div>
-
----
+LanEx is a desktop app for designing chips with the open-source [LibreLane](https://github.com/librelane/librelane) flow. You write and simulate Verilog, press Run, and get a finished chip layout (a GDS file). If a run fails, LanEx tells you why in plain words and suggests a fix.
 
 ## Install
 
-LanEx is a small Python app — the standard library plus `librelane`. Install it
-once; from there it can **install LibreLane and every EDA tool for you** (one
-version-matched container image — no native EDA installs on any platform), or
-plug straight into a toolchain you already run.
+### Windows
 
-<table>
-<tr><th align="left" width="215">Your machine</th><th align="left">Do this</th></tr>
+**[Download LanEx-Setup.exe](https://github.com/AkshatIsWired/lanex/releases/latest/download/LanEx-Setup.exe)** and run it.
 
-<tr><td><b>Windows</b><br><sub>11, or 10 22H2 with its updates; x64; 8 GB RAM recommended</sub></td>
-<td>
+1. If Windows says "Windows protected your PC", click **More info**, then **Run anyway**. The installer isn't code-signed yet.
+2. Accept the license, keep **Recommended**, and click **Install**.
+3. Your PC may restart once to turn on WSL. Setup opens again by itself after you sign in.
 
-Download **LanEx-Setup.exe** from the
-**[Releases page](https://github.com/AkshatIsWired/lanex/releases)** and run it.
-Windows warns that it does not know the publisher (the installer is not
-code-signed yet): click **More info**, then **Run anyway**.
+You need Windows 11 or Windows 10 22H2 (64-bit), 8 GB of memory and about 23 GB of free disk space. Setup takes around 15 minutes.
 
-Setup is five pages: Welcome, License, one Configure page (**Recommended** is
-right for a first chip), Installing, Finished. If WSL is not on yet, Windows
-asks for administrator permission and restarts once; Setup opens again by
-itself after you sign in. There is no terminal step at any point.
+### Linux and macOS
 
-Measured on a clean 2-core, 8 GB virtual machine: **about 17 minutes** from
-Install to "Ready to design", including the restart; **2.35 GB downloaded**;
-**13.9 GB of disk** afterwards (have about 23 GB free).
-
-Everything goes into a private Linux environment of its own: your other WSL
-distros are not touched. **Uninstalling** keeps your projects, tools and PDKs by
-default, so a reinstall takes minutes; it can also back the environment up or
-remove it for good. [What it does, where things live, how to remove the
-rest →](docs/INSTALL.md#windows)</td></tr>
-
-<tr><td><b>Linux / macOS</b><br><sub>or a WSL2 distro you manage yourself</sub></td>
-<td>
+Paste this into a terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
 ```
 
-One command, any major distro (Debian/Ubuntu, Fedora, Arch, openSUSE), macOS 13+,
-or inside WSL2. In a terminal it opens an interactive installer with the same
-choices as the Windows Setup: **Recommended** (Docker, the matched LibreLane
-image, Verilator, Icarus Verilog, GTKWave, Graphviz, GDS3D and sky130A),
-**Custom** (pick the engine, each tool, each PDK and extra libraries),
-**Minimal** (the app only) or **Complete** (every tool and PDK). It shows what
-it will download, asks for your sudo password once, and installs with a live
-progress view and a log file. Safe to re-run: **a re-run upgrades LanEx in
-place**, keeps your projects, and skips what is already installed. Then launch
-it with:
+Then start LanEx:
 
 ```bash
 lanex
 ```
 
-Don't prefix it with `sudo`: it asks for sudo itself only where needed, and
-refuses to run under `sudo` outright (that's how installs end up in root's
-home). Unattended (CI, scripts, no terminal), pick the profile up front:
+It works on Ubuntu, Debian, Fedora, Arch, openSUSE and macOS 13 or newer.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash -s -- --profile recommended
-```
+Updating, uninstalling, manual installs and troubleshooting are in the [install guide](docs/INSTALL.md).
 
-Without a terminal and without `--profile`, it installs the app as before, with
-plain line-by-line output.</td></tr>
+## Your first chip
 
-<tr><td><b>Anything else</b></td>
-<td>
+Open LanEx and pick **Make my first chip**. It walks you through a small design (a blinking LED) from Verilog to a finished layout in a few minutes.
 
-Per-distro manual steps, installing into an existing LibreLane environment, the
-manual WSL2 path, updating, uninstalling, and troubleshooting all live in
-**[docs/INSTALL.md](docs/INSTALL.md)**.</td></tr>
+## What it does
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/ide.png" alt="RTL IDE with a simulation waveform"></td>
+<td width="50%"><img src="docs/screenshots/pipeline.png" alt="A run with all seven stages finished"></td>
+</tr>
+<tr>
+<td>Write, lint and simulate Verilog, and read the waveform in the app.</td>
+<td>Run the flow and watch each stage finish, with a picture of the chip at every step.</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/fix-sheet.png" alt="A failed run with suggested fixes"></td>
+<td><img src="docs/screenshots/layout-3d.png" alt="The finished chip in 3D"></td>
+</tr>
+<tr>
+<td>When a run fails, see what went wrong and apply a fix that resumes the run.</td>
+<td>Look at the finished chip layer by layer, or in 3D.</td>
+</tr>
 </table>
 
-**Known limits of the beta:**
+LanEx also lists every check LibreLane runs on the layout, compares runs side by side, and installs the tools and process kits (PDKs) for you. It supports SkyWater 130 nm, GlobalFoundries 180 nm and IHP 130 nm.
 
-- **LanEx is not a sign-off tool.** "Clean" means every check LibreLane runs on
-  the layout passed: design rules in Magic and KLayout, LVS, the GDS XOR,
-  antenna rules, and timing in every corner it checks. It does not cover
-  gate-level simulation with real delays, a shuttle's own precheck, or the
-  foundry's sign-off decks.
-- **Windows: x64 only.** Proven on clean virtual machines with Windows 11
-  Enterprise 26H2 (build 26300) and Windows 10 Enterprise 22H2 (build
-  19045.6456), each with 2 cores and 8 GB. Home and Pro editions use the same
-  WSL and are expected to behave the same, but were not run. ARM64 Windows is
-  not supported.
-- **Windows 10** shows a second administrator prompt ("Host Process for Windows
-  Services") while WSL installs, and its first WSL start after the restart can
-  take about five minutes; Setup waits for it.
-- The installer is **not code-signed** yet (the SmartScreen warning above).
+## Documentation
 
-> **Prerequisites** for the Linux/macOS path: Python ≥ 3.10, and Docker or Podman
-> — recommended but **optional**, because LanEx's Tools tab can install an engine
-> for you. The Windows installer needs neither: it brings its own.
+- [Install guide](docs/INSTALL.md): every platform, updating, uninstalling, troubleshooting
+- [RTL IDE](docs/rtl-ide.md)
+- [Verify](docs/verify.md)
+- [Layout](docs/layout.md)
+- [Cells and macros](docs/cells.md)
 
-The UI opens in its **own app window** — a standalone window with its own taskbar
-entry, no tabs and no URL bar (it renders with your installed Chrome/Edge/
-Chromium; with none installed it falls back to a browser tab, and `lanex --tab`
-forces one).
+## Before you manufacture
 
----
+LanEx shows what LibreLane and its tools report; it doesn't run its own checks. A "Clean" result means LibreLane's checks passed. Before you send a design to a foundry, run your foundry's and shuttle's own sign-off checks.
 
-## Quickstart
+## Contributing
+
+Bug reports and ideas are welcome in [Issues](https://github.com/AkshatIsWired/lanex/issues). To run LanEx from source (Python 3.10 or newer):
 
 ```bash
-lanex                                  # localhost cockpit in its own app window
-lanex --tab                            # …in a normal browser tab instead
-lanex --design-dir path/to/my_chip     # open already pointed at a design
-lanex --no-browser --port 9000         # headless / custom port
-lanex --host 0.0.0.0 --allow-remote    # expose on your network (no auth — take care)
+git clone https://github.com/AkshatIsWired/lanex && cd lanex
+python3 -m venv .venv && . .venv/bin/activate
+pip install -c windows/setup/constraints.txt -e . pytest
+lanex
 ```
 
-**Your first chip in five clicks:**
-
-1. **Setup** → pick your HDL folder (or click **Use the SPM example**).
-2. **Tools** → click **Pull image** (recommended: one download = every EDA tool,
-   version-matched — no native installs). Keep the **Container** engine selected.
-3. Confirm the **PDK** + standard-cell library match your target.
-4. Choose **Full Auto** or **Step-by-step** in the top bar.
-5. Press **Run**. Watch the pipeline light up; the GDS lands on **Preview**.
-
-### The tabs
-
-| Tab | What it does |
-|-----|--------------|
-| **Setup** | Pick design, PDK/SCL, flow; auto-generate a config. Every constraint field shows LibreLane's default AND what your config file sets (exact line, scoped sections labelled); a **Final settings** dialog previews everything the run will send and why. |
-| **Pipeline** | Live per-step run timeline + logs + step output. |
-| **RTL IDE** | Edit / lint / simulate Verilog; files or module hierarchy; VCD waveform viewer (signal tree, cursor/marker, values in the code on hover) + one-click GTKWave with the same signals. |
-| **Verification** | DRC / LVS / antenna / timing signoff verdict — every check carries a source button opening the raw tool report with the verdict line highlighted. |
-| **Analytics** | Metric trends, run comparison, cell usage. Every metric has a source button opening the run's own `metrics.json` at the exact line the number came from. **Final settings used** lists all ~400 variables the run resolved — values verbatim from `resolved.json`, each attributed to your override, your config line, or a default — filterable and CSV-exportable. |
-| **DSE** | Design-space sweeps and result viewer. |
-| **Layout** | Open GDS in KLayout / Magic / GDS3D / OpenROAD. |
-| **Cells &amp; Macros** | PDK std cells; insert custom cells + hard macros. |
-| **Runs** | Browse history; pin, import, export, and bundle runs. |
-
----
-
-## GUI ↔ CLI
-
-LanEx never hides what it runs. Everything it does maps onto the ordinary
-`librelane` CLI, and the **Manual** tab's **Reveal CLI** button always prints the
-*exact* command for your current design, config, and overrides (container or
-local). That button is authoritative; the table below is the quick mental model.
-
-| GUI action | Equivalent CLI |
-|-----------|----------------|
-| Setup → **Run** (container) | `librelane --dockerized <config> --pdk <PDK> --scl <SCL>` |
-| Setup → **Run** (local tools) | `librelane <config> --pdk <PDK> --scl <SCL>` |
-| Pipeline **From / To / Skip** | `librelane … --from <Step> --to <Step> --skip <Step>` |
-| Setup → **Run name** | `librelane … --run-tag <name>` |
-| Verify → **re-run a check** | `librelane … --last-run --to <Checker>` |
-| Runs → **Reproduce** | replays the run's persisted `gui-run.json` command verbatim |
-| Manual tab console | runs the allow-listed tool you type, and streams its output |
-
-Config overrides set in the form are passed as `-c KEY=VALUE` (plus a
-`.gui-*.json` overlay for the nested `MACROS` / custom-cell variables a flat `-c`
-string can't express). Reveal CLI shows the fully-expanded command, so you can
-paste it into a terminal and get byte-identical behaviour.
-
----
-
-## Architecture
-
-LanEx is built to keep both the install and the trust surface small.
-
-- **A pure-Python controller.** `lanex/controller/` imports only `librelane.*`
-  and the standard library — no web framework, no ORM, no bundler. It never
-  touches HTTP directly; it is the faithful, upstream-mergeable core.
-- **A stdlib server.** `lanex/server/` is a `http.server` + Server-Sent-Events
-  backend. Zero third-party runtime dependencies.
-- **A vanilla frontend.** ES modules with a single vendored copy of ECharts — no
-  React, no TypeScript, no build step.
-- **Faithful by construction.** LanEx renders exactly what the tools emit. A
-  golden-corpus regression suite and a startup compatibility probe fail loudly if
-  the installed `librelane` ever drifts from what LanEx parses, so displayed
-  numbers can't silently go wrong.
-
-```
-lanex/
-├─ controller/   pure-Python core (librelane + stdlib only)
-├─ server/       http.server + SSE; no third-party deps
-│  └─ static/    vanilla ES-module SPA + vendored ECharts
-└─ tests/        684 tests, incl. golden-run + fidelity corpus
-```
-
----
-
-## Testing
-
-```bash
-pip install pytest
-python3 -m pytest lanex/tests -q     # 684 passed, 3 skipped
-```
-
-The suite includes a golden-run corpus (a clean run and a non-finite-metric run)
-that locks LanEx's byte-faithful passthrough against regressions, plus a
-fidelity layer: all three VCD parsers (product, browser viewer, CI reference)
-must agree on one committed simulator dump; every golden metric must render
-faithfully; provenance answers must be byte-identical to the files on disk; and
-CI drives a real GTKWave under Xvfb to prove the waveform hand-off shows exactly
-what the simulator wrote. GitHub Actions' Summary tab explains every test group
-— and a completeness check fails CI if a test file ships without one.
-
----
-
-## Relationship to LibreLane
-
-LanEx is an independent project that **uses** LibreLane; it does not modify it.
-LibreLane is licensed under Apache-2.0 and is invoked as an external program.
-See [NOTICE](NOTICE) for attribution. LanEx is not affiliated with or endorsed by
-the LibreLane project.
+Run the tests with `python -m pytest lanex/tests -q`.
 
 ## License
 
-[Apache License 2.0](LICENSE). Provided **AS&nbsp;IS, without warranty** — see the
-sign-off disclaimer at the top of this file and in [NOTICE](NOTICE).
-
-<div align="center"><sub>Built for the open-silicon community.</sub></div>
+[Apache 2.0](LICENSE). LanEx is an independent project. It uses LibreLane but isn't affiliated with or endorsed by the LibreLane project. See [NOTICE](NOTICE).
