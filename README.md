@@ -15,7 +15,7 @@ A cockpit &amp; IDE for the [**LibreLane**](https://github.com/librelane/librela
 [![License](https://img.shields.io/badge/license-Apache%202.0-2f6fe0.svg?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-2f6fe0?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-stdlib%20only-4da3ff?style=flat-square)](#architecture)
-[![Tests](https://img.shields.io/badge/tests-684%20passing-3fb950?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1338%20passing-3fb950?style=flat-square)](#testing)
 [![Built on LibreLane](https://img.shields.io/badge/built%20on-LibreLane-2f6fe0?style=flat-square)](https://github.com/librelane/librelane)
 
 <a href="#install"><b>Install</b></a> &nbsp;·&nbsp;
@@ -99,8 +99,8 @@ affiliated with or endorsed by the LibreLane project or its maintainers.
 | Setup | Verification | Analytics |
 |:---:|:---:|:---:|
 | <img src="docs/screenshots/setup.png" width="260"> | <img src="docs/screenshots/verify.png" width="260"> | <img src="docs/screenshots/analytics.png" width="260"> |
-| **RTL IDE** | **Layout** | **Design-space exploration** |
-| <img src="docs/screenshots/ide.png" width="260"> | <img src="docs/screenshots/layout.png" width="260"> | <img src="docs/screenshots/dse.png" width="260"> |
+| **RTL IDE** | **Layout** | **Runs &amp; sweeps** |
+| <img src="docs/screenshots/ide.png" width="260"> | <img src="docs/screenshots/layout.png" width="260"> | <img src="docs/screenshots/runs.png" width="260"> |
 
 <sub>More in <a href="docs/screenshots/"><code>docs/screenshots/</code></a></sub>
 
