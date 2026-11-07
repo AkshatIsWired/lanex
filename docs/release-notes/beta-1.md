@@ -80,7 +80,7 @@ Every download is pinned and hash-checked: the LibreLane tool image by digest, e
 ## Known limits
 
 - LanEx is not a sign-off tool. "Clean" means LibreLane's own checks passed (DRC in Magic and KLayout, LVS, XOR, antenna, timing in its corners). It does not replace gate-level simulation with delays, a shuttle's precheck or a foundry's sign-off decks.
-- Windows: tested on Windows 11 Enterprise and Windows 10 Enterprise virtual machines; Home and Pro were not run. Windows 10 asks for administrator permission twice, and its first WSL start after the restart can take about five minutes.
+- Windows: this build was run on a Windows 11 Enterprise virtual machine; the same installer passed on Windows 10 Enterprise with the previous build. Home and Pro were not run. Windows 10 asks for administrator permission twice, and its first WSL start after the restart can take about five minutes.
 - macOS: the installer and the Docker Desktop path are covered by tests, but this build has not been run on a real Mac yet. Reports welcome.
 - Not code-signed yet.
 
