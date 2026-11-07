@@ -456,3 +456,102 @@ def test_shell_and_setup_sequence_base_restart_finalize() -> None:
     base = provision[provision.index('say "Provisioning the LanEx environment'):
                      provision.index('say "LanEx base provisioning is complete')]
     assert base.count("check_cancel") >= 7
+
+
+# The Linux/macOS terminal installer (scripts/install.sh) marks its manifest as
+# a host install. Docker Desktop / rootless Docker sockets and a non-systemd
+# PID 1 are fine there; the Windows appliance keeps every strict promise.
+
+
+def _host_manifest() -> dict:
+    manifest = _manifest()
+    manifest["source"] = {"kind": "install.sh", "lanex": "1.0.0"}
+    return manifest
+
+
+def _docker_desktop_probe(argv, timeout=30):
+    if "context" in argv:
+        return {"ready": True, "detail": "unix:///Users/ada/.docker/run/docker.sock"}
+    if "inspect" in argv:
+        return {"ready": True, "detail": "sha256:" + "d" * 64}
+    return {"ready": True, "rc": 0, "detail": ""}
+
+
+def _patch_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lanex.controller import container_run, pdk, tools
+
+    monkeypatch.setattr(
+        provisioning.importlib.metadata,
+        "version",
+        lambda name: {"librelane": "3.0.4", "ciel": "2.6.1"}[name],
+    )
+    monkeypatch.setattr(tools, "resolve_engine", lambda *args: {"ready": True, "engine": "docker"})
+    monkeypatch.setattr(container_run, "image_ref", lambda: "example/image:3.0.4")
+    monkeypatch.setattr(
+        pdk,
+        "check_pdk_library_ready",
+        lambda *a, **k: {"ready": True, "required_version": "a" * 40},
+    )
+    monkeypatch.setattr(provisioning, "_command_probe", _docker_desktop_probe)
+
+
+_CHOICES = {"pdks": ["sky130A"], "libraries": {"sky130A": []}, "nativeTools": [], "engine": "docker"}
+
+
+def test_host_manifest_accepts_docker_desktop_socket(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_ready(monkeypatch)
+    plan = provisioning.load_plan(_write(tmp_path, _host_manifest()), choices=_CHOICES)
+    assert plan["host"] is True
+    report = provisioning.readiness_report(plan)
+    assert "runtime:systemd" not in report["checks"]
+    assert report["checks"]["engine:docker"]["ready"] is True
+    assert report["checks"]["container:image"]["ready"] is True
+    assert report["ready"] is True
+
+
+def test_appliance_manifest_still_requires_the_local_socket(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_ready(monkeypatch)
+    plan = provisioning.load_plan(_write(tmp_path, _manifest()), choices=_CHOICES)
+    assert plan["host"] is False
+    report = provisioning.readiness_report(plan)
+    assert "runtime:systemd" in report["checks"]
+    assert report["checks"]["engine:docker"]["ready"] is False
+    assert report["ready"] is False
+
+
+def test_image_pull_skips_socket_check_only_when_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lanex.controller import tools
+
+    monkeypatch.setattr(
+        tools, "resolve_engine", lambda *args: {"ready": True, "engine": "docker", "sg_wrap": False}
+    )
+    monkeypatch.setattr(
+        installer,
+        "_shell_exec_quiet",
+        lambda argv, timeout: (0, "unix:///Users/ada/.docker/run/docker.sock\n", ""),
+    )
+    monkeypatch.setattr(installer, "_run_argv", lambda argv, **kwargs: {"ok": True, "rc": 0, "output": []})
+    monkeypatch.setattr(installer, "record_image_digest", lambda *a, **k: "sha256:" + "d" * 64)
+    # An earlier test in this file cancels "container:image"; do not inherit it.
+    monkeypatch.setattr(installer, "_is_cancelled", lambda key: False)
+    digest = "sha256:" + "d" * 64
+    strict = installer.pull_image_sync("ghcr.io/librelane/librelane:3.0.4", digest)
+    assert strict["ok"] is False and "appliance-local socket" in strict["reason"]
+    host = installer.pull_image_sync(
+        "ghcr.io/librelane/librelane:3.0.4", digest, require_local_socket=False
+    )
+    assert host["ok"] is True
+
+
+def test_darwin_wrapper_target_reads_the_exec_line(tmp_path: Path) -> None:
+    app = tmp_path / "GDS3D.app" / "Contents" / "MacOS" / "GDS3D"
+    wrapper = tmp_path / "gds3d"
+    wrapper.write_text(f'#!/bin/sh\nexec {app} "$@"\n', encoding="utf-8")
+    assert provisioning._darwin_wrapper_target(str(wrapper)) == str(app)
+    binary = tmp_path / "plain"
+    binary.write_bytes(b"\xcf\xfa\xed\xfe")
+    assert provisioning._darwin_wrapper_target(str(binary)) == str(binary)

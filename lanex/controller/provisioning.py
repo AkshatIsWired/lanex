@@ -5,6 +5,9 @@
 The ordinary LanEx installer stays deliberately forgiving.  Windows Setup uses
 this module after the private WSL appliance has rebooted with systemd: selected
 components are installed synchronously and every promised outcome is checked.
+The Linux/macOS terminal installer (scripts/install.sh) runs the same code on
+the user's own machine; its manifest marks it as a host install (see
+``_is_host_manifest``), which relaxes only the appliance-specific promises.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -37,6 +41,30 @@ def _read_json(path: str | os.PathLike[str], label: str) -> Dict[str, Any]:
     if not isinstance(value, dict):
         raise ProvisioningInputError(f"{label} must contain a JSON object")
     return value
+
+
+def _darwin_wrapper_target(path: str) -> Optional[str]:
+    """The app binary a macOS ``gds3d`` wrapper execs, or *path* itself."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(4096).decode("utf-8", "replace")
+    except OSError:
+        return None
+    if not head.startswith("#!"):
+        return path
+    for line in head.splitlines()[1:]:
+        line = line.strip()
+        if line.startswith("exec "):
+            target = line[len("exec "):]
+            if target.endswith(' "$@"'):
+                target = target[: -len(' "$@"')]
+            return target.strip().strip("'\"") or None
+    return None
+
+
+def _is_host_manifest(manifest: Mapping[str, Any]) -> bool:
+    source = manifest.get("source")
+    return isinstance(source, Mapping) and source.get("kind") == "install.sh"
 
 
 def load_plan(
@@ -151,6 +179,12 @@ def load_plan(
         "schema": 1,
         "profile": profile,
         "manifest": manifest,
+        # The Linux/macOS terminal installer (scripts/install.sh) makes its
+        # manifest from the installed package and marks it so. Its machine is
+        # the user's own, not the Windows appliance: Docker may be Docker
+        # Desktop or rootless (another socket), PID 1 may not be systemd, and
+        # macOS runs GDS3D's prebuilt app. Everything else stays as strict.
+        "host": _is_host_manifest(manifest),
         "engine": engine,
         "image": image_selected,
         "nativeTools": list(dict.fromkeys(native)),
@@ -186,11 +220,14 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
     from . import installer, pdk, tools
 
     checks: Dict[str, Any] = {}
-    try:
-        pid1 = Path("/proc/1/comm").read_text(encoding="utf-8").strip()
-    except Exception:
-        pid1 = ""
-    checks["runtime:systemd"] = {"ready": pid1 == "systemd", "pid1": pid1}
+    host = bool(plan.get("host"))
+    if not host:
+        # The appliance promises systemd; an ordinary Linux box or a Mac does not.
+        try:
+            pid1 = Path("/proc/1/comm").read_text(encoding="utf-8").strip()
+        except Exception:
+            pid1 = ""
+        checks["runtime:systemd"] = {"ready": pid1 == "systemd", "pid1": pid1}
     dependencies = plan["manifest"].get("dependencies", {})
     for package in ("librelane", "ciel"):
         wanted = dependencies.get(package)
@@ -219,7 +256,16 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
             }
         else:
             probe = _binary_probe(name, binary_args.get(key, ("--version",)))
-        if key == "gds3d" and probe.get("ready"):
+        if key == "gds3d" and probe.get("ready") and host and sys.platform == "darwin":
+            # macOS installs the repo's prebuilt GDS3D.app behind a wrapper; no
+            # build, so no ldd/headers/Mesa/commit to check. The wrapper must
+            # still point at an app binary that exists.
+            target = _darwin_wrapper_target(str(probe.get("path")))
+            probe["app"] = target
+            probe["ready"] = bool(target and os.access(target, os.X_OK))
+            if not probe["ready"]:
+                probe["missing"] = ["GDS3D.app"]
+        elif key == "gds3d" and probe.get("ready"):
             path = probe.get("path")
             probe["linkage"] = (
                 _command_probe(["ldd", str(path)]) if shutil.which("ldd") else {"ready": False}
@@ -265,7 +311,12 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
         endpoint = context.get("detail", "")
         context["localSocket"] = endpoint == "unix:///var/run/docker.sock"
         engine_check["context"] = context
-        engine_check["ready"] = bool(context.get("ready") and context["localSocket"])
+        if host:
+            # Docker Desktop and rootless Docker answer on their own socket;
+            # resolve_engine already proved this one runs containers.
+            engine_check["ready"] = True
+        else:
+            engine_check["ready"] = bool(context.get("ready") and context["localSocket"])
         engine_ready = bool(engine_check["ready"])
     if engine != "none":
         checks[f"engine:{engine}"] = engine_check
@@ -583,6 +634,7 @@ def finalize(plan: Mapping[str, Any]) -> Dict[str, Any]:
             result = installer.pull_image_sync(
                 image["reference"], image["digest"], expected_engine=plan["engine"],
                 expect_bytes=image_bytes,
+                require_local_socket=not plan.get("host"),
             )
             drain()
             if not result.get("ok"):
