@@ -39,7 +39,10 @@ shopt -s extglob 2>/dev/null || true
 #                     (default: main)
 #   LANEX_REPO=<owner/name>  GitHub repository for LANEX_REF (default:
 #                     AkshatIsWired/lanex; useful for fork candidates)
-#   LANEX_PIP_CONSTRAINT=<path>  optional pip constraints file (versions only).
+#   LANEX_PIP_CONSTRAINT=<path>  pip constraints file (versions only). Default:
+#                     windows/setup/constraints.txt from the same ref, the
+#                     exact package versions Windows Setup ships.
+#   LANEX_UNPINNED=1  newest compatible Python packages instead of those pins
 #   LANEX_PIP_LOCK=<path>  hash-locked requirements file (the Windows appliance).
 #                     Every dependency is installed with pip --require-hashes
 #                     into a plain venv at pipx's usual path; there is no
@@ -452,11 +455,61 @@ build_tools_stage() {
     esac
 }
 
+PINNED=0
+pin_constraints() {
+    # The exact Python package versions Windows Setup ships and tests
+    # (windows/setup/constraints.txt), taken from the same ref as the LanEx
+    # source, so a curl install gets the same tree instead of whatever PyPI
+    # published this morning. pyproject.toml pins only librelane and ciel.
+    [ -n "${LANEX_PIP_LOCK:-}" ] && return 0
+    [ -n "${PIP_CONSTRAINT:-}" ] && return 0     # LANEX_PIP_CONSTRAINT or the user's own
+    if [ "${LANEX_UNPINNED:-0}" = "1" ]; then
+        note "LANEX_UNPINNED=1: the newest compatible Python packages."
+        return 0
+    fi
+    local src="${LANEX_FROM:-github}" f="" dir
+    case "$src" in
+        github)
+            # A path without spaces: pip splits PIP_CONSTRAINT on whitespace.
+            dir="$(mktemp -d 2>/dev/null || mktemp -d -t lanex)" || return 0
+            f="$dir/constraints.txt"
+            if ! fetch_url "https://raw.githubusercontent.com/${REPO}/${REF}/windows/setup/constraints.txt" "$f"; then
+                warn "Could not fetch the tested package versions for ${REF}; using the newest compatible ones."
+                return 0
+            fi ;;
+        pypi) return 0 ;;
+        *)  [ -f "$src/windows/setup/constraints.txt" ] || return 0
+            case "$src" in *[[:space:]]*) return 0 ;; esac
+            f="$src/windows/setup/constraints.txt" ;;
+    esac
+    if ! grep -q '^librelane==' "$f" 2>/dev/null; then
+        warn "The tested package list for ${REF} looks wrong; using the newest compatible versions."
+        return 0
+    fi
+    export PIP_CONSTRAINT="$f"
+    PINNED=1
+    if [ "$src" = github ]; then
+        note "Python packages: the tested versions (windows/setup/constraints.txt at ${REF})"
+    else
+        note "Python packages: the tested versions ($f)"
+    fi
+}
+
 install_lanex() {
+    pin_constraints
     attempt_install && return 0
     build_tools_stage
-    attempt_install \
-        || die "Could not install LanEx from $(resolve_source).
+    attempt_install && return 0
+    if [ "$PINNED" = 1 ]; then
+        # Seen: the pinned rapidfuzz needs Python 3.11, so Ubuntu 22.04's 3.10
+        # cannot take the whole set. librelane and ciel stay exact either way.
+        warn "The tested package versions did not install on $("$PY" --version 2>&1)."
+        warn "Retrying with the newest versions that fit (librelane and ciel stay exact)."
+        unset PIP_CONSTRAINT
+        PINNED=0
+        attempt_install && return 0
+    fi
+    die "Could not install LanEx from $(resolve_source).
    Read the pip error above. Usual causes: network hiccup (just re-run this
    script), or a dependency without a prebuilt wheel for very new Python
    versions. If it persists, install a Python 3.10-3.12 (e.g. sudo dnf
