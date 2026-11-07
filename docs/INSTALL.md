@@ -315,14 +315,52 @@ manage themselves.)
 New here, or you just want it running? This single line works on **any major
 Linux distro (Debian/Ubuntu, Fedora, Arch, openSUSE, …), inside WSL2 on
 Windows, and on macOS**. It detects your system, installs the packages a fresh
-machine is missing, installs LanEx, puts the `lanex` command on your PATH, and —
-if you have Docker or Podman — pre-pulls the version-matched LibreLane image
-(otherwise the in-app Tools tab sets that up on first run). Safe to re-run;
+machine is missing, installs LanEx with the same tested Python package versions
+Windows Setup ships, and puts the `lanex` command on your PATH. Safe to re-run;
 **a re-run also upgrades LanEx in place**.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash
 ```
+
+In a terminal it opens an interactive installer with the Windows Setup's
+choices: **Recommended** (Docker, the version-matched LibreLane image pinned by
+digest, Verilator, Icarus Verilog, GTKWave, Graphviz, GDS3D and sky130A),
+**Custom** (pick the engine, each tool, each PDK and extra libraries),
+**Minimal** (the app only) or **Complete** (every tool and PDK). It shows the
+download and disk size first, asks for your sudo password once, then installs
+with a progress view and a log file. Arrow keys, Space, Enter and Esc drive it;
+`q` quits before anything is installed.
+
+Unattended (CI, scripts, no terminal), name the profile up front:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh | bash -s -- --profile recommended
+```
+
+`--profile complete` and `--profile minimal` work the same way, and
+`--choices <file>` takes a Custom selection saved by an earlier run
+(`~/.lanex/setup-choices.json`). Without a terminal and without a profile it
+installs only the app, with plain line-by-line output, and pre-pulls the
+LibreLane image if Docker or Podman is already there.
+
+<details>
+<summary>Installer knobs (environment variables)</summary>
+
+| Variable | Effect |
+|---|---|
+| `LANEX_REF=<branch, tag or SHA>` | install that version of LanEx (default `main`) |
+| `LANEX_REPO=<owner/name>` | install from a fork |
+| `LANEX_UNPINNED=1` | newest compatible Python packages instead of the tested pins (librelane and ciel stay exact) |
+| `LANEX_NO_UI=1` | plain output even in a terminal |
+| `LANEX_ASCII=1` / `NO_COLOR=1` | no Unicode glyphs / no colour in the interactive installer |
+| `LANEX_SKIP_PULL=1`, `LANEX_SKIP_GDS3D=1` | skip the image pre-pull / GDS3D in the plain (no profile) path |
+| `LANEX_NO_PIPX=1` | install into `~/.lanex/venv` instead of pipx |
+
+The tested package versions are `windows/setup/constraints.txt` at the same
+ref as the source. On Python 3.10 (Ubuntu 22.04) one of them needs 3.11, so the
+installer says so and falls back to the newest versions that fit.
+</details>
 
 No `curl` on a fresh box? `wget` works the same:
 
@@ -372,9 +410,8 @@ its own taskbar entry, no tabs and no URL bar (it uses your installed
 Chrome/Edge/Chromium for the rendering; with none installed it falls back to a
 normal browser tab, and `lanex --tab` forces the tab). That's it. **If anything in the manual options
 below looks confusing, just use this; it's built to work out of the box on any
-supported machine.** On **Fedora / Arch / macOS**, or if you **already run
-LibreLane**, the script isn't for you — pick the matching self-contained row
-below instead.
+supported machine.** If you **already run LibreLane** in your own environment,
+use row 4 below instead, so LanEx shares that environment.
 
 ### Manual install — pick the row that matches your machine
 
@@ -405,7 +442,11 @@ lanex
 
 (The [one-line installer](#easiest--one-command-that-just-works-start-here-if-unsure)
 runs these steps for you — plus fallbacks for machines where one of them
-fails — and upgrades on re-run.)
+fails — and upgrades on re-run. It also installs the exact Python package
+versions Windows Setup was tested with; to get those in any manual row, put
+`PIP_CONSTRAINT=https://raw.githubusercontent.com/AkshatIsWired/lanex/main/windows/setup/constraints.txt`
+in front of the `pipx install` command. Python 3.11+ only: Ubuntu 22.04's 3.10
+can't take one of the pins.)
 
 Why `pipx` and not `pip`: Ubuntu 23.04+ (including every current WSL Ubuntu)
 refuses `pip install` outside a virtualenv (PEP 668 — see

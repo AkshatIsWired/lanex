@@ -3084,8 +3084,13 @@ def install_pdk(pdk: str, libraries: Optional[List[str]] = None) -> Dict[str, An
 
 def pull_image_sync(reference: str, expected_digest: str, *,
                     expected_engine: Optional[str] = None,
-                    expect_bytes: Optional[int] = None) -> Dict[str, Any]:
-    """Synchronously pull the immutable image selected by a build manifest."""
+                    expect_bytes: Optional[int] = None,
+                    require_local_socket: bool = True) -> Dict[str, Any]:
+    """Synchronously pull the immutable image selected by a build manifest.
+
+    ``require_local_socket`` is the Windows appliance's promise that Docker is
+    its own daemon. The Linux/macOS terminal installer turns it off: Docker
+    Desktop and rootless Docker listen on their own sockets."""
     from . import tools
 
     if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", expected_digest or ""):
@@ -3099,7 +3104,7 @@ def pull_image_sync(reference: str, expected_digest: str, *,
         return {"ok": False,
                 "reason": f"selected engine is {expected_engine}, but {engine} is the resolved engine",
                 "resolved": resolved}
-    if engine == "docker":
+    if engine == "docker" and require_local_socket:
         rc, endpoint, error = _shell_exec_quiet(
             ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
             timeout=15.0,

@@ -16,9 +16,9 @@ fi
 
 URL="https://raw.githubusercontent.com/AkshatIsWired/lanex/main/scripts/install.sh"
 if command -v curl >/dev/null 2>&1; then
-    exec bash -c "$(curl -fsSL "$URL")"
+    exec bash -c "$(curl -fsSL "$URL")" install.sh "$@"
 elif command -v wget >/dev/null 2>&1; then
-    exec bash -c "$(wget -qO- "$URL")"
+    exec bash -c "$(wget -qO- "$URL")" install.sh "$@"
 fi
 printf 'Need curl or wget to fetch the installer:\n  %s\n' "$URL" >&2
 exit 1
