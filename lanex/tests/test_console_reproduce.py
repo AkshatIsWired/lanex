@@ -18,7 +18,7 @@ META = {
         "recommended": "container", "cwd": "/home/u/spm",
     },
     "tag": "r1",
-    "toolchain": {"librelane_version": "3.0.4", "lanex_version": "0.1.0+3.0.4",
+    "toolchain": {"librelane_version": "3.0.4", "lanex_version": "1.0.0",
                   "image": "ghcr.io/librelane/librelane:3.0.4@sha256:eab07a50"},
 }
 RESOLVED = {"PDK_ROOT": "/home/u/.ciel/ciel/sky130/versions/8afc8346a57fe1ab7934ba5a6056ea8b43078e71",

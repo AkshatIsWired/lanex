@@ -90,9 +90,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if args.version:
-        from ._version import get_version
+        from ._version import get_version_line
 
-        sys.stdout.write(f"lanex {get_version()}\n")
+        sys.stdout.write(f"lanex {get_version_line()}\n")
         return 0
 
     _setup_logging(args.verbose)
