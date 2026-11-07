@@ -1295,7 +1295,9 @@ ui_logo_build() {
 # ---- terminal plumbing ----------------------------------------------------
 ui_size() {
     local s r c pad
-    s="$(stty size <&3 2>/dev/null || true)"
+    # COLUMNS/LINES are blanked for stty: this script exports 120x40 for its
+    # child processes, and BusyBox stty reports those instead of the window.
+    s="$(unset COLUMNS LINES; stty size <&3 2>/dev/null || true)"
     r="${s% *}"; c="${s#* }"
     case "$r" in ''|*[!0-9]*) r=24 ;; esac
     case "$c" in ''|*[!0-9]*) c=80 ;; esac
@@ -1309,7 +1311,7 @@ ui_size() {
 ui_init() {
     exec 3</dev/tty 4>/dev/tty
     UI_STTY="$(stty -g <&3 2>/dev/null || true)"
-    stty -echo <&3 2>/dev/null || true
+    ui_tty_keys
     ui_caps
     ui_logo_build
     ui_size
@@ -1323,6 +1325,22 @@ ui_init() {
     printf '\r\033[2K\033[1A\033[2K\033[?1049h\033[?25l\033[H\033[2J' >&4
     UI_ALT=1
     UI=1
+}
+
+ui_tty_keys() {
+    # Key-at-a-time input, set here rather than left to `read -n1`: bash 3.2
+    # (macOS) leaves line mode only when it reads stdin, and under
+    # `curl | bash` stdin is this script. Without this every key but Enter
+    # waits in the line buffer: arrows, digits and q do nothing.
+    stty -echo -icanon min 1 time 0 <&3 2>/dev/null || true
+}
+
+ui_tty_line() {  # the user's own line mode, for sudo's prompt and y/n answers
+    if [ -n "$UI_STTY" ]; then
+        stty "$UI_STTY" <&3 2>/dev/null
+    else
+        stty icanon echo <&3 2>/dev/null
+    fi
 }
 
 ui_leave_screen() {
@@ -2146,13 +2164,15 @@ ui_sudo() {
         fl ""
         fflush
         printf '\033[?25h' >&4
-        stty echo <&3 2>/dev/null
+        ui_tty_line
         stty -echo <&3 2>/dev/null
         if ! sudo -v -p "${UI_PAD}   ${C_CYAN}${G_PTR}${R} password for %u: " <&3 2>&4; then
+            ui_tty_keys
             printf '\033[?25l' >&4
             ui_flash "sudo did not accept the password. Enter to try again, Esc to go back."
             return 1
         fi
+        ui_tty_keys
         printf '\033[?25l' >&4
     fi
     # Keep the ticket fresh for long downloads; stops with this script.
@@ -2574,7 +2594,7 @@ ui_done() {
         local a=""
         ui_drain_input
         printf '  %sStart LanEx now?%s %s[Y/n]%s ' "$B" "$R" "$C_DIM" "$R" >&4
-        stty echo <&3 2>/dev/null
+        ui_tty_line
         IFS= read -r -t 120 -u 3 a || a="n"
         stty "$UI_STTY" <&3 2>/dev/null
         case "$a" in
