@@ -154,6 +154,8 @@ export const api = {
     _fetch("/api/reveal", { method: "POST", body: JSON.stringify({ tag, path }) }),
   desktopTools: () => _fetch("/api/desktop-tools"),
   containerTools: () => _fetch("/api/container-tools"),
+  // macOS: restart XQuartz so it accepts container viewers (closes its windows).
+  xquartzRestart: () => _fetch("/api/xquartz/restart", { method: "POST", body: "{}" }),
   containerToolOpen: (tool) =>
     _fetch("/api/container-tools/open", { method: "POST", body: JSON.stringify({ tool }) }),
   openInTool: (tool, tag, path, useTech, location) =>

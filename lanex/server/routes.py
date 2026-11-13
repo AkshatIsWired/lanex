@@ -2360,6 +2360,17 @@ def h_container_tool_open(handler: Any) -> None:
         tool, design_dir=base_dir, work_dir=base_dir), 200)
 
 
+def h_xquartz_restart(handler: Any) -> None:
+    """macOS: restart XQuartz so it accepts container viewers (POST).
+
+    Only on the user's click: a restart closes the X11 windows open now."""
+    from ..controller import container_tools
+    if getattr(handler, "command", "POST") != "POST":
+        _respond(handler, {"ok": False, "error": "use POST"}, 405)
+        return
+    _respond(handler, container_tools.ensure_xquartz(restart=True), 200)
+
+
 def _final_odb(run_dir: "Path") -> Optional["Path"]:
     """The run's final OpenDB database (.odb), for OpenROAD GUI."""
     final = run_dir / "final"
@@ -4736,6 +4747,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/desktop-tools", h_desktop_tools),
     ("/api/container-tools", h_container_tools),
     ("/api/container-tools/open", h_container_tool_open),
+    ("/api/xquartz/restart", h_xquartz_restart),
     ("/api/open-in-tool", h_open_in_tool),
     ("/api/layout/sources", h_layout_sources),
     ("/api/layout/open", h_layout_open),

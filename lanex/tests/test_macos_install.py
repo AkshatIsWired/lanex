@@ -237,27 +237,33 @@ def test_scoop_no_longer_offers_engine_clients():
 
 # ------------------------------------------------------- XQuartz display ----
 
-def test_darwin_display_not_installed_names_the_cask():
+def test_darwin_display_not_installed_offers_install():
     v = container_tools._darwin_display_status(
-        {"installed": False, "running": False, "tcp_ok": None})
+        {"installed": False, "running": False, "tcp_ok": None, "brew": True})
     assert v["ok"] is False
+    assert v["action"] == "install-xquartz" and v["can_install"] is True
     assert "brew install --cask xquartz" in v["reason"]
+    # Without Homebrew there is no one-click install, only the download.
+    v = container_tools._darwin_display_status(
+        {"installed": False, "running": False, "tcp_ok": None, "brew": False})
+    assert v["can_install"] is False and "xquartz.org" in v["reason"]
 
 
-def test_darwin_display_installed_not_running():
+def test_darwin_display_installed_not_running_is_launchable():
+    # LanEx starts XQuartz itself, so a stopped XQuartz must not block the
+    # container route in the UI.
     v = container_tools._darwin_display_status(
         {"installed": True, "running": False, "tcp_ok": None})
-    assert v["ok"] is False
-    assert "open -a XQuartz" in v["reason"]
+    assert v["ok"] is True
+    assert "starts it" in v["reason"]
 
 
-def test_darwin_display_running_but_tcp_refused():
-    # Modern XQuartz default: nolisten_tcp ON — running yet unreachable from
-    # containers. This must be its own precise message, not a generic failure.
+def test_darwin_display_running_but_tcp_refused_offers_restart():
     v = container_tools._darwin_display_status(
         {"installed": True, "running": True, "tcp_ok": False})
     assert v["ok"] is False
-    assert "nolisten_tcp" in v["reason"]
+    assert v["action"] == "restart-xquartz"
+    assert "closes the XQuartz windows" in v["reason"]
 
 
 def test_darwin_display_ok_mentions_xhost():
@@ -265,6 +271,160 @@ def test_darwin_display_ok_mentions_xhost():
         {"installed": True, "running": True, "tcp_ok": True})
     assert v["ok"] is True
     assert "xhost" in v["reason"]
+
+
+def test_xquartz_status_measures_tcp_instead_of_trusting_the_pref(monkeypatch):
+    monkeypatch.setattr(container_tools, "_xquartz_installed", lambda: True)
+    monkeypatch.setattr(container_tools, "_xquartz_running", lambda: True)
+    monkeypatch.setattr(container_tools, "_xquartz_tcp_pref", lambda: None)
+    monkeypatch.setattr(container_tools, "_brew_available", lambda: True)
+    monkeypatch.setattr(container_tools, "_xquartz_tcp_listening", lambda timeout=1.0: False)
+    assert container_tools._xquartz_status()["tcp_ok"] is False
+    monkeypatch.setattr(container_tools, "_xquartz_tcp_listening", lambda timeout=1.0: True)
+    assert container_tools._xquartz_status()["tcp_ok"] is True
+    monkeypatch.setattr(container_tools, "_xquartz_running", lambda: False)
+    assert container_tools._xquartz_status()["tcp_ok"] is None
+
+
+def test_xquartz_tcp_listening_uses_a_real_connect(monkeypatch):
+    import socket
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    addr = srv.getsockname()
+    try:
+        monkeypatch.setattr(container_tools, "_XQUARTZ_TCP", addr)
+        assert container_tools._xquartz_tcp_listening() is True
+    finally:
+        srv.close()
+    assert container_tools._xquartz_tcp_listening() is False
+
+
+class _XQ:
+    """A fake XQuartz: records the commands LanEx runs against it."""
+
+    def __init__(self, monkeypatch, *, installed=True, running=False, tcp=False,
+                 starts_listening=True, pref=None):
+        self.installed, self.running, self.tcp = installed, running, tcp
+        self.starts_listening, self.pref = starts_listening, pref
+        self.calls = []
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(container_tools, "_xquartz_installed", lambda: self.installed)
+        monkeypatch.setattr(container_tools, "_xquartz_running", lambda: self.running)
+        monkeypatch.setattr(container_tools, "_xquartz_tcp_listening",
+                            lambda timeout=1.0: self.running and self.tcp)
+        monkeypatch.setattr(container_tools, "_xquartz_tcp_pref", lambda: self.pref)
+        monkeypatch.setattr(container_tools, "_brew_available", lambda: True)
+        monkeypatch.setattr(container_tools.subprocess, "run", self.run)
+        monkeypatch.setattr(container_tools, "_wait",
+                            lambda cond, seconds, step=0.25: bool(cond()))
+
+    def run(self, argv, **kw):
+        self.calls.append(list(argv))
+        if argv[:2] == ["defaults", "write"]:
+            self.pref = True
+        elif argv[0].endswith("osascript"):
+            self.running = False
+        elif argv[0].endswith("open"):
+            self.running = True
+            # A start after the pref is written listens on TCP.
+            self.tcp = self.starts_listening and self.pref is True
+
+        class R:
+            returncode = 0
+            stdout = ""
+        return R()
+
+
+def test_ensure_xquartz_starts_a_stopped_xquartz_after_writing_the_pref(monkeypatch):
+    xq = _XQ(monkeypatch, running=False)
+    res = container_tools.ensure_xquartz()
+    assert res["ok"] is True and res["started"] is True and res["restarted"] is False
+    write = xq.calls.index(["defaults", "write", "org.xquartz.X11", "nolisten_tcp", "-bool", "false"])
+    start = xq.calls.index(["/usr/bin/open", "-a", "XQuartz"])
+    assert write < start  # no restart needed: the pref is read at start-up
+
+
+def test_ensure_xquartz_never_restarts_without_the_users_click(monkeypatch):
+    xq = _XQ(monkeypatch, running=True, tcp=False, pref=True)
+    res = container_tools.ensure_xquartz()
+    assert res["ok"] is False and res["action"] == "restart-xquartz"
+    assert not any(c[0].endswith("osascript") for c in xq.calls)
+    res = container_tools.ensure_xquartz(restart=True)
+    assert res["ok"] is True and res["restarted"] is True
+    assert any(c[0].endswith("osascript") for c in xq.calls)
+
+
+def test_ensure_xquartz_running_and_listening_does_nothing_else(monkeypatch):
+    xq = _XQ(monkeypatch, running=True, tcp=True, pref=True)
+    assert container_tools.ensure_xquartz() == {"ok": True}
+    assert not any(c[0].endswith(("open", "osascript")) for c in xq.calls)
+
+
+def test_ensure_xquartz_not_installed_offers_install(monkeypatch):
+    _XQ(monkeypatch, installed=False)
+    res = container_tools.ensure_xquartz()
+    assert res["ok"] is False and res["action"] == "install-xquartz" and res["can_install"]
+
+
+def test_ensure_xquartz_start_that_never_listens_says_what_to_do(monkeypatch):
+    _XQ(monkeypatch, running=False, starts_listening=False)
+    res = container_tools.ensure_xquartz(wait_s=1)
+    assert res["ok"] is False
+    assert "Allow connections from network clients" in res["error"]
+
+
+def test_ensure_xquartz_noop_off_macos(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert container_tools.ensure_xquartz() == {"ok": True}
+
+
+def test_open_in_container_tool_returns_the_restart_offer(monkeypatch, tmp_path):
+    _XQ(monkeypatch, running=True, tcp=False, pref=True)
+    monkeypatch.setattr(tools_mod, "resolve_engine", lambda: {"ready": True, "engine": "docker"})
+    monkeypatch.setattr(container_tools, "_image_present", lambda *a, **k: True)
+    res = container_tools.open_in_container_tool("klayout", design_dir=tmp_path, work_dir=tmp_path)
+    assert res["ok"] is False and res["need"] == "display"
+    assert res["action"] == "restart-xquartz"
+
+
+def test_install_xquartz_runs_the_cask_and_writes_the_pref(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    state = {"installed": False, "pref": 0}
+
+    def write_pref():
+        state["pref"] += 1
+        return True
+
+    monkeypatch.setattr(container_tools, "_xquartz_installed", lambda: state["installed"])
+    monkeypatch.setattr(container_tools, "write_xquartz_tcp_pref", write_pref)
+    monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
+    monkeypatch.setattr(installer, "_emit", lambda *a, **k: None)
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        state["installed"] = True
+        return {"rc": 0, "output": []}
+
+    monkeypatch.setattr(installer, "_run_argv", fake_run)
+    res = installer._install_xquartz_macos("xquartz")
+    assert res["ok"] is True
+    assert seen == [["/usr/local/bin/brew", "install", "--cask", "xquartz"]]
+    assert state["pref"] == 1
+
+
+def test_install_script_sets_up_xquartz_with_a_container_engine():
+    script = (Path(__file__).resolve().parents[2] / "scripts" / "install.sh").read_text(encoding="utf-8")
+    body = script[script.index("xquartz_stage() {"):]
+    body = body[:body.index("\n}\n")]
+    assert "brew install --cask xquartz" in body
+    assert "defaults write org.xquartz.X11 nolisten_tcp -bool false" in body
+    assert "die " not in body  # optional: a warning, never a failed install
+    engine = script[script.index("engine_stage() {"):]
+    engine = engine[:engine.index("\n}\n")]
+    assert "xquartz_stage" in engine
 
 
 def test_x11_flags_podman_uses_containers_host_alias(monkeypatch):

@@ -493,8 +493,9 @@ No Homebrew? Install it first: https://brew.sh (one command). LibreLane's heavy
 tools run in the container image, so Docker/Podman is the smooth path on macOS;
 the Tools tab can install one for you (it handles the Docker.app first-run and
 the podman VM setup). Desktop layout viewers launched <i>from the container</i>
-(KLayout/Magic/OpenROAD) additionally need XQuartz — see the troubleshooting
-entry below.</td></tr>
+(KLayout/Magic/OpenROAD) additionally need XQuartz. The installer sets it up
+when you pick a container engine, and LanEx starts it when a viewer opens; see
+the troubleshooting entry below if a viewer still says "no display".</td></tr>
 
 <tr><td><b>4 · You already run LibreLane</b><br><sub>in a venv / conda env</sub></td>
 <td>
@@ -780,20 +781,31 @@ or turn scaling off with `LANEX_VIEWER_SCALE=1`. Your own `GDK_SCALE` /
 <details>
 <summary><b>Container viewers (KLayout / Magic / OpenROAD GUI) say "no display" on macOS</b></summary>
 
-Tools running *inside* the container are Linux X11 apps — on macOS they need
-**XQuartz** as the X server, reached over TCP. Three one-time steps:
+Tools running *inside* the container are Linux X11 apps; on macOS they draw
+into **XQuartz**, reached over TCP. LanEx handles it:
 
-1. Install and start it: `brew install --cask xquartz`, log out and back in
-   (or reboot), then `open -a XQuartz`.
-2. Allow network (container) clients — XQuartz ships with this **off**:
-   XQuartz → Settings → Security → enable **"Allow connections from network
-   clients"**, then restart XQuartz. (Terminal equivalent:
-   `defaults write org.xquartz.X11 nolisten_tcp -bool false`.)
-3. `xhost +localhost` in an XQuartz terminal. LanEx also runs this for you at
-   each launch when it can.
+- **Install:** `install.sh` installs XQuartz (`brew install --cask xquartz`,
+  which asks for your password) whenever you choose Docker or Podman, and
+  turns on "Allow connections from network clients". If that step failed, the
+  viewer button offers **Install XQuartz** (macOS shows its own password
+  dialog), or run the command yourself.
+- **Start:** when you open a viewer, LanEx starts XQuartz if it is not
+  running, waits for it, runs `xhost +localhost`, then opens the viewer.
+- **Already running without network clients:** XQuartz reads that setting
+  only when it starts, so the viewer button offers **Restart XQuartz and
+  open**. That closes any XQuartz windows you have open, which is why LanEx
+  asks first.
 
-LanEx's Layout buttons report exactly which of these steps is missing. The
-built-in layout preview and all flow runs work without XQuartz — this only
+Doing it by hand, if you prefer:
+
+```bash
+brew install --cask xquartz
+defaults write org.xquartz.X11 nolisten_tcp -bool false
+open -a XQuartz            # quit and reopen it if it was already running
+xhost +localhost           # in an XQuartz terminal
+```
+
+The built-in Layout tab and all flow runs work without XQuartz; this only
 affects the interactive desktop viewers launched from the container.
 </details>
 

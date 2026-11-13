@@ -953,11 +953,39 @@ docker_reachable() {
         && sg docker -c 'docker info' >/dev/null 2>&1
 }
 
+XQUARTZ_HINT="the viewers that open in their own window (KLayout, Magic, OpenROAD, Netgen) need it; the Layout tab works without it"
+
+xquartz_stage() {  # macOS: the X server container viewers draw into; optional
+    say "XQuartz (windows for the viewers in the container)"
+    if [ -d /Applications/Utilities/XQuartz.app ] || [ -x /opt/X11/bin/Xquartz ]; then
+        note "XQuartz is already installed."
+    elif [ -n "${LX_STEPLOG:-}" ] && ! sudo -n true 2>/dev/null; then
+        # A wizard step runs behind the screen with no way to type a password:
+        # without a live sudo ticket the pkg installer would wait on a prompt
+        # nobody can see. LanEx offers the install again when a viewer opens.
+        warn "XQuartz was not installed because this step cannot ask for your password; ${XQUARTZ_HINT}. LanEx offers to install it when you open a viewer, or run:  brew install --cask xquartz"
+    elif command -v brew >/dev/null 2>&1; then
+        note "Installing XQuartz with Homebrew. Its installer needs your macOS password."
+        brew install --cask xquartz \
+            || warn "XQuartz did not install, so ${XQUARTZ_HINT}. Install it later with:  brew install --cask xquartz  (Homebrew's error is in the install log)."
+    else
+        warn "Homebrew is not installed, so XQuartz was not installed; ${XQUARTZ_HINT}. Get it from https://www.xquartz.org"
+    fi
+    # Accept container clients over TCP from XQuartz's first start, so it never
+    # needs a restart for this. LanEx starts XQuartz itself when a viewer opens.
+    defaults write org.xquartz.X11 nolisten_tcp -bool false 2>/dev/null \
+        || warn "Could not set XQuartz to accept container windows. Run:  defaults write org.xquartz.X11 nolisten_tcp -bool false"
+    return 0
+}
+
 engine_stage() {
     local eng="$CH_ENGINE" pkg
     [ "$eng" = "none" ] && return 0
     if [ "$OS" = "macos" ]; then
         note "macOS: LanEx installs ${eng} itself in the next step (Homebrew / the vendor's app)."
+        # XQuartz runs a pkg installer as root, so it goes in here, while this
+        # script still has the terminal (and the sudo ticket) for the password.
+        xquartz_stage
         return 0
     fi
     say "Container engine (${eng})"
