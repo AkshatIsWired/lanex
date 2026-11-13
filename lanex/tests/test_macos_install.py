@@ -237,27 +237,33 @@ def test_scoop_no_longer_offers_engine_clients():
 
 # ------------------------------------------------------- XQuartz display ----
 
-def test_darwin_display_not_installed_names_the_cask():
+def test_darwin_display_not_installed_offers_install():
     v = container_tools._darwin_display_status(
-        {"installed": False, "running": False, "tcp_ok": None})
+        {"installed": False, "running": False, "tcp_ok": None, "brew": True})
     assert v["ok"] is False
+    assert v["action"] == "install-xquartz" and v["can_install"] is True
     assert "brew install --cask xquartz" in v["reason"]
+    # Without Homebrew there is no one-click install, only the download.
+    v = container_tools._darwin_display_status(
+        {"installed": False, "running": False, "tcp_ok": None, "brew": False})
+    assert v["can_install"] is False and "xquartz.org" in v["reason"]
 
 
-def test_darwin_display_installed_not_running():
+def test_darwin_display_installed_not_running_is_launchable():
+    # LanEx starts XQuartz itself, so a stopped XQuartz must not block the
+    # container route in the UI.
     v = container_tools._darwin_display_status(
         {"installed": True, "running": False, "tcp_ok": None})
-    assert v["ok"] is False
-    assert "open -a XQuartz" in v["reason"]
+    assert v["ok"] is True
+    assert "starts it" in v["reason"]
 
 
-def test_darwin_display_running_but_tcp_refused():
-    # Modern XQuartz default: nolisten_tcp ON — running yet unreachable from
-    # containers. This must be its own precise message, not a generic failure.
+def test_darwin_display_running_but_tcp_refused_offers_restart():
     v = container_tools._darwin_display_status(
         {"installed": True, "running": True, "tcp_ok": False})
     assert v["ok"] is False
-    assert "nolisten_tcp" in v["reason"]
+    assert v["action"] == "restart-xquartz"
+    assert "closes the XQuartz windows" in v["reason"]
 
 
 def test_darwin_display_ok_mentions_xhost():
@@ -265,6 +271,280 @@ def test_darwin_display_ok_mentions_xhost():
         {"installed": True, "running": True, "tcp_ok": True})
     assert v["ok"] is True
     assert "xhost" in v["reason"]
+
+
+def test_xquartz_status_measures_tcp_instead_of_trusting_the_pref(monkeypatch):
+    monkeypatch.setattr(container_tools, "_xquartz_installed", lambda: True)
+    monkeypatch.setattr(container_tools, "_xquartz_running", lambda: True)
+    monkeypatch.setattr(container_tools, "_xquartz_tcp_pref", lambda: None)
+    monkeypatch.setattr(container_tools, "_brew_available", lambda: True)
+    monkeypatch.setattr(container_tools, "_xquartz_tcp_listening", lambda timeout=1.0: False)
+    assert container_tools._xquartz_status()["tcp_ok"] is False
+    monkeypatch.setattr(container_tools, "_xquartz_tcp_listening", lambda timeout=1.0: True)
+    assert container_tools._xquartz_status()["tcp_ok"] is True
+    monkeypatch.setattr(container_tools, "_xquartz_running", lambda: False)
+    assert container_tools._xquartz_status()["tcp_ok"] is None
+
+
+def test_xquartz_tcp_listening_uses_a_real_connect(monkeypatch):
+    import socket
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    addr = srv.getsockname()
+    try:
+        monkeypatch.setattr(container_tools, "_XQUARTZ_TCP", addr)
+        assert container_tools._xquartz_tcp_listening() is True
+    finally:
+        srv.close()
+    assert container_tools._xquartz_tcp_listening() is False
+
+
+class _XQ:
+    """A fake XQuartz: records the commands LanEx runs against it."""
+
+    def __init__(self, monkeypatch, *, installed=True, running=False, tcp=False,
+                 starts_listening=True, pref=None):
+        self.installed, self.running, self.tcp = installed, running, tcp
+        self.starts_listening, self.pref = starts_listening, pref
+        self.calls = []
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(container_tools, "_xquartz_installed", lambda: self.installed)
+        monkeypatch.setattr(container_tools, "_xquartz_running", lambda: self.running)
+        monkeypatch.setattr(container_tools, "_xquartz_tcp_listening",
+                            lambda timeout=1.0: self.running and self.tcp)
+        monkeypatch.setattr(container_tools, "_xquartz_tcp_pref", lambda: self.pref)
+        monkeypatch.setattr(container_tools, "_brew_available", lambda: True)
+        monkeypatch.setattr(container_tools.subprocess, "run", self.run)
+        monkeypatch.setattr(container_tools, "_wait",
+                            lambda cond, seconds, step=0.25: bool(cond()))
+
+    def run(self, argv, **kw):
+        self.calls.append(list(argv))
+        if argv[:2] == ["defaults", "write"]:
+            self.pref = True
+        elif argv[0].endswith("osascript"):
+            self.running = False
+        elif argv[0].endswith("open"):
+            self.running = True
+            # A start after the pref is written listens on TCP.
+            self.tcp = self.starts_listening and self.pref is True
+
+        class R:
+            returncode = 0
+            stdout = ""
+        return R()
+
+
+def test_ensure_xquartz_starts_a_stopped_xquartz_after_writing_the_pref(monkeypatch):
+    xq = _XQ(monkeypatch, running=False)
+    res = container_tools.ensure_xquartz()
+    assert res["ok"] is True and res["started"] is True and res["restarted"] is False
+    write = xq.calls.index(["defaults", "write", "org.xquartz.X11", "nolisten_tcp", "-bool", "false"])
+    start = xq.calls.index(["/usr/bin/open", "-a", "XQuartz"])
+    assert write < start  # no restart needed: the pref is read at start-up
+
+
+def test_ensure_xquartz_never_restarts_without_the_users_click(monkeypatch):
+    xq = _XQ(monkeypatch, running=True, tcp=False, pref=True)
+    res = container_tools.ensure_xquartz()
+    assert res["ok"] is False and res["action"] == "restart-xquartz"
+    assert not any(c[0].endswith("osascript") for c in xq.calls)
+    res = container_tools.ensure_xquartz(restart=True)
+    assert res["ok"] is True and res["restarted"] is True
+    assert any(c[0].endswith("osascript") for c in xq.calls)
+
+
+def test_ensure_xquartz_running_and_listening_does_nothing_else(monkeypatch):
+    xq = _XQ(monkeypatch, running=True, tcp=True, pref=True)
+    assert container_tools.ensure_xquartz() == {"ok": True}
+    assert not any(c[0].endswith(("open", "osascript")) for c in xq.calls)
+
+
+def test_ensure_xquartz_not_installed_offers_install(monkeypatch):
+    _XQ(monkeypatch, installed=False)
+    res = container_tools.ensure_xquartz()
+    assert res["ok"] is False and res["action"] == "install-xquartz" and res["can_install"]
+
+
+def test_ensure_xquartz_start_that_never_listens_says_what_to_do(monkeypatch):
+    _XQ(monkeypatch, running=False, starts_listening=False)
+    res = container_tools.ensure_xquartz(wait_s=1)
+    assert res["ok"] is False
+    assert "Allow connections from network clients" in res["error"]
+
+
+def test_ensure_xquartz_noop_off_macos(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert container_tools.ensure_xquartz() == {"ok": True}
+
+
+def test_open_in_container_tool_returns_the_restart_offer(monkeypatch, tmp_path):
+    _XQ(monkeypatch, running=True, tcp=False, pref=True)
+    monkeypatch.setattr(tools_mod, "resolve_engine", lambda: {"ready": True, "engine": "docker"})
+    monkeypatch.setattr(container_tools, "_image_present", lambda *a, **k: True)
+    res = container_tools.open_in_container_tool("klayout", design_dir=tmp_path, work_dir=tmp_path)
+    assert res["ok"] is False and res["need"] == "display"
+    assert res["action"] == "restart-xquartz"
+
+
+def test_install_xquartz_runs_the_cask_and_writes_the_pref(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    state = {"installed": False, "pref": 0}
+
+    def write_pref():
+        state["pref"] += 1
+        return True
+
+    monkeypatch.setattr(container_tools, "_xquartz_installed", lambda: state["installed"])
+    monkeypatch.setattr(container_tools, "write_xquartz_tcp_pref", write_pref)
+    monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
+    monkeypatch.setattr(installer, "_emit", lambda *a, **k: None)
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        state["installed"] = True
+        return {"rc": 0, "output": []}
+
+    monkeypatch.setattr(installer, "_run_argv", fake_run)
+    res = installer._install_xquartz_macos("xquartz")
+    assert res["ok"] is True
+    assert seen == [["/usr/local/bin/brew", "install", "--cask", "xquartz"]]
+    assert state["pref"] == 1
+
+
+def test_install_script_sets_up_xquartz_with_a_container_engine():
+    script = (Path(__file__).resolve().parents[2] / "scripts" / "install.sh").read_text(encoding="utf-8")
+    body = script[script.index("xquartz_stage() {"):]
+    body = body[:body.index("\n}\n")]
+    assert "brew install --cask xquartz" in body
+    assert "defaults write org.xquartz.X11 nolisten_tcp -bool false" in body
+    assert "die " not in body  # optional: a warning, never a failed install
+    engine = script[script.index("engine_stage() {"):]
+    engine = engine[:engine.index("\n}\n")]
+    assert "xquartz_stage" in engine
+
+
+# ----------------------------------------------------------------- GTKWave ----
+
+def _perl_launcher(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/usr/bin/perl\nuse Switch;\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _native_bin(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 64)  # Mach-O magic
+    path.chmod(0o755)
+    return path
+
+
+def test_gtkwave_legacy_launcher_is_recognised(tmp_path):
+    from lanex.controller import gtkwave_mac
+
+    assert gtkwave_mac.is_legacy_launcher(str(_perl_launcher(tmp_path / "a" / "gtkwave")))
+    assert not gtkwave_mac.is_legacy_launcher(str(_native_bin(tmp_path / "b" / "gtkwave")))
+    assert not gtkwave_mac.is_legacy_launcher(None)
+
+
+def test_gtkwave_resolve_prefers_formula_and_rejects_legacy(monkeypatch, tmp_path):
+    from lanex.controller import desktop, gtkwave_mac
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    legacy = _perl_launcher(tmp_path / "usr" / "local" / "bin" / "gtkwave")
+    formula = tmp_path / "opt" / "gtkwave"
+    monkeypatch.setattr(gtkwave_mac, "_path_hit", lambda: str(legacy))
+    monkeypatch.setattr(gtkwave_mac, "_formula_candidates", lambda: [str(formula)])
+    monkeypatch.setattr(gtkwave_mac, "_executable", lambda p: Path(p).is_file())
+    st = gtkwave_mac.status()
+    assert st["ready"] is False and st["legacy"] == str(legacy)
+    assert "brew install gtkwave" in st["message"] and "@INC" not in st["message"]
+    assert installer._verify_install("gtkwave") is False
+    _native_bin(formula)
+    assert gtkwave_mac.resolve() == str(formula)
+    # The shared check drives the installer's verify and the launch path.
+    assert installer._verify_install("gtkwave") is True
+    assert desktop._resolve_bin(desktop._TOOLS["gtkwave"]) == str(formula)
+
+
+def test_gtkwave_resolve_off_macos_is_the_plain_lookup(monkeypatch):
+    from lanex.controller import gtkwave_mac
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(gtkwave_mac, "_path_hit", lambda: "/usr/bin/gtkwave")
+    assert gtkwave_mac.resolve() == "/usr/bin/gtkwave"
+
+
+def test_gtkwave_install_links_over_the_legacy_launcher(monkeypatch, tmp_path):
+    from lanex.controller import gtkwave_mac
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    legacy = _perl_launcher(tmp_path / "bin" / "gtkwave")
+    formula = tmp_path / "opt" / "gtkwave"
+    monkeypatch.setattr(gtkwave_mac, "_formula_candidates", lambda: [str(formula)])
+    monkeypatch.setattr(gtkwave_mac, "_path_hit", lambda: str(legacy))
+    monkeypatch.setattr(gtkwave_mac, "_executable", lambda p: Path(p).is_file())
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        if argv[1] == "install":
+            _native_bin(formula)
+            return {"rc": 1, "output": ["Error: Could not symlink bin/gtkwave",
+                                        "Target /usr/local/bin/gtkwave already exists."]}
+        return {"rc": 0, "output": []}
+
+    st = gtkwave_mac.install_formula(run, "brew")
+    assert calls == [["brew", "install", "gtkwave"], ["brew", "link", "--overwrite", "gtkwave"]]
+    assert st["ready"] is True and st["path"] == str(formula)
+    assert legacy.exists()  # the user's old app is never deleted
+
+
+def test_gtkwave_install_routes_to_the_macos_path(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
+    monkeypatch.setattr(installer, "_install_gtkwave_macos", lambda key: {"ok": True, "via": key})
+    assert installer.install_tool("gtkwave") == {"ok": True, "via": "gtkwave"}
+
+
+def test_gtkwave_readiness_line_is_plain_words(monkeypatch):
+    from lanex.controller import gtkwave_mac, provisioning
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(gtkwave_mac, "status", lambda: {
+        "ready": False, "path": None, "legacy": "/usr/local/bin/gtkwave",
+        "message": gtkwave_mac.BROKEN_MESSAGE})
+    probe = provisioning._gtkwave_darwin_probe()
+    assert probe["ready"] is False
+    assert probe["missing"] == [gtkwave_mac.BROKEN_MESSAGE]
+    assert "brew install gtkwave" in gtkwave_mac.BROKEN_MESSAGE
+
+
+def test_gtkwave_tools_tab_row_uses_the_shared_check(monkeypatch):
+    from lanex.controller import gtkwave_mac
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(gtkwave_mac, "status", lambda: {
+        "ready": False, "path": None, "legacy": "/usr/local/bin/gtkwave",
+        "message": gtkwave_mac.BROKEN_MESSAGE})
+    # What the generic probe says about the Perl launcher: "installed", with an error.
+    info = {"installed": True, "path": "/usr/local/bin/gtkwave", "version": "",
+            "error": "exit code 2"}
+    out = tools_mod._gtkwave_darwin_info(info)
+    assert out["installed"] is False and out["error"] == gtkwave_mac.BROKEN_MESSAGE
+
+
+def test_install_script_checks_the_gtkwave_formula_not_the_path():
+    script = (Path(__file__).resolve().parents[2] / "scripts" / "install.sh").read_text(encoding="utf-8")
+    body = script[script.index("brew_stage() {"):]
+    body = body[:body.index("\n}\n")]
+    assert "command -v gtkwave >/dev/null 2>&1 || brew install gtkwave" not in body
+    assert "brew list --formula gtkwave" in body
+    assert "brew link --overwrite gtkwave" in body
 
 
 def test_x11_flags_podman_uses_containers_host_alias(monkeypatch):
@@ -822,3 +1102,17 @@ def test_engine_install_fails_open_when_version_unknown(monkeypatch):
                         lambda key: called.append(key) or {"ok": True})
     assert installer._install_engine_macos("docker")["ok"] is True
     assert called == ["docker"]
+
+
+def test_gtkwave_launch_explains_the_broken_old_app(monkeypatch, tmp_path):
+    from lanex.controller import desktop, gtkwave_mac
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(gtkwave_mac, "resolve", lambda: None)
+    monkeypatch.setattr(gtkwave_mac, "status", lambda: {
+        "ready": False, "path": None, "legacy": "/usr/local/bin/gtkwave",
+        "message": gtkwave_mac.BROKEN_MESSAGE})
+    dump = tmp_path / "sim.vcd"
+    dump.write_text("$end\n", encoding="utf-8")
+    res = desktop.open_in_tool("gtkwave", dump, use_tech=False)
+    assert res["ok"] is False and res["error"] == gtkwave_mac.BROKEN_MESSAGE

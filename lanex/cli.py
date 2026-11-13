@@ -81,6 +81,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="read-only machine-readable Windows-appliance readiness check")
     parser.add_argument("--setup-choices", metavar="JSON", default=None,
                         help="owner-state or choices JSON used with appliance setup commands")
+    parser.add_argument("--install-shortcut", action="store_true",
+                        help="create the desktop shortcut (macOS: ~/Applications/LanEx.app; "
+                             "Linux: an applications-menu entry) and exit")
+    parser.add_argument("--remove-shortcut", action="store_true",
+                        help="remove the desktop shortcut made by --install-shortcut and exit")
+    parser.add_argument("--from-shortcut", action="store_true",
+                        help=argparse.SUPPRESS)
     parser.add_argument("--verbose", action="store_true")
     # Not argparse's `action="version"`: that evaluates its version string while
     # the parser is being built, and get_version() imports librelane — a cost
@@ -94,6 +101,29 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         sys.stdout.write(f"lanex {get_version_line()}\n")
         return 0
+
+    if args.install_shortcut or args.remove_shortcut:
+        from .controller import shortcut
+
+        res = shortcut.install() if args.install_shortcut else shortcut.remove()
+        if args.install_shortcut:
+            sys.stdout.write((res.get("message") or "") + "\n")
+        else:
+            for p in res.get("paths") or []:
+                sys.stdout.write(f"removed {p}\n")
+        sys.stdout.write(json.dumps({"shortcut": res}) + "\n")
+        return 0 if res.get("ok") else 1
+
+    if args.from_shortcut:
+        # No terminal: output goes to the log, and an already running LanEx
+        # gets a window instead of a second server.
+        _redirect_to_shortcut_log()
+        running = _running_instance_url()
+        if running:
+            sys.stdout.write(f"LanEx is already running at {running}; opening its window\n")
+            sys.stdout.flush()
+            _lazy_open(running, False)
+            return 0
 
     _setup_logging(args.verbose)
 
@@ -184,6 +214,42 @@ def main(argv: Optional[List[str]] = None) -> int:
     finally:
         _clear_server_record()
     return 0
+
+
+def _redirect_to_shortcut_log() -> None:
+    """Send stdout/stderr to ~/.lanex/logs/lanex-app.log (best effort)."""
+    try:
+        from .controller import shortcut
+
+        path = shortcut.log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        f = open(path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115 - process lifetime
+        os.dup2(f.fileno(), 1)
+        os.dup2(f.fileno(), 2)
+        sys.stdout = f
+        sys.stderr = f
+    except Exception:
+        pass
+
+
+def _running_instance_url(timeout: float = 2.0) -> Optional[str]:
+    """URL of a LanEx already serving on this machine (from server.json, health
+    checked), or None."""
+    try:
+        record = json.loads(_server_record_path().read_text(encoding="utf-8"))
+        url = str(record.get("url") or "")
+    except Exception:
+        return None
+    if not url.startswith(("http://127.0.0.1:", "http://localhost:", "http://[::1]:")):
+        return None
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/api/health", timeout=timeout) as r:
+            body = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        return url if body.get("service") == "lanex" else None
+    except Exception:
+        return None
 
 
 def _leave_unwritable_cwd() -> None:

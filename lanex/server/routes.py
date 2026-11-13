@@ -2360,6 +2360,17 @@ def h_container_tool_open(handler: Any) -> None:
         tool, design_dir=base_dir, work_dir=base_dir), 200)
 
 
+def h_xquartz_restart(handler: Any) -> None:
+    """macOS: restart XQuartz so it accepts container viewers (POST).
+
+    Only on the user's click: a restart closes the X11 windows open now."""
+    from ..controller import container_tools
+    if getattr(handler, "command", "POST") != "POST":
+        _respond(handler, {"ok": False, "error": "use POST"}, 405)
+        return
+    _respond(handler, container_tools.ensure_xquartz(restart=True), 200)
+
+
 def _final_odb(run_dir: "Path") -> Optional["Path"]:
     """The run's final OpenDB database (.odb), for OpenROAD GUI."""
     final = run_dir / "final"
@@ -3035,8 +3046,10 @@ def h_native_pick(handler: Any) -> None:
     while p is not None and not p.is_dir() and p.parent != p:
         p = p.parent
     start = str(p) if p is not None and p.is_dir() else start
+    exts = body.get("exts")
     _respond(handler, native_pick.pick(body.get("mode") or "folder",
-                                       str(body.get("title") or ""), start))
+                                       str(body.get("title") or ""), start,
+                                       exts if isinstance(exts, list) else None))
 
 
 def h_project_forget(handler: Any) -> None:
@@ -4199,6 +4212,25 @@ def h_celllib_layout(handler: Any) -> None:
                                           _query_param(handler.path, "cell")))
 
 
+def h_celllib_view(handler: Any) -> None:
+    """Open the in-app layout viewer on one standard cell (the library's GDS
+    with that cell as top). The reply is /api/layout/open's: render, probe and
+    mesh then work on its ``sid``."""
+    from ..controller import layoutview
+    p = handler.path
+    _respond(handler, layoutview.open_cell_session(_query_param(p, "pdk"), _query_param(p, "scl"),
+                                                   _query_param(p, "cell")))
+
+
+def h_celllib_view_close(handler: Any) -> None:
+    """Forget a cell viewer session the page has moved away from. Only cell
+    sessions: a run's layout belongs to the Layout tab."""
+    from ..controller import layoutview
+    sid = str((getattr(handler, "_body", {}) or {}).get("sid") or "")
+    closed = sid.startswith(layoutview._CELL_PREFIX) and layoutview.close_session(sid)
+    _respond(handler, {"ok": True, "closed": bool(closed)})
+
+
 def h_macro_catalog(handler: Any) -> None:
     from ..controller import macrolib
     _respond(handler, macrolib.catalog(_query_param(handler.path, "pdk"),
@@ -4687,6 +4719,8 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/ide/open-wave", h_ide_open_wave),
     ("/api/celllib/cell", h_celllib_cell),
     ("/api/celllib/layout", h_celllib_layout),
+    ("/api/celllib/view", h_celllib_view),
+    ("/api/celllib/view/close", h_celllib_view_close),
     ("/api/celllib", h_celllib),
     ("/api/macros/catalog", h_macro_catalog),
     ("/api/macros/projects", h_macro_projects),
@@ -4736,6 +4770,7 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/desktop-tools", h_desktop_tools),
     ("/api/container-tools", h_container_tools),
     ("/api/container-tools/open", h_container_tool_open),
+    ("/api/xquartz/restart", h_xquartz_restart),
     ("/api/open-in-tool", h_open_in_tool),
     ("/api/layout/sources", h_layout_sources),
     ("/api/layout/open", h_layout_open),

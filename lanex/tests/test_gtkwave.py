@@ -50,7 +50,8 @@ def test_gtkwave_nix_strategy():
 
 def test_gtkwave_verify_and_uninstall_wired():
     src = Path(installer.__file__).read_text()
-    assert '"gtkwave": lambda: _check_cmd("gtkwave")' in src
+    # Verified through gtkwave_mac: on macOS the legacy cask launcher never counts.
+    assert '"gtkwave": _gtkwave_usable' in src
     assert '"gtkwave": ["sudo", apt, "remove", "-y", "gtkwave"]' in src
     assert '"gtkwave": ["brew", "uninstall", "gtkwave"]' in src
 

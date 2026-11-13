@@ -415,6 +415,11 @@ export class LayoutCanvas {
   }
 
   destroy() {
+    // A queued render must not ask for a session that has gone with the view.
+    clearTimeout(this.timer);
+    clearTimeout(this._refineT);
+    this.bbox = null;
+    this.seq++;
     this._ro.disconnect();
     window.removeEventListener("g:zoom", this._onZoom);
     this.base.remove();

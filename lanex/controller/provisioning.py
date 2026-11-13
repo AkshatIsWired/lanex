@@ -215,6 +215,22 @@ def _binary_probe(name: str, args: Iterable[str] = ("--version",)) -> Dict[str, 
     return result
 
 
+def _gtkwave_darwin_probe() -> Dict[str, Any]:
+    """GTKWave on macOS: the usable binary (gtkwave_mac), never the legacy
+    cask's Perl launcher; a failure is one plain sentence, not Perl's @INC."""
+    from . import gtkwave_mac
+
+    st = gtkwave_mac.status()
+    if not st["ready"]:
+        return {"ready": False, "missing": [st["message"]], "legacy": st.get("legacy")}
+    result = _command_probe([st["path"], "--version"])
+    result["path"] = st["path"]
+    if not result.get("ready"):
+        result["missing"] = [f"GTKWave at {st['path']} did not start. "
+                             f"Reinstall it in Terminal with:  {gtkwave_mac.FIX_COMMAND}"]
+    return result
+
+
 def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dict[str, Any]:
     """Read-only report for every selected appliance postcondition."""
     from . import installer, pdk, tools
@@ -254,6 +270,8 @@ def readiness_report(plan: Mapping[str, Any], *, functional: bool = True) -> Dic
                 "path": path,
                 "missing": [] if path else ["gds3d"],
             }
+        elif key == "gtkwave" and sys.platform == "darwin":
+            probe = _gtkwave_darwin_probe()
         else:
             probe = _binary_probe(name, binary_args.get(key, ("--version",)))
         if key == "gds3d" and probe.get("ready") and host and sys.platform == "darwin":

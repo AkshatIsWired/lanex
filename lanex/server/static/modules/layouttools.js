@@ -30,10 +30,38 @@ export async function toolRoutes() {
     if (inCont && displayOk) out[key] = { where: "container", title: "Opens in the version-matched LibreLane container" };
     else if (hostOk) out[key] = { where: "host", title: "Opens your installed " + LABEL[key] };
     // Not disabled: the remedy (the exact WSLg / XQuartz fix) lives in display.reason.
-    else if (inCont) out[key] = { where: "nodisplay", title: (container.display && container.display.reason) || "no display reachable" };
+    else if (inCont) out[key] = { where: "nodisplay", title: (container.display && container.display.reason) || "no display reachable",
+      display: container.display || {} };
     else out[key] = { where: "install", title: LABEL[key] + " is not installed; set it up in the Tools tab" };
   }
   return out;
+}
+
+// A display problem with a one-click fix (macOS XQuartz): show it with the
+// button that fixes it, then open the viewer again. `d` is {reason|error,
+// action, can_install, command} from /api/container-tools or a launch result.
+export function displayToast(d, label, retry) {
+  const text = d.reason || d.error || "No display is reachable for windows from the container.";
+  if (d.action === "restart-xquartz") {
+    toast.show(text, "warn", 0, { label: "Restart XQuartz and open", run: async () => {
+      toast.show("Restarting XQuartz…", "info");
+      let res = null;
+      try { res = await api.xquartzRestart(); } catch (ex) { res = { error: ex.message || String(ex) }; }
+      if (res && res.ok) retry();
+      else toast.show((res && res.error) || "XQuartz did not restart.", "warn", 0);
+    } });
+    return;
+  }
+  if (d.action === "install-xquartz" && d.can_install) {
+    toast.show(text, "warn", 0, { label: "Install XQuartz", run: async () => {
+      try { await api.installTool("xquartz"); } catch (_e) {}
+      toast.show("Installing XQuartz. macOS asks for your password in its own dialog. " +
+        "Progress and any error are in the Tools tab log; open " + label + " again when it finishes.", "info", 12000);
+    } });
+    return;
+  }
+  // Sticky: the remedy is a command the user must be able to read and copy.
+  toast.show(text, "warn", 0);
 }
 
 // Open one run in one viewer. `path` (run-relative) opens a specific file, e.g.
@@ -47,9 +75,9 @@ export async function launchTool(tool, tag, { path } = {}) {
     import("./nav.js").then((m) => m.go("tools"));
     return;
   }
+  const retry = () => launchTool(tool, tag, { path });
   if (r.where === "nodisplay") {
-    // Sticky: the remedy is a multi-step command the user must be able to read.
-    toast.show("No display is reachable for windows from the container. " + (r.title || ""), "warn", 0);
+    displayToast({ ...(r.display || {}), reason: r.title }, label, retry);
     return;
   }
   try {
@@ -64,7 +92,8 @@ export async function launchTool(tool, tag, { path } = {}) {
       // Provenance: tech files resolved from a different PDK root than the run's.
       if (res && res.ok && res.tech_note) toast.show(res.tech_note, "warn");
     }
-    if (!(res && res.ok)) toast.show((res && (res.error || res.need)) || ("Couldn't open " + label), "warn");
+    if (res && !res.ok && res.need === "display" && res.action) displayToast(res, label, retry);
+    else if (!(res && res.ok)) toast.show((res && (res.error || res.need)) || ("Couldn't open " + label), "warn");
   } catch (ex) {
     toast.show("Couldn't open " + label + ": " + (ex.message || ex), "error");
   }

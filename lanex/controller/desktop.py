@@ -40,11 +40,10 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
     # silently reports "not installed".
     "gds3d":   {"label": "GDS3D",   "kind": "3D", "bin": "gds3d", "alts": ["GDS3D"]},
     "magic":   {"label": "Magic",   "kind": "2D", "bin": "magic", "alts": []},
-    # GTKWave opens the RTL IDE's simulation dumps (VCD/FST), not layouts. On
-    # macOS ONLY the Homebrew formula binary counts — the legacy cask's
-    # gtkwave.app is broken on modern macOS (Perl Switch.pm) and is deliberately
-    # not resolved here, so a stale cask install reads as "not installed" and
-    # routes the user to the working `brew install gtkwave`.
+    # GTKWave opens the RTL IDE's simulation dumps (VCD/FST), not layouts. It
+    # is resolved through gtkwave_mac: on macOS the legacy cask's Perl launcher
+    # (broken on modern macOS, needs Switch.pm) never counts as installed, and
+    # the Homebrew formula's binary is used even when its link is shadowed.
     "gtkwave": {"label": "GTKWave", "kind": "wave", "bin": "gtkwave", "alts": []},
     # NOTE: OpenROAD's GUI loads an ODB via a script, not a GDS on argv, so we do
     # NOT offer an "open this GDS in OpenROAD" launch — it would just open an
@@ -61,6 +60,9 @@ def _resolve_bin(spec: Dict[str, Any]) -> Optional[str]:
     ``$PATH`` — e.g. the GDS3D source build → ``~/.local/bin/gds3d`` — is still
     found and reported installed."""
     from . import platform_env
+    if spec["bin"] == "gtkwave":
+        from . import gtkwave_mac
+        return gtkwave_mac.resolve()
     return platform_env.resolve_user_bin(spec["bin"], spec.get("alts", []))
 
 
@@ -407,6 +409,9 @@ def open_in_tool(tool: str, file_path: str | Path, *,
     binary = _resolve_bin(spec)
     if not binary:
         bin_name = spec["bin"]
+        if tool == "gtkwave" and sys.platform == "darwin":
+            from . import gtkwave_mac
+            return {"ok": False, "need": bin_name, "error": gtkwave_mac.status()["message"]}
         return {"ok": False, "need": bin_name,
                 "error": f"{spec['label']} ({bin_name}) isn't installed on this machine. "
                          f"Install it from the Tools tab, then retry. This only works when the "

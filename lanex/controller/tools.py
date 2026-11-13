@@ -1078,9 +1078,25 @@ def warm_check_tools() -> None:
         _background("tools", lambda: check_tools())
 
 
+def _gtkwave_darwin_info(info: Dict[str, Any]) -> Dict[str, Any]:
+    """The legacy cask's Perl launcher answers --version with a Perl error, which
+    the generic probe counts as installed. Use the shared usable-gtkwave check."""
+    from . import gtkwave_mac
+
+    st = gtkwave_mac.status()
+    if not st["ready"]:
+        return {"installed": False, "path": "", "version": "", "error": st["message"]}
+    if info.get("installed") and info.get("path") == st["path"] and not info.get("error"):
+        return info
+    return {**info, "installed": True, "path": st["path"], "error": "",
+            "version": info.get("version", "") if info.get("path") == st["path"] else ""}
+
+
 def _tool_row(t: Dict[str, Any]) -> Dict[str, Any]:
     info = _probe(t["binary"], t["version_flag"])
     info = _module_probe_fallback(t["key"], info)
+    if t["key"] == "gtkwave" and sys.platform == "darwin":
+        info = _gtkwave_darwin_info(info)
     return {
         "key": t["key"],
         "label": t["label"],

@@ -154,6 +154,8 @@ export const api = {
     _fetch("/api/reveal", { method: "POST", body: JSON.stringify({ tag, path }) }),
   desktopTools: () => _fetch("/api/desktop-tools"),
   containerTools: () => _fetch("/api/container-tools"),
+  // macOS: restart XQuartz so it accepts container viewers (closes its windows).
+  xquartzRestart: () => _fetch("/api/xquartz/restart", { method: "POST", body: "{}" }),
   containerToolOpen: (tool) =>
     _fetch("/api/container-tools/open", { method: "POST", body: JSON.stringify({ tool }) }),
   openInTool: (tool, tag, path, useTech, location) =>
@@ -277,8 +279,8 @@ export const api = {
     _fetch("/api/project/forget", { method: "POST", body: JSON.stringify({ design_dir: designDir }) }),
   projectDelete: (designDir, confirmName) =>
     _fetch("/api/project/delete", { method: "POST", body: JSON.stringify({ design_dir: designDir, confirm_name: confirmName }) }),
-  nativePick: ({ mode, title, start }) =>
-    _fetch("/api/fs/native-pick", { method: "POST", timeout: 0, body: JSON.stringify({ mode, title, start }) }),
+  nativePick: ({ mode, title, start, exts }) =>
+    _fetch("/api/fs/native-pick", { method: "POST", timeout: 0, body: JSON.stringify({ mode, title, start, exts }) }),
   projectNew: (payload) =>
     _fetch("/api/project/new", { method: "POST", body: JSON.stringify(payload) }),
   runExportUrl: (tag, fmt) =>
@@ -341,6 +343,10 @@ export const api = {
     _fetch("/api/celllib/cell?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || "")),
   cellLayout: (pdk, scl, cell) =>
     _fetch("/api/celllib/layout?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || "")),
+  cellView: (pdk, scl, cell) =>
+    _fetch("/api/celllib/view?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || ""), { timeout: 120000 }),
+  cellViewClose: (sid) =>
+    _fetch("/api/celllib/view/close", { method: "POST", body: JSON.stringify({ sid }) }),
   macroCatalog: (pdk, scl) =>
     _fetch("/api/macros/catalog?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "")),
   macroProjects: (designDir) =>

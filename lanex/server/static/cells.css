@@ -209,6 +209,15 @@ body.theme-light #sec-cells {
 .cl-lay { border-radius: var(--r-sm); background: #0c1017; border: 1px solid var(--border); padding: 8px; }
 .cl-lay svg { display: block; width: 100%; height: 280px; }
 @container cl-detail (min-width: 1420px) or ((min-width: 700px) and (max-width: 940px)) { .cl-lay svg { height: 360px; } }
+/* the Layout card's Drawing / Viewer / 3D switch and the live views */
+.cl-card-h .cl-lay-mode { margin-left: auto; align-self: center; }
+.cl-lv-frame { border-radius: var(--r-sm); border: 1px solid var(--border); overflow: hidden; background: #0c1017; }
+.cl-lv, .cl-lv-skel { height: 296px; }
+.cl-lv-skel { border-radius: 0; }
+@container cl-detail (min-width: 1420px) or ((min-width: 700px) and (max-width: 940px)) { .cl-lv, .cl-lv-skel { height: 376px; } }
+.cl-lv-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; }
+.cl-lv-bar .cl-dims { margin: 0; flex: 1 1 220px; }
+.cl-lv-k { font-size: 12.5px; color: var(--text-muted); }
 .cl-ly { fill: var(--f); fill-opacity: 0.5; stroke: var(--s); stroke-width: 0.012; vector-effect: non-scaling-stroke; stroke-opacity: 0.9; transition: opacity var(--dur-1); }
 .cl-ly.is-blanket { fill-opacity: 0.07; stroke-dasharray: 3 3; }
 .cl-ly.is-off { opacity: 0; }

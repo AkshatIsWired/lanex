@@ -294,11 +294,30 @@ brew_stage() {
             brew install python@3.12 || brew install python || warn "brew python install failed."
         fi
         command -v pipx >/dev/null 2>&1 || brew install pipx || warn "brew pipx failed — will fall back to pip/venv."
-        # gtkwave: homebrew-core gained the FORMULA in 2024 (the old cask was
-        # broken on modern macOS and removed). An old brew needs `brew update`.
-        command -v gtkwave >/dev/null 2>&1 || brew install gtkwave \
-            || warn "gtkwave failed to install — run 'brew update && brew install gtkwave' later (the RTL IDE's 'Open in GTKWave' needs it)."
+        # gtkwave: homebrew-core gained the FORMULA in 2024. The old cask's
+        # launcher is a Perl script that needs Switch.pm, gone from modern
+        # macOS, so a `gtkwave` on PATH does not mean a working one: the
+        # formula is what counts (same rule as lanex/controller/gtkwave_mac.py).
+        if ! brew list --formula gtkwave >/dev/null 2>&1; then
+            # brew exits non-zero when only its link step lost to the old
+            # cask's file; the formula is installed then, and is linked below.
+            brew install gtkwave || brew list --formula gtkwave >/dev/null 2>&1 \
+                || warn "gtkwave failed to install — run 'brew update && brew install gtkwave' later (the RTL IDE's 'Open in GTKWave' needs it)."
+        fi
+        if gtkwave_is_legacy; then
+            # The old cask's link holds bin/gtkwave: replace only that link,
+            # the old gtkwave.app stays where it is.
+            note "The gtkwave on PATH is the old GTKWave app, which no longer runs on this macOS; linking the Homebrew one in its place."
+            brew link --overwrite gtkwave \
+                || warn "Could not link the Homebrew gtkwave over the old one. LanEx still uses the Homebrew copy; for your own shell run: brew link --overwrite gtkwave"
+        fi
     fi
+}
+
+gtkwave_is_legacy() {  # the legacy cask's Perl launcher is first on PATH
+    local p
+    p="$(command -v gtkwave 2>/dev/null)" || return 1
+    head -n 1 "$p" 2>/dev/null | grep -q perl
 }
 
 system_deps() {
@@ -953,11 +972,39 @@ docker_reachable() {
         && sg docker -c 'docker info' >/dev/null 2>&1
 }
 
+XQUARTZ_HINT="the viewers that open in their own window (KLayout, Magic, OpenROAD, Netgen) need it; the Layout tab works without it"
+
+xquartz_stage() {  # macOS: the X server container viewers draw into; optional
+    say "XQuartz (windows for the viewers in the container)"
+    if [ -d /Applications/Utilities/XQuartz.app ] || [ -x /opt/X11/bin/Xquartz ]; then
+        note "XQuartz is already installed."
+    elif [ -n "${LX_STEPLOG:-}" ] && ! sudo -n true 2>/dev/null; then
+        # A wizard step runs behind the screen with no way to type a password:
+        # without a live sudo ticket the pkg installer would wait on a prompt
+        # nobody can see. LanEx offers the install again when a viewer opens.
+        warn "XQuartz was not installed because this step cannot ask for your password; ${XQUARTZ_HINT}. LanEx offers to install it when you open a viewer, or run:  brew install --cask xquartz"
+    elif command -v brew >/dev/null 2>&1; then
+        note "Installing XQuartz with Homebrew. Its installer needs your macOS password."
+        brew install --cask xquartz \
+            || warn "XQuartz did not install, so ${XQUARTZ_HINT}. Install it later with:  brew install --cask xquartz  (Homebrew's error is in the install log)."
+    else
+        warn "Homebrew is not installed, so XQuartz was not installed; ${XQUARTZ_HINT}. Get it from https://www.xquartz.org"
+    fi
+    # Accept container clients over TCP from XQuartz's first start, so it never
+    # needs a restart for this. LanEx starts XQuartz itself when a viewer opens.
+    defaults write org.xquartz.X11 nolisten_tcp -bool false 2>/dev/null \
+        || warn "Could not set XQuartz to accept container windows. Run:  defaults write org.xquartz.X11 nolisten_tcp -bool false"
+    return 0
+}
+
 engine_stage() {
     local eng="$CH_ENGINE" pkg
     [ "$eng" = "none" ] && return 0
     if [ "$OS" = "macos" ]; then
         note "macOS: LanEx installs ${eng} itself in the next step (Homebrew / the vendor's app)."
+        # XQuartz runs a pkg installer as root, so it goes in here, while this
+        # script still has the terminal (and the sudo ticket) for the password.
+        xquartz_stage
         return 0
     fi
     say "Container engine (${eng})"
@@ -1072,7 +1119,7 @@ for f in rep.get("installFailures") or []:
     why = r.get("guidance") or r.get("reason") or r.get("error") or ("cancelled" if f.get("cancelled") else "failed")
     comp = str(f.get("component"))
     seen.add(comp)
-    bad.append("%s: %s" % (comp, str(why).strip().splitlines()[0][:300]))
+    bad.append("%s: %s" % (comp, str(why).strip().splitlines()[0][:700]))
 for name, c in (rep.get("checks") or {}).items():
     # The Windows appliance also promises systemd and exact Python pins;
     # on an ordinary machine those are not this installer's business.
@@ -1081,7 +1128,7 @@ for name, c in (rep.get("checks") or {}).items():
     miss = c.get("missing") or c.get("detail") or ""
     if isinstance(miss, list):
         miss = ", ".join(str(x) for x in miss)
-    bad.append(("%s: not ready %s" % (name, str(miss).strip()[:200])).strip())
+    bad.append(("%s: not ready %s" % (name, str(miss).strip()[:400])).strip())
 print("\n".join(bad[:8]))
 sys.exit(1 if bad else 0)
 EOFPY
@@ -1110,7 +1157,8 @@ finalize_stage() {
     die "LanEx is installed, but some components are not ready:
 $(printf '%s\n' "$problems" | sed 's/^/   - /')
    Re-run the same command to retry them (finished parts are kept),
-   or add them later in LanEx -> Tools. (finalizer exit code ${rc})"
+   or add them later in LanEx -> Tools. (finalizer exit code ${rc})
+   Full component log: ${out}"
 }
 
 stage_components() {  # the plain-output path (LANEX_PROFILE / --profile)
@@ -2457,6 +2505,21 @@ run_row() {  # key function [cur-tag]
 }
 LX_FAILROW=""
 
+SHORTCUT_MSG=""
+shortcut_stage() {  # app shortcut (LanEx.app / .desktop) -> SHORTCUT_MSG; never fails the install
+    SHORTCUT_MSG=""
+    [ "${LANEX_NO_SHORTCUT:-0}" = "1" ] && return 0
+    [ "$WSL" = "1" ] && return 0
+    [ -n "$LAUNCHER" ] && [ -x "$LAUNCHER" ] || return 0
+    local out
+    out="$("$LAUNCHER" --install-shortcut 2>&1 < /dev/null)" || {
+        SHORTCUT_MSG="No app shortcut was made: $(printf '%s\n' "$out" | head -n 1). LanEx still starts with the lanex command."
+        return 0
+    }
+    SHORTCUT_MSG="$(printf '%s\n' "$out" | head -n 1)"
+    return 0
+}
+
 stage_final() {  # the finalizer covers gds3d, image, PDKs and the last check
     finalize_stage
 }
@@ -2578,6 +2641,13 @@ ui_done() {
     OB+=("${C_DIM}Took${R}          $took" "${C_DIM}Log${R}           $lg" "")
     out_box "$w" "${C_OK}${B}${G_OK} LanEx is ready${R}"
     printf '\n' >&4
+    shortcut_stage >> "$LX_LOG" 2>&1
+    if [ -n "$SHORTCUT_MSG" ]; then
+        printf 'shortcut: %s\n' "$SHORTCUT_MSG" >> "$LX_LOG" 2>/dev/null
+        ui_wrap "$SHORTCUT_MSG" $(( w - 4 ))
+        printf '  %s%s%s %s\n' "$C_CYAN" "$G_INFO" "$R" "${WRAP[0]}" >&4
+        for (( i = 1; i < ${#WRAP[@]}; i++ )); do printf '    %s\n' "${WRAP[$i]}" >&4; done
+    fi
     if [ "$DOCKER_GROUP_ADDED" = 1 ]; then
         ui_wrap "You were added to the docker group. LanEx uses it right away; for the docker command in your own shell, open a new terminal (or log out and in)." $(( w - 4 ))
         printf '  %s%s%s %s\n' "$C_CYAN" "$G_INFO" "$R" "${WRAP[0]}" >&4
@@ -2753,6 +2823,8 @@ main() {
         gds3d_stage
     fi
     wsl_notes
+    shortcut_stage
+    [ -n "$SHORTCUT_MSG" ] && note "$SHORTCUT_MSG"
     say "Done — launch the cockpit with:  lanex"
     note "Re-running this installer later upgrades LanEx in place."
 }

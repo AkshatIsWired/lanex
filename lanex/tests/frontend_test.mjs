@@ -191,8 +191,16 @@ check("layouttools: 'no display' still answers a click with the remedy", () => {
   const src = readFileSync(resolve(MOD, "layouttools.js"), "utf8");
   assert.match(src, /where: "nodisplay", title: \(container\.display && container\.display\.reason\)/,
     "nodisplay route must carry the display remedy");
-  assert.match(src, /r\.where === "nodisplay"[\s\S]{0,300}toast\.show\([^;]*r\.title[^;]*"warn", 0\)/,
-    "nodisplay click must show the remedy in a sticky toast");
+  assert.match(src, /r\.where === "nodisplay"[\s\S]{0,300}displayToast\(\{[^;]*reason: r\.title/,
+    "nodisplay click must hand the remedy to displayToast");
+  // Every displayToast branch is sticky; the XQuartz ones carry a fix button.
+  const fn = src.slice(src.indexOf("export function displayToast"), src.indexOf("// Open one run in one viewer"));
+  assert.equal((fn.match(/toast\.show\(text, "warn", 0/g) || []).length, 3,
+    "each display remedy must be a sticky toast");
+  assert.match(fn, /"restart-xquartz"[\s\S]*label: "Restart XQuartz and open"[\s\S]*api\.xquartzRestart\(\)/,
+    "a running XQuartz without TCP must offer the one-click restart");
+  assert.match(fn, /"install-xquartz" && d\.can_install[\s\S]*api\.installTool\("xquartz"\)/,
+    "a missing XQuartz must offer the one-click install when Homebrew can do it");
   const page = readFileSync(resolve(MOD, "layout.js"), "utf8");
   const desk = page.slice(page.indexOf("async function renderDesk"), page.indexOf("function paintOpenMain"));
   assert.ok(desk.length > 0 && !/disabled/.test(desk), "desktop viewer buttons must never be disabled");

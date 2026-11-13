@@ -844,6 +844,17 @@ export class Layout3D {
     if (this._ro) this._ro.disconnect();
     if (this._onZoom) window.removeEventListener("g:zoom", this._onZoom);
     if (this._onVis) document.removeEventListener("visibilitychange", this._onVis);
+    // Browsers allow only a few live WebGL contexts per page: give this one
+    // back now instead of waiting for garbage collection.
+    if (this._raf) { cancelAnimationFrame(this._raf); this._raf = 0; }
+    this.ok = false;
+    if (this.gl) {
+      for (const L of this.layers) { this.gl.deleteBuffer(L.vbo); this.gl.deleteBuffer(L.lbo); }
+      this.layers = [];
+      const lose = this.gl.getExtension("WEBGL_lose_context");
+      if (lose) lose.loseContext();
+      this.gl = null;
+    }
     this.cv.remove();
   }
 }

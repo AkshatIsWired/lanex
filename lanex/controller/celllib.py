@@ -1494,6 +1494,39 @@ def _lyp(pdk: str) -> List[Dict[str, Any]]:
     return _cached("lyp", str(path), [path], build)
 
 
+# A GDS structure name as PDK libraries spell them; never a path.
+_CELL_NAME_RX = re.compile(r"^[A-Za-z0-9_$][A-Za-z0-9_$.\-\[\]]{0,199}$")
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def cell_gds(pdk: str, scl: str, cell: str) -> Tuple[Optional[Path], str]:
+    """The SCL GDS file that holds *cell* (the library's one GDS, or the
+    per-cell ``<cell>.gds`` of libraries split that way), and an empty string;
+    or None and the reason in plain words. The PDK, library and cell names
+    come from a request, so the file is only ever looked up inside the
+    installed PDK and must resolve inside it."""
+    s = scl_dir(pdk, scl)
+    if s is None:
+        return None, "this PDK or library is not installed"
+    if not cell or not _CELL_NAME_RX.match(cell):
+        return None, "that is not a valid cell name"
+    files = sorted((s / "gds").glob("*.gds")) if (s / "gds").is_dir() else []
+    if not files:
+        return None, "this library ships no GDS"
+    gp = next((f for f in files if f.stem == cell), files[0])
+    root = pdk_dir(pdk)
+    if root is None or not _within(gp, root):
+        return None, "the library's GDS lies outside the PDK folder"
+    return gp, ""
+
+
 def cell_layout(pdk: str, scl: str, cell: str, gds_path: Optional[str] = None,
                 max_polys: int = 6000) -> Dict[str, Any]:
     """Polygons of *cell* by layer, in microns, ready to draw. Uses the SCL's GDS
@@ -1502,16 +1535,10 @@ def cell_layout(pdk: str, scl: str, cell: str, gds_path: Optional[str] = None,
         if gds_path:
             gp = Path(gds_path)
         else:
-            s = scl_dir(pdk, scl)
-            files = sorted((s / "gds").glob("*.gds")) if s and (s / "gds").is_dir() else []
-            if not files:
-                return {"ok": False, "error": "this library ships no GDS"}
-            gp = files[0]
-            # libraries split per cell: <cell>.gds
-            for f in files:
-                if f.stem == cell:
-                    gp = f
-                    break
+            found, err = cell_gds(pdk, scl, cell)
+            if found is None:
+                return {"ok": False, "error": err}
+            gp = found
         idx = _gds_index(gp)
         if cell not in idx["spans"]:
             return {"ok": False, "error": f"{cell} is not in {gp.name}"}

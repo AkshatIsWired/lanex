@@ -1255,7 +1255,10 @@ function wireOpen(b) {
     try {
       const r = await api.containerToolOpen(key);
       if (r && r.ok) toast.show(r.hint || (key + " opening from the container image… (first window can take a few seconds)"), "success");
-      else toast.show((r && r.error) || (key + " could not be launched"), r && r.need === "image" ? "warn" : "error");
+      else if (r && r.need === "display" && r.action) {
+        const { displayToast } = await import("./layouttools.js");
+        displayToast(r, key, () => b.click());
+      } else toast.show((r && r.error) || (key + " could not be launched"), r && r.need === "image" ? "warn" : "error");
     } catch (ex) {
       toast.show(key + " launch error: " + (ex.message || ex), "error");
     }

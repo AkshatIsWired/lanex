@@ -20,6 +20,7 @@ import { toast } from "./toast.js";
 import { icon } from "./icons.js";
 import { wireJump } from "./jumpnav.js";
 import * as M from "./cells-model.js";
+import * as CV from "./cells-view.js";
 import * as runCtx from "./context.js";
 import { localeNum } from "./intlcache.js";
 import { loadingStart, skel } from "./loading.js";
@@ -36,6 +37,7 @@ const S = {
   detail: new Map(),      // cell -> /api/celllib/cell
   layout: new Map(),      // cell -> /api/celllib/layout
   hidden: new Set(),      // layout layer keys switched off
+  lmode: "draw",          // Layout card: "draw" (quick drawing), "view" (KLayout viewer) or "3d"
   token: 0,
   view: Object.assign({ q: "", cat: "", used: false, hideEx: false, sort: "name" }, safeStorage.getJSON(LS, {}) || {}),
 };
@@ -147,13 +149,19 @@ function wire(sec) {
   });
   document.addEventListener("g:active_design_changed", () => { S.lib = null; S.sel = null; });
   document.addEventListener("g:tab_activated", (e) => {
-    if (e.detail && e.detail.tab === "cells" && S.stale) { S.stale = false; S.lib = null; }
+    const tab = e.detail && e.detail.tab;
+    // A live layout view holds a server session and maybe a WebGL context:
+    // close it when the page is left, open it again on the way back.
+    if (tab !== "cells") { CV.teardown(); S.lvAway = true; return; }
+    if (S.stale) { S.stale = false; S.lib = null; }
+    if (S.lvAway) { S.lvAway = false; const lc = document.getElementById("cl-c-layout"); if (lc && S.lmode !== "draw") applyLayoutMode(lc); }
   });
 }
 
 // ---------------------------------------------------------------- load -----
 async function load(pdk, scl, wantCell, { keepScroll = false } = {}) {
   const my = ++S.token;
+  CV.teardown();
   S.pdk = pdk; S.scl = scl; S.dd = state.designDir || "";
   const host = document.getElementById("cl-lib");
   // The first library read gets the page skeleton after 300 ms; switching library keeps its own line.
@@ -476,6 +484,7 @@ async function paintDetail(name) {
   if (!host) return;
   const c = S.byName.get(name);
   const fam = familyOf(name);
+  CV.teardown();
   // Two stacks, not rows: each card is as tall as what it holds, so a short
   // card never sits in a box stretched to its neighbour's height.
   host.innerHTML = headHtml(c, fam) + "<div class='cl-cards'>" +
@@ -498,7 +507,7 @@ async function paintDetail(name) {
   if (det && det.ok) S.detail.set(key, det);
   if (lay && lay.ok) S.layout.set(key, lay);
   const lc = document.getElementById("cl-c-layout");
-  if (lc) { lc.innerHTML = layoutHtml(c, lay, det); wireLayout(lc); }
+  if (lc) { lc.innerHTML = layoutHtml(c, lay, det); wireLayout(lc); if (S.lmode !== "draw") applyLayoutMode(lc); }
   const dc = document.getElementById("cl-c-drive");
   if (dc) { dc.innerHTML = driveHtml(c, fam, det); wireDrive(dc); }
   const pc = document.getElementById("cl-c-pins");
@@ -609,13 +618,43 @@ function pinChips(ins, outs) {
 }
 
 // ---------------------------------------------------------------- layout ---
+// Three ways to look at the cell: the quick drawing below (instant, the
+// default), KLayout's own rendering to pan and zoom, and the 3D layer stack.
+const LAYOUT_MODES = [
+  ["draw", "Drawing", "A quick drawing of the cell's shapes, with its pin names"],
+  ["view", "Viewer", "KLayout draws the cell: pan, zoom and measure, as in the Layout tab"],
+  ["3d", "3D", "The cell's layers stacked at their real heights"],
+];
+
 function layoutHtml(c, lay, det) {
+  const seg = "<span class='seg cl-lay-mode' role='group' aria-label='How to show the layout'>" + LAYOUT_MODES.map(([k, l, t]) =>
+    "<button class='seg-btn" + (S.lmode === k ? " is-active" : "") + "' data-lmode='" + k + "' aria-pressed='" + (S.lmode === k) + "' title='" + esc(t) + "'>" + l + "</button>").join("") + "</span>";
   const head = "<div class='cl-card-h'>Layout <span class='muted'>" +
-    (lay && lay.ok ? esc(lay.gds) + " · drawn from the PDK's GDS" : "") + "</span></div>";
+    (lay && lay.ok ? esc(lay.gds) + " · drawn from the PDK's GDS" : "") + "</span>" + seg + "</div>";
+  return head + "<div class='cl-lay-draw'" + (S.lmode === "draw" ? "" : " hidden") + ">" + drawingHtml(c, lay, det) + "</div>" +
+    "<div class='cl-lay-live'" + (S.lmode === "draw" ? " hidden" : "") + "></div>";
+}
+
+function applyLayoutMode(card) {
+  const mode = S.lmode;
+  card.querySelectorAll("[data-lmode]").forEach((b) => {
+    const on = b.dataset.lmode === mode;
+    b.classList.toggle("is-active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  const draw = card.querySelector(".cl-lay-draw"), live = card.querySelector(".cl-lay-live");
+  if (!draw || !live) return;
+  draw.hidden = mode !== "draw";
+  live.hidden = mode === "draw";
+  if (mode === "draw") { CV.teardown(); live.innerHTML = ""; return; }
+  CV.show(live, mode, { pdk: S.pdk, scl: S.scl, cell: S.sel, hidden: S.hidden });
+}
+
+function drawingHtml(c, lay, det) {
   if (!lay || !lay.ok) {
     const lef = det && det.lef;
-    if (lef && lef.w) return head + footprintSvg(lef) + "<p class='muted cl-p'>" + esc((lay && lay.error) || "No GDS for this cell") + ". Showing the LEF abstract instead (outline and pins).</p>";
-    return head + "<p class='muted cl-p'>" + esc((lay && lay.error) || "No layout available.") + "</p>";
+    if (lef && lef.w) return footprintSvg(lef) + "<p class='muted cl-p'>" + esc((lay && lay.error) || "No GDS for this cell") + ". Showing the LEF abstract instead (outline and pins).</p>";
+    return "<p class='muted cl-p'>" + esc((lay && lay.error) || "No layout available.") + "</p>";
   }
   const [x0, y0, x1, y1] = lay.bbox;
   const w = x1 - x0, h = y1 - y0;
@@ -668,7 +707,7 @@ function layoutHtml(c, lay, det) {
     ? "<p class='cl-dims'><b>" + c.w.toFixed(2) + " × " + c.h.toFixed(2) + " µm</b>" + (c.sites ? " · " + c.sites + " sites wide" : "") +
       " · every cell in the library is " + c.h.toFixed(2) + " µm tall, so cells abut in rows and share the power rails along the top and bottom edges.</p>"
     : "";
-  return head + svg + legend + dims;
+  return svg + legend + dims;
 }
 
 function polyArea(p) {
@@ -690,7 +729,12 @@ function footprintSvg(lef) {
 
 function wireLayout(card) {
   card.addEventListener("click", (e) => {
-    const b = e.target.closest(".cl-lg");
+    const m = e.target.closest("[data-lmode]");
+    if (m) {
+      if (m.dataset.lmode !== S.lmode) { S.lmode = m.dataset.lmode; applyLayoutMode(card); }
+      return;
+    }
+    const b = e.target.closest(".cl-lay-draw .cl-lg");
     if (!b) return;
     if (b.dataset.lbls) { b.classList.toggle("is-off"); card.querySelector(".cl-lbls")?.classList.toggle("is-off"); return; }
     const n = b.dataset.ly;

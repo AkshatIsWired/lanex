@@ -77,69 +77,195 @@ def _image_present(engine: str, image: str, *, sg_wrap: bool = False) -> bool:
         return True
 
 
-def _xquartz_status() -> Dict[str, Any]:
-    """XQuartz prerequisites on macOS: ``{installed, running, tcp_ok}``.
+XQUARTZ_APP = "/Applications/Utilities/XQuartz.app"
+XQUARTZ_INSTALL_CMD = "brew install --cask xquartz"
+XQUARTZ_TCP_PREF_CMD = "defaults write org.xquartz.X11 nolisten_tcp -bool false"
+# Display :0 over TCP: what containers reach as host.docker.internal:0.
+_XQUARTZ_TCP = ("127.0.0.1", 6000)
 
-    ``tcp_ok`` is tri-state (True/False/None-unknown): containers reach XQuartz
-    over TCP (``host.docker.internal:0``), and modern XQuartz ships with
-    ``nolisten_tcp`` ON by default — so an installed, running XQuartz still
-    refuses container connections until that preference is flipped. Checking it
-    here turns "no window, no error" into an exact one-line fix. Never raises."""
-    installed = (Path("/opt/X11/bin/Xquartz").exists()
-                 or Path("/Applications/Utilities/XQuartz.app").exists())
-    running = False
+
+def _xquartz_installed() -> bool:
+    return Path("/opt/X11/bin/Xquartz").exists() or Path(XQUARTZ_APP).exists()
+
+
+def _xquartz_running() -> bool:
+    """Is the XQuartz server process alive?
+
+    Asked of the process table first: a crashed XQuartz leaves its socket in
+    /tmp/.X11-unix behind, and a stale socket must not read as "running" (the
+    restart path would then wait forever for it to quit). The socket is the
+    fallback only when pgrep itself cannot be run."""
+    answered = False
+    for argv in (["/usr/bin/pgrep", "-xq", "Xquartz"], ["/usr/bin/pgrep", "-fq", "X11.bin"]):
+        try:
+            rc = subprocess.run(argv, capture_output=True, timeout=5).returncode
+        except Exception:
+            continue
+        if rc == 0:
+            return True
+        if rc == 1:   # pgrep ran and found nothing
+            answered = True
+    if answered:
+        return False
     try:
         sock_dir = Path("/tmp/.X11-unix")
-        running = sock_dir.is_dir() and any(sock_dir.iterdir())
+        return sock_dir.is_dir() and any(sock_dir.iterdir())
     except Exception:
-        running = False
-    if not running:
-        try:
-            running = subprocess.run(["/usr/bin/pgrep", "-xq", "Xquartz"],
-                                     capture_output=True, timeout=5).returncode == 0
-        except Exception:
-            pass
-    tcp_ok: Optional[bool] = None
+        return False
+
+
+def _xquartz_tcp_listening(timeout: float = 1.0) -> bool:
+    """True when an X server accepts TCP connections on display :0."""
+    import socket
+
+    try:
+        with socket.create_connection(_XQUARTZ_TCP, timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _xquartz_tcp_pref() -> Optional[bool]:
+    """The ``nolisten_tcp`` preference read as "allows TCP": True/False, or None
+    when it was never written (XQuartz then refuses TCP)."""
     for domain in ("org.xquartz.X11", "org.macosforge.xquartz.X11"):
         try:
             r = subprocess.run(["defaults", "read", domain, "nolisten_tcp"],
                                capture_output=True, text=True, timeout=5)
             if r.returncode == 0:
-                tcp_ok = (r.stdout or "").strip() in ("0", "false", "NO")
-                break
+                return (r.stdout or "").strip() in ("0", "false", "NO")
         except Exception:
             continue
-    return {"installed": installed, "running": running, "tcp_ok": tcp_ok}
+    return None
+
+
+def write_xquartz_tcp_pref() -> bool:
+    """Let XQuartz accept TCP clients from its next start. Idempotent."""
+    if sys.platform != "darwin":
+        return False
+    if _xquartz_tcp_pref() is True:
+        return True
+    try:
+        return subprocess.run(XQUARTZ_TCP_PREF_CMD.split(), capture_output=True,
+                              timeout=10).returncode == 0
+    except Exception:
+        return False
+
+
+def _brew_available() -> bool:
+    try:
+        from . import installer
+
+        return bool(installer._brew_path())
+    except Exception:
+        return False
+
+
+def _xquartz_status() -> Dict[str, Any]:
+    """XQuartz on macOS: ``{installed, running, tcp_ok, tcp_pref, brew}``.
+
+    ``tcp_ok`` is measured, not inferred from the preference: while XQuartz
+    runs, whether it accepts a TCP connection on 127.0.0.1:6000 (what containers
+    use through ``host.docker.internal:0``). ``None`` while it is not running.
+    Never raises."""
+    installed = _xquartz_installed()
+    running = _xquartz_running() if installed else False
+    tcp_ok: Optional[bool] = _xquartz_tcp_listening() if running else None
+    return {"installed": installed, "running": running, "tcp_ok": tcp_ok,
+            "tcp_pref": _xquartz_tcp_pref() if installed else None,
+            "brew": _brew_available()}
+
+
+def _xquartz_install_verdict(brew: bool) -> Dict[str, Any]:
+    if brew:
+        reason = ("Viewers from the container need XQuartz, which is not installed. "
+                  "Install it here (macOS asks for your password in its own dialog), "
+                  f"or in Terminal with:  {XQUARTZ_INSTALL_CMD}")
+    else:
+        reason = ("Viewers from the container need XQuartz, which is not installed. "
+                  "Download it from https://www.xquartz.org, install it, then try again. "
+                  "The Layout tab works without it.")
+    return {"ok": False, "reason": reason, "action": "install-xquartz",
+            "can_install": bool(brew), "command": XQUARTZ_INSTALL_CMD}
 
 
 def _darwin_display_status(xq: Dict[str, Any]) -> Dict[str, Any]:
-    """Compose the macOS ``{ok, reason}`` verdict from an XQuartz status.
+    """Compose the macOS ``{ok, reason, action?}`` verdict from an XQuartz status.
 
-    Pure so tests can drive every branch. NOTE: the server's own ``$DISPLAY``
-    is deliberately NOT a prerequisite — container launches use
-    ``host.docker.internal:0`` (TCP), which works whether or not the shell that
-    started LanEx had DISPLAY exported."""
+    Pure so tests can drive every branch. An installed XQuartz that is not
+    running counts as launchable: :func:`ensure_xquartz` starts it. The server's
+    own ``$DISPLAY`` is deliberately not a prerequisite; container launches use
+    ``host.docker.internal:0`` over TCP."""
     if not xq.get("installed"):
-        return {"ok": False, "reason":
-                "Container GUIs on macOS need XQuartz. Install it with "
-                "`brew install --cask xquartz`, log out and back in (or reboot), "
-                "then retry."}
+        return _xquartz_install_verdict(bool(xq.get("brew")))
     if not xq.get("running"):
-        return {"ok": False, "reason":
-                "XQuartz is installed but not running. Start it (`open -a XQuartz`), "
-                "then retry. First time only: in XQuartz → Settings → Security enable "
-                "“Allow connections from network clients”, restart XQuartz, and run "
-                "`xhost +localhost` in its terminal."}
+        return {"ok": True, "reason": "XQuartz is installed; LanEx starts it when a viewer opens."}
     if xq.get("tcp_ok") is False:
-        return {"ok": False, "reason":
-                "XQuartz is running but refuses network (container) connections. "
-                "Run `defaults write org.xquartz.X11 nolisten_tcp -bool false`, "
-                "restart XQuartz, run `xhost +localhost`, then retry. (Same switch: "
-                "XQuartz → Settings → Security → “Allow connections from network "
-                "clients”.)"}
+        return {"ok": False, "action": "restart-xquartz", "reason":
+                "XQuartz is running but does not accept connections from the container. "
+                "Restarting XQuartz fixes it, and closes the XQuartz windows open now. "
+                "(The setting is XQuartz > Settings > Security > Allow connections "
+                "from network clients.)"}
     return {"ok": True, "reason":
-            "XQuartz detected. If a window doesn't appear, run `xhost +localhost` "
-            "in an XQuartz terminal once."}
+            "XQuartz is ready. LanEx runs xhost +localhost before each launch."}
+
+
+def _wait(cond: Any, seconds: float, step: float = 0.25) -> bool:
+    import time
+
+    deadline = time.monotonic() + seconds
+    while True:
+        if cond():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(step)
+
+
+def ensure_xquartz(*, restart: bool = False, wait_s: float = 25.0) -> Dict[str, Any]:
+    """Make XQuartz ready for a container viewer on macOS.
+
+    Writes the TCP preference, starts XQuartz when it is not running and waits
+    for it to accept TCP. A running XQuartz that refuses TCP needs a restart,
+    which closes the user's X11 windows, so that happens only with *restart*;
+    otherwise the result carries ``action: "restart-xquartz"`` for the UI to
+    offer. Returns ``{ok, started?, restarted?}`` or ``{ok: False, need, error,
+    action?}``. No-op off macOS. Never raises."""
+    if sys.platform != "darwin":
+        return {"ok": True}
+    try:
+        if not _xquartz_installed():
+            v = _xquartz_install_verdict(_brew_available())
+            return {"ok": False, "need": "display", "error": v["reason"],
+                    "action": v["action"], "can_install": v["can_install"],
+                    "command": v["command"]}
+        write_xquartz_tcp_pref()
+        restarted = False
+        if _xquartz_running():
+            if _xquartz_tcp_listening():
+                return {"ok": True}
+            if not restart:
+                v = _darwin_display_status({"installed": True, "running": True, "tcp_ok": False})
+                return {"ok": False, "need": "display", "error": v["reason"],
+                        "action": "restart-xquartz"}
+            subprocess.run(["/usr/bin/osascript", "-e", 'quit app "XQuartz"'],
+                           capture_output=True, timeout=15)
+            if not _wait(lambda: not _xquartz_running(), 15.0):
+                return {"ok": False, "need": "display", "error":
+                        "XQuartz did not quit. Quit it yourself (XQuartz > Quit X11), "
+                        "then open the viewer again."}
+            restarted = True
+        subprocess.run(["/usr/bin/open", "-a", "XQuartz"], capture_output=True, timeout=15)
+        if not _wait(_xquartz_tcp_listening, wait_s):
+            return {"ok": False, "need": "display", "error":
+                    f"XQuartz did not start accepting connections within {int(wait_s)} seconds. "
+                    "Open XQuartz yourself, turn on XQuartz > Settings > Security > Allow "
+                    "connections from network clients, quit and reopen XQuartz, then "
+                    "open the viewer again."}
+        return {"ok": True, "started": True, "restarted": restarted}
+    except Exception as ex:  # noqa: BLE001
+        return {"ok": False, "need": "display",
+                "error": f"Could not start XQuartz ({ex}). Open it yourself with:  open -a XQuartz"}
 
 
 def _darwin_allow_x11_clients(env: Dict[str, str]) -> None:
@@ -630,9 +756,15 @@ def open_in_container_tool(
         return {"ok": False, "error": f"could not resolve container engine: {ex}"}
 
     if spec.get("needs_display"):
-        disp = display_available()
-        if not disp.get("ok"):
-            return {"ok": False, "need": "display", "error": disp.get("reason", "no display")}
+        if sys.platform == "darwin":
+            # Starts XQuartz when it is installed but not running.
+            ready = ensure_xquartz()
+            if not ready.get("ok"):
+                return ready
+        else:
+            disp = display_available()
+            if not disp.get("ok"):
+                return {"ok": False, "need": "display", "error": disp.get("reason", "no display")}
 
     design_dir = Path(design_dir).resolve()
     work_dir = Path(work_dir).resolve()

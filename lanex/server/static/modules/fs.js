@@ -21,7 +21,10 @@ export function setupFolderBrowser() {
   document.getElementById("fs-up")?.addEventListener("click", () => navigateUp());
   document.getElementById("fs-path")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
-      fetchDir(e.target.value.trim());
+      const v = e.target.value.trim();
+      // In file mode a typed or pasted file path is the answer itself.
+      if (_pick && _pick.file && _wanted(v)) useCurrentFolder();
+      else fetchDir(v);
     }
   });
 
@@ -64,11 +67,23 @@ function closeModal() {
   if (_pick) { const p = _pick; _pick = null; p.resolve(null); _labelModal(); }
 }
 
-function _labelModal(title = "Open a design folder", use = "Use this folder") {
+const _FOLDER_HINT = "Click a folder to open it. Type a path to jump directly. When you're in the right folder, press the blue button.";
+
+function _labelModal(title = "Open a design folder", use = "Use this folder", hint = _FOLDER_HINT) {
   const t = document.getElementById("fs-modal-title");
   const u = document.getElementById("fs-use");
+  const h = document.querySelector("#fs-modal .fs-body > .hint");
   if (t) t.textContent = title;
   if (u) u.textContent = use;
+  if (h) h.textContent = hint;
+}
+
+// True when `path` names a file of the type the open file picker wants.
+function _wanted(path) {
+  if (!path || !_pick || !_pick.file) return false;
+  const low = String(path).toLowerCase();
+  const exts = _pick.exts || [];
+  return exts.length ? exts.some((x) => low.endsWith(x)) : !/[\\/]$/.test(low);
 }
 
 // Let any caller borrow the browser: resolves with the chosen folder, or null
@@ -90,11 +105,33 @@ export async function pickFolder(opts = {}) {
   return browseFolder(opts);
 }
 
-export function browseFolder({ title = "Choose a folder", use = "Choose this folder", seed = "" } = {}) {
+// The same browser picks a single file: `exts` (like [".zip"]) are the types
+// it accepts. Resolves with the file's path, or null when closed.
+export async function pickFile(opts = {}) {
+  const exts = (opts.exts || []).map((x) => String(x).toLowerCase());
+  if (_picking) { toast.show("The file picker is already open. It may be behind this window.", "warn"); return null; }
+  _picking = true;
+  toast.show("Opening the file picker…", "info");
+  try {
+    const r = await api.nativePick({ mode: "file", title: opts.title || "Choose a file", start: opts.seed || "", exts });
+    if (r && r.busy) { toast.show("The file picker is already open. It may be behind this window.", "warn"); return null; }
+    if (r && r.native) return (r.paths && r.paths[0]) || null;
+  } catch (_e) { /* fall through to the built-in browser */ }
+  finally { _picking = false; }
+  return browseFile({ ...opts, exts });
+}
+
+export function browseFile({ title = "Choose a file", use = "Choose this file", seed = "", exts = [] } = {}) {
+  const kind = exts.length ? exts.join(" or ") + " file" : "file";
+  return browseFolder({ title, use, seed, file: true, exts,
+    hint: "Open folders until you see the " + kind + ", then click it. You can also type or paste its full path and press Enter." });
+}
+
+export function browseFolder({ title = "Choose a folder", use = "Choose this folder", seed = "", file = false, exts = [], hint = _FOLDER_HINT } = {}) {
   if (_pick) _pick.resolve(null);
   return new Promise((resolve) => {
-    _pick = { resolve };
-    _labelModal(title, use);
+    _pick = { resolve, file, exts: exts.map((x) => String(x).toLowerCase()) };
+    _labelModal(title, use, hint);
     const modal = document.getElementById("fs-modal");
     modal.hidden = false;
     document.addEventListener("keydown", _fsKeydown);
@@ -176,15 +213,37 @@ function paintList(entries) {
         : "<span class='size'>" + fmt.metric(e.size) + " B</span>");
     if (e.is_dir) {
       row.addEventListener("click", () => fetchDir(e.path));
-    } else {
-      // Files: clicking "select as design_dir parent" is unfriendly, so leave as no-op.
-      // Show file in preview if user clicks, but past 5 we skip wiring.
+    } else if (_pick && _pick.file && _wanted(e.path)) {
+      // File mode: a click selects the file, a double click chooses it.
+      row.classList.add("pickable");
+      row.addEventListener("click", () => {
+        list.querySelectorAll(".filesel-row.picked").forEach((r) => r.classList.remove("picked"));
+        row.classList.add("picked");
+        document.getElementById("fs-path").value = e.path;
+      });
+      row.addEventListener("dblclick", () => useCurrentFolder());
+    } else if (_pick && _pick.file) {
+      row.classList.add("unpickable");
     }
     list.appendChild(row);
   }
 }
 
 function useCurrentFolder() {
+  if (_pick && _pick.file) {
+    const v = (document.getElementById("fs-path")?.value || "").trim();
+    if (!_wanted(v)) {
+      const exts = _pick.exts || [];
+      toast.show("Choose a " + (exts.length ? exts.join(" or ") + " " : "") + "file first.", "warn");
+      return;
+    }
+    const p = _pick; _pick = null;
+    document.getElementById("fs-modal").hidden = true;
+    document.removeEventListener("keydown", _fsKeydown);
+    _labelModal();
+    p.resolve(v);
+    return;
+  }
   if (_pick) {
     const p = _pick; _pick = null;
     const modal = document.getElementById("fs-modal");
