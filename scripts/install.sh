@@ -1072,7 +1072,7 @@ for f in rep.get("installFailures") or []:
     why = r.get("guidance") or r.get("reason") or r.get("error") or ("cancelled" if f.get("cancelled") else "failed")
     comp = str(f.get("component"))
     seen.add(comp)
-    bad.append("%s: %s" % (comp, str(why).strip().splitlines()[0][:300]))
+    bad.append("%s: %s" % (comp, str(why).strip().splitlines()[0][:700]))
 for name, c in (rep.get("checks") or {}).items():
     # The Windows appliance also promises systemd and exact Python pins;
     # on an ordinary machine those are not this installer's business.
@@ -1110,7 +1110,8 @@ finalize_stage() {
     die "LanEx is installed, but some components are not ready:
 $(printf '%s\n' "$problems" | sed 's/^/   - /')
    Re-run the same command to retry them (finished parts are kept),
-   or add them later in LanEx -> Tools. (finalizer exit code ${rc})"
+   or add them later in LanEx -> Tools. (finalizer exit code ${rc})
+   Full component log: ${out}"
 }
 
 stage_components() {  # the plain-output path (LANEX_PROFILE / --profile)

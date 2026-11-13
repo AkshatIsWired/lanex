@@ -34,7 +34,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_harden": "A web page can't drive LanEx through a rebound domain; Console commands, reproduce scripts and sweep values can't smuggle in shell commands; nothing runs into a missing project folder; 300 runs list fast.",
     "test_sweeps":"A sweep point that failed is shown as failed with its reason, points are named by their value, and stop-early halts the queue.",
     "test_tools_tab_facts": "The Tools page reports installed versus LanEx-tested versions honestly and labels anything else Custom.",
-    "test_pdkfeed": "PDK files are fetched from the mirror first, resumed, and used only when their SHA-256 matches the pin.",
+    "test_pdkfeed": "PDK files are fetched from the mirror first, resumed, and used only when their SHA-256 matches the pin; a certificate failure stops at once with plain advice.",
     "test_goldens": "Metric passthrough is byte/value-faithful; non-finite metrics never reach the wire raw (Fear A).",
     "test_failing_run": "A run that FAILED signoff (real DRC/LVS/timing) is never shown as tape-out ready (Fear A, known-bad).",
     "test_verify": "The signoff verdict stays 3-state — pass / fail / unknown never collapse to two.",

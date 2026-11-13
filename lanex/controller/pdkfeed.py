@@ -39,6 +39,10 @@ _UA = {"User-Agent": "LanEx-pdkfeed/1"}
 FAILURE_BUDGET_S = 20 * 60
 
 
+class CertificateError(RuntimeError):
+    """Every source failed TLS certificate verification; retrying cannot help."""
+
+
 def pins_path() -> Path:
     from . import platform_env
 
@@ -108,7 +112,9 @@ def _fetch_once(url: str, part: Path, on_bytes: Callable[[int], None],
     if have:
         headers["Range"] = f"bytes={have}-"
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=60) as r:
+    from . import tlsctx
+
+    with urllib.request.urlopen(req, timeout=60, context=tlsctx.https_context()) as r:
         if have and r.status != 206:
             have = 0  # the server ignored the range: start over
         length = r.headers.get("Content-Length")
@@ -147,9 +153,15 @@ def fetch_verified(asset: Dict[str, Any], dest_dir: Path, mirror_base: str, *,
     if mirror_base and asset.get("mirrorName"):
         urls.append(f"{mirror_base.rstrip('/')}/{asset['mirrorName']}")
     urls.append(asset["url"])
+    from . import tlsctx
+
     failing_since: Optional[float] = None
     delay = 2.0
+    attempt = 0
+    said: set = set()   # each distinct failure line is logged once
     while True:
+        attempt += 1
+        cert_failed: List[str] = []
         for url in urls:
             if cancelled():
                 raise Cancelled()
@@ -160,11 +172,25 @@ def fetch_verified(asset: Dict[str, Any], dest_dir: Path, mirror_base: str, *,
             except urllib.error.HTTPError as e:
                 if e.code == 416:
                     part.unlink(missing_ok=True)
-                log(f"   {asset['filename']}: HTTP {e.code} from {url}")
+                line = f"   {asset['filename']}: HTTP {e.code} from {url}"
+                if line not in said:
+                    said.add(line)
+                    log(line)
                 continue
             except Exception as e:  # noqa: BLE001 - network errors of every kind
-                log(f"   {asset['filename']}: connection problem ({type(e).__name__}: {e}); "
-                    "the part already downloaded is kept")
+                if tlsctx.is_cert_failure(e):
+                    cert_failed.append(url)
+                    line = (f"   {asset['filename']}: the security certificate of {url} "
+                            f"could not be verified ({e})")
+                    if line not in said:
+                        said.add(line)
+                        log(line)
+                    continue
+                line = (f"   {asset['filename']}: connection problem ({type(e).__name__}: {e}); "
+                        "the part already downloaded is kept")
+                if line not in said:
+                    said.add(line)
+                    log(line)
                 continue
             got = _sha256(part)
             if got == want:
@@ -172,11 +198,25 @@ def fetch_verified(asset: Dict[str, Any], dest_dir: Path, mirror_base: str, *,
                 return dest
             log(f"   {asset['filename']} from {url} did not match its pinned SHA-256; discarded")
             part.unlink(missing_ok=True)
+        if cert_failed and len(cert_failed) == len(urls):
+            # A certificate that does not verify now will not verify in a
+            # minute either: stop instead of spending the retry budget.
+            raise CertificateError(
+                f"could not download {asset['filename']}: the security certificate of the "
+                f"download server could not be verified, so nothing was downloaded. "
+                + tlsctx.cert_failure_advice()
+                + " Then retry; the parts already downloaded are kept.")
         now = time.monotonic()
         failing_since = failing_since or now
         if now - failing_since > FAILURE_BUDGET_S:
             raise RuntimeError(f"could not download {asset['filename']} with the pinned SHA-256 "
-                               f"from {', '.join(urls)}")
+                               f"from {', '.join(urls)} after {attempt} attempts over "
+                               f"{int(FAILURE_BUDGET_S // 60)} minutes. Check the internet "
+                               "connection, then retry; the part already downloaded is kept.")
+        if attempt >= 2:
+            left = max(0, int(FAILURE_BUDGET_S - (now - failing_since)))
+            log(f"   {asset['filename']}: still retrying (attempt {attempt}, "
+                f"about {max(1, left // 60)} min left before giving up)")
         for _ in range(int(delay * 10)):
             if cancelled():
                 raise Cancelled()
