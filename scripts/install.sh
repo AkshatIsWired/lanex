@@ -2505,6 +2505,21 @@ run_row() {  # key function [cur-tag]
 }
 LX_FAILROW=""
 
+SHORTCUT_MSG=""
+shortcut_stage() {  # app shortcut (LanEx.app / .desktop) -> SHORTCUT_MSG; never fails the install
+    SHORTCUT_MSG=""
+    [ "${LANEX_NO_SHORTCUT:-0}" = "1" ] && return 0
+    [ "$WSL" = "1" ] && return 0
+    [ -n "$LAUNCHER" ] && [ -x "$LAUNCHER" ] || return 0
+    local out
+    out="$("$LAUNCHER" --install-shortcut 2>&1 < /dev/null)" || {
+        SHORTCUT_MSG="No app shortcut was made: $(printf '%s\n' "$out" | head -n 1). LanEx still starts with the lanex command."
+        return 0
+    }
+    SHORTCUT_MSG="$(printf '%s\n' "$out" | head -n 1)"
+    return 0
+}
+
 stage_final() {  # the finalizer covers gds3d, image, PDKs and the last check
     finalize_stage
 }
@@ -2626,6 +2641,13 @@ ui_done() {
     OB+=("${C_DIM}Took${R}          $took" "${C_DIM}Log${R}           $lg" "")
     out_box "$w" "${C_OK}${B}${G_OK} LanEx is ready${R}"
     printf '\n' >&4
+    shortcut_stage >> "$LX_LOG" 2>&1
+    if [ -n "$SHORTCUT_MSG" ]; then
+        printf 'shortcut: %s\n' "$SHORTCUT_MSG" >> "$LX_LOG" 2>/dev/null
+        ui_wrap "$SHORTCUT_MSG" $(( w - 4 ))
+        printf '  %s%s%s %s\n' "$C_CYAN" "$G_INFO" "$R" "${WRAP[0]}" >&4
+        for (( i = 1; i < ${#WRAP[@]}; i++ )); do printf '    %s\n' "${WRAP[$i]}" >&4; done
+    fi
     if [ "$DOCKER_GROUP_ADDED" = 1 ]; then
         ui_wrap "You were added to the docker group. LanEx uses it right away; for the docker command in your own shell, open a new terminal (or log out and in)." $(( w - 4 ))
         printf '  %s%s%s %s\n' "$C_CYAN" "$G_INFO" "$R" "${WRAP[0]}" >&4
@@ -2801,6 +2823,8 @@ main() {
         gds3d_stage
     fi
     wsl_notes
+    shortcut_stage
+    [ -n "$SHORTCUT_MSG" ] && note "$SHORTCUT_MSG"
     say "Done — launch the cockpit with:  lanex"
     note "Re-running this installer later upgrades LanEx in place."
 }

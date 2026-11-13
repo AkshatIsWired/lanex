@@ -99,6 +99,7 @@ IMPLICATIONS: Dict[str, str] = {
     "test_dialog_scroll": "Long dialog content stays reachable: the body scrolls (real-browser layout check) and customDialog can never regress onto the folder-browser's clipped .dlg-wide variant.",
     "test_display_derivations": "The few DERIVED display values (utilization %, die W×H, power mW) recompute exactly from the raw golden metrics — no silent unit/scale mangling.",
     "test_install_script": "The one-line installer keeps its contracts: main-on-last-line, degradable stages, git+gtkwave in every package stage, and a skippable best-effort GDS3D stage.",
+    "test_shortcut": "The macOS LanEx.app and the Linux applications-menu entry are generated correctly, re-runs are safe, and a second start reuses the running LanEx.",
     "test_macos_install": "The macOS install paths (GDS3D app, engines, XQuartz display detection, arch/version guards) stay correct without a Mac in CI.",
     "test_appwindow": "The standalone app-window launcher picks a real browser per platform and can never leave the user with no UI.",
     "test_runner": "The flow runner streams librelane's own per-step events and full-detail logs (the __librelane__/SUBPROCESS bridge) — local runs stay first-class.",
