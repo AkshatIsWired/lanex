@@ -343,6 +343,10 @@ export const api = {
     _fetch("/api/celllib/cell?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || "")),
   cellLayout: (pdk, scl, cell) =>
     _fetch("/api/celllib/layout?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || "")),
+  cellView: (pdk, scl, cell) =>
+    _fetch("/api/celllib/view?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "") + "&cell=" + encodeURIComponent(cell || ""), { timeout: 120000 }),
+  cellViewClose: (sid) =>
+    _fetch("/api/celllib/view/close", { method: "POST", body: JSON.stringify({ sid }) }),
   macroCatalog: (pdk, scl) =>
     _fetch("/api/macros/catalog?pdk=" + encodeURIComponent(pdk || "") + "&scl=" + encodeURIComponent(scl || "")),
   macroProjects: (designDir) =>

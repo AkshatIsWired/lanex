@@ -252,3 +252,75 @@ def test_pdk_refs_must_be_prefixed_paths(tmp_path):
     assert not bad["ok"]
     ok = custommacros.save_macro(str(tmp_path), "sram", refs={"gds": "pdk_dir::a.gds", "lef": "pdk_dir::a.lef"})
     assert ok["ok"] and ok["macro"]["views"]["gds"] == "pdk_dir::a.gds"
+
+
+# ---------------------------------------------------------------- cell viewer
+def test_cell_gds_stays_inside_the_pdk(tmp_path, monkeypatch):
+    root = _pdk(tmp_path, monkeypatch)
+    gp, why = celllib.cell_gds("tinyA", "t", "t__nand2_1")
+    assert gp is not None and gp.name == "t.gds" and why == ""
+    # names from a request never become paths
+    for pdk, scl, cell in [("..", "t", "x"), ("tinyA", "../t", "x"), ("tinyA", "t", "../../etc/passwd"),
+                           ("tinyA", "t", "a/b"), ("tinyA", "t", ""), ("/etc", "t", "x")]:
+        gp, why = celllib.cell_gds(pdk, scl, cell)
+        assert gp is None and why, (pdk, scl, cell)
+    # a GDS linked in from outside the PDK is refused
+    outside = tmp_path / "elsewhere.gds"
+    _gds(outside, "evil")
+    gds_dir = root / "tinyA" / "libs.ref" / "t" / "gds"
+    (gds_dir / "t.gds").unlink()
+    try:
+        (gds_dir / "evil.gds").symlink_to(outside)
+    except OSError:
+        return   # no symlinks on this machine
+    gp, why = celllib.cell_gds("tinyA", "t", "evil")
+    assert gp is None and "outside" in why
+
+
+def test_cell_gds_reports_a_library_without_gds(tmp_path, monkeypatch):
+    root = _pdk(tmp_path, monkeypatch)
+    (root / "tinyA" / "libs.ref" / "t" / "gds" / "t.gds").unlink()
+    assert celllib.cell_gds("tinyA", "t", "t__nand2_1") == (None, "this library ships no GDS")
+    assert celllib.cell_layout("tinyA", "t", "t__nand2_1")["error"] == "this library ships no GDS"
+
+
+def test_cell_view_without_klayout_says_why(tmp_path, monkeypatch):
+    from lanex.controller import layoutview
+    _pdk(tmp_path, monkeypatch)
+    monkeypatch.setattr(layoutview, "available", lambda: {"ok": False, "version": "", "reason": "no klayout here"})
+    r = layoutview.open_cell_session("tinyA", "t", "t__nand2_1")
+    assert r == {"ok": False, "error": "no klayout here", "need": "klayout"}
+
+
+def _klayout_ok() -> bool:
+    from lanex.controller import layoutview
+    return layoutview.available()["ok"]
+
+
+def test_cell_view_session_opens_renders_and_closes(tmp_path, monkeypatch):
+    if not _klayout_ok():
+        import pytest
+        pytest.skip("klayout Python package not installed")
+    from lanex.controller import layoutview
+    _pdk(tmp_path, monkeypatch)
+    monkeypatch.setattr(layoutview, "_SESSIONS", type(layoutview._SESSIONS)())
+    r = layoutview.open_cell_session("tinyA", "t", "t__nand2_1")
+    assert r["ok"], r
+    assert r["sid"] == "cell::tinyA::t::t__nand2_1" and r["top"] == "t__nand2_1"
+    assert r["bbox"] == [0, 0, 1.0, 2.72]
+    assert layoutview.render(r["sid"], box=None, w=64, h=64)[:4] == b"\x89PNG"
+    assert layoutview.mesh(r["sid"], None, None) is not None
+    missing = layoutview.open_cell_session("tinyA", "t", "t__nope_1")
+    assert not missing["ok"] and missing["error"] == "t__nope_1 is not in t.gds"
+    assert layoutview.close_session(r["sid"]) and layoutview.render(r["sid"], box=None, w=64, h=64) is None
+
+
+def test_cell_sessions_have_their_own_cap(tmp_path, monkeypatch):
+    from lanex.controller import layoutview
+    sessions = type(layoutview._SESSIONS)()
+    monkeypatch.setattr(layoutview, "_SESSIONS", sessions)
+    for k in ["/r1::final", "cell::a", "/r2::final", "cell::b", "cell::c"]:
+        sessions[k] = object()
+    layoutview._evict()
+    # the oldest cell session goes; runs are untouched by cell browsing
+    assert list(sessions) == ["/r1::final", "/r2::final", "cell::b", "cell::c"]

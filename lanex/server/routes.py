@@ -4212,6 +4212,25 @@ def h_celllib_layout(handler: Any) -> None:
                                           _query_param(handler.path, "cell")))
 
 
+def h_celllib_view(handler: Any) -> None:
+    """Open the in-app layout viewer on one standard cell (the library's GDS
+    with that cell as top). The reply is /api/layout/open's: render, probe and
+    mesh then work on its ``sid``."""
+    from ..controller import layoutview
+    p = handler.path
+    _respond(handler, layoutview.open_cell_session(_query_param(p, "pdk"), _query_param(p, "scl"),
+                                                   _query_param(p, "cell")))
+
+
+def h_celllib_view_close(handler: Any) -> None:
+    """Forget a cell viewer session the page has moved away from. Only cell
+    sessions: a run's layout belongs to the Layout tab."""
+    from ..controller import layoutview
+    sid = str((getattr(handler, "_body", {}) or {}).get("sid") or "")
+    closed = sid.startswith(layoutview._CELL_PREFIX) and layoutview.close_session(sid)
+    _respond(handler, {"ok": True, "closed": bool(closed)})
+
+
 def h_macro_catalog(handler: Any) -> None:
     from ..controller import macrolib
     _respond(handler, macrolib.catalog(_query_param(handler.path, "pdk"),
@@ -4700,6 +4719,8 @@ ROUTES: List[Tuple[str, Any]] = [
     ("/api/ide/open-wave", h_ide_open_wave),
     ("/api/celllib/cell", h_celllib_cell),
     ("/api/celllib/layout", h_celllib_layout),
+    ("/api/celllib/view", h_celllib_view),
+    ("/api/celllib/view/close", h_celllib_view_close),
     ("/api/celllib", h_celllib),
     ("/api/macros/catalog", h_macro_catalog),
     ("/api/macros/projects", h_macro_projects),

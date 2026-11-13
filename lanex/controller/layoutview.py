@@ -54,6 +54,10 @@ _log = logging.getLogger(__name__)
 _LOCK = threading.RLock()
 _SESSIONS: "OrderedDict[str, _Session]" = OrderedDict()
 _MAX_SESSIONS = 4
+# Sessions on one standard cell of a PDK library (the Cells tab) have their own,
+# smaller cap so browsing cells never pushes a run's layout out.
+_CELL_PREFIX = "cell::"
+_MAX_CELL_SESSIONS = 2
 _THUMBS: "OrderedDict[Tuple, bytes]" = OrderedDict()
 _MAX_THUMBS = 48
 
@@ -492,7 +496,7 @@ def _hex(c: int) -> str:
 class _Session:
     """One loaded layout (a run's GDS or a stage DEF) in a headless LayoutView."""
 
-    def __init__(self, sid: str, path: Path, kind: str, cfg: Dict[str, Any]):
+    def __init__(self, sid: str, path: Path, kind: str, cfg: Dict[str, Any], top: Optional[str] = None):
         import klayout.db as kdb
         import klayout.lay as klay
 
@@ -502,6 +506,8 @@ class _Session:
         self.mtime = path.stat().st_mtime
         self.used = time.time()
         self.notes: List[str] = []
+        # A cell session has no run folder to find its PDK from later (3D).
+        self.cfg: Optional[Dict[str, Any]] = cfg if top else None
         tech = _tech_files(cfg)
         v = klay.LayoutView()
         if kind == "def":
@@ -521,6 +527,11 @@ class _Session:
             v.load_layout(str(path), opt, True)
         else:
             v.load_layout(str(path), True)
+        if top:
+            ly = v.cellview(0).layout()
+            if not ly.has_cell(top):
+                raise LookupError(top + " is not in " + path.name)
+            v.select_cell(ly.cell_by_name(top), 0)
         if tech["lyp"]:
             try:
                 v.load_layer_props(tech["lyp"])
@@ -744,7 +755,23 @@ def open_session(run_dir: Path, source: str) -> Dict[str, Any]:
     path, kind = _source_path(run_dir, source)
     if path is None or not path.is_file():
         return {"ok": False, "error": "this run has no layout for '" + (source or "final") + "'"}
-    sid = _sid(run_dir, source)
+    info = _open(_sid(run_dir, source), path, kind, lambda: _resolved(run_dir))
+    if info.get("ok"):
+        info["klayout"] = av.get("version")
+    return info
+
+
+def _evict() -> None:
+    """Drop the least recently used sessions past each kind's cap."""
+    cells = [k for k in _SESSIONS if k.startswith(_CELL_PREFIX)]
+    runs = [k for k in _SESSIONS if not k.startswith(_CELL_PREFIX)]
+    for k in cells[:max(0, len(cells) - _MAX_CELL_SESSIONS)] + runs[:max(0, len(runs) - _MAX_SESSIONS)]:
+        _SESSIONS.pop(k, None)
+
+
+def _open(sid: str, path: Path, kind: str, cfg: Any, top: Optional[str] = None) -> Dict[str, Any]:
+    """Load *path* into a session (or reuse a current one) and describe it.
+    *cfg* is called only when a new session has to be built."""
     with _LOCK:
         s = _SESSIONS.get(sid)
         if s is not None and s.mtime != path.stat().st_mtime:
@@ -753,20 +780,46 @@ def open_session(run_dir: Path, source: str) -> Dict[str, Any]:
         if s is None:
             t0 = time.time()
             try:
-                s = _Session(sid, path, kind, _resolved(run_dir))
+                s = _Session(sid, path, kind, cfg(), top=top)
+            except LookupError as ex:
+                return {"ok": False, "error": str(ex).strip("'\"")}
             except Exception as ex:
                 _log.exception("layout session open failed")
                 return {"ok": False, "error": "KLayout could not read " + path.name + ": " + str(ex)}
             _log.info("layout session %s opened in %.2fs", sid, time.time() - t0)
             _SESSIONS[sid] = s
-            while len(_SESSIONS) > _MAX_SESSIONS:
-                _SESSIONS.popitem(last=False)
+            _evict()
         else:
             _SESSIONS.move_to_end(sid)
         info = s.info()
     info["ok"] = True
-    info["klayout"] = av.get("version")
     return info
+
+
+def open_cell_session(pdk: str, scl: str, cell: str) -> Dict[str, Any]:
+    """A viewer session on one standard cell: the library's GDS with *cell* as
+    the top. The names come from a request; ``celllib.cell_gds`` only resolves
+    them to a file inside the installed PDK."""
+    from . import celllib
+
+    av = available()
+    if not av["ok"]:
+        return {"ok": False, "error": av["reason"], "need": "klayout"}
+    gds, why = celllib.cell_gds(pdk, scl, cell)
+    if gds is None:
+        return {"ok": False, "error": why}
+    root = celllib.pdk_dir(pdk)
+    cfg = {"PDK": pdk, "PDK_ROOT": str(root.parent) if root is not None else ""}
+    info = _open(_CELL_PREFIX + pdk + "::" + scl + "::" + cell, gds, "gds", lambda: cfg, top=cell)
+    if info.get("ok"):
+        info["klayout"] = av.get("version")
+    return info
+
+
+def close_session(sid: str) -> bool:
+    """Forget a session now (the page moved on). True when one was open."""
+    with _LOCK:
+        return _SESSIONS.pop(sid, None) is not None
 
 
 def session(sid: str) -> Optional[_Session]:
@@ -1101,10 +1154,13 @@ def mesh(sid: str, box: Optional[List[float]], visible: Optional[List[int]]) -> 
         s = _SESSIONS.get(sid)
         if s is None:
             return None
-        run_dir = s.path.parent
-        while run_dir.parent != run_dir and not (run_dir / "resolved.json").is_file():
-            run_dir = run_dir.parent
-        cfg = _resolved(run_dir)
+        if s.cfg is not None:
+            cfg = s.cfg
+        else:
+            run_dir = s.path.parent
+            while run_dir.parent != run_dir and not (run_dir / "resolved.json").is_file():
+                run_dir = run_dir.parent
+            cfg = _resolved(run_dir)
         stack, techfile = _gds3d_stack(cfg.get("PDK"))
         kind = "gds3d"
         if not stack:
