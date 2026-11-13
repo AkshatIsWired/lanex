@@ -43,7 +43,7 @@ _BUSY = threading.Lock()
 # old tree view. Files use OpenFileDialog, which is already the modern dialog.
 # A hidden top-most owner window keeps the dialog in front of the LanEx window.
 _PS_SCRIPT = r'''
-param([string]$Mode, [string]$Title, [string]$Start)
+param([string]$Mode, [string]$Title, [string]$Start, [string]$Filter)
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
@@ -136,9 +136,10 @@ $timer.Add_Tick({
 })
 $timer.Start()
 try {
-  if ($Mode -eq "files") {
+  if ($Mode -eq "files" -or $Mode -eq "file") {
     $d = New-Object System.Windows.Forms.OpenFileDialog
-    $d.Multiselect = $true
+    $d.Multiselect = ($Mode -eq "files")
+    if ($Filter) { $d.Filter = $Filter }
     $d.Title = $Title
     if ($Start -and (Test-Path $Start)) { $d.InitialDirectory = $Start }
     if ($d.ShowDialog($owner) -eq "OK") { $d.FileNames | ForEach-Object { Write-Output $_ } }
@@ -154,6 +155,35 @@ def _ps_quote(s: str) -> str:
     return "'" + (s or "").replace("'", "''") + "'"
 
 
+def _clean_exts(exts: Any) -> List[str]:
+    """Normalise an extension list to lowercase ``.ext`` strings; anything that
+    is not a plain extension (wildcards, separators, quotes) is dropped so it
+    can never reach a dialog's filter syntax."""
+    out: List[str] = []
+    for e in exts or []:
+        if not isinstance(e, str):
+            continue
+        e = str(e).strip().lower()
+        if not e:
+            continue
+        if not e.startswith("."):
+            e = "." + e
+        if len(e) > 16 or not e[1:].replace("_", "").isalnum():
+            continue
+        if e not in out:
+            out.append(e)
+    return out
+
+
+def _win_filter(exts: List[str]) -> str:
+    """OpenFileDialog filter: the wanted types first, then every file."""
+    if not exts:
+        return ""
+    pats = ";".join("*" + e for e in exts)
+    return "%s files (%s)|%s|All files (*.*)|*.*" % (
+        "/".join(e[1:].upper() for e in exts), pats, pats)
+
+
 def _windows_start(start: str) -> str:
     if not start:
         return ""
@@ -161,12 +191,13 @@ def _windows_start(start: str) -> str:
     return win or ""
 
 
-def _pick_windows(mode: str, title: str, start: str) -> Optional[List[str]]:
+def _pick_windows(mode: str, title: str, start: str, exts: Optional[List[str]] = None) -> Optional[List[str]]:
     if not os.path.exists(_POWERSHELL):
         return None
     # -EncodedCommand sidesteps every quoting layer between WSL and PowerShell.
     body = "& {" + _PS_SCRIPT + "} " + " ".join(
-        ["-Mode", _ps_quote(mode), "-Title", _ps_quote(title), "-Start", _ps_quote(_windows_start(start))])
+        ["-Mode", _ps_quote(mode), "-Title", _ps_quote(title), "-Start", _ps_quote(_windows_start(start)),
+         "-Filter", _ps_quote(_win_filter(exts or []))])
     enc = base64.b64encode(body.encode("utf-16-le")).decode("ascii")
     try:
         out = subprocess.run(
@@ -183,7 +214,7 @@ def _pick_windows(mode: str, title: str, start: str) -> Optional[List[str]]:
     return paths
 
 
-def _pick_linux(mode: str, title: str, start: str) -> Optional[List[str]]:
+def _pick_linux(mode: str, title: str, start: str, exts: Optional[List[str]] = None) -> Optional[List[str]]:
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         return None
     start_dir = (start.rstrip("/") + "/") if start else ""
@@ -191,13 +222,19 @@ def _pick_linux(mode: str, title: str, start: str) -> Optional[List[str]]:
         cmd = ["zenity", "--file-selection", "--title", title or "Choose"]
         if mode == "files":
             cmd += ["--multiple", "--separator", "\n"]
-        else:
+        elif mode == "folder":
             cmd += ["--directory"]
+        if mode != "folder" and exts:
+            cmd += ["--file-filter", " ".join("*" + e for e in exts), "--file-filter", "All files | *"]
         if start_dir:
             cmd += ["--filename", start_dir]
     elif shutil.which("kdialog"):
         if mode == "files":
             cmd = ["kdialog", "--getopenfilename", start_dir or ".", "--multiple", "--separate-output"]
+        elif mode == "file":
+            cmd = ["kdialog", "--getopenfilename", start_dir or "."]
+            if exts:
+                cmd.append(" ".join("*" + e for e in exts))
         else:
             cmd = ["kdialog", "--getexistingdirectory", start_dir or "."]
         if title:
@@ -213,19 +250,23 @@ def _pick_linux(mode: str, title: str, start: str) -> Optional[List[str]]:
     return [line for line in (out.stdout or "").splitlines() if line.strip()]
 
 
-def pick(mode: str = "folder", title: str = "", start: str = "") -> Dict[str, Any]:
+def pick(mode: str = "folder", title: str = "", start: str = "",
+         exts: Any = None) -> Dict[str, Any]:
     """``{"native": bool, "paths": [...]}``. ``native`` False means no system
     picker exists here and the caller should use the built-in browser; an
     empty ``paths`` with ``native`` True means the person cancelled, and
-    ``busy`` True means another picker is already open."""
-    mode = "files" if mode == "files" else "folder"
+    ``busy`` True means another picker is already open. ``mode`` is
+    ``folder``, ``file`` (one file) or ``files`` (several); ``exts`` narrows
+    the file modes to those extensions (the person can still show all)."""
+    mode = mode if mode in ("file", "files") else "folder"
+    clean = _clean_exts(exts)
     if not _BUSY.acquire(blocking=False):
         return {"native": True, "paths": [], "busy": True}
     try:
         if platform_env.is_wsl():
-            got = _pick_windows(mode, title, start)
+            got = _pick_windows(mode, title, start, clean)
         else:
-            got = _pick_linux(mode, title, start)
+            got = _pick_linux(mode, title, start, clean)
     finally:
         _BUSY.release()
     if got is None:

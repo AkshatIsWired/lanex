@@ -154,6 +154,11 @@
 .fs-ico, .out-cat-ico { display: inline-flex; vertical-align: middle; color: var(--text-muted); }
 .fs-ico { margin-right: var(--s-1); }
 .filesel-row.dir .fs-ico { color: var(--accent); }
+/* File picking in the folder browser: the wanted type is clickable, the
+   chosen one is marked, other files are shown but dimmed. */
+.filesel-row.pickable { cursor: pointer; }
+.filesel-row.picked { border-color: var(--accent); background: var(--accent-soft); }
+.filesel-row.unpickable { opacity: 0.55; }
 .ac-banner-icon { display: inline-flex; align-items: center; color: var(--accent); }
 .cmdk-ico .ic { vertical-align: middle; }
 

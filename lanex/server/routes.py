@@ -3046,8 +3046,10 @@ def h_native_pick(handler: Any) -> None:
     while p is not None and not p.is_dir() and p.parent != p:
         p = p.parent
     start = str(p) if p is not None and p.is_dir() else start
+    exts = body.get("exts")
     _respond(handler, native_pick.pick(body.get("mode") or "folder",
-                                       str(body.get("title") or ""), start))
+                                       str(body.get("title") or ""), start,
+                                       exts if isinstance(exts, list) else None))
 
 
 def h_project_forget(handler: Any) -> None:

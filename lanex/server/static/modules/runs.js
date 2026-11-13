@@ -10,7 +10,7 @@
 
 import { api, fmt } from "./api.js";
 import { state, safeStorage } from "./state.js";
-import { confirmDialog, alertDialog, checklistDialog, choiceDialog, promptDialog, holdFocus } from "./dialog.js";
+import { confirmDialog, alertDialog, checklistDialog, choiceDialog, customDialog, holdFocus } from "./dialog.js";
 import { toast } from "./toast.js";
 import { gatherRunsScoped, normDir, getRunScope, setRunScope, setRun, setBaseline, contextRun, contextDesign, onContext, designLabel } from "./context.js";
 import { go } from "./nav.js";
@@ -1303,12 +1303,7 @@ async function importRunFlow() {
     ],
   });
   if (!kind) return;
-  const path = await promptDialog({
-    title: kind === "dir" ? "Adopt a run directory" : "Import a bundle (.zip)",
-    label: kind === "dir"
-      ? "Absolute path to the run directory (a runs/<tag> folder):"
-      : "Absolute path to the LanEx bundle (.zip):",
-  });
+  const path = await importPathDialog(kind);
   if (!path || !path.trim()) return;
   try {
     const res = kind === "dir"
@@ -1321,6 +1316,50 @@ async function importRunFlow() {
   } catch (ex) {
     await alertDialog({ title: "Import failed", body: (ex && ex.message) || String(ex) });
   }
+}
+
+// Where the import comes from: Browse opens the system picker (or the built-in
+// browser), and the field still takes a typed or pasted path for remote and
+// headless setups where no picker can appear.
+async function importPathDialog(kind) {
+  const isDir = kind === "dir";
+  const seed = (state.designDir || "").replace(/[\\/]+$/, "") + (isDir ? "/runs" : "");
+  let inputEl = null;
+  const esc = fmt.escape;
+  const v = await customDialog({
+    title: esc(isDir ? "Adopt a run directory" : "Import a bundle (.zip)"),
+    bodyHtml:
+      "<label class='dlg-label' for='import-path'>" + esc(isDir
+        ? "The run folder (a runs/<tag> folder). Browse to it, or type or paste its full path."
+        : "The LanEx bundle (.zip). Browse to it, or type or paste its full path.") + "</label>" +
+      "<div class='picker-row'><input class='dlg-input' id='import-path' type='text' autocomplete='off' spellcheck='false'/>" +
+      "<button type='button' class='btn btn-ghost' id='import-browse'>Browse…</button></div>",
+    buttons: [
+      { label: "Cancel", value: null, cls: "btn-ghost" },
+      { label: "Import", value: "__GO__", cls: "btn-primary" },
+    ],
+    onMount: (back, close) => {
+      inputEl = back.querySelector("#import-path");
+      inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && inputEl.value.trim()) { e.preventDefault(); close("__GO__"); }
+      });
+      back.querySelector("#import-browse").addEventListener("click", async () => {
+        const m = await import("./fs.js");
+        const start = inputEl.value.trim() || seed;
+        // Step aside while the picker is up: the built-in browser is an
+        // earlier modal in the page and would sit underneath this one.
+        back.hidden = true;
+        const got = isDir
+          ? await m.pickFolder({ title: "Choose the run folder", use: "Import this run", seed: start })
+          : await m.pickFile({ title: "Choose the LanEx bundle", use: "Import this bundle", seed: start, exts: [".zip"] });
+        back.hidden = false;
+        if (got) inputEl.value = got;
+        inputEl.focus();
+      });
+      setTimeout(() => inputEl.focus(), 0);
+    },
+  });
+  return v === "__GO__" && inputEl ? inputEl.value : null;
 }
 
 async function deleteRunFlow(tag) {
