@@ -294,11 +294,30 @@ brew_stage() {
             brew install python@3.12 || brew install python || warn "brew python install failed."
         fi
         command -v pipx >/dev/null 2>&1 || brew install pipx || warn "brew pipx failed — will fall back to pip/venv."
-        # gtkwave: homebrew-core gained the FORMULA in 2024 (the old cask was
-        # broken on modern macOS and removed). An old brew needs `brew update`.
-        command -v gtkwave >/dev/null 2>&1 || brew install gtkwave \
-            || warn "gtkwave failed to install — run 'brew update && brew install gtkwave' later (the RTL IDE's 'Open in GTKWave' needs it)."
+        # gtkwave: homebrew-core gained the FORMULA in 2024. The old cask's
+        # launcher is a Perl script that needs Switch.pm, gone from modern
+        # macOS, so a `gtkwave` on PATH does not mean a working one: the
+        # formula is what counts (same rule as lanex/controller/gtkwave_mac.py).
+        if ! brew list --formula gtkwave >/dev/null 2>&1; then
+            # brew exits non-zero when only its link step lost to the old
+            # cask's file; the formula is installed then, and is linked below.
+            brew install gtkwave || brew list --formula gtkwave >/dev/null 2>&1 \
+                || warn "gtkwave failed to install — run 'brew update && brew install gtkwave' later (the RTL IDE's 'Open in GTKWave' needs it)."
+        fi
+        if gtkwave_is_legacy; then
+            # The old cask's link holds bin/gtkwave: replace only that link,
+            # the old gtkwave.app stays where it is.
+            note "The gtkwave on PATH is the old GTKWave app, which no longer runs on this macOS; linking the Homebrew one in its place."
+            brew link --overwrite gtkwave \
+                || warn "Could not link the Homebrew gtkwave over the old one. LanEx still uses the Homebrew copy; for your own shell run: brew link --overwrite gtkwave"
+        fi
     fi
+}
+
+gtkwave_is_legacy() {  # the legacy cask's Perl launcher is first on PATH
+    local p
+    p="$(command -v gtkwave 2>/dev/null)" || return 1
+    head -n 1 "$p" 2>/dev/null | grep -q perl
 }
 
 system_deps() {
@@ -1109,7 +1128,7 @@ for name, c in (rep.get("checks") or {}).items():
     miss = c.get("missing") or c.get("detail") or ""
     if isinstance(miss, list):
         miss = ", ".join(str(x) for x in miss)
-    bad.append(("%s: not ready %s" % (name, str(miss).strip()[:200])).strip())
+    bad.append(("%s: not ready %s" % (name, str(miss).strip()[:400])).strip())
 print("\n".join(bad[:8]))
 sys.exit(1 if bad else 0)
 EOFPY

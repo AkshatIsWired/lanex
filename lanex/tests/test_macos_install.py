@@ -427,6 +427,126 @@ def test_install_script_sets_up_xquartz_with_a_container_engine():
     assert "xquartz_stage" in engine
 
 
+# ----------------------------------------------------------------- GTKWave ----
+
+def _perl_launcher(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/usr/bin/perl\nuse Switch;\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _native_bin(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 64)  # Mach-O magic
+    path.chmod(0o755)
+    return path
+
+
+def test_gtkwave_legacy_launcher_is_recognised(tmp_path):
+    from lanex.controller import gtkwave_mac
+
+    assert gtkwave_mac.is_legacy_launcher(str(_perl_launcher(tmp_path / "a" / "gtkwave")))
+    assert not gtkwave_mac.is_legacy_launcher(str(_native_bin(tmp_path / "b" / "gtkwave")))
+    assert not gtkwave_mac.is_legacy_launcher(None)
+
+
+def test_gtkwave_resolve_prefers_formula_and_rejects_legacy(monkeypatch, tmp_path):
+    from lanex.controller import desktop, gtkwave_mac
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    legacy = _perl_launcher(tmp_path / "usr" / "local" / "bin" / "gtkwave")
+    formula = tmp_path / "opt" / "gtkwave"
+    monkeypatch.setattr(gtkwave_mac, "_path_hit", lambda: str(legacy))
+    monkeypatch.setattr(gtkwave_mac, "_formula_candidates", lambda: [str(formula)])
+    monkeypatch.setattr(gtkwave_mac, "_executable", lambda p: Path(p).is_file())
+    st = gtkwave_mac.status()
+    assert st["ready"] is False and st["legacy"] == str(legacy)
+    assert "brew install gtkwave" in st["message"] and "@INC" not in st["message"]
+    assert installer._verify_install("gtkwave") is False
+    _native_bin(formula)
+    assert gtkwave_mac.resolve() == str(formula)
+    # The shared check drives the installer's verify and the launch path.
+    assert installer._verify_install("gtkwave") is True
+    assert desktop._resolve_bin(desktop._TOOLS["gtkwave"]) == str(formula)
+
+
+def test_gtkwave_resolve_off_macos_is_the_plain_lookup(monkeypatch):
+    from lanex.controller import gtkwave_mac
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(gtkwave_mac, "_path_hit", lambda: "/usr/bin/gtkwave")
+    assert gtkwave_mac.resolve() == "/usr/bin/gtkwave"
+
+
+def test_gtkwave_install_links_over_the_legacy_launcher(monkeypatch, tmp_path):
+    from lanex.controller import gtkwave_mac
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    legacy = _perl_launcher(tmp_path / "bin" / "gtkwave")
+    formula = tmp_path / "opt" / "gtkwave"
+    monkeypatch.setattr(gtkwave_mac, "_formula_candidates", lambda: [str(formula)])
+    monkeypatch.setattr(gtkwave_mac, "_path_hit", lambda: str(legacy))
+    monkeypatch.setattr(gtkwave_mac, "_executable", lambda p: Path(p).is_file())
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        if argv[1] == "install":
+            _native_bin(formula)
+            return {"rc": 1, "output": ["Error: Could not symlink bin/gtkwave",
+                                        "Target /usr/local/bin/gtkwave already exists."]}
+        return {"rc": 0, "output": []}
+
+    st = gtkwave_mac.install_formula(run, "brew")
+    assert calls == [["brew", "install", "gtkwave"], ["brew", "link", "--overwrite", "gtkwave"]]
+    assert st["ready"] is True and st["path"] == str(formula)
+    assert legacy.exists()  # the user's old app is never deleted
+
+
+def test_gtkwave_install_routes_to_the_macos_path(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(installer, "_brew_path", lambda: "/usr/local/bin/brew")
+    monkeypatch.setattr(installer, "_install_gtkwave_macos", lambda key: {"ok": True, "via": key})
+    assert installer.install_tool("gtkwave") == {"ok": True, "via": "gtkwave"}
+
+
+def test_gtkwave_readiness_line_is_plain_words(monkeypatch):
+    from lanex.controller import gtkwave_mac, provisioning
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(gtkwave_mac, "status", lambda: {
+        "ready": False, "path": None, "legacy": "/usr/local/bin/gtkwave",
+        "message": gtkwave_mac.BROKEN_MESSAGE})
+    probe = provisioning._gtkwave_darwin_probe()
+    assert probe["ready"] is False
+    assert probe["missing"] == [gtkwave_mac.BROKEN_MESSAGE]
+    assert "brew install gtkwave" in gtkwave_mac.BROKEN_MESSAGE
+
+
+def test_gtkwave_tools_tab_row_uses_the_shared_check(monkeypatch):
+    from lanex.controller import gtkwave_mac
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(gtkwave_mac, "status", lambda: {
+        "ready": False, "path": None, "legacy": "/usr/local/bin/gtkwave",
+        "message": gtkwave_mac.BROKEN_MESSAGE})
+    # What the generic probe says about the Perl launcher: "installed", with an error.
+    info = {"installed": True, "path": "/usr/local/bin/gtkwave", "version": "",
+            "error": "exit code 2"}
+    out = tools_mod._gtkwave_darwin_info(info)
+    assert out["installed"] is False and out["error"] == gtkwave_mac.BROKEN_MESSAGE
+
+
+def test_install_script_checks_the_gtkwave_formula_not_the_path():
+    script = (Path(__file__).resolve().parents[2] / "scripts" / "install.sh").read_text(encoding="utf-8")
+    body = script[script.index("brew_stage() {"):]
+    body = body[:body.index("\n}\n")]
+    assert "command -v gtkwave >/dev/null 2>&1 || brew install gtkwave" not in body
+    assert "brew list --formula gtkwave" in body
+    assert "brew link --overwrite gtkwave" in body
+
+
 def test_x11_flags_podman_uses_containers_host_alias(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     assert "DISPLAY=host.containers.internal:0" in container_tools._x11_flags("podman")
@@ -982,3 +1102,17 @@ def test_engine_install_fails_open_when_version_unknown(monkeypatch):
                         lambda key: called.append(key) or {"ok": True})
     assert installer._install_engine_macos("docker")["ok"] is True
     assert called == ["docker"]
+
+
+def test_gtkwave_launch_explains_the_broken_old_app(monkeypatch, tmp_path):
+    from lanex.controller import desktop, gtkwave_mac
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(gtkwave_mac, "resolve", lambda: None)
+    monkeypatch.setattr(gtkwave_mac, "status", lambda: {
+        "ready": False, "path": None, "legacy": "/usr/local/bin/gtkwave",
+        "message": gtkwave_mac.BROKEN_MESSAGE})
+    dump = tmp_path / "sim.vcd"
+    dump.write_text("$end\n", encoding="utf-8")
+    res = desktop.open_in_tool("gtkwave", dump, use_tech=False)
+    assert res["ok"] is False and res["error"] == gtkwave_mac.BROKEN_MESSAGE

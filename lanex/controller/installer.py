@@ -239,6 +239,12 @@ def _check_cmd(name: str) -> bool:
     return platform_env.usable_which(name) is not None
 
 
+def _gtkwave_usable() -> bool:
+    """A gtkwave that runs; on macOS the legacy cask's Perl launcher does not."""
+    from . import gtkwave_mac
+    return gtkwave_mac.resolve() is not None
+
+
 def _py_module_available(mod: str) -> bool:
     """True when *mod* is importable in THIS interpreter.
 
@@ -1548,7 +1554,7 @@ def _verify_install(key: str) -> bool:
         "podman": lambda: _check_cmd("podman"),
         "gds3d": lambda: _check_cmd("gds3d") or (Path.home() / ".local" / "bin" / "gds3d").exists(),
         "graphviz": lambda: _check_cmd("dot"),
-        "gtkwave": lambda: _check_cmd("gtkwave"),
+        "gtkwave": _gtkwave_usable,
     }
     checker = mapping.get(key)
     if checker is None:
@@ -2544,6 +2550,30 @@ def _install_docker_dmg_darwin(key: str = "docker") -> Dict[str, Any]:
     return {"ok": True, "method": "dmg", "label": "Docker Desktop DMG install"}
 
 
+def _install_gtkwave_macos(key: str) -> Dict[str, Any]:
+    """The Homebrew gtkwave formula, placed ahead of a legacy cask launcher."""
+    from . import gtkwave_mac
+
+    brew = _brew_path() or "brew"
+    before = gtkwave_mac.status()
+    if before.get("legacy"):
+        _emit("installer_info", {"key": key, "message":
+              "the GTKWave on PATH is the old GTKWave app, which no longer runs on this "
+              "macOS; installing the current Homebrew GTKWave (the old app is kept)"})
+
+    def run(argv: List[str]) -> Dict[str, Any]:
+        return _run_argv(argv, label="brew " + " ".join(argv[1:]), key=key)
+
+    st = gtkwave_mac.install_formula(run, brew)
+    if _is_cancelled(key):
+        return _cancelled_result(key)
+    if st.get("ready"):
+        return {"ok": True, "method": "brew", "label": "brew install gtkwave", "path": st["path"]}
+    reason = st.get("message") or gtkwave_mac.BROKEN_MESSAGE
+    _emit("installer_error", {"key": key, "message": reason})
+    return {"ok": False, "reason": reason, "guidance": reason}
+
+
 def _install_xquartz_macos(key: str) -> Dict[str, Any]:
     """XQuartz (the X server container viewers draw into on macOS) via the
     Homebrew cask, then the preference that lets it accept container clients.
@@ -2700,6 +2730,8 @@ def install_tool(key: str) -> Dict[str, Any]:
             return _install_gds3d()
         if key in ("docker", "podman") and sys.platform == "darwin":
             return _install_engine_macos(key)
+        if key == "gtkwave" and sys.platform == "darwin" and _brew_path():
+            return _install_gtkwave_macos(key)
         if key == "xquartz":
             return _install_xquartz_macos(key)
         return _install_tool_impl(key)
